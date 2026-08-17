@@ -59,21 +59,39 @@ namespace Smile {
         Out.reserve(_Meshes.size());
         constexpr u64 kChunkBudget = 256ull * 1024 * 1024;
 
+        // Payload de RT por mesh. Da cena cozida ele ja vem no FMesh; do proxy do terreno (e de
+        // qualquer malha construida em runtime) nao vem, e o scratch abaixo o gera UMA vez —
+        // as duas passadas (dimensionar o chunk, copiar para o staging) leem o mesmo resultado.
+        std::vector<std::vector<FRTTriangle>> RtScratch(_Meshes.size());
+        auto RtOf = [&](size_t _M) -> const std::vector<FRTTriangle>& {
+            return ResolveRTTriangles(_Meshes[_M], RtScratch[_M]);
+        };
+
         size_t i = 0;
         while (i < _Meshes.size()) {
-            // Layout do chunk. Slices de VB empacotados sem padding: cada tamanho e multiplo
-            // de sizeof(Vertex), entao todo offset sai multiplo do stride (FirstElement dos
-            // SRVs bindless e exato). A regiao de IB comeca em VbTotal (multiplo de 4).
+            // Layout do chunk: [VB][IB][RTTri]. Slices empacotados sem padding dentro de cada
+            // regiao — cada tamanho e multiplo do stride da regiao, entao todo offset sai
+            // multiplo dele (FirstElement dos SRVs bindless e exato). A regiao de IB comeca em
+            // VbTotal (multiplo de 4, pois sizeof(Vertex)=32) e a de RT em VbTotal+IbTotal.
+            //
+            // ⚠️ O inicio da regiao de RT tem de ser multiplo de sizeof(FRTTriangle)=32. VbTotal
+            // ja e multiplo de 32; IbTotal e multiplo de 4 e NAO de 32, entao a soma e alinhada
+            // explicitamente. Sem isso o FirstElement truncaria e o mesh leria triangulos de
+            // outro — desalinhamento silencioso, que so apareceria como facing errado.
             const size_t First = i;
-            u64 VbTotal = 0, IbTotal = 0;
+            u64 VbTotal = 0, IbTotal = 0, RtTotal = 0;
             for (; i < _Meshes.size(); ++i) {
+                const u64 RtBytes = RtOf(i).size() * sizeof(FRTTriangle);
                 const u64 Add = _Meshes[i].Vertices.size() * sizeof(Vertex)
-                              + _Meshes[i].Indices.size()  * sizeof(u32);
-                if (i > First && VbTotal + IbTotal + Add > kChunkBudget) break;
+                              + _Meshes[i].Indices.size()  * sizeof(u32) + RtBytes;
+                if (i > First && VbTotal + IbTotal + RtTotal + Add > kChunkBudget) break;
                 VbTotal += _Meshes[i].Vertices.size() * sizeof(Vertex);
                 IbTotal += _Meshes[i].Indices.size()  * sizeof(u32);
+                RtTotal += RtBytes;
             }
-            const u64 Total = VbTotal + IbTotal;
+            const u64 RtBase = ((VbTotal + IbTotal + sizeof(FRTTriangle) - 1)
+                                / sizeof(FRTTriangle)) * sizeof(FRTTriangle);
+            const u64 Total  = RtBase + RtTotal;
             if (Total == 0) {
                 for (size_t m = First; m < i; ++m) {
                     auto Gpu = std::make_unique<FGpuMesh>(); // invalido (IndexCount 0)
@@ -94,20 +112,25 @@ namespace Smile {
             Microsoft::WRL::ComPtr<ID3D12Resource> Staging = StagingBuffer.Resource;
             u8* Mapped = StagingBuffer.Mapped;
 
-            u64 VbCursor = 0, IbCursor = VbTotal;
+            u64 VbCursor = 0, IbCursor = VbTotal, RtCursor = RtBase;
             for (size_t m = First; m < i; ++m) {
                 const FMesh& Mesh = _Meshes[m];
+                const std::vector<FRTTriangle>& Rt = RtOf(m);
                 const u64 VbSize = Mesh.Vertices.size() * sizeof(Vertex);
                 const u64 IbSize = Mesh.Indices.size()  * sizeof(u32);
+                const u64 RtSize = Rt.size()            * sizeof(FRTTriangle);
                 auto Gpu = std::make_unique<FGpuMesh>();
                 if (VbSize > 0 && IbSize > 0) {
                     std::memcpy(Mapped + VbCursor, Mesh.Vertices.data(), VbSize);
                     std::memcpy(Mapped + IbCursor, Mesh.Indices.data(),  IbSize);
-                    Gpu->InitFromPool(Pool, VbCursor, IbCursor,
+                    if (RtSize > 0) std::memcpy(Mapped + RtCursor, Rt.data(), RtSize);
+                    Gpu->InitFromPool(Pool, VbCursor, IbCursor, RtCursor,
                                       static_cast<u32>(Mesh.Vertices.size()),
-                                      static_cast<u32>(Mesh.Indices.size()));
+                                      static_cast<u32>(Mesh.Indices.size()),
+                                      static_cast<u32>(Rt.size()));
                     VbCursor += VbSize;
                     IbCursor += IbSize;
+                    RtCursor += RtSize;
                 }
                 Out.push_back(Gpu.get());
                 MeshLibrary.push_back(std::move(Gpu));

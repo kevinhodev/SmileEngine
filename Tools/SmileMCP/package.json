@@ -1,6 +1,6 @@
 {
   "name": "smile-mcp",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Servidor MCP local para inspecionar, compilar e executar a SmileEngine.",
   "type": "module",

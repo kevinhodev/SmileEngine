@@ -101,6 +101,12 @@ namespace SmileEditor {
         CameraBookmarksBr = new CameraBookmarksBridge(this); // bookmarks de camera (renderer depois)
         CaptureBr  = new CaptureBridge(this);         // captura deterministica (renderer depois)
         McpBr      = new McpBridge(CaptureBr, CameraBookmarksBr, this);
+        connect(McpBr, &McpBridge::ShutdownRequested, this, [this]() {
+            // Benchmark automatizado nao pode parar num dialogo de sidecar. O fechamento ainda
+            // passa pelo segundo estagio de closeEvent, que espera a render thread terminar.
+            CloseApproved = true;
+            close();
+        });
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
@@ -714,6 +720,7 @@ namespace SmileEditor {
         // Captura: idem, so o handle. O progresso e puxado por Timer do QML enquanto o card
         // estiver visivel — a sessao roda na render thread e a GUI so pergunta.
         if (CaptureBr) CaptureBr->SetRenderer(Viewport->GetRenderer());
+        if (McpBr) McpBr->SetViewport(Viewport);
 
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {

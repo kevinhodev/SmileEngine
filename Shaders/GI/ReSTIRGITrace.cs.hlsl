@@ -232,7 +232,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             SMILE_RT_PROCEED(q)
             ray.TMin = 0.0f; // a origem nao mudou; so o intervalo daquela consulta
             // Re-classifica SO aqui: no caminho comum (sem retrace) a classificacao de cima ja
-            // vale, e HitIsBackface custa 3 indices + 3 posicoes.
+            // vale, e HitIsBackface custa UM registro de 32 B (era 3 indices + 3 posicoes).
             backface = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&
                        HitIsBackface(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                      q.CommittedWorldToObject3x4(), ray.Direction, twoSided);

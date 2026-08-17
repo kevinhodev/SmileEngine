@@ -60,7 +60,7 @@ namespace Smile {
 
                 auto [It, Inserted] = Smoothed.try_emplace(S.Name, Ms);
                 if (!Inserted) It->second += (Ms - It->second) * 0.1; // EMA
-                LastResults.push_back({ S.Name, It->second, S.Depth });
+                LastResults.push_back({ S.Name, It->second, S.Depth, Ms });
             }
         }
 

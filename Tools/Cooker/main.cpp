@@ -480,7 +480,9 @@ int main(int argc, char** argv) {
     std::unordered_map<const ufbx_node*, int32_t> firstRenderableOfNode;
 
     std::vector<uint32_t> triBuf;
+    std::vector<Smile::FRTTriangle> rtTris; // reusado por parte; ver a geracao abaixo
     size_t totalTris = 0;
+    size_t totalRtTris = 0;
     size_t dedupHits = 0;
 
     for (size_t ni = 0; ni < scene->nodes.count; ++ni) {
@@ -589,6 +591,20 @@ int main(int argc, char** argv) {
             geo.insert(geo.end(), reinterpret_cast<uint8_t*>(sm.Indices.data()),
                        reinterpret_cast<uint8_t*>(sm.Indices.data()) + sm.Indices.size()*sizeof(uint32_t));
 
+            // v8: payload de RT, AQUI e nao antes. Neste ponto `sm.Indices` ja passou pelo weld
+            // (sm.Add) e pelo reverseWinding do laco acima, entao o triangulo i deste vetor e
+            // exatamente o PrimitiveIndex i que o BLAS vera. Gerar antes do winding inverteria o
+            // cross e a normal de face sairia trocada — silenciosamente, porque so o facing
+            // mudaria e a imagem so denunciaria no verso.
+            rtTris.clear();
+            Smile::BuildRTTriangles(sm.Vertices.data(), (uint32_t)sm.Vertices.size(),
+                                    sm.Indices.data(), (uint32_t)sm.Indices.size(), rtTris);
+            e.RTTriangleOffset = geo.size();
+            e.RTTriangleCount  = (uint32_t)rtTris.size();
+            geo.insert(geo.end(), reinterpret_cast<uint8_t*>(rtTris.data()),
+                       reinterpret_cast<uint8_t*>(rtTris.data()) + rtTris.size()*sizeof(Smile::FRTTriangle));
+            totalRtTris += rtTris.size();
+
             uint32_t meshIdx = (uint32_t)entries.size();
             entries.push_back(e);
             meshCache.emplace(std::make_pair(mesh, pi), meshIdx);
@@ -615,6 +631,14 @@ int main(int argc, char** argv) {
     std::printf("[Cooker] Instancing: %zu de %zu renderaveis reusam geometria ja cozida (%.1f%%)\n",
                 dedupHits, renderables.size(),
                 renderables.empty() ? 0.0 : 100.0 * (double)dedupHits / (double)renderables.size());
+    // Triangulos UNICOS, e nao instanciados: o payload de RT mora por (malha, parte), entao a
+    // conta que importa para o custo em disco/VRAM e esta — uma malha usada por 201 nos paga uma
+    // vez so. E o mesmo motivo pelo qual a dedup da v7 vale tanto aqui.
+    std::printf("[Cooker] Payload RT: %zu triangulos unicos x %zu B = %.1f MB (%.1f%% do blob)\n",
+                totalRtTris, sizeof(Smile::FRTTriangle),
+                totalRtTris * sizeof(Smile::FRTTriangle) / (1024.0*1024.0),
+                geo.empty() ? 0.0 : 100.0 * (double)(totalRtTris * sizeof(Smile::FRTTriangle))
+                                  / (double)geo.size());
 
     // --- Escreve .smesh ---
     {

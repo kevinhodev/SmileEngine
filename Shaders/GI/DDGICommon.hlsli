@@ -39,14 +39,21 @@
                                       // usa: a categoria da instancia e a mask do raio, que o
                                       // shader nao consegue ler de volta da TLAS
 
-// 80 bytes — casa campo-a-campo com DDGIInstanceGeo (DDGI.cpp). Campos alem do BaseColor/geometria
-// alimentam o ReSTIR PT (emissivo, alpha-test, metal/rough); os shaders antigos ignoram os novos.
-// VertexSrv/IndexSrv = indices bindless (ResourceDescriptorHeap) do VB/IB originais do mesh,
-// 0-based por mesh — substituem os merged buffers (t4/t5 aposentados).
+// 84 bytes — casa campo-a-campo com FRTInstanceGeo (RaytracingScene.cpp). Campos alem do
+// BaseColor/geometria alimentam o ReSTIR PT (emissivo, alpha-test, metal/rough); os shaders
+// antigos ignoram os novos.
+//
+// VertexSrv/IndexSrv = indices bindless (ResourceDescriptorHeap) do VB/IB originais do mesh.
+// Continuam existindo para o MeshLightExtract, que percorre a malha por vertice. O caminho de
+// HIT nao os usa mais — ver TriangleSrv.
+//
+// TriangleSrv = StructuredBuffer<RTTriangle> pre-cozido, indexado direto por PrimitiveIndex.
+// Compartilhado por todas as instancias da mesma malha (o payload e local, como a geometria).
 struct InstanceGeo {
     float4 BaseColor;
     uint   VertexSrv;
     uint   IndexSrv;
+    uint   TriangleSrv;
     uint   AlbedoIndex;
     uint   HasAlbedo;
     uint   TwoSidedRT;   // = FMaterial::IsTwoSidedForRT: TwoSided OU AlphaTest. NAO e a flag crua
@@ -67,6 +74,97 @@ struct DDGIVertex {
     float3 Normal;
     float2 TexCoord;
 };
+
+// ================================================================================================
+// RTTriangle — payload PRE-COZIDO por triangulo. Espelho de Smile::FRTTriangle
+// (Engine/Include/Smile/Graphics/RTTriangle.h); o layout e posicional e os dois lados tem de
+// mudar juntos, com bump de kCookedVersion (o payload e persistido no .smesh).
+//
+// POR QUE ELE EXISTE. O caminho de hit fazia PrimitiveIndex -> IB (3 uints) -> 3 vertices de
+// 32 B. As leituras de vertice sao DEPENDENTES dos indices e caem em enderecos arbitrarios do VB;
+// num shader de hit, que ja e incoerente entre lanes, isso e a pior forma de acesso possivel.
+// Aqui o mesmo dado sai de um registro contiguo com endereco conhecido de imediato.
+//
+// A incoerencia ENTRE lanes continua (lanes batem em triangulos diferentes) — o que sai e o
+// espalhamento DENTRO de cada hit e a dependencia de endereco.
+// ================================================================================================
+struct RTTriangle {
+    uint FaceNormalOct;      // octaedrica SNORM16x2, espaco LOCAL
+    uint VertexNormalOct[3]; // idem, por vertice do triangulo
+    uint UV[3];              // half2 por vertice
+    uint Flags;              // bit 0 = normal de face valida (RTTRI_FLAG_FACE_NORMAL_VALID)
+};
+
+#define RTTRI_FLAG_FACE_NORMAL_VALID 0x1u
+
+// SNORM16 -> float. O max(-1) e o de sempre: -32768/32767 daria -1.000030, e o decode octaedrico
+// depende de |x|+|y| <= 1 para escolher o hemisferio certo.
+float RT_UnpackSnorm16(uint _Packed) {
+    int S = (int)(_Packed & 0xFFFFu);
+    if (S > 32767) S -= 65536;
+    return max((float)S / 32767.0f, -1.0f);
+}
+
+// Espelho exato do Smile::RTOctEncodeSnorm16 (Cigolle et al. 2014). Devolve NORMALIZADA.
+float3 RT_OctDecode(uint _Enc) {
+    float X = RT_UnpackSnorm16(_Enc & 0xFFFFu);
+    float Y = RT_UnpackSnorm16(_Enc >> 16);
+    float3 N = float3(X, Y, 1.0f - abs(X) - abs(Y));
+    float  T = saturate(-N.z);
+    N.x += (N.x >= 0.0f) ? -T : T;
+    N.y += (N.y >= 0.0f) ? -T : T;
+    return normalize(N);
+}
+
+float2 RT_UnpackHalf2(uint _Packed) {
+    return float2(f16tof32(_Packed & 0xFFFFu), f16tof32(_Packed >> 16));
+}
+
+// ⚠️ O ACESSO ao payload (RT_LoadTriangle) NAO mora aqui — esta em RTTriangleAccess.hlsli. Ele usa
+// `ResourceDescriptorHeap`, que exige SM 6.6 + root signature heap-directly-indexed, e este header
+// e incluido tambem por shaders de RASTER (DebugView.ps, DeferredLighting.ps, ForwardBlend.ps...).
+// O DXC valida o corpo de toda funcao, entao bastava existir aqui para quebrar a build deles.
+// Daqui para baixo so ha matematica pura, e e assim que tem de continuar.
+
+// Normal de vertice INTERPOLADA pelas barycentricas, em espaco de objeto. E ela que continua
+// mandando na BRDF, no N.L e na amostragem do DDGI — a de face governa outra coisa (facing,
+// OffsetN, SignedDist), e trocar uma pela outra era exatamente o que esta mudanca NAO faz.
+float3 RT_InterpolatedNormalObj(RTTriangle _T, float2 _Bary) {
+    return RT_OctDecode(_T.VertexNormalOct[0]) * (1.0f - _Bary.x - _Bary.y)
+         + RT_OctDecode(_T.VertexNormalOct[1]) * _Bary.x
+         + RT_OctDecode(_T.VertexNormalOct[2]) * _Bary.y;
+}
+
+float2 RT_InterpolatedUV(RTTriangle _T, float2 _Bary) {
+    return RT_UnpackHalf2(_T.UV[0]) * (1.0f - _Bary.x - _Bary.y)
+         + RT_UnpackHalf2(_T.UV[1]) * _Bary.x
+         + RT_UnpackHalf2(_T.UV[2]) * _Bary.y;
+}
+
+// Normal de FACE em espaco de MUNDO, sem orientacao — o caller decide o lado. Retorna false em
+// triangulo degenerado OU transform singular, e o caller cai na interpolada (contrato identico
+// ao do antigo HitFaceNormal).
+//
+// ⚠️ O teste de degeneracao tem DOIS bracos, e so um pode ser cozido:
+//   - arestas colineares / de comprimento zero -> propriedade da MALHA, cozida no bit de flag;
+//   - transform singular -> propriedade da INSTANCIA, entao continua aqui, no `nLen > 0` apos o
+//     mul. Cozinhar so o primeiro e deixar o segundo fora daria normal NaN em instancia com
+//     escala zero, que e um estado alcancavel pelo gizmo do editor.
+//
+// A transformacao e a de sempre: mul(n, (float3x3)worldToObject) com vetor-linha, que e a
+// inversa-transposta de ObjectToWorld. Normalizar em espaco de objeto (no cozimento) e depois
+// transformar da a MESMA direcao que transformar sem normalizar e normalizar no fim.
+bool RT_FaceNormal(RTTriangle _T, float3x4 _WorldToObject, out float3 _OutFaceN) {
+    if ((_T.Flags & RTTRI_FLAG_FACE_NORMAL_VALID) == 0u) {
+        _OutFaceN = float3(0.0f, 0.0f, 1.0f);
+        return false;
+    }
+    float3 NObj  = RT_OctDecode(_T.FaceNormalOct);
+    float3 NWrld = mul(NObj, (float3x3)_WorldToObject);
+    float  NLen  = length(NWrld);
+    _OutFaceN = (NLen > 0.0f) ? (NWrld / NLen) : float3(0.0f, 0.0f, 1.0f);
+    return NLen > 0.0f;
+}
 
 float3 DDGI_SphericalFibonacci(float i, float n) {
     const float PHI = 1.61803398875f;

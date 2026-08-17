@@ -14,12 +14,32 @@ Ferramentas disponiveis:
 - `smile_get_latest_logs`: cauda dos logs persistentes do editor.
 - `smile_build`: build de um alvo CMake.
 - `smile_compile_shaders`: atalho para o alvo `Shaders`.
-- `smile_run_editor`: inicia um `SmileEditor.exe` ja compilado.
+- `smile_cook_scene`: recozinha um FBX e valida os cabecalhos `.smesh`/`.sscene` gerados.
+- `smile_editor_status`: consulta PID, executavel, commit, prontidao, cena e captura do editor vivo.
+- `smile_profile_configure`: fixa o regime de render, a hora e opcionalmente a camera do teste.
+- `smile_profile_gpu`: amostra timestamps brutos e a EMA do Mini Profiler, com percentis e VRAM.
+- `smile_close_editor`: encerra o editor pelo bridge, esperando o shutdown da render thread.
+- `smile_run_editor`: inicia um `SmileEditor.exe`, aceita uma `.sscene` tipada e aguarda o
+  renderer ficar pronto.
 - `smile_capture_frame`: captura o viewport do editor aberto e retorna PNG, manifesto e,
   opcionalmente, a imagem embutida na resposta MCP.
 
 Os acessos a arquivos aceitam somente caminhos relativos que permanecem dentro da raiz da
 SmileEngine. Processos sao iniciados sem shell, e nomes de alvo CMake sao validados.
+
+## Fluxo de validacao
+
+O ciclo completo pode ser feito sem voltar ao terminal:
+
+1. `smile_build` para `SmileCooker`, `Shaders` e `SmileEditor`, conforme o escopo da mudanca.
+2. `smile_cook_scene` com o caminho relativo do FBX.
+3. `smile_run_editor` com `scenePath`; por default ele espera ate 90 s pelo renderer e confirma
+   que a cena pedida, nao apenas algum editor, ficou pronta.
+4. `smile_capture_frame` para publicar PNG e manifesto.
+
+`smile_run_editor` detecta uma instancia ja conectada para nao abrir dois editores apontando para
+a mesma named pipe. Se a instancia existente estiver com outra cena, a ferramenta falha alto em
+vez de capturar silenciosamente o viewport errado.
 
 ## Requisitos
 
@@ -54,7 +74,7 @@ novo processo seja descoberto.
 O exemplo usa `default_tools_approval_mode = "writes"`: consultas read-only podem fluir, enquanto
 build e execucao continuam sujeitos a aprovacao do cliente.
 
-## Proxima etapa: bridge do editor
+## Bridge do editor
 
 O MCP atual opera do lado de fora do processo. A extensao planejada e um bridge local no editor,
 com protocolo versionado e mensagens JSON, para expor estado vivo sem incorporar o SDK MCP ao C++:
@@ -63,8 +83,10 @@ com protocolo versionado e mensagens JSON, para expor estado vivo sem incorporar
 Codex <-> SmileMCP (STDIO) <-> bridge local <-> SmileEditor/Renderer
 ```
 
-Esse bridge deve comecar read-only (`editor_status`, cena, entidades, render graph e profiling).
-Operacoes mutaveis e scripting entram depois, com allowlist, timeout e identificador de sessao.
+O bridge comeca read-only para estado vivo: `smile_editor_status` expoe conexao, PID, prontidao,
+cena e captura em andamento. Entidades, render graph e profiling ainda sao extensoes futuras;
+operacoes mutaveis e scripting devem entrar somente com allowlist, timeout e identificador de
+sessao.
 
 O primeiro comando vivo ja esta implementado: `smile_capture_frame` conversa com o `McpBridge`
 do editor por JSON delimitado por linha. A named pipe aceita somente o usuario local, permanece

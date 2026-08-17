@@ -45,10 +45,19 @@ export interface FindTextOptions {
   maxResults: number;
 }
 
+export type BuildConfiguration = "Debug" | "Release" | "RelWithDebInfo";
+
 export interface BuildOptions {
   buildDirectory: string;
-  configuration: "Debug" | "Release" | "RelWithDebInfo";
+  configuration: BuildConfiguration;
   target: string;
+  timeoutSeconds: number;
+}
+
+export interface CookSceneOptions {
+  sourcePath: string;
+  configuration: BuildConfiguration;
+  opaqueGlass: boolean;
   timeoutSeconds: number;
 }
 
@@ -334,6 +343,63 @@ export class SmileProject {
     );
   }
 
+  async cookScene(options: CookSceneOptions): Promise<Record<string, unknown>> {
+    const sourcePath = await this.resolveProjectPath(options.sourcePath);
+    const sourceStat = await stat(sourcePath);
+    if (!sourceStat.isFile() || path.extname(sourcePath).toLocaleLowerCase() !== ".fbx") {
+      throw new Error("sourcePath precisa apontar para um arquivo .fbx dentro da SmileEngine.");
+    }
+
+    const executable = this.cookerExecutable(options.configuration);
+    const outputBase = sourcePath.slice(0, -path.extname(sourcePath).length);
+    const meshPath = `${outputBase}.smesh`;
+    const scenePath = `${outputBase}.sscene`;
+    const expectedOutputs = [meshPath, scenePath].map((outputPath) => this.relative(outputPath));
+    // fopen("wb") segue symlink existente. Valide antes de executar para o tool nunca conseguir
+    // sobrescrever um destino fora da raiz por meio de um .smesh/.sscene redirecionado.
+    for (const outputPath of expectedOutputs) {
+      if (existsSync(path.join(this.root, outputPath))) await this.resolveProjectPath(outputPath);
+    }
+
+    const args = [sourcePath];
+    if (options.opaqueGlass) args.push("--opaque-glass");
+    const result = await runCommand(executable, args, {
+      cwd: this.root,
+      timeoutMs: options.timeoutSeconds * 1000,
+      maxOutputBytes: 2 * 1024 * 1024,
+    });
+
+    if (result.exitCode !== 0) {
+      return {
+        ...result,
+        sourcePath: this.relative(sourcePath),
+        expectedOutputs,
+      };
+    }
+
+    const [trustedMeshPath, trustedScenePath] = await Promise.all([
+      this.resolveProjectPath(expectedOutputs[0]!),
+      this.resolveProjectPath(expectedOutputs[1]!),
+    ]);
+    const [mesh, scene] = await Promise.all([
+      this.inspectCookedHeader(trustedMeshPath, 0x48534d53, "smesh"),
+      this.inspectCookedHeader(trustedScenePath, 0x4e435353, "sscene"),
+    ]);
+    if (mesh.version !== scene.version) {
+      throw new Error(
+        `O cooker produziu versoes divergentes: smesh v${mesh.version} e sscene v${scene.version}.`,
+      );
+    }
+
+    return {
+      ...result,
+      sourcePath: this.relative(sourcePath),
+      opaqueGlass: options.opaqueGlass,
+      cookedVersion: mesh.version,
+      outputs: { mesh, scene },
+    };
+  }
+
   async findEditorExecutables(): Promise<Array<Record<string, unknown>>> {
     const binRoot = path.join(this.root, "build", "bin");
     if (!existsSync(binRoot)) return [];
@@ -353,11 +419,21 @@ export class SmileProject {
     return found;
   }
 
-  editorExecutable(configuration: "Debug" | "Release" | "RelWithDebInfo"): string {
+  editorExecutable(configuration: BuildConfiguration): string {
     const executable = path.join(this.root, "build", "bin", configuration, "SmileEditor.exe");
     if (!existsSync(executable)) {
       throw new Error(
         `SmileEditor ${configuration} nao encontrado. Compile o alvo SmileEditor primeiro.`,
+      );
+    }
+    return executable;
+  }
+
+  cookerExecutable(configuration: BuildConfiguration): string {
+    const executable = path.join(this.root, "build", "bin", configuration, "SmileCooker.exe");
+    if (!existsSync(executable)) {
+      throw new Error(
+        `SmileCooker ${configuration} nao encontrado. Compile o alvo SmileCooker primeiro.`,
       );
     }
     return executable;
@@ -419,5 +495,44 @@ export class SmileProject {
     } finally {
       await handle.close();
     }
+  }
+
+  private async inspectCookedHeader(
+    filePath: string,
+    expectedMagic: number,
+    kind: "smesh" | "sscene",
+  ): Promise<Record<string, unknown> & { version: number }> {
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile() || fileStat.size < 16) {
+      throw new Error(`O cooker nao produziu um ${kind} valido: ${this.relative(filePath)}.`);
+    }
+
+    const handle = await open(filePath, "r");
+    const header = Buffer.alloc(16);
+    try {
+      const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      if (bytesRead !== header.length) throw new Error(`Cabecalho ${kind} truncado.`);
+    } finally {
+      await handle.close();
+    }
+
+    const magic = header.readUInt32LE(0);
+    const version = header.readUInt32LE(4);
+    if (magic !== expectedMagic) {
+      throw new Error(`Magic invalido no ${kind} produzido: 0x${magic.toString(16)}.`);
+    }
+
+    return {
+      path: this.relative(filePath),
+      bytes: fileStat.size,
+      modifiedAt: fileStat.mtime.toISOString(),
+      version,
+      ...(kind === "smesh"
+        ? { meshCount: header.readUInt32LE(8) }
+        : {
+            materialCount: header.readUInt32LE(8),
+            renderableCount: header.readUInt32LE(12),
+          }),
+    };
   }
 }

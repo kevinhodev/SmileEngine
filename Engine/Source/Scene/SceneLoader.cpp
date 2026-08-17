@@ -117,9 +117,22 @@ namespace Smile {
             std::memcpy(&Prepared->MeshHeader, MeshBytes.data(), sizeof(SMeshHeader));
             const SSceneHeader& SceneHeader = Prepared->SceneHeader;
             const SMeshHeader& MeshHeader = Prepared->MeshHeader;
-            if (SceneHeader.Magic != kSSceneMagic || SceneHeader.Version != kCookedVersion ||
-                MeshHeader.Magic != kSMeshMagic || MeshHeader.Version != kCookedVersion) {
-                LogError("LoadCookedScene: magic/versao invalidos");
+            if (SceneHeader.Magic != kSSceneMagic || MeshHeader.Magic != kSMeshMagic) {
+                LogError("LoadCookedScene: magic invalido (o arquivo nao e um cozido da Smile)");
+                return {};
+            }
+            // Versao errada NAO tem fallback, e a v8 e o caso que torna isso obrigatorio: um
+            // cozido v7 nao tem a regiao de RT por triangulo, e todo o caminho de hit passou a
+            // depender dela. Aceitar o arquivo e sintetizar o payload no load esconderia um
+            // recook que nao aconteceu e faria a engine pagar, silenciosamente, o custo que esta
+            // mudanca existe para remover. Falha alto e diz o que fazer.
+            if (SceneHeader.Version != kCookedVersion || MeshHeader.Version != kCookedVersion) {
+                LogError("LoadCookedScene: cozido v" +
+                         std::to_string(MeshHeader.Version != kCookedVersion ? MeshHeader.Version
+                                                                             : SceneHeader.Version) +
+                         ", a engine exige v" + std::to_string(kCookedVersion) +
+                         ". Recozinhe a cena com o SmileCooker (a v8 adiciona o payload de RT por"
+                         " triangulo, que o runtime nao sintetiza).");
                 return {};
             }
 
@@ -164,11 +177,25 @@ namespace Smile {
             for (const SMeshEntry& Entry : Prepared->MeshEntries) {
                 if (Entry.VertexOffset > std::numeric_limits<size_t>::max() ||
                     Entry.IndexOffset > std::numeric_limits<size_t>::max() ||
+                    Entry.RTTriangleOffset > std::numeric_limits<size_t>::max() ||
                     !ArrayFits(static_cast<size_t>(Entry.VertexOffset), Entry.VertexCount,
                                sizeof(Vertex), GeometryBytes) ||
                     !ArrayFits(static_cast<size_t>(Entry.IndexOffset), Entry.IndexCount,
-                               sizeof(u32), GeometryBytes)) {
+                               sizeof(u32), GeometryBytes) ||
+                    !ArrayFits(static_cast<size_t>(Entry.RTTriangleOffset), Entry.RTTriangleCount,
+                               sizeof(FRTTriangle), GeometryBytes)) {
                     LogError("LoadCookedScene: blob de geometria truncado");
+                    return {};
+                }
+                // A correspondencia com o BLAS e posicional (RTTriangle[i] <-> PrimitiveIndex i),
+                // entao a contagem tem de ser EXATA — nao "pelo menos". Um cozido em que ela
+                // divirja produziria normal de face de outro triangulo, que e o tipo de erro que
+                // so aparece no facing e passa por ruido de sombreamento.
+                if (Entry.RTTriangleCount != Entry.IndexCount / 3u) {
+                    LogError("LoadCookedScene: payload de RT com " +
+                             std::to_string(Entry.RTTriangleCount) + " triangulos para " +
+                             std::to_string(Entry.IndexCount / 3u) +
+                             " do IB — cozido inconsistente, recozinhe a cena");
                     return {};
                 }
             }
@@ -242,6 +269,13 @@ namespace Smile {
                 if (Entry.IndexCount > 0) {
                     std::memcpy(Mesh.Indices.data(), GeometryBase + Entry.IndexOffset,
                                 Entry.IndexCount * sizeof(u32));
+                }
+                // v8: o payload de RT vem PRONTO do arquivo — nada e recalculado no load. Foi
+                // cozido depois do weld e do winding, entao ja esta na ordem do PrimitiveIndex.
+                Mesh.RTTriangles.resize(Entry.RTTriangleCount);
+                if (Entry.RTTriangleCount > 0) {
+                    std::memcpy(Mesh.RTTriangles.data(), GeometryBase + Entry.RTTriangleOffset,
+                                Entry.RTTriangleCount * sizeof(FRTTriangle));
                 }
             }
             Prepared->MeshMs = MsSince(MeshStart);

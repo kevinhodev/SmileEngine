@@ -18,7 +18,7 @@ const transport = new StdioClientTransport({
   stderr: "pipe",
 });
 
-const client = new Client({ name: "smile-mcp-smoke", version: "0.1.0" });
+const client = new Client({ name: "smile-mcp-smoke", version: "0.3.0" });
 
 try {
   await client.connect(transport);
@@ -31,6 +31,11 @@ try {
     "smile_get_latest_logs",
     "smile_build",
     "smile_compile_shaders",
+    "smile_cook_scene",
+    "smile_editor_status",
+    "smile_profile_configure",
+    "smile_profile_gpu",
+    "smile_close_editor",
     "smile_run_editor",
     "smile_capture_frame",
   ];
@@ -58,6 +63,10 @@ try {
       name: "smile_get_latest_logs",
       arguments: { sessions: 1, tailLines: 5 },
     },
+    {
+      name: "smile_editor_status",
+      arguments: { timeoutSeconds: 0.1 },
+    },
   ];
 
   const payloads = new Map();
@@ -78,12 +87,31 @@ try {
   if (payloads.get("smile_find_text")?.count < 1) {
     throw new Error("smile_find_text nao encontrou o marcador do projeto");
   }
+  if (typeof payloads.get("smile_editor_status")?.connected !== "boolean") {
+    throw new Error("smile_editor_status nao retornou estado de conexao");
+  }
 
   const escapedPath = await client.callTool({
     name: "smile_read_file",
     arguments: { relativePath: "../fora-da-raiz.txt" },
   });
   if (!escapedPath.isError) throw new Error("smile_read_file aceitou um caminho fora da raiz");
+
+  const invalidCookSource = await client.callTool({
+    name: "smile_cook_scene",
+    arguments: { sourcePath: "CMakeLists.txt", configuration: "Release" },
+  });
+  if (!invalidCookSource.isError) throw new Error("smile_cook_scene aceitou uma fonte que nao e FBX");
+
+  const invalidEditorScene = await client.callTool({
+    name: "smile_run_editor",
+    arguments: {
+      configuration: "Release",
+      scenePath: "CMakeLists.txt",
+      waitUntilReady: false,
+    },
+  });
+  if (!invalidEditorScene.isError) throw new Error("smile_run_editor aceitou uma cena que nao e SScene");
 
   console.log(
     `Smoke test OK: ${tools.tools.length} ferramentas; leitura, busca, logs e isolamento validados.`,

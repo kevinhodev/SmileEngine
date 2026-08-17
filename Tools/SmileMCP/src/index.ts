@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SmileEditorBridge } from "./editor-bridge.js";
+import { SmileEditorBridge, type ProfileSnapshot } from "./editor-bridge.js";
 import { SmileProject, discoverSmileRoot } from "./smile-project.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.3.0";
 const project = new SmileProject(discoverSmileRoot());
 const editorBridge = new SmileEditorBridge(project.root);
 
@@ -19,7 +20,9 @@ const server = new McpServer(
       "Ferramentas locais da SmileEngine. Prefira primeiro as operacoes read-only de inspecao. " +
       "Build e execucao operam apenas na raiz configurada por SMILE_ROOT. Compile Shaders para " +
       "mudancas somente em HLSL e SmileEditor quando interfaces C++/HLSL tambem mudarem. " +
-      "smile_capture_frame atua no editor aberto e aguarda PNG + manifesto.",
+      "Use smile_cook_scene para regenerar os cozidos e smile_run_editor com scenePath para " +
+      "aguardar a cena ficar pronta antes de smile_capture_frame. Para benchmarks, configure " +
+      "um regime deterministico com smile_profile_configure antes de smile_profile_gpu.",
   },
 );
 
@@ -34,6 +37,98 @@ function errorResult(error: unknown) {
   return {
     isError: true,
     content: [{ type: "text" as const, text: message }],
+  };
+}
+
+function sameWindowsPath(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  const normalize = (value: string): string => path.resolve(value).toLocaleLowerCase("en-US");
+  return normalize(left) === normalize(right);
+}
+
+function summarize(values: number[]): Record<string, number> {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (sorted.length === 0) return { count: 0 };
+  const percentile = (p: number): number => {
+    const index = (sorted.length - 1) * p;
+    const low = Math.floor(index);
+    const high = Math.ceil(index);
+    const weight = index - low;
+    return sorted[low]! * (1 - weight) + sorted[high]! * weight;
+  };
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  const variance =
+    sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / sorted.length;
+  return {
+    count: sorted.length,
+    min: sorted[0]!,
+    p10: percentile(0.1),
+    median: percentile(0.5),
+    mean,
+    p90: percentile(0.9),
+    p95: percentile(0.95),
+    max: sorted.at(-1)!,
+    stdDev: Math.sqrt(variance),
+  };
+}
+
+function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean) {
+  const scopes = new Map<
+    string,
+    { name: string; queue: string; depth: number; raw: number[]; ema: number[] }
+  >();
+  for (const snapshot of snapshots) {
+    for (const timing of [...snapshot.direct, ...snapshot.asyncCompute]) {
+      const key = `${timing.queue}\u0000${timing.depth}\u0000${timing.name}`;
+      let scope = scopes.get(key);
+      if (!scope) {
+        scope = {
+          name: timing.name,
+          queue: timing.queue,
+          depth: timing.depth,
+          raw: [],
+          ema: [],
+        };
+        scopes.set(key, scope);
+      }
+      scope.raw.push(timing.rawMilliseconds);
+      scope.ema.push(timing.milliseconds);
+    }
+  }
+  const passSummaries = [...scopes.values()]
+    .map((scope) => ({
+      name: scope.name,
+      queue: scope.queue,
+      depth: scope.depth,
+      rawMilliseconds: summarize(scope.raw),
+      emaMilliseconds: summarize(scope.ema),
+    }))
+    .sort(
+      (left, right) =>
+        ((right.rawMilliseconds.median as number | undefined) ?? 0) -
+        ((left.rawMilliseconds.median as number | undefined) ?? 0),
+    );
+
+  return {
+    sampleCount: snapshots.length,
+    firstFrameIndex: snapshots[0]?.frameIndex ?? null,
+    lastFrameIndex: snapshots.at(-1)?.frameIndex ?? null,
+    gpu: snapshots[0]?.gpu ?? null,
+    resolution: snapshots[0]
+      ? {
+          outputWidth: snapshots[0].outputWidth,
+          outputHeight: snapshots[0].outputHeight,
+          renderWidth: snapshots[0].renderWidth,
+          renderHeight: snapshots[0].renderHeight,
+        }
+      : null,
+    cpuFps: summarize(snapshots.map((snapshot) => snapshot.cpuFps)),
+    localVramBytes: summarize(
+      snapshots.map((snapshot) => snapshot.vram.localUsageBytes),
+    ),
+    settings: snapshots[0]?.settings ?? null,
+    passes: passSummaries,
+    ...(includeSamples ? { samples: snapshots } : {}),
   };
 }
 
@@ -265,14 +360,180 @@ server.registerTool(
 );
 
 server.registerTool(
+  "smile_cook_scene",
+  {
+    title: "Cook a Smile scene",
+    description:
+      "Recozinha um FBX com o SmileCooker e valida os cabecalhos .smesh/.sscene produzidos ao lado da fonte.",
+    inputSchema: {
+      sourcePath: z
+        .string()
+        .min(1)
+        .describe("Caminho relativo de um FBX dentro da raiz da SmileEngine."),
+      configuration: z.enum(["Debug", "Release", "RelWithDebInfo"]).default("Release"),
+      opaqueGlass: z.boolean().default(false),
+      timeoutSeconds: z.number().int().min(10).max(1800).default(900),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const result = await project.cookScene({
+        sourcePath: input.sourcePath,
+        configuration: input.configuration,
+        opaqueGlass: input.opaqueGlass,
+        timeoutSeconds: input.timeoutSeconds,
+      });
+      return result.exitCode === 0 ? jsonResult(result) : { ...jsonResult(result), isError: true };
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_editor_status",
+  {
+    title: "Smile editor status",
+    description:
+      "Consulta o editor vivo pela named pipe e retorna PID, prontidao, cena carregada e estado da captura.",
+    inputSchema: {
+      timeoutSeconds: z.number().min(0.1).max(10).default(2),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const status = await editorBridge.status(Math.round(input.timeoutSeconds * 1000));
+      return jsonResult({ connected: true, ...status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return jsonResult({ connected: false, ready: false, captureBusy: false, message });
+    }
+  },
+);
+
+server.registerTool(
+  "smile_profile_configure",
+  {
+    title: "Configure Smile profiling regime",
+    description:
+      "Fixa camera opcional, TOD e os consumidores do hit path; gameplay_rr replica o regime do Mini Profiler com DLSS Ray Reconstruction.",
+    inputSchema: {
+      preset: z.enum(["gameplay_rr", "controlled_native"]).default("gameplay_rr"),
+      bookmarkSlot: z.number().int().min(-1).max(3).default(-1),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      return jsonResult(await editorBridge.configureProfile(input.preset, input.bookmarkSlot));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_profile_gpu",
+  {
+    title: "Sample Smile GPU profiler",
+    description:
+      "Aquece por tempo real e amostra timestamps brutos + EMA do Mini Profiler, retornando mediana, percentis, desvio e VRAM por passe.",
+    inputSchema: {
+      warmupSeconds: z.number().min(0).max(120).default(15),
+      samples: z.number().int().min(5).max(240).default(60),
+      intervalMs: z.number().int().min(100).max(2000).default(250),
+      includeSamples: z.boolean().default(false),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      if (input.warmupSeconds > 0) {
+        await new Promise((resolve) => setTimeout(resolve, input.warmupSeconds * 1000));
+      }
+      const snapshots: ProfileSnapshot[] = [];
+      for (let index = 0; index < input.samples; index += 1) {
+        snapshots.push(await editorBridge.profileSnapshot(Math.max(2_000, input.intervalMs * 4)));
+        if (index + 1 < input.samples) {
+          await new Promise((resolve) => setTimeout(resolve, input.intervalMs));
+        }
+      }
+      return jsonResult({
+        warmupSeconds: input.warmupSeconds,
+        intervalMs: input.intervalMs,
+        ...summarizeProfile(snapshots, input.includeSamples),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_close_editor",
+  {
+    title: "Close Smile editor",
+    description:
+      "Solicita fechamento ordenado ao editor vivo e aguarda renderer, janela e named pipe encerrarem.",
+    inputSchema: {
+      timeoutSeconds: z.number().int().min(5).max(120).default(30),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const status = await editorBridge.status(300).catch(() => undefined);
+      if (!status) return jsonResult({ alreadyStopped: true, stopped: true });
+      return jsonResult({ pid: status.pid, ...(await editorBridge.shutdown(input.timeoutSeconds)) });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
   "smile_run_editor",
   {
     title: "Run Smile editor",
     description:
-      "Inicia uma versao ja compilada do SmileEditor como processo separado e retorna o PID.",
+      "Inicia o SmileEditor, opcionalmente com uma .sscene, e pode aguardar renderer e cena ficarem prontos.",
     inputSchema: {
       configuration: z.enum(["Debug", "Release", "RelWithDebInfo"]).default("Debug"),
+      scenePath: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Caminho relativo da .sscene que deve ser carregada no boot."),
       arguments: z.array(z.string()).max(32).default([]),
+      waitUntilReady: z.boolean().default(true),
+      startupTimeoutSeconds: z.number().int().min(10).max(300).default(90),
     },
     annotations: {
       readOnlyHint: false,
@@ -284,19 +545,81 @@ server.registerTool(
   async (input) => {
     try {
       const executable = project.editorExecutable(input.configuration);
-      const child = spawn(executable, input.arguments, {
+      let scenePath: string | undefined;
+      if (input.scenePath) {
+        scenePath = await project.resolveProjectPath(input.scenePath);
+        const sceneStat = await stat(scenePath);
+        if (!sceneStat.isFile() || path.extname(scenePath).toLocaleLowerCase() !== ".sscene") {
+          throw new Error("scenePath precisa apontar para um arquivo .sscene.");
+        }
+      }
+
+      try {
+        const existing = await editorBridge.status(300);
+        if (!existing.executablePath) {
+          throw new Error(
+            "O SmileEditor conectado usa um bridge antigo que nao identifica a build. " +
+              "Feche-o e recompile o alvo SmileEditor.",
+          );
+        }
+        if (!sameWindowsPath(existing.executablePath, executable)) {
+          throw new Error(
+            `Ja existe um SmileEditor aberto por '${existing.executablePath}', mas foi pedida ` +
+              `'${executable}'. Feche-o antes de trocar de configuracao.`,
+          );
+        }
+        if (scenePath && !sameWindowsPath(existing.scenePath, scenePath)) {
+          throw new Error(
+            `Ja existe um SmileEditor aberto com '${existing.scenePath || "nenhuma cena"}'. ` +
+              "Feche-o antes de iniciar outra cena.",
+          );
+        }
+        const status = input.waitUntilReady
+          ? await editorBridge.waitUntilReady(input.startupTimeoutSeconds, scenePath)
+          : existing;
+        return jsonResult({
+          configuration: input.configuration,
+          executable,
+          pid: existing.pid,
+          alreadyRunning: true,
+          status,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("Ja existe um SmileEditor")) {
+          throw error;
+        }
+        if (
+          !(error instanceof Error) ||
+          !error.message.startsWith("SmileEditor nao encontrado na named pipe local")
+        ) {
+          throw error;
+        }
+      }
+
+      const editorArguments = scenePath ? [scenePath, ...input.arguments] : input.arguments;
+      const child = spawn(executable, editorArguments, {
         cwd: path.dirname(executable),
         detached: true,
         shell: false,
         stdio: "ignore",
         windowsHide: false,
       });
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
       child.unref();
+      const status = input.waitUntilReady
+        ? await editorBridge.waitUntilReady(input.startupTimeoutSeconds, scenePath)
+        : undefined;
       return jsonResult({
         configuration: input.configuration,
         executable,
         pid: child.pid ?? null,
-        arguments: input.arguments,
+        alreadyRunning: false,
+        scenePath: scenePath ? project.relative(scenePath) : null,
+        arguments: editorArguments,
+        status: status ?? null,
       });
     } catch (error) {
       return errorResult(error);

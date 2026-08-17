@@ -8,6 +8,10 @@
 namespace Smile {
     class FGpuMesh {
     public:
+        // Sobe VB/IB e o payload de RT por triangulo. Quando o payload nao vem do cozido
+        // (primitiva do editor, preview de material) ele e GERADO aqui pelo ResolveRTTriangles —
+        // sem isso o caminho procedural ficaria sem payload e os shaders de hit leriam um SRV
+        // vazio, o que aparece como normal de face invalida em toda a malha.
         void Upload(ID3D12Device* Device, const FMesh& Mesh);
 
         // Pool de geometria: varios meshes suballocados num UNICO buffer default-heap
@@ -21,9 +25,11 @@ namespace Smile {
         // Aponta este mesh pra uma fatia do pool: VBV/IBV/GPUVAs viram base+offset, e
         // VertexBuffer/IndexBuffer seguram o MESMO pool (o refcount do ComPtr mantem o
         // pool vivo enquanto qualquer mesh dele existir). VbOffset PRECISA ser multiplo
-        // de sizeof(Vertex) e IbOffset de 4 (FirstElement dos SRVs bindless e exato).
+        // de sizeof(Vertex), IbOffset de 4 e RtOffset de sizeof(FRTTriangle) (FirstElement
+        // dos SRVs bindless e exato). A regiao de RT e a terceira do chunk: [VB][IB][RTTri].
         void InitFromPool(const Microsoft::WRL::ComPtr<ID3D12Resource>& Pool,
-                          u64 VbOffset, u64 IbOffset, u32 VertexCount, u32 IndexCount);
+                          u64 VbOffset, u64 IbOffset, u64 RtOffset,
+                          u32 VertexCount, u32 IndexCount, u32 RtTriangleCount);
 
         void Draw(ID3D12GraphicsCommandList* CommandList) const;
 
@@ -43,19 +49,31 @@ namespace Smile {
         ID3D12Resource* VertexResource() const { return VertexBuffer.Get(); }
         ID3D12Resource* IndexResource()  const { return IndexBuffer.Get(); }
 
-        // Offset da fatia dentro do pool, em ELEMENTOS (Vertex / u32) — FirstElement dos
-        // SRVs bindless de VB/IB (DDGI). 0 quando o mesh tem buffer proprio (Upload).
+        // Offset da fatia dentro do pool, em ELEMENTOS (Vertex / u32 / FRTTriangle) —
+        // FirstElement dos SRVs bindless. 0 quando o mesh tem buffer proprio (Upload).
         u32 VertexFirstElement() const { return VbFirstElement; }
         u32 IndexFirstElement()  const { return IbFirstElement; }
+
+        // Payload de RT por triangulo. O recurso pode ser o MESMO pool do VB/IB (cena cozida) ou
+        // um buffer proprio (Upload avulso); quem consome so precisa do par (recurso, elemento).
+        // Count 0 = mesh sem payload, e nesse caso nenhum SRV e criado — ver FRaytracingScene.
+        ID3D12Resource* RTTriangleResource()     const { return RTTriangleBuffer.Get(); }
+        u32             RTTriangleFirstElement() const { return RtFirstElement; }
+        u32             RTTriangleCount()        const { return RtTriangleCount_; }
 
     private:
         Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
+        // Terceiro recurso do mesh. Na cena cozida aponta para o mesmo pool que VB/IB (o ComPtr
+        // extra so soma refcount); no caminho avulso do Upload e um buffer proprio.
+        Microsoft::WRL::ComPtr<ID3D12Resource> RTTriangleBuffer;
         D3D12_VERTEX_BUFFER_VIEW               VertexBufferView{};
         D3D12_INDEX_BUFFER_VIEW                IndexBufferView{};
         u32                                    IndexCount     = 0;
         u32                                    VbFirstElement = 0;
         u32                                    IbFirstElement = 0;
+        u32                                    RtFirstElement = 0;
+        u32                                    RtTriangleCount_ = 0;
     };
 
     class FMaterial;

@@ -7,6 +7,10 @@ const PROTOCOL_VERSION = 1;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
+// O renderer pode anunciar Available por um instante entre a criacao do viewport e o commit
+// assincrono da cena, voltando a false enquanto troca os recursos. Uma amostra positiva fez o
+// run_editor liberar a captura cedo demais na Bistro. Exija uma janela continua, nao um pulso.
+const READY_STABLE_MS = 1_500;
 
 interface BridgeEnvelope {
   version: number;
@@ -18,6 +22,9 @@ interface BridgeEnvelope {
 export interface EditorStatus {
   protocolVersion: number;
   pid: number;
+  executablePath?: string;
+  buildCommit?: string;
+  engineVersion?: string;
   ready: boolean;
   captureBusy: boolean;
   scenePath: string;
@@ -41,6 +48,33 @@ export interface CaptureFrameResult {
   manifest: Record<string, unknown>;
   imageData?: string;
   imageOmittedReason?: string;
+}
+
+export interface ProfileTiming {
+  name: string;
+  queue: "direct" | "asyncCompute";
+  depth: number;
+  milliseconds: number;
+  rawMilliseconds: number;
+}
+
+export interface ProfileSnapshot {
+  frameIndex: number;
+  cpuFps: number;
+  outputWidth: number;
+  outputHeight: number;
+  renderWidth: number;
+  renderHeight: number;
+  gpu: string;
+  direct: ProfileTiming[];
+  asyncCompute: ProfileTiming[];
+  vram: {
+    valid: boolean;
+    localUsageBytes: number;
+    localBudgetBytes: number;
+    nonLocalUsageBytes: number;
+  };
+  settings: Record<string, unknown>;
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -80,6 +114,44 @@ export class SmileEditorBridge {
     const result = await this.request("status", {}, timeoutMs);
     if (!result || typeof result !== "object") throw new Error("Status invalido retornado pelo editor.");
     return result as EditorStatus;
+  }
+
+  async waitUntilReady(timeoutSeconds: number, expectedScenePath?: string): Promise<EditorStatus> {
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    let lastStatus: EditorStatus | undefined;
+    let lastError: Error | undefined;
+    let readySince: number | undefined;
+
+    while (Date.now() < deadline) {
+      try {
+        lastStatus = await this.status(Math.min(1_000, Math.max(100, deadline - Date.now())));
+        lastError = undefined;
+        const sceneMatches =
+          expectedScenePath === undefined ||
+          this.samePath(lastStatus.scenePath, expectedScenePath);
+        if (lastStatus.ready && sceneMatches) {
+          readySince ??= Date.now();
+          if (Date.now() - readySince >= READY_STABLE_MS) return lastStatus;
+        } else {
+          readySince = undefined;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        readySince = undefined;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    if (lastStatus?.ready && expectedScenePath) {
+      throw new Error(
+        `SmileEditor ficou pronto, mas carregou '${lastStatus.scenePath || "nenhuma cena"}' ` +
+          `em vez de '${expectedScenePath}'.`,
+      );
+    }
+    throw new Error(
+      `SmileEditor nao ficou pronto em ${timeoutSeconds} s.` +
+        (lastError ? ` Ultimo erro: ${lastError.message}` : ""),
+    );
   }
 
   async captureFrame(options: CaptureFrameOptions): Promise<CaptureFrameResult> {
@@ -137,6 +209,47 @@ export class SmileEditorBridge {
       }
     }
     return capture;
+  }
+
+  async configureProfile(
+    preset: "gameplay_rr" | "controlled_native",
+    bookmarkSlot: number,
+  ): Promise<Record<string, unknown>> {
+    const result = await this.request(
+      "profile_configure",
+      { preset, bookmarkSlot },
+      30_000,
+    );
+    if (!result || typeof result !== "object") {
+      throw new Error("Configuracao de perfil invalida retornada pelo editor.");
+    }
+    return result as Record<string, unknown>;
+  }
+
+  async profileSnapshot(timeoutMs = 2_000): Promise<ProfileSnapshot> {
+    const result = await this.request("profile_snapshot", {}, timeoutMs);
+    if (!result || typeof result !== "object") {
+      throw new Error("Snapshot de perfil invalido retornado pelo editor.");
+    }
+    const snapshot = result as Partial<ProfileSnapshot>;
+    if (!Array.isArray(snapshot.direct) || !Array.isArray(snapshot.asyncCompute)) {
+      throw new Error("Snapshot de perfil sem timestamps de GPU.");
+    }
+    return snapshot as ProfileSnapshot;
+  }
+
+  async shutdown(timeoutSeconds: number): Promise<Record<string, unknown>> {
+    const accepted = await this.request("shutdown", {}, 5_000);
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        await this.status(500);
+      } catch {
+        return { accepted, stopped: true };
+      }
+    }
+    throw new Error(`SmileEditor nao encerrou em ${timeoutSeconds} s.`);
   }
 
   private request(command: string, argumentsObject: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
@@ -225,5 +338,11 @@ export class SmileEditorBridge {
       throw new Error(`SmileEditor retornou um arquivo que nao e ${extension}.`);
     }
     return resolved;
+  }
+
+  private samePath(left: string, right: string): boolean {
+    if (!left || !right) return false;
+    const normalize = (value: string): string => path.resolve(value).toLocaleLowerCase("en-US");
+    return normalize(left) === normalize(right);
   }
 }

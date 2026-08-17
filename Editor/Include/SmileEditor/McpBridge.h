@@ -13,6 +13,7 @@ class QLocalSocket;
 namespace SmileEditor {
     class CameraBookmarksBridge;
     class CaptureBridge;
+    class ViewportWidget;
 
     // Canal local e pequeno entre o SmileMCP e o editor vivo. QLocalServer vira named pipe no
     // Windows; UserAccessOption restringe a conexao ao usuario que iniciou o editor. O protocolo
@@ -26,6 +27,12 @@ namespace SmileEditor {
         ~McpBridge() override;
 
         void OnSceneLoaded(const QString& ScenePath, bool Additive);
+        void SetViewport(ViewportWidget* Value) { Viewport = Value; }
+
+    signals:
+        // MainWindow aprova o fechamento antes de fechar, evitando dialogos de sidecar durante
+        // um ciclo automatizado de benchmark e preservando o shutdown ordenado do renderer.
+        void ShutdownRequested();
 
     private slots:
         void OnNewConnection();
@@ -39,11 +46,15 @@ namespace SmileEditor {
         void HandleRequest(QLocalSocket* Socket, const QByteArray& Line);
         void HandleCapture(QLocalSocket* Socket, const QString& Id,
                            const QJsonObject& Arguments);
+        void HandleProfileConfigure(QLocalSocket* Socket, const QString& Id,
+                                    const QJsonObject& Arguments);
+        void HandleProfileSnapshot(QLocalSocket* Socket, const QString& Id);
         void Reply(QLocalSocket* Socket, const QString& Id, bool Ok,
                    const QJsonObject& Payload);
 
         CaptureBridge*        Capture   = nullptr;
         CameraBookmarksBridge* Bookmarks = nullptr;
+        ViewportWidget*        Viewport  = nullptr;
         QLocalServer*         Server    = nullptr;
         QHash<QLocalSocket*, QByteArray> Buffers;
         QPointer<QLocalSocket> ActiveCaptureSocket;

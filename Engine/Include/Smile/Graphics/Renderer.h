@@ -328,6 +328,7 @@ namespace Smile {
         u32  RenderHeight() const { return static_cast<u32>(SwapChain.GetHeight() * RenderScale + 0.5f); }
         u32  OutputWidth()  const { return SwapChain.GetWidth(); }
         u32  OutputHeight() const { return SwapChain.GetHeight(); }
+        u32  GetFrameIndex() const { return FrameIndex; }
 
         // Picking: o ID pass roda em res interna -> escala a coord do mouse (nativa) por RenderScale.
         void RequestPick(u32 X, u32 Y) {

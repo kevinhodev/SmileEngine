@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-08-17T03:41:07.423Z",
+  "scenePath": "Assets/Scenes/Bistro/BistroExterior.sscene",
+  "sequence": [
+    "packed-a1",
+    "legacy-b",
+    "packed-a2"
+  ],
+  "regime": {
+    "preset": "gameplay_rr",
+    "warmupSeconds": 15,
+    "samples": 60,
+    "intervalMs": 250,
+    "statistic": "timestamp bruto; mediana por rodada; packed = media de A1 e A2"
+  },
+  "restoredVariant": "packed",
+  "comparisons": [],
+  "runs": [],
+  "failure": "Error: smile_capture_frame: renderer ainda nao esta pronto\n    at call (file:///D:/Engines/SmileEngine/Tools/SmileMCP/scripts/benchmark-rt-geometry.mjs:34:29)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///D:/Engines/SmileEngine/Tools/SmileMCP/scripts/benchmark-rt-geometry.mjs:132:21"
+}
