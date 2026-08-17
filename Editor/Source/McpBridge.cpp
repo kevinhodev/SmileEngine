@@ -1,13 +1,9 @@
 #include "SmileEditor/McpBridge.h"
 #include "SmileEditor/CameraBookmarksBridge.h"
 #include "SmileEditor/CaptureBridge.h"
-#include "SmileEditor/ViewportWidget.h"
+#include "SmileEditor/RenderSettingsController.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Core/VersionInfo.h"
-#include "Smile/Graphics/D3D12Device.h"
-#include "Smile/Graphics/GpuProfiler.h"
-#include "Smile/Graphics/RenderSettings.h"
-#include "Smile/Graphics/Renderer.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -41,26 +37,76 @@ namespace SmileEditor {
             return true;
         }
 
-        QJsonArray SerializeTimings(
-            const std::vector<Smile::FGpuProfiler::FScopeResult>& _Results,
-            const QString& _Queue) {
+        QJsonArray SerializeTimings(const QVector<FProfileTimingSnapshot>& _Results) {
             QJsonArray Out;
             for (const auto& R : _Results) {
                 Out.append(QJsonObject{
-                    { QStringLiteral("name"), QString::fromUtf8(R.Name ? R.Name : "") },
-                    { QStringLiteral("queue"), _Queue },
-                    { QStringLiteral("depth"), static_cast<int>(R.Depth) },
+                    { QStringLiteral("name"), R.Name },
+                    { QStringLiteral("queue"), R.Queue },
+                    { QStringLiteral("depth"), R.Depth },
                     { QStringLiteral("milliseconds"), R.Milliseconds },
                     { QStringLiteral("rawMilliseconds"), R.RawMilliseconds },
                 });
             }
             return Out;
         }
+
+        QJsonObject SerializeSettings(const FRenderSettingsSnapshot& _Settings) {
+            return QJsonObject{
+                { QStringLiteral("ddgi"), _Settings.DDGI },
+                { QStringLiteral("restirGI"), _Settings.ReSTIRGI },
+                { QStringLiteral("restirDI"), _Settings.ReSTIRDI },
+                { QStringLiteral("radianceCache"), _Settings.RadianceCache },
+                { QStringLiteral("cacheQuery"), _Settings.CacheQuery },
+                { QStringLiteral("reflections"), _Settings.Reflections },
+                { QStringLiteral("gtao"), _Settings.GTAO },
+                { QStringLiteral("indirectPrimaryRequested"),
+                  _Settings.IndirectPrimaryRequested },
+                { QStringLiteral("indirectPrimaryEffective"),
+                  _Settings.IndirectPrimaryEffective },
+                { QStringLiteral("indirectFallbackRequested"),
+                  _Settings.IndirectFallbackRequested },
+                { QStringLiteral("indirectFallbackEffective"),
+                  _Settings.IndirectFallbackEffective },
+                { QStringLiteral("denoiser"), _Settings.Denoiser },
+                { QStringLiteral("upscaler"), _Settings.Upscaler },
+                { QStringLiteral("upscalerQuality"), _Settings.UpscalerQuality },
+                { QStringLiteral("renderScale"), _Settings.RenderScale },
+                { QStringLiteral("timeOfDayHours"), _Settings.TimeOfDayHours },
+                { QStringLiteral("timeOfDayRunning"), _Settings.TimeOfDayRunning },
+            };
+        }
+
+        QJsonObject SerializeProfileSnapshot(const FProfileSnapshot& _Snapshot) {
+            return QJsonObject{
+                { QStringLiteral("frameIndex"), static_cast<double>(_Snapshot.FrameIndex) },
+                { QStringLiteral("cpuFps"), _Snapshot.CpuFps },
+                { QStringLiteral("outputWidth"), _Snapshot.OutputWidth },
+                { QStringLiteral("outputHeight"), _Snapshot.OutputHeight },
+                { QStringLiteral("renderWidth"), _Snapshot.RenderWidth },
+                { QStringLiteral("renderHeight"), _Snapshot.RenderHeight },
+                { QStringLiteral("gpu"), _Snapshot.Gpu },
+                { QStringLiteral("direct"), SerializeTimings(_Snapshot.Direct) },
+                { QStringLiteral("asyncCompute"), SerializeTimings(_Snapshot.AsyncCompute) },
+                { QStringLiteral("vram"), QJsonObject{
+                    { QStringLiteral("valid"), _Snapshot.Vram.Valid },
+                    { QStringLiteral("localUsageBytes"),
+                      static_cast<double>(_Snapshot.Vram.LocalUsageBytes) },
+                    { QStringLiteral("localBudgetBytes"),
+                      static_cast<double>(_Snapshot.Vram.LocalBudgetBytes) },
+                    { QStringLiteral("nonLocalUsageBytes"),
+                      static_cast<double>(_Snapshot.Vram.NonLocalUsageBytes) },
+                } },
+                { QStringLiteral("settings"), SerializeSettings(_Snapshot.Settings) },
+            };
+        }
     }
 
     McpBridge::McpBridge(CaptureBridge* _Capture, CameraBookmarksBridge* _Bookmarks,
+                         RenderSettingsController* _RenderSettings,
                          QObject* _Parent)
         : QObject(_Parent), Capture(_Capture), Bookmarks(_Bookmarks),
+          RenderSettings(_RenderSettings),
           Server(new QLocalServer(this)),
           PipeName(qEnvironmentVariable("SMILE_MCP_PIPE", "SmileEngine-MCP-v1"))
     {
@@ -152,13 +198,8 @@ namespace SmileEditor {
             // a cada 250 ms pode cair sempre dentro do frame e reportar false para sempre. A
             // consulta MCP pode esperar o frame soltar o lock; o resultado passa a ser estado,
             // nao uma foto da contencao naquele microssegundo.
-            bool Ready = false;
-            if (Viewport && Viewport->GetRenderer()) {
-                auto Access = Viewport->GetRenderer().Lock();
-                Ready = Access && Access->IsInitialized();
-            } else {
-                Ready = Capture && Capture->Available();
-            }
+            const bool Ready = RenderSettings ? RenderSettings->Ready()
+                                              : Capture && Capture->Available();
             QJsonObject Result{
                 { QStringLiteral("protocolVersion"), kProtocolVersion },
                 { QStringLiteral("pid"), static_cast<qint64>(QCoreApplication::applicationPid()) },
@@ -219,10 +260,10 @@ namespace SmileEditor {
 
     void McpBridge::HandleProfileConfigure(QLocalSocket* _Socket, const QString& _Id,
                                            const QJsonObject& _Arguments) {
-        if (!Viewport || !Viewport->GetRenderer()) {
+        if (!RenderSettings) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
-                                QStringLiteral("renderer ainda nao esta pronto") } });
+                                QStringLiteral("controlador de render indisponivel") } });
             return;
         }
 
@@ -250,118 +291,48 @@ namespace SmileEditor {
             return;
         }
 
-        auto Access = Viewport->GetRenderer().Lock();
-        if (!Access || !Access->IsInitialized()) {
+        const EProfilePreset ProfilePreset = Preset == QStringLiteral("gameplay_rr")
+            ? EProfilePreset::GameplayRR : EProfilePreset::ControlledNative;
+        QString Error;
+        const auto Applied = RenderSettings->ApplyProfilePreset(ProfilePreset, Error);
+        if (!Applied) {
             Reply(_Socket, _Id, false,
-                  QJsonObject{ { QStringLiteral("error"),
-                                QStringLiteral("renderer ainda nao esta inicializado") } });
+                  QJsonObject{ { QStringLiteral("error"), Error } });
             return;
         }
 
-        // Regime fixo para o A/B: o que muda entre processos e somente o bytecode do acesso a
-        // geometria. O cache entra ativo de imediato (sem borda de auto-warmup no meio da serie),
-        // sol e hora ficam congelados, e todos os consumidores do hit path ficam ligados.
-        auto& Settings = Access->Settings();
-        Settings.SetRadianceCacheAutoWarmup(false);
-        Settings.SetUseGI(true);
-        Settings.SetRadianceCacheEnabled(true);
-        Settings.SetRadianceCacheQuery(true);
-        Settings.SetUseReSTIRGI(true);
-        Settings.SetUseReSTIRDI(true);
-        Settings.SetUseReflections(true);
-        Settings.SetUseAO(true);
-        Settings.SetIndirectPrimary(Smile::EIndirectPrimary::ReSTIR_SHaRC);
-
-        if (Preset == QStringLiteral("gameplay_rr")) {
-            Settings.SetUpscalerQuality(0);
-            Settings.SetDenoiser(Smile::EDenoiser::DLSS_RR);
-        } else {
-            Settings.SetDenoiser(Smile::EDenoiser::None);
-            Settings.SetUpscaler(Smile::EUpscaler::None);
-            Settings.SetRenderScale(1.0f);
-        }
-
-        auto& Tod = Access->GetTimeOfDay();
-        Tod.Enabled   = true;
-        Tod.Running   = false;
-        Tod.TimeHours = 10.0f;
-
         Reply(_Socket, _Id, true,
               QJsonObject{ { QStringLiteral("result"), QJsonObject{
-                  { QStringLiteral("preset"), Preset },
+                  { QStringLiteral("preset"), Applied->Preset },
                   { QStringLiteral("bookmarkSlot"), Slot },
-                  { QStringLiteral("timeOfDayHours"), 10.0 },
+                  { QStringLiteral("timeOfDayHours"), Applied->TimeOfDayHours },
+                  { QStringLiteral("settings"), SerializeSettings(Applied->Settings) },
               } } });
     }
 
     void McpBridge::HandleProfileSnapshot(QLocalSocket* _Socket, const QString& _Id) {
-        if (!Viewport || !Viewport->GetRenderer()) {
+        if (!RenderSettings) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
-                                QStringLiteral("renderer ainda nao esta pronto") } });
+                                QStringLiteral("controlador de render indisponivel") } });
             return;
         }
-        auto Access = Viewport->GetRenderer().Lock();
-        if (!Access || !Access->IsInitialized()) {
+        QString Error;
+        const auto Snapshot = RenderSettings->ProfileSnapshot(Error);
+        if (!Snapshot) {
             Reply(_Socket, _Id, false,
-                  QJsonObject{ { QStringLiteral("error"),
-                                QStringLiteral("renderer ainda nao esta inicializado") } });
+                  QJsonObject{ { QStringLiteral("error"), Error } });
             return;
         }
-
-        const auto& Settings = Access->Settings();
-        const auto& VM = Access->GetDevice().QueryVideoMemory();
-        QJsonObject Result{
-            { QStringLiteral("frameIndex"), static_cast<double>(Access->GetFrameIndex()) },
-            { QStringLiteral("cpuFps"), Viewport->GetFPS() },
-            { QStringLiteral("outputWidth"), static_cast<int>(Access->OutputWidth()) },
-            { QStringLiteral("outputHeight"), static_cast<int>(Access->OutputHeight()) },
-            { QStringLiteral("renderWidth"), static_cast<int>(Access->RenderWidth()) },
-            { QStringLiteral("renderHeight"), static_cast<int>(Access->RenderHeight()) },
-            { QStringLiteral("gpu"), QString::fromStdWString(
-                  Access->GetDevice().GetAdapterDescription()) },
-            { QStringLiteral("direct"), SerializeTimings(
-                  Access->GetGpuProfiler().Results(), QStringLiteral("direct")) },
-            { QStringLiteral("asyncCompute"), SerializeTimings(
-                  Access->GetAsyncComputeTimings(), QStringLiteral("asyncCompute")) },
-            { QStringLiteral("vram"), QJsonObject{
-                  { QStringLiteral("valid"), VM.Valid },
-                  { QStringLiteral("localUsageBytes"), static_cast<double>(VM.LocalUsage) },
-                  { QStringLiteral("localBudgetBytes"), static_cast<double>(VM.LocalBudget) },
-                  { QStringLiteral("nonLocalUsageBytes"), static_cast<double>(VM.NonLocalUsage) },
-              } },
-            { QStringLiteral("settings"), QJsonObject{
-                  { QStringLiteral("ddgi"), Settings.GetUseGI() },
-                  { QStringLiteral("restirGI"), Settings.GetUseReSTIRGI() },
-                  { QStringLiteral("restirDI"), Settings.GetUseReSTIRDI() },
-                  { QStringLiteral("radianceCache"), Settings.GetRadianceCacheEnabled() },
-                  { QStringLiteral("cacheQuery"), Settings.GetRadianceCacheQuery() },
-                  { QStringLiteral("reflections"), Settings.GetUseReflections() },
-                  { QStringLiteral("gtao"), Settings.GetUseAO() },
-                  { QStringLiteral("indirectPrimaryRequested"),
-                    static_cast<int>(Settings.GetIndirectPrimary()) },
-                  { QStringLiteral("indirectPrimaryEffective"),
-                    static_cast<int>(Settings.EffectiveIndirectPrimary()) },
-                  { QStringLiteral("denoiser"), static_cast<int>(Settings.GetDenoiser()) },
-                  { QStringLiteral("upscaler"), static_cast<int>(Settings.GetUpscaler()) },
-                  { QStringLiteral("upscalerQuality"), Settings.GetUpscalerQuality() },
-                  { QStringLiteral("renderScale"), Settings.GetRenderScale() },
-                  { QStringLiteral("timeOfDayHours"), Access->GetTimeOfDay().TimeHours },
-                  { QStringLiteral("timeOfDayRunning"), Access->GetTimeOfDay().Running },
-              } },
-        };
-        Reply(_Socket, _Id, true, QJsonObject{ { QStringLiteral("result"), Result } });
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"),
+                            SerializeProfileSnapshot(*Snapshot) } });
     }
 
     void McpBridge::HandleCapture(QLocalSocket* _Socket, const QString& _Id,
                                   const QJsonObject& _Arguments) {
-        bool Ready = false;
-        if (Viewport && Viewport->GetRenderer()) {
-            auto Access = Viewport->GetRenderer().Lock();
-            Ready = Access && Access->IsInitialized();
-        } else {
-            Ready = Capture && Capture->Available();
-        }
+        const bool Ready = RenderSettings ? RenderSettings->Ready()
+                                          : Capture && Capture->Available();
         if (!Capture || !Ready) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),

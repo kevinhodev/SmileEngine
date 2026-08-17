@@ -25,6 +25,7 @@ set(EDITOR_HEADERS
     Include/SmileEditor/CameraBookmarksBridge.h
     Include/SmileEditor/CaptureBridge.h
     Include/SmileEditor/McpBridge.h
+    Include/SmileEditor/RenderSettingsController.h
     Include/SmileEditor/MaterialsBridge.h
     Include/SmileEditor/RenderSettingsBridge.h
 )
@@ -52,6 +53,7 @@ set(EDITOR_SOURCES
     Source/CameraBookmarksBridge.cpp
     Source/CaptureBridge.cpp
     Source/McpBridge.cpp
+    Source/RenderSettingsController.cpp
     Source/MaterialsBridge.cpp
     Source/RenderSettingsBridge.cpp
 )

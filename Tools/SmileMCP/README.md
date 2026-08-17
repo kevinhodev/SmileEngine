@@ -76,18 +76,20 @@ build e execucao continuam sujeitos a aprovacao do cliente.
 
 ## Bridge do editor
 
-O MCP atual opera do lado de fora do processo. A extensao planejada e um bridge local no editor,
-com protocolo versionado e mensagens JSON, para expor estado vivo sem incorporar o SDK MCP ao C++:
+O MCP opera do lado de fora do processo. Um bridge local no editor usa protocolo versionado e
+mensagens JSON para expor estado vivo sem incorporar o SDK MCP ao C++:
 
 ```text
 Codex <-> SmileMCP (STDIO) <-> bridge local <-> SmileEditor/Renderer
 ```
 
-O bridge comeca read-only para estado vivo: `smile_editor_status` expoe conexao, PID, prontidao,
-cena e captura em andamento. Entidades, render graph e profiling ainda sao extensoes futuras;
-operacoes mutaveis e scripting devem entrar somente com allowlist, timeout e identificador de
-sessao.
+Os comandos vivos atuais cobrem status, captura, configuracao/snapshot de profiling e shutdown.
+`McpBridge` fica restrito a validar e traduzir o protocolo; acesso sincronizado ao renderer,
+aplicacao dos presets e snapshots tipados moram no `RenderSettingsController`. O mesmo controlador
+notifica os bridges QML depois de uma mutacao externa, evitando que a engine mude pela pipe e a UI
+continue exibindo valores antigos.
 
-O primeiro comando vivo ja esta implementado: `smile_capture_frame` conversa com o `McpBridge`
-do editor por JSON delimitado por linha. A named pipe aceita somente o usuario local, permanece
-aberta durante o aquecimento e responde apenas depois que PNG + manifesto foram publicados.
+Entidades e render graph ainda sao extensoes futuras. Novas operacoes mutaveis e scripting devem
+entrar somente com allowlist, timeout e identificador de sessao. `smile_capture_frame` mantem a
+named pipe aberta durante o aquecimento e responde apenas depois que PNG + manifesto foram
+publicados.

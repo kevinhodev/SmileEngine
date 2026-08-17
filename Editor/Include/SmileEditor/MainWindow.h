@@ -28,6 +28,7 @@ namespace SmileEditor {
     class CameraBookmarksBridge;
     class CaptureBridge;
     class McpBridge;
+    class RenderSettingsController;
     class MaterialsBridge;
     class RenderSettingsBridge;
 
@@ -102,6 +103,7 @@ namespace SmileEditor {
         // Captura deterministica. Vizinha dos bookmarks pela mesma razao: o protocolo e pose fixa
         // + knobs fixos, e as duas metades tem de estar a um clique uma da outra.
         CaptureBridge*        CaptureBr  = nullptr;
+        RenderSettingsController* RenderSettingsCtrl = nullptr;
         McpBridge*            McpBr      = nullptr; // named pipe local usada pelo SmileMCP
         RenderSettingsBridge* RenderBr   = nullptr; // ponte C++ -> knobs do SettingsWindow.qml
         QPointer<QDialog>     MaterialsDlg;          // janela flutuante do Editor de Materiais

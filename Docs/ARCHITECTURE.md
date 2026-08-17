@@ -747,9 +747,12 @@ o viewport permanece um `HWND` nativo. Os painéis Widgets originais
   usado pela render thread; `Lock()` devolve um guard RAII. Inicialização e shutdown também
   acontecem na thread de renderização.
 - **Bridges QML** (`Q_OBJECT` + `Q_PROPERTY`/`Q_INVOKABLE`), uma por domínio:
-  `MaterialsBridge`, `LightsBridge`, `SceneOutlinerBridge`, `TimeOfDayBridge`, `MenuBridge`,
-  `StatusBridge`, `LogBridge`, `WindowBridge`. **`ViewportWidget` acumula, além do viewport,
-  o papel de bridge de ~130 propriedades de render** (dívida conhecida, §13).
+  `MaterialsBridge`, `LightsBridge`, `SceneOutlinerBridge`, `TimeOfDayBridge`,
+  `RenderSettingsBridge`, `MenuBridge`, `StatusBridge`, `LogBridge`, `WindowBridge`.
+- **Controle externo de render:** `RenderSettingsController` concentra o acesso sincronizado que
+  nao pertence a uma tela. `McpBridge` traduz JSON/named pipe e usa snapshots tipados do
+  controlador; depois de uma mutacao externa, os sinais do controlador invalidam os mesmos
+  bindings QML usados pelos setters da UI.
 - **QmlHost** carrega os `.qml` do source dir em dev (hot-reload) e do lado do exe em deploy.
   `Theme.qml` é a fonte única de cores/tipografia; a fonte Inter é empacotada.
 - **Logger → UI:** `Smile::SetLogSink` redireciona `LogInfo/Warning/Error` para o `ConsolePanel`.
@@ -890,9 +893,10 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 - **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
   caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
   política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
-- **`ViewportWidget` é o espelho do God object no editor:** 2796 linhas + 645 no header e
-  **134 `Q_PROPERTY`**, acumulando host do HWND, input, telemetria e a bridge de ~130 knobs de
-  render. As bridges por domínio já provam o padrão certo — falta um `RenderSettingsBridge`.
+- **`ViewportWidget` ainda concentra responsabilidades do editor:** host do HWND, input,
+  telemetria, visualizador de alvos e fila de jobs do renderer continuam no mesmo tipo. Os knobs
+  ja sairam para `RenderSettingsBridge`, e configuracao/snapshot externos passam por
+  `RenderSettingsController`; a separacao restante e sobretudo de telemetria e apresentacao.
 - **Acoplamento de compilação:** 59 dos 73 headers públicos de `Graphics/` puxam
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` puxa 69 headers e é incluído por 10 TUs.
 - **Inversão de dependência menor:** `Engine/Source/Scene/SceneLoader.cpp` inclui

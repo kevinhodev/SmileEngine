@@ -77,6 +77,14 @@ export interface ProfileSnapshot {
   settings: Record<string, unknown>;
 }
 
+export interface ProfileConfiguration {
+  preset: "gameplay_rr" | "controlled_native";
+  bookmarkSlot: number;
+  timeOfDayHours: number;
+  // Readback posterior ao apply, nao eco dos argumentos: inclui pedido/efetivo da politica GI.
+  settings: Record<string, unknown>;
+}
+
 function isInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return (
@@ -214,7 +222,7 @@ export class SmileEditorBridge {
   async configureProfile(
     preset: "gameplay_rr" | "controlled_native",
     bookmarkSlot: number,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<ProfileConfiguration> {
     const result = await this.request(
       "profile_configure",
       { preset, bookmarkSlot },
@@ -223,7 +231,18 @@ export class SmileEditorBridge {
     if (!result || typeof result !== "object") {
       throw new Error("Configuracao de perfil invalida retornada pelo editor.");
     }
-    return result as Record<string, unknown>;
+    const configuration = result as Partial<ProfileConfiguration>;
+    if (
+      configuration.preset !== preset ||
+      typeof configuration.bookmarkSlot !== "number" ||
+      typeof configuration.timeOfDayHours !== "number" ||
+      !configuration.settings ||
+      typeof configuration.settings !== "object" ||
+      Array.isArray(configuration.settings)
+    ) {
+      throw new Error("Configuracao de perfil sem readback obrigatorio do estado aplicado.");
+    }
+    return configuration as ProfileConfiguration;
   }
 
   async profileSnapshot(timeoutMs = 2_000): Promise<ProfileSnapshot> {

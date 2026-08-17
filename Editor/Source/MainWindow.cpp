@@ -15,6 +15,7 @@
 #include "SmileEditor/CameraBookmarksBridge.h"
 #include "SmileEditor/CaptureBridge.h"
 #include "SmileEditor/McpBridge.h"
+#include "SmileEditor/RenderSettingsController.h"
 #include "SmileEditor/MaterialsBridge.h"
 #include "SmileEditor/WindowBridge.h"
 #include "SmileEditor/ViewportWidget.h"
@@ -100,7 +101,8 @@ namespace SmileEditor {
         MaterialsBr = new MaterialsBridge(this);      // Editor de Materiais (renderer depois)
         CameraBookmarksBr = new CameraBookmarksBridge(this); // bookmarks de camera (renderer depois)
         CaptureBr  = new CaptureBridge(this);         // captura deterministica (renderer depois)
-        McpBr      = new McpBridge(CaptureBr, CameraBookmarksBr, this);
+        RenderSettingsCtrl = new RenderSettingsController(this);
+        McpBr      = new McpBridge(CaptureBr, CameraBookmarksBr, RenderSettingsCtrl, this);
         connect(McpBr, &McpBridge::ShutdownRequested, this, [this]() {
             // Benchmark automatizado nao pode parar num dialogo de sidecar. O fechamento ainda
             // passa pelo segundo estagio de closeEvent, que espera a render thread terminar.
@@ -108,6 +110,20 @@ namespace SmileEditor {
             close();
         });
         RenderBr   = new RenderSettingsBridge(this);  // knobs de render (renderer depois)
+
+        // Mutacoes externas passam pelo controlador compartilhado. O lock e solto antes destes
+        // sinais, entao os bindings podem reler o renderer sem reentrancia; a UI deixa de ficar
+        // stale quando um preset foi aplicado pela named pipe em vez de por um clique QML.
+        connect(RenderSettingsCtrl, &RenderSettingsController::GISettingsChanged,
+                RenderBr, &RenderSettingsBridge::GISettingsChanged);
+        connect(RenderSettingsCtrl, &RenderSettingsController::RenderSettingsChanged,
+                RenderBr, &RenderSettingsBridge::RenderSettingsChanged);
+        connect(RenderSettingsCtrl, &RenderSettingsController::StatsChanged,
+                RenderBr, &RenderSettingsBridge::StatsChanged);
+        connect(RenderSettingsCtrl, &RenderSettingsController::TimeOfDayChanged,
+                TodBridge, &TimeOfDayBridge::StateChanged);
+        connect(RenderSettingsCtrl, &RenderSettingsController::TimeOfDayChanged,
+                TodBridge, &TimeOfDayBridge::TimeChanged);
 
         // Estrutura de luzes mudou (add/remover/duplicar/toggle/rename/cor) -> arvore refaz.
         connect(LightsBr, &LightsBridge::LightsChanged,
@@ -720,7 +736,7 @@ namespace SmileEditor {
         // Captura: idem, so o handle. O progresso e puxado por Timer do QML enquanto o card
         // estiver visivel — a sessao roda na render thread e a GUI so pergunta.
         if (CaptureBr) CaptureBr->SetRenderer(Viewport->GetRenderer());
-        if (McpBr) McpBr->SetViewport(Viewport);
+        if (RenderSettingsCtrl) RenderSettingsCtrl->SetViewport(Viewport);
 
         // Painel TOD: liga a bridge no renderer e passa a atualizar o relogio por frame.
         if (TodBridge) {

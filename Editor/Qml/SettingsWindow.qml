@@ -60,7 +60,7 @@ Rectangle {
         if (selectedPage === 0)
             return "Upscaling, Anti-Aliasing e Resolução Interna do Viewport"
         if (selectedPage === 1)
-            return "Geometria dos raios de GI, reflexo e sombra: origem, intervalo e frescor da amostra"
+            return "Estimador de iluminação indireta, volume DDGI e ferramentas avançadas de validação"
         if (selectedPage === 4)
             return "Espectro físico, ganho das ondas e deslocamento geométrico do oceano FFT"
         if (selectedPage === 6)
@@ -2641,9 +2641,9 @@ Rectangle {
         }
 
         // ---- Pagina 1: Iluminacao global ----------------------------------------------------
-        // Painel de CALIBRACAO dos epsilons de raio. Uma coluna so (os controles sao largos por
-        // causa da explicacao de cada knob) e Column/Repeater: nenhum slider sabe seu proprio y,
-        // entao acrescentar ou tirar um knob na tabela do C++ reflui a pagina sozinho.
+        // A visão normal mostra só a política operacional. Calibração, diagnóstico e protocolo
+        // de captura ficam no laboratório recolhível; continuam na mesma Column para que abrir ou
+        // fechar o grupo reflua a página sem coordenadas manuais.
         Flickable {
             id: giPage
             visible: root.selectedPage === 1
@@ -2660,6 +2660,10 @@ Rectangle {
             // Repeater — reconstruindo os delegates DEBAIXO do mouse durante o arrasto. Recarrega
             // so nos momentos discretos: abrir a pagina e restaurar padroes.
             property var epsModel: []
+            // O uso cotidiano precisa de três decisões; o restante desta página existe para
+            // bring-up, calibração e A/B. Mantê-lo recolhido evita transformar instrumentos de
+            // laboratório em opções que parecem necessárias para configurar uma cena.
+            property bool labVisible: false
             function reloadEps() {
                 epsModel = renderModel.rayEpsilons
                 biasMaxSlider.uiValue = renderModel.giSurfaceBiasMax
@@ -2675,7 +2679,131 @@ Rectangle {
                 spacing: 16
 
                 Card {
+                    id: giOverviewCard
+                    width: parent.width
+                    title: "Pipeline de iluminação indireta"
+                    height: giLabButton.y + giLabButton.height + contentPadding
+
+                    Text {
+                        id: giPolicyText
+                        x: 20
+                        y: giOverviewCard.headerHeight + giOverviewCard.contentPadding
+                        width: parent.width - 40
+                        wrapMode: Text.WordWrap
+                        text: renderModel.indirectPolicySummary
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 12
+                    }
+
+                    Text {
+                        id: giPrimaryLabel
+                        x: 20
+                        y: giPolicyText.y + giPolicyText.height + 14
+                        text: "Estimador primário"
+                        color: root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 11
+                    }
+                    Row {
+                        id: giPrimaryRow
+                        x: 20
+                        y: giPrimaryLabel.y + giPrimaryLabel.height + 6
+                        spacing: 6
+                        Chip {
+                            label: "ReSTIR + SHaRC"
+                            active: renderModel.indirectPrimary === 0
+                            onTapped: renderModel.SetIndirectPrimary(0)
+                        }
+                        Chip {
+                            label: "DDGI"
+                            active: renderModel.indirectPrimary === 1
+                            onTapped: renderModel.SetIndirectPrimary(1)
+                        }
+                        Chip {
+                            label: "Off"
+                            active: renderModel.indirectPrimary === 2
+                            onTapped: renderModel.SetIndirectPrimary(2)
+                        }
+                    }
+
+                    Text {
+                        id: giDdgiLabel
+                        x: 20
+                        y: giPrimaryRow.y + giPrimaryRow.height + 18
+                        text: "Volume DDGI"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        id: giDdgiHint
+                        x: 20
+                        y: giDdgiLabel.y + giDdgiLabel.height + 2
+                        text: "fallback, névoa e modo DDGI"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 20
+                        y: giDdgiLabel.y - 3
+                        checked: renderModel.ddgiEnabled
+                        onToggled: renderModel.ToggleDDGI()
+                    }
+
+                    Text {
+                        id: giRestirLabel
+                        x: 20
+                        y: giDdgiHint.y + giDdgiHint.height + 16
+                        text: "ReSTIR GI"
+                        color: root.textNormal
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        id: giRestirHint
+                        x: 20
+                        y: giRestirLabel.y + giRestirLabel.height + 2
+                        text: "produtor do modo ReSTIR + SHaRC"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 20
+                        y: giRestirLabel.y - 3
+                        checked: renderModel.restirGIEnabled
+                        onToggled: renderModel.ToggleReSTIRGI()
+                    }
+
+                    StatusRow {
+                        id: giCacheStatus
+                        x: 20
+                        y: giRestirHint.y + giRestirHint.height + 16
+                        width: parent.width - 40
+                        label: "World radiance cache"
+                        value: !renderModel.radianceCacheEnabled ? "desligado"
+                               : (renderModel.radianceCacheQuery &&
+                                  renderModel.radianceCacheAutoWarmup ? "automático"
+                                                                     : "configuração manual")
+                    }
+
+                    ActionButton {
+                        id: giLabButton
+                        x: 20
+                        y: giCacheStatus.y + giCacheStatus.height + 16
+                        label: giPage.labVisible ? "Ocultar laboratório de GI"
+                                                 : "Abrir laboratório de GI"
+                        onTapped: giPage.labVisible = !giPage.labVisible
+                    }
+                }
+
+                Card {
                     id: rayEpsCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Epsilons de raio — calibração"
                     height: epsCol.y + epsCol.height + contentPadding
@@ -2777,6 +2905,7 @@ Rectangle {
                 // continuo p/ varrer, e sim uma troca de REGIME da TLAS (reconstroi a estrutura).
                 Card {
                     id: rtCullCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Culling nos reflexos"
                     height: cullLabel.y + cullLabel.height + contentPadding + 8
@@ -2823,6 +2952,7 @@ Rectangle {
 
                 Card {
                     id: backfaceCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Backface no gather do ReSTIR"
                     height: bfLabel.y + bfLabel.height + contentPadding + 8
@@ -2870,6 +3000,7 @@ Rectangle {
 
                 Card {
                     id: regirCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "ReGIR — luzes nos hits secundários"
                     height: regirLabel.y + regirLabel.height + contentPadding + 8
@@ -2914,70 +3045,15 @@ Rectangle {
 
                 Card {
                     id: radianceCacheCard
+                    visible: giPage.labVisible
                     width: parent.width
-                    title: "World radiance cache — terminador dos raios secundários"
+                    title: "World radiance cache — laboratório"
                     height: rcMissText.y + rcMissText.height + contentPadding + 8
-
-                    // A POLÍTICA vem antes de tudo e NÃO depende do cache: `DDGI primary` e `Off`
-                    // são estados válidos, e é justamente neles que o card do SHaRC importa menos.
-                    // Aninhá-la na linha de telemetria do cache (onde ela nasceu) a escondia
-                    // exatamente quando ela era a informação mais útil da página.
-                    Text {
-                        id: rcPolicyText
-                        x: 20
-                        y: radianceCacheCard.headerHeight + radianceCacheCard.contentPadding
-                        width: parent.width - 40
-                        wrapMode: Text.WordWrap
-                        text: renderModel.indirectPolicySummary
-                        color: root.textNormal
-                        font.family: C.Theme.fontFamily
-                        font.pixelSize: 12
-                    }
-
-                    // O SELETOR, logo abaixo do resumo porque é dele que o resumo fala: a linha de
-                    // cima mostra pedido → efetivo, e estas duas linhas são o PEDIDO. Quando o
-                    // pedido não pode ser honrado (SHaRC sem o passe pronto, DDGI sem volume), o
-                    // chip continua marcado e a seta aparece acima — o combo não volta sozinho.
-                    Text {
-                        id: rcPrimaryLabel
-                        x: 20
-                        y: rcPolicyText.y + rcPolicyText.height + 14
-                        text: "Primário — quem PRODUZ o indireto de superfície"
-                        color: root.textSecondary
-                        font.family: C.Theme.fontFamily
-                        font.pixelSize: 11
-                    }
-                    Row {
-                        id: rcPrimaryRow
-                        x: 20
-                        y: rcPrimaryLabel.y + rcPrimaryLabel.height + 6
-                        spacing: 6
-                        Chip {
-                            label: "ReSTIR + SHaRC"
-                            active: renderModel.indirectPrimary === 0
-                            onTapped: renderModel.SetIndirectPrimary(0)
-                        }
-                        Chip {
-                            // ROLLBACK da série. Não remover sem um gate que prove que ninguém
-                            // precisa mais dele: é o controle contra o qual as baselines da Fase 0
-                            // foram tiradas.
-                            label: "DDGI"
-                            active: renderModel.indirectPrimary === 1
-                            onTapped: renderModel.SetIndirectPrimary(1)
-                        }
-                        Chip {
-                            // Off apaga o indireto de superfície INTEIRO — SHaRC junto. Não isola
-                            // o DDGI, e a névoa continua lendo o atlas.
-                            label: "Off"
-                            active: renderModel.indirectPrimary === 2
-                            onTapped: renderModel.SetIndirectPrimary(2)
-                        }
-                    }
 
                     Text {
                         id: rcFallbackLabel
                         x: 20
-                        y: rcPrimaryRow.y + rcPrimaryRow.height + 12
+                        y: radianceCacheCard.headerHeight + radianceCacheCard.contentPadding
                         text: "Fallback — quem RESPONDE o miss do raio secundário"
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
@@ -3010,7 +3086,7 @@ Rectangle {
                         y: rcFallbackRow.y + rcFallbackRow.height + 10
                         width: parent.width - 40
                         wrapMode: Text.WordWrap
-                        text: "Trocar qualquer um dos dois invalida os históricos de SUPERFÍCIE " +
+                        text: "Trocar o fallback invalida os históricos de SUPERFÍCIE " +
                               "(ReSTIR GI, reflexões, atlas do DDGI, NRD): o terminador do raio " +
                               "secundário muda para todos de uma vez. A NÉVOA não é derrubada — " +
                               "ela lê o atlas direto e continua lendo exatamente o mesmo.\n\n" +
@@ -3431,6 +3507,7 @@ Rectangle {
 
                 Card {
                     id: cameraBookmarksCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Câmeras de referência — protocolo de captura"
                     height: camSlotsColumn.y + camSlotsColumn.height + contentPadding + 8
@@ -3558,6 +3635,7 @@ Rectangle {
 
                 Card {
                     id: captureCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Captura determinística — PNG + manifesto"
                     height: captureColumn.y + captureColumn.height + contentPadding + 8
@@ -3726,6 +3804,7 @@ Rectangle {
 
                 Card {
                     id: restirDICard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "ReSTIR DI — direta local"
                     height: restirDILabel.y + restirDILabel.height + contentPadding + 8
@@ -3767,6 +3846,7 @@ Rectangle {
 
                 Card {
                     id: ddgiSampleCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Amostragem do DDGI — bias de auto-sombra"
                     height: biasMaxSlider.y + biasMaxSlider.height + contentPadding + 8
@@ -3829,6 +3909,7 @@ Rectangle {
 
                 Card {
                     id: ddgiAdaptiveCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Resposta do atlas — histerese adaptativa"
                     height: adaptiveHystLabel.y + adaptiveHystLabel.height + contentPadding + 8
@@ -3892,6 +3973,7 @@ Rectangle {
 
                 Card {
                     id: ddgiCascadesCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Cascatas de sondas"
                     height: cascadeRow.y + cascadeRow.height + contentPadding + 8
@@ -3978,6 +4060,7 @@ Rectangle {
 
                 Card {
                     id: ddgiAdaptiveRaysCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Orçamento de raios por sonda"
                     height: adaptiveRaysLabel.y + adaptiveRaysLabel.height + contentPadding + 8
@@ -4039,6 +4122,7 @@ Rectangle {
 
                 Card {
                     id: ddgiMeasureCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Medição — DDGI como terminador"
                     height: measureTermLabel.y + measureTermLabel.height + contentPadding + 8
@@ -4092,6 +4176,7 @@ Rectangle {
 
                 Card {
                     id: volumeFadeCard
+                    visible: giPage.labVisible
                     width: parent.width
                     title: "Fora do volume de sondas"
                     height: fadeSlider.y + fadeSlider.height + contentPadding + 8
