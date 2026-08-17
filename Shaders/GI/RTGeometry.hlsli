@@ -1,6 +1,9 @@
 #ifndef SMILE_GI_RTGEOMETRY_HLSLI
 #define SMILE_GI_RTGEOMETRY_HLSLI
 
+// RT_LoadTriangle. Separado do DDGICommon porque usa ResourceDescriptorHeap — ver a nota la.
+#include "RTTriangleAccess.hlsli"
+
 // Decodificacao de GEOMETRIA no ponto de hit (normal de face / de shading), extraida do
 // HitShading.hlsli p/ passes que precisam da superficie mas nao da iluminacao — hoje o
 // BvhDebug, que so quer sombrear o color-coding p/ a forma ficar legivel, e nao pode arrastar

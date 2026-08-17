@@ -1,6 +1,9 @@
 #ifndef SMILE_RT_ALPHATEST_HLSLI
 #define SMILE_RT_ALPHATEST_HLSLI
 
+// RT_LoadTriangle. Separado do DDGICommon porque usa ResourceDescriptorHeap — ver a nota la.
+#include "RTTriangleAccess.hlsli"
+
 // Alpha-test de candidatos do RayQuery (extraido do HitShading.hlsli p/ passes que so precisam
 // de visibilidade, ex. ReSTIRGISpatial). Contrato de bindings (declarados pelo shader que
 // inclui): Instances (StructuredBuffer<InstanceGeo>), LinearWrap e root signature

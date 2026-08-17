@@ -120,12 +120,11 @@ float2 RT_UnpackHalf2(uint _Packed) {
     return float2(f16tof32(_Packed & 0xFFFFu), f16tof32(_Packed >> 16));
 }
 
-// Acesso unico ao payload. Todos os caminhos de hit passam por aqui — se um dia o stride ou o
-// bindless mudarem, muda num lugar so.
-RTTriangle RT_LoadTriangle(InstanceGeo _Geo, uint _Tri) {
-    StructuredBuffer<RTTriangle> Tris = ResourceDescriptorHeap[_Geo.TriangleSrv];
-    return Tris[_Tri];
-}
+// ⚠️ O ACESSO ao payload (RT_LoadTriangle) NAO mora aqui — esta em RTTriangleAccess.hlsli. Ele usa
+// `ResourceDescriptorHeap`, que exige SM 6.6 + root signature heap-directly-indexed, e este header
+// e incluido tambem por shaders de RASTER (DebugView.ps, DeferredLighting.ps, ForwardBlend.ps...).
+// O DXC valida o corpo de toda funcao, entao bastava existir aqui para quebrar a build deles.
+// Daqui para baixo so ha matematica pura, e e assim que tem de continuar.
 
 // Normal de vertice INTERPOLADA pelas barycentricas, em espaco de objeto. E ela que continua
 // mandando na BRDF, no N.L e na amostragem do DDGI — a de face governa outra coisa (facing,
