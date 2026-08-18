@@ -26,6 +26,7 @@ namespace SmileEditor {
         constexpr float kRingRadiusFrac = 0.85f;
         constexpr int   kRingSegments   = 64;
         constexpr float kTwoPi          = 6.28318530718f;
+        constexpr float kDegToRad       = 0.01745329252f;
         // Piso da escala: o transform continua invertivel e a AABB nao degenera. Escala negativa
         // (espelho) nao e representavel aqui — inverteria a orientacao das normais sem que nada
         // no pipeline soubesse.
@@ -45,6 +46,10 @@ namespace SmileEditor {
         float& Comp(Vec3& V, int I) { return I == 0 ? V.X : (I == 1 ? V.Y : V.Z); }
         float  Comp(const Vec3& V, int I) { return I == 0 ? V.X : (I == 1 ? V.Y : V.Z); }
 
+        // Arredonda para o multiplo mais proximo. Mesma forma do floor(v/s + 0.5)*s da Cry.
+        float SnapTo(float V, float Step) {
+            return (Step > 1e-6f) ? std::floor(V / Step + 0.5f) * Step : V;
+        }
         // Distancia 2D de um ponto ao SEGMENTO (nao a reta): sem o clamp, o eixo/anel continuaria
         // capturando o cursor muito depois da ponta desenhada.
         float DistPointSeg(float Px, float Py, float Ax, float Ay, float Bx, float By) {
@@ -626,7 +631,27 @@ namespace SmileEditor {
         Vec3 O, Dir;
         if (!R.ScreenToRay(X, Y, O, Dir)) return;
         const float T = AxisParam(O, Dir, DragAxisWorld, DragStartPivot);
-        const Vec3 NewPos = DragStartPos + DragAxisWorld * (T - DragStartT);
+        float Delta = T - DragStartT;
+
+        if (SnapActive()) {
+            // ABSOLUTO so quando o eixo E um eixo de mundo: ai existe grade para cair em cima, e
+            // e o que alinha dois objetos entre si. Num eixo LOCAL torto nao ha grade nenhuma —
+            // "multiplo de 10 cm" ao longo de uma diagonal nao quer dizer nada em relacao ao
+            // mundo — entao ali o passo quantiza a DISTANCIA PERCORRIDA, que e a leitura util.
+            //
+            // E o PIVO que cai na grade, nao o Transform.Position: a origem do objeto quase nunca
+            // esta dentro dele (ver o cabecalho da classe), entao alinhar a Position deixaria o
+            // objeto VISIVEL parado em coordenada quebrada — snap que nao alinha nada. E o mesmo
+            // argumento do GridBase da UE, que ancora a grade no que o widget mostra.
+            if (SpaceFor(DragIsLight) == ESpace::World) {
+                const float PivotOnAxis = DragStartPivot.Dot(DragAxisWorld) + Delta;
+                Delta += SnapTo(PivotOnAxis, SnapCfg.TranslateM) - PivotOnAxis;
+            } else {
+                Delta = SnapTo(Delta, SnapCfg.TranslateM);
+            }
+        }
+
+        const Vec3 NewPos = DragStartPos + DragAxisWorld * Delta;
 
         if (DragIsLight) {
             auto& Lights = R.GetScene().Lights();
@@ -675,6 +700,12 @@ namespace SmileEditor {
             DialRevolutions += (a < 0.0f) ? 1 : -1;
         DialAngle = a;
         DragAngle = (a + kTwoPi * static_cast<float>(DialRevolutions)) * DialSign;
+        // Snap no ANGULO DO GESTO (girar exatos 90 graus), e nao no euler resultante: o eixo pode
+        // ser qualquer um, entao "euler multiplo de 15" so teria sentido em rotacao de eixo de
+        // mundo, e nem sempre — e o que se pede de um snap de rotacao e o passo do GIRO. E o
+        // default da Flax. Sem acumulador: o DragAngle ja e funcao pura do cursor desde o press,
+        // entao arredondar aqui e estavel e volta exatamente a zero.
+        if (SnapActive()) DragAngle = SnapTo(DragAngle, SnapCfg.RotateDeg * kDegToRad);
 
         const Mat44 Delta = AxisAngleRow(DragAxisWorld, DragAngle);
 
@@ -726,7 +757,11 @@ namespace SmileEditor {
         // seguia com a razao crua, entao um objeto que ja nascia abaixo de 1 batia no piso e
         // DESLIZAVA (a escala parava, a translacao continuava andando).
         const float Start  = Comp(DragStartScale, i);
-        const float Target = std::max(kMinScale, Start * Raw);
+        float       Target = std::max(kMinScale, Start * Raw);
+        // Snap no VALOR da escala, nao na razao: e o que a Cry faz (SnapScale) e o que o rotulo
+        // "10%" promete — 1,0 / 1,1 / 1,2, e nao "cresceu 10% do que ja era". O piso continua
+        // depois do snap, senao um passo grande com objeto pequeno cairia em zero.
+        if (SnapActive()) Target = std::max(kMinScale, SnapTo(Target, SnapCfg.ScaleStep));
         const float Eff    = (std::fabs(Start) > 1e-8f) ? (Target / Start) : 1.0f;
 
         const Vec3 OldMin = Rn.AABBMin, OldMax = Rn.AABBMax;

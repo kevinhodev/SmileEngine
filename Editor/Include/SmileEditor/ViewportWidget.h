@@ -43,6 +43,14 @@ namespace SmileEditor {
         Q_PROPERTY(int gizmoSpace READ GetGizmoSpace NOTIFY GizmoSpaceChanged)
         Q_PROPERTY(int gizmoSpaceEffective READ GetGizmoSpaceEffective NOTIFY GizmoSpaceChanged)
         Q_PROPERTY(int gizmoSpaceRestriction READ GetGizmoSpaceRestriction NOTIFY GizmoSpaceChanged)
+        // Snapping, um liga/desliga e um passo por modo. Os indices batem com os de gizmoMode
+        // (1 mover, 2 rotacionar, 3 escalar), entao o QML usa o mesmo numero nos dois lugares.
+        Q_PROPERTY(bool snapTranslateOn READ GetSnapTranslateOn NOTIFY GizmoSnapChanged)
+        Q_PROPERTY(bool snapRotateOn READ GetSnapRotateOn NOTIFY GizmoSnapChanged)
+        Q_PROPERTY(bool snapScaleOn READ GetSnapScaleOn NOTIFY GizmoSnapChanged)
+        Q_PROPERTY(double snapTranslateM READ GetSnapTranslateM NOTIFY GizmoSnapChanged)
+        Q_PROPERTY(double snapRotateDeg READ GetSnapRotateDeg NOTIFY GizmoSnapChanged)
+        Q_PROPERTY(double snapScaleStep READ GetSnapScaleStep NOTIFY GizmoSnapChanged)
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
         Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewStateChanged)
@@ -135,6 +143,12 @@ namespace SmileEditor {
         int               GetGizmoSpaceRestriction() const {
             return static_cast<int>(GizmoCtrl.Restriction());
         }
+        bool              GetSnapTranslateOn() const { return GizmoCtrl.Snap().TranslateOn; }
+        bool              GetSnapRotateOn()    const { return GizmoCtrl.Snap().RotateOn; }
+        bool              GetSnapScaleOn()     const { return GizmoCtrl.Snap().ScaleOn; }
+        double            GetSnapTranslateM()  const { return GizmoCtrl.Snap().TranslateM; }
+        double            GetSnapRotateDeg()   const { return GizmoCtrl.Snap().RotateDeg; }
+        double            GetSnapScaleStep()   const { return GizmoCtrl.Snap().ScaleStep; }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
         bool              IsRtShaderTimerAvailable() const;
@@ -188,6 +202,9 @@ namespace SmileEditor {
         // 0 Global / 1 Local. Alterna entre os dois sem o chamador saber os numeros.
         Q_INVOKABLE void SetGizmoSpace(int space);
         Q_INVOKABLE void ToggleGizmoSpace();
+        // Modo: 1 mover, 2 rotacionar, 3 escalar (mesmos numeros de gizmoMode).
+        Q_INVOKABLE void ToggleSnap(int mode);
+        Q_INVOKABLE void SetSnapValue(int mode, double value);
 
         Q_INVOKABLE void SelectLit();
         Q_INVOKABLE void SelectReflectionHeatmap();
@@ -256,6 +273,7 @@ namespace SmileEditor {
         void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
         void GizmoModeChanged(); // ferramenta de transformacao (toolbar e Q/W/E/R)
         void GizmoSpaceChanged(); // espaco Global/Local (toolbar e Ctrl+`)
+        void GizmoSnapChanged();  // liga/desliga e passo do snap
         // Um gesto do gizmo terminou tendo MESMO alterado o transform de um renderavel. Existe
         // porque o GizmoController escreve direto na FScene, sem passar por nenhuma ponte Qt —
         // sem este aviso a camada autorada (.smap) nunca ficava suja, e uma sessao inteira de
@@ -342,6 +360,9 @@ namespace SmileEditor {
         };
         std::deque<FQueuedRendererJob> RendererJobs;
         bool          RendererJobActive = false;
+        // Ctrl no instante do MOVIMENTO, e nao lido depois: o gizmo pode ser aplicado um frame
+        // adiante (FlushPendingGizmoInput), e ai a tecla ja pode ter sido solta.
+        bool          PendingGizmoSnapInverted = false;
         bool          GizmoMousePending = false;
         bool          GizmoReleasePending = false;
         Smile::u32    PendingGizmoMouseX = 0;

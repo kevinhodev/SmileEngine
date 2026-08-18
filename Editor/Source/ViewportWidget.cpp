@@ -597,6 +597,28 @@ namespace SmileEditor {
                           : static_cast<int>(GizmoController::ESpace::World));
     }
 
+    void ViewportWidget::ToggleSnap(int _Mode) {
+        switch (_Mode) {
+            case 1: GizmoCtrl.SetSnapTranslateOn(!GizmoCtrl.Snap().TranslateOn); break;
+            case 2: GizmoCtrl.SetSnapRotateOn(!GizmoCtrl.Snap().RotateOn);       break;
+            case 3: GizmoCtrl.SetSnapScaleOn(!GizmoCtrl.Snap().ScaleOn);         break;
+            default: return;
+        }
+        emit GizmoSnapChanged();
+    }
+
+    void ViewportWidget::SetSnapValue(int _Mode, double _Value) {
+        const float V = static_cast<float>(_Value);
+        if (!(V > 0.0f)) return; // barra 0, negativo e NaN de uma vez
+        switch (_Mode) {
+            case 1: GizmoCtrl.SetSnapTranslateM(V); break;
+            case 2: GizmoCtrl.SetSnapRotateDeg(V);  break;
+            case 3: GizmoCtrl.SetSnapScaleStep(V);  break;
+            default: return;
+        }
+        emit GizmoSnapChanged();
+    }
+
     void ViewportWidget::SelectLit() {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
@@ -1805,6 +1827,9 @@ namespace SmileEditor {
 
     void ViewportWidget::FlushPendingGizmoInput(Smile::Renderer& _Renderer) {
         if (GizmoMousePending) {
+            // Ctrl capturado no evento, aplicado aqui: entre um e outro pode ter passado um
+            // frame, e ler o teclado agora daria o estado errado num arraste rapido.
+            GizmoCtrl.SetSnapInverted(PendingGizmoSnapInverted);
             GizmoCtrl.OnMouseMove(_Renderer, PendingGizmoMouseX, PendingGizmoMouseY);
             GizmoMousePending = false;
         }
@@ -1900,6 +1925,7 @@ namespace SmileEditor {
                 PendingGizmoMouseX = static_cast<Smile::u32>(P.x() > 0.0 ? P.x() : 0.0);
                 PendingGizmoMouseY = static_cast<Smile::u32>(P.y() > 0.0 ? P.y() : 0.0);
                 GizmoMousePending = true;
+                PendingGizmoSnapInverted = (_Event->modifiers() & Qt::ControlModifier) != 0;
                 GizmoReleasePending = true;
 
                 // Finaliza imediatamente se o frame ja liberou o Renderer; caso contrario,
@@ -1931,6 +1957,7 @@ namespace SmileEditor {
                 PendingGizmoMouseX = static_cast<Smile::u32>(P.x() > 0.0 ? P.x() : 0.0);
                 PendingGizmoMouseY = static_cast<Smile::u32>(P.y() > 0.0 ? P.y() : 0.0);
                 GizmoMousePending = true;
+                PendingGizmoSnapInverted = (_Event->modifiers() & Qt::ControlModifier) != 0;
             }
             auto RendererAccess = Renderer.TryLock();
             if (RendererAccess && RendererAccess->IsInitialized()) {

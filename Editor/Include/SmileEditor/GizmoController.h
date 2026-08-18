@@ -100,6 +100,54 @@ namespace SmileEditor {
         bool              IsSpaceForced()  const { return Restriction() != ESpaceRestriction::None; }
         EMode GetMode() const { return Mode; }
 
+        // --- SNAPPING -----------------------------------------------------------------------
+        // Semantica ABSOLUTA, como UE e Cry: o RESULTADO cai em multiplos do passo, e nao o
+        // movimento. E o que faz dois objetos ficarem alinhados entre si, que e o ponto.
+        //   UE:  `Point = (Point - GridBase).GridSnap(GetGridSize()) + GridBase`
+        //        (FEditorViewportSnapping::SnapPointToGrid)
+        //   Cry: `floor(v / step + 0.5) * step` (SSnappingPreferences::SnapLength/Angle/Scale)
+        // A Flax faz o contrario por padrao — acumula o DELTA em _translationScaleSnapDelta e so
+        // libera multiplos inteiros — e oferece o absoluto como AbsoluteSnapEnabled. O relativo
+        // preserva o desalinhamento original do objeto, que e util e nao e o que se pede de um
+        // botao chamado "snap".
+        //
+        // Aqui NAO existe acumulador, e nao por simplificacao: cada gesto ja recomputa do estado
+        // do PRESS (ver ApplyRotate), entao o valor final e funcao pura do cursor e arredondar na
+        // saida basta. O acumulador da Flax existe porque la o delta e incremental.
+        struct FSnap {
+            bool  TranslateOn = false;
+            bool  RotateOn    = false;
+            bool  ScaleOn     = false;
+            float TranslateM  = 0.10f;   // metros
+            float RotateDeg   = 15.0f;
+            float ScaleStep   = 0.10f;   // fracao (0.10 = 10%)
+        };
+
+        const FSnap& Snap() const { return SnapCfg; }
+        void SetSnapTranslateOn(bool V) { SnapCfg.TranslateOn = V; }
+        void SetSnapRotateOn(bool V)    { SnapCfg.RotateOn    = V; }
+        void SetSnapScaleOn(bool V)     { SnapCfg.ScaleOn     = V; }
+        void SetSnapTranslateM(float V) { if (V > 0.0f) SnapCfg.TranslateM = V; }
+        void SetSnapRotateDeg(float V)  { if (V > 0.0f) SnapCfg.RotateDeg  = V; }
+        void SetSnapScaleStep(float V)  { if (V > 0.0f) SnapCfg.ScaleStep  = V; }
+
+        // Ctrl segurado INVERTE o snap do modo atual. A Flax so FORCA ligado
+        // (`UseSnapping => Root.GetKey(KeyboardKeys.Control)`, EditorGizmoViewport.cs) e a UE nao
+        // tem modificador nenhum. Inverter e a escolha daqui: com um botao de liga/desliga na
+        // toolbar, "forcar ligado" nao faz nada quando ele ja esta ligado, enquanto inverter
+        // resolve os dois sentidos com a mesma tecla — que e o caso que realmente aparece
+        // (encostar um objeto fora da grade sem ter de desligar o snap e religar depois).
+        void SetSnapInverted(bool V) { SnapInverted = V; }
+
+        // O snap vale AGORA, para o modo atual? Ja com a inversao do Ctrl aplicada.
+        bool SnapActive() const {
+            const bool On = Mode == EMode::Translate ? SnapCfg.TranslateOn
+                          : Mode == EMode::Rotate    ? SnapCfg.RotateOn
+                          : Mode == EMode::Scale     ? SnapCfg.ScaleOn
+                                                     : false;
+            return On != SnapInverted;
+        }
+
         // Chamado a cada frame APOS UpdateCamera e ANTES de RenderFrame: submete os handles do
         // modo atual ao FDebugDraw da Engine (no-op sem selecao) + os icones billboard das luzes
         // (um em cada; toco de direcao no spot selecionado).
@@ -195,6 +243,8 @@ namespace SmileEditor {
         // caminhos que JA tem o IsLight em maos passam ele pelo SpaceFor: sao os de evento de
         // mouse, que podem rodar com uma selecao mais nova que o ultimo frame.
         bool        SelectionIsLight = false;
+        FSnap       SnapCfg{};
+        bool        SnapInverted = false;   // Ctrl segurado; ver SetSnapInverted
         EAxis       Hovered = EAxis::None;
         EAxis       Active  = EAxis::None;
         bool        Dragging = false;
