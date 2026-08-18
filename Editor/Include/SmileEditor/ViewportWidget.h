@@ -25,7 +25,7 @@ class QMouseEvent;
 
 namespace Smile {
     class Renderer;
-    struct FPreparedCookedScene;
+    struct FSceneImportResult;
 }
 
 namespace SmileEditor {
@@ -125,8 +125,8 @@ namespace SmileEditor {
         bool              IsRendererStopped() const { return RendererStoppedFlag; }
         RendererHandle    GetRenderer() const { return Renderer; }
         using SceneCommitCallback = std::function<void(bool, const QString&)>;
-        bool CommitPreparedSceneAsync(
-            std::shared_ptr<Smile::FPreparedCookedScene> Prepared,
+        bool CommitImportedSceneAsync(
+            std::shared_ptr<Smile::FSceneImportResult> Imported,
             bool Additive,
             SceneCommitCallback Completion);
         float            GetFPS()      const { return LastFPS; }

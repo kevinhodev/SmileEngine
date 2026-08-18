@@ -1251,17 +1251,17 @@ namespace SmileEditor {
         if (RedrawTimer) RedrawTimer->stop();
     }
 
-    bool ViewportWidget::CommitPreparedSceneAsync(
-            std::shared_ptr<Smile::FPreparedCookedScene> _Prepared,
+    bool ViewportWidget::CommitImportedSceneAsync(
+            std::shared_ptr<Smile::FSceneImportResult> _Imported,
             bool _Additive,
             SceneCommitCallback _Completion) {
-        if (!_Prepared) return false;
+        if (!_Imported) return false;
         return EnqueueRendererJob(
             {},
-            [Prepared = std::move(_Prepared), _Additive](Smile::Renderer& _Renderer) mutable {
+            [Imported = std::move(_Imported), _Additive](Smile::Renderer& _Renderer) mutable {
                 RenderThread::JobCompletion Result;
                 Result.Success = _Renderer.CommitCookedScene(
-                    std::move(Prepared), _Additive);
+                    std::move(Imported), _Additive);
                 if (!Result.Success)
                     Result.Error = "CommitCookedScene retornou false";
                 return Result;

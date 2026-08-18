@@ -8,8 +8,8 @@ novas exceções. A regra curta para agentes está em `.cursor/rules/smile-engin
 
 - `Core/` e `Math/` não dependem de DirectX, Qt, cena ou renderer.
 - `Graphics/` pode consumir `Core/`, `Math/` e o modelo de cena.
-- Código novo em `Scene/` não inclui `Renderer.h`. O acoplamento atual de `SceneLoader.cpp` é dívida
-  conhecida e deve ser removido por um resultado de importação independente do renderer.
+- Código em `Scene/` não inclui `Renderer.h`. `SceneLoader.cpp` produz `FSceneImportResult` apenas
+  com dados CPU; `RendererSceneImport.cpp` é o consumidor responsável pelo commit GPU.
 - `Engine/` não depende de Qt. Tradução para `QObject`, signals, models e QML pertence a `Editor/`.
 - Ferramentas reutilizam a API pública de `Engine/Include` sempre que possível.
 - Headers públicos expõem contratos; detalhes de implementação e helpers privados ficam no `.cpp`.
@@ -86,7 +86,8 @@ a um parágrafo que promete uma invariante sem verificá-la.
   cena em `RendererScene.cpp`, captura/diagnóstico em `RendererCapture.cpp`, frame em
   `RendererFrame.cpp` e gravação de passes em `RendererPasses.cpp`. O mapa de ownership e fluxo
   está em [`RENDERER.md`](RENDERER.md). Estado CPU persistente de cena pertence a
-  `RendererSceneState.h`; histórico e relógios entre frames pertencem a `RendererFrameState.h`.
+  `RendererSceneState.h`; histórico e relógios entre frames pertencem a `RendererFrameState.h`;
+  sessão determinística e telemetria do manifesto pertencem a `RendererCaptureState.h`.
 - Escolha primeiro um dos domínios existentes: `Renderer`, `Backend`, `Resources`, `Scene`, `Lighting`,
   `GI`, `RayTracing`, `Environment`, `PostProcess`, `Water`, `Editor` ou `Debug`. Crie outro apenas
   quando houver responsabilidade própria e mais de um componente relacionado.
@@ -105,8 +106,7 @@ validadas no editor, idealmente com captura antes/depois usando o protocolo de `
 
 1. Reduzir a superfície e o ownership de `Renderer.h`, movendo estado para os subsistemas donos sem
    voltar a concentrar a implementação em uma única TU.
-2. Remover a dependência `SceneLoader -> Renderer` com um resultado de importação independente.
-3. Extrair telemetria, apresentação de debug targets e fila de jobs de `ViewportWidget`.
-4. Aumentar a cobertura CPU de `Math`, `CookedFormat`, culling e mutações de cena.
-5. Limpar comentários por subsistema junto de mudanças funcionais, movendo conhecimento durável para
+2. Extrair telemetria, apresentação de debug targets e fila de jobs de `ViewportWidget`.
+3. Aumentar a cobertura CPU de `Math`, `CookedFormat`, culling e mutações de cena.
+4. Limpar comentários por subsistema junto de mudanças funcionais, movendo conhecimento durável para
    documentos temáticos e evitando um diff cosmético gigante.

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererCaptureState.h"
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
@@ -42,6 +43,7 @@ namespace Smile {
         : Backend(std::make_unique<FRenderBackend>()),
           SceneState(std::make_unique<FRendererSceneState>()),
           FrameState(std::make_unique<FRendererFrameState>()),
+          CaptureState(std::make_unique<FRendererCaptureState>()),
           SettingsImpl(std::make_unique<FRenderSettings>(*this)) {}
 
     u32 Renderer::GetFrameIndex() const {
@@ -354,7 +356,7 @@ namespace Smile {
         if (!Initialized) return;
         // Um .hlsli força reload completo; um stem nomeado só afeta a captura quando possui dono.
         if (!_ChangedStem.empty() && !Passes.OwnerOfShaderStem(_ChangedStem)) return;
-        Capture.Cancel("um shader mudou no disco durante o aquecimento");
+        CaptureState->Session.Cancel("um shader mudou no disco durante o aquecimento");
     }
 
     bool Renderer::ReloadShaders(const std::string& _ChangedStem) {
@@ -365,7 +367,7 @@ namespace Smile {
             // A captura nao pode misturar frames produzidos por builds diferentes do shader.
             // Cancele antes da primeira mutacao, inclusive quando varias instancias casam o stem.
             if (_ChangedStem.empty()) {
-                Capture.Cancel("os shaders foram recarregados durante o aquecimento");
+                CaptureState->Session.Cancel("os shaders foram recarregados durante o aquecimento");
                 RecreateAllPSOs();
                 LogInfo("Shaders recarregados (reload completo)");
                 return true;
@@ -373,7 +375,8 @@ namespace Smile {
 
             const FPassInitContext Ctx = MakePassInitContext();
             const char* Owner = Passes.OwnerOfShaderStem(_ChangedStem);
-            if (Owner) Capture.Cancel("os shaders foram recarregados durante o aquecimento");
+            if (Owner)
+                CaptureState->Session.Cancel("os shaders foram recarregados durante o aquecimento");
             const u32 Hits = Passes.RecreatePipelinesForStem(_ChangedStem, Ctx);
             if (Hits > 0) {
                 LogInfo("Shader recarregado: " + _ChangedStem + " (passe: " + Owner +
@@ -393,7 +396,7 @@ namespace Smile {
     void Renderer::Resize(u32 _Width, u32 _Height) {
         if (!Initialized || _Width == 0 || _Height == 0) return;
         // Um resize reinicia historicos e invalida o aquecimento da captura atual.
-        Capture.Cancel("a janela foi redimensionada durante o aquecimento");
+        CaptureState->Session.Cancel("a janela foi redimensionada durante o aquecimento");
         Backend->Resize(_Width, _Height);
         RecreateInternalTargets();
     }
@@ -412,8 +415,8 @@ namespace Smile {
         _Scale = _Scale < 0.33f ? 0.33f : (_Scale > 2.0f ? 2.0f : _Scale);
         if (_Scale == RenderScale) return;
         // Recriar os alvos invalida o aquecimento, exceto durante a aplicacao do proprio preset.
-        if (!CaptureSetupGuard)
-            Capture.Cancel("a escala de renderizacao mudou durante o aquecimento");
+        if (!CaptureState->SetupGuard)
+            CaptureState->Session.Cancel("a escala de renderizacao mudou durante o aquecimento");
         RenderScale = _Scale;
         if (!Initialized || Backend->SwapChain.GetWidth() == 0) return;
         Backend->DirectQueue.Flush();
@@ -588,7 +591,7 @@ namespace Smile {
     void Renderer::Shutdown() {
         if (!Initialized) return;
         Backend->FlushDirect();
-        Capture.Release();
+        CaptureState->Session.Release();
         Backend->Shutdown();
         Nrd.Shutdown();
         NrdDirect.Shutdown();

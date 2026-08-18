@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererCaptureState.h"
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
@@ -12,8 +13,8 @@ namespace Smile {
         using T = EHistoryTarget;
         // Um ajuste durante o aquecimento tornaria falsa a contagem de frames do manifesto.
         // O guard cobre setup, reset e restauracao executados pelo proprio capturador.
-        if (!R.CaptureSetupGuard)
-            R.Capture.Cancel("um ajuste derrubou historico durante o aquecimento");
+        if (!R.CaptureState->SetupGuard)
+            R.CaptureState->Session.Cancel("um ajuste derrubou historico durante o aquecimento");
 
         // Passes declaram os proprios alvos. Os casos abaixo sao adaptadores de estado que ainda
         // pertence ao Renderer ou a subsistemas sem contrato de passe.
@@ -256,7 +257,8 @@ namespace Smile {
         //
         // Os outros dois knobs do passe (produtor dedicado, terminal) nao precisam disto: eles
         // invalidam, e o funil do Invalidate ja cancela a captura.
-        R.Capture.Cancel("a fracao do update do cache mudou durante o aquecimento");
+        R.CaptureState->Session.Cancel(
+            "a fracao do update do cache mudou durante o aquecimento");
         R.RadianceCache.SetUpdateFraction(_V);
     }
     f32 FRenderSettings::GetRadianceCacheUpdateFraction() const {
@@ -299,7 +301,7 @@ namespace Smile {
         //
         // Mesmo criterio do produtor dedicado e do numero de vertices: knob que muda o que ENTRA
         // na celula limpa a tabela. O Invalidate tambem cancela captura em curso, entao o
-        // Capture.Cancel explicito que estava aqui deixou de ser necessario.
+        // O cancelamento explicito que estava aqui deixou de ser necessario.
         Invalidate(Dom::RayVisibility);
     }
     f32 FRenderSettings::GetRadianceCacheMinCacheableRoughness() const {
@@ -336,7 +338,8 @@ namespace Smile {
         // 73.195, PSNR de 48 dB entre os regimes. Trocar de regime no meio de um aquecimento
         // produziria uma captura meio instrumentada e meio nao, que nao pertence a nenhuma das
         // duas series. Sem guarda de setup: o capturador nao mexe neste knob.
-        R.Capture.Cancel("a instrumentacao do cache foi alternada durante o aquecimento");
+        R.CaptureState->Session.Cancel(
+            "a instrumentacao do cache foi alternada durante o aquecimento");
         R.RadianceCache.SetStatsEnabled(_V);
     }
     void FRenderSettings::SetRadianceCacheStatsDetailEnabled(bool _V) {
@@ -345,7 +348,8 @@ namespace Smile {
         // acrescenta atomicos AO PRODUTOR tambem (a telemetria de insercao), onde eles mudam quem
         // vence a corrida do CAS. E o regime que mais mexe no escalonamento, entao alterna-lo no
         // meio de um aquecimento produz uma captura que nao pertence a serie nenhuma.
-        R.Capture.Cancel("o detalhe da instrumentacao do cache foi alternado durante o aquecimento");
+        R.CaptureState->Session.Cancel(
+            "o detalhe da instrumentacao do cache foi alternado durante o aquecimento");
         R.RadianceCache.SetStatsDetailEnabled(_V);
     }
     bool FRenderSettings::GetRadianceCacheStatsDetailEnabled() const {
@@ -433,7 +437,8 @@ namespace Smile {
         // serie nenhuma. Este acrescenta UM atomico por hit sombreado — nao muda o conteudo do
         // cache (os traces de render nao inserem desde a Fase 3), mas muda custo, contencao no UAV
         // de estatisticas e overlap com o updater. "Nao muda a imagem" nao e "e comparavel".
-        R.Capture.Cancel("a telemetria de fonte foi alternada durante o aquecimento");
+        R.CaptureState->Session.Cancel(
+            "a telemetria de fonte foi alternada durante o aquecimento");
         R.RadianceCache.SetStatsSourceEnabled(_V);
     }
     bool FRenderSettings::GetRadianceCacheStatsSourceEnabled() const {
@@ -1158,7 +1163,7 @@ namespace Smile {
     //
     // O FrameIndex absoluto NAO e tocado — fences, frame slots e lifetime dependem de ele ser
     // monotonico. Essa e a razao de os dois contadores existirem separados.
-    // Chamada de dentro do UpdateFrameCapture, sob o CaptureSetupGuard — sem ele o funil
+    // Chamada de dentro do UpdateFrameCapture, sob o guard da captura — sem ele o funil
     // cancelaria a sessao no ato de comeca-la.
     void FRenderSettings::NotifyDeterministicCapture() {
         Invalidate(Dom::DeterministicCapture);

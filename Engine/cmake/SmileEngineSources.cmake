@@ -84,6 +84,7 @@ smile_engine_group("Scene"
     Include/Smile/Scene/CookedFormat.h
     Include/Smile/Scene/Light.h
     Include/Smile/Scene/Scene.h
+    Include/Smile/Scene/SceneLoader.h
     Source/Scene/Scene.cpp
     Source/Scene/SceneLoader.cpp
 )
@@ -95,10 +96,12 @@ smile_graphics_domain(Renderer
     PassContext
     Renderer
     RendererCapture
+    RendererCaptureState
     RendererFrame
     RendererFrameState
     RendererPasses
     RendererScene
+    RendererSceneImport
     RendererSceneState
     RenderPass
     RenderSettings

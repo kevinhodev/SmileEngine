@@ -67,12 +67,12 @@
 
 namespace Smile {
     struct CameraInput;
-    struct FPreparedCookedScene;
+    struct FSceneImportResult;
     class FScene;
     class FRenderBackend;
     struct FRendererSceneState;
     struct FRendererFrameState;
-    using FPreparedCookedScenePtr = std::shared_ptr<FPreparedCookedScene>;
+    struct FRendererCaptureState;
 
     // Fachada de configuracao. Fica incompleta aqui para evitar dependencia circular.
     class FRenderSettings;
@@ -245,11 +245,9 @@ namespace Smile {
         bool LoadMaterialPreviewEnvironment(const std::wstring& Path);
         bool MaterialPreviewReady() const { return MaterialPreview.HasEnvironment(); }
 
-        // A preparacao e CPU-only (I/O, validacao, decode de texturas e copia dos meshes),
-        // portanto pode rodar em worker enquanto o Renderer continua exibindo a cena atual.
-        // O commit cria/muta recursos D3D12 e deve rodar na thread proprietaria do Renderer.
-        static FPreparedCookedScenePtr PrepareCookedScene(const std::wstring& ScenePath);
-        bool CommitCookedScene(FPreparedCookedScenePtr Prepared, bool Additive = false);
+        // O loader produz este resultado em CPU; o commit GPU roda na thread do Renderer.
+        bool CommitCookedScene(std::shared_ptr<FSceneImportResult> Imported,
+                               bool Additive = false);
 
         // Atalho sincrono mantido para consumidores sem event loop. Additive=true acrescenta
         // a cena cozida sobre a atual sem limpar meshes/materiais/camera ja carregados.
@@ -408,10 +406,10 @@ namespace Smile {
         bool ConsumeDebugPreview(std::vector<u8>& OutPixels);
 
         // Captura assincrona e deterministica. O chamador define a pose antes do request.
-        bool RequestCapture(const FCaptureRequest& Request) { return Capture.Request(Request); }
-        bool CaptureBusy() const              { return Capture.Busy(); }
-        u32  CaptureWarmupRemaining() const   { return Capture.WarmupRemaining(); }
-        bool ConsumeCaptureResult(FFrameCapture::FResult& Out) { return Capture.ConsumeResult(Out); }
+        bool RequestCapture(const FCaptureRequest& Request);
+        bool CaptureBusy() const;
+        u32  CaptureWarmupRemaining() const;
+        bool ConsumeCaptureResult(FFrameCapture::FResult& Out);
 
         u32  GetDepthSRVSlot() const         { return Targets.DepthSRVSlot; }
 
@@ -464,6 +462,8 @@ namespace Smile {
         std::unique_ptr<FRendererSceneState> SceneState;
         // Historicos e relogios CPU que conectam frames consecutivos.
         std::unique_ptr<FRendererFrameState> FrameState;
+        // Sessao deterministica e telemetria efetiva do manifesto.
+        std::unique_ptr<FRendererCaptureState> CaptureState;
 
         // Knobs consumidos pelo FRenderSettings (corpos no Renderer.cpp). Ficam privados p/ que
         // exista UM caminho publico: o editor passa pela fachada, que carrega a invalidacao.
@@ -597,29 +597,6 @@ namespace Smile {
         void             ApplyCaptureSettings(const FCaptureSettings& S);
         void             RestoreCaptureState(const FCaptureSettings& S);
         f32              SettledWetness() const;
-        FFrameCapture    Capture;
-        // Sol da sessao, reafirmado a cada frame pelo TickWorldClock. Ver a nota la: o painel de
-        // TOD escreve direto na referencia do GetTimeOfDay(), sem passar por setter, entao a unica
-        // defesa que vale por construcao e reescrever.
-        f32              CaptureSunHours = 0.0f;
-        Vec3             CaptureSunDir{ 0.0f, 1.0f, 0.0f };
-        // Hora que a sessao FIXOU de fato (negativa = nenhuma). Diferente do pin PEDIDO: com o
-        // Time-of-Day desligado o pedido e ignorado, e o manifesto tem de dizer isso.
-        f32              CapturePinApplied = -1.0f;
-        // Enquanto verdadeiro, o funil de invalidacao NAO cancela a captura: e o proprio
-        // capturador mexendo no renderer (preset, reset, restauracao). Ver UpdateFrameCapture.
-        bool             CaptureSetupGuard = false;
-        // O ReGIR so constroi com consumidor E luz na cena; o gate real e montado no meio do
-        // frame, longe do FFrameModes. Guardado aqui para o manifesto registrar o que rodou.
-        bool             ReGIRRanThisFrame = false;
-        // Registra execucao real, distinta do modo apenas selecionado.
-        bool             RRRanThisFrame    = false;
-        // Luzes puntuais elegiveis empacotadas para o indireto neste frame.
-        u32              GILightCountThisFrame = 0;
-        // Ocupacao lida da copia POS-resolve do frame capturado. Separada do Stats() do painel,
-        // que vem do anel e carrega query/hits — as duas metades tem origens diferentes.
-        FRadianceCacheStats CaptureCacheStats{};
-
         bool            UseAsyncCompute = true;
         bool            AsyncGIRanLastFrame = false;
         FPipelineState  PipelineState;
@@ -900,10 +877,6 @@ namespace Smile {
 
         bool UseAtmosphereAmbient  = true;
         f32  AtmoAmbientIntensity  = 1.0f;
-
-        // Relogio canonico de captura: independente do tempo de parede.
-        static constexpr f32 kCaptureDeltaSeconds = 1.0f / 60.0f;
-        static constexpr f32 kCaptureElapsedSeconds = 0.0f;
 
         bool Initialized = false;
 

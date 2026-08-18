@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererCaptureState.h"
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
@@ -190,8 +191,8 @@ namespace Smile {
         // O gate real do ReGIR e este, e nao o toggle: sem consumidor ou sem luz na cena a grade
         // nem chega a ser construida. O manifesto da captura le daqui — reconstituir a condicao
         // por fora e o comeco de uma divergencia.
-        ReGIRRanThisFrame     = ReGIROn;
-        GILightCountThisFrame = GILightCount;
+        CaptureState->ReGIRRanThisFrame     = ReGIROn;
+        CaptureState->GILightCountThisFrame = GILightCount;
         if (ReGIROn) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "ReGIR (build)");
             ReGIR.UpdatePerFrame(FrameSlot, FrameState->TemporalSampleIndex, GILightCount, GILightSetSignature);
@@ -327,10 +328,9 @@ namespace Smile {
         IUpscaler* ActiveUp      = _ActiveUp;
         const bool RRPoisoned    = _RRPoisoned;
 
-        // Zerado no topo e marcado SO no caminho que chega ao Dispatch — mesmo padrao do
-        // ReGIRRanThisFrame. Esta funcao roda uma vez por frame e sem retorno antecipado antes
-        // daqui, entao o zero vale para o frame inteiro.
-        RRRanThisFrame = false;
+        // Zerado no topo e marcado SO no caminho que chega ao Dispatch. Esta funcao roda uma vez
+        // por frame e sem retorno antecipado antes daqui, entao o zero vale para o frame inteiro.
+        CaptureState->RRRanThisFrame = false;
 
         ID3D12Resource* PostInput    = Targets.HDRColorBuffer.Get();
         u32             PostInputSRV = Targets.HDRSRVSlot;
@@ -434,7 +434,7 @@ namespace Smile {
                 ActiveUp->Dispatch(CommandList, UpParams);
             }
             // Marque RR somente depois de um dispatch efetivo.
-            RRRanThisFrame = IsRR;
+            CaptureState->RRRanThisFrame = IsRR;
             RRResetPending = false;   // reset consumido
 
             // Streamline com state tracking manual pode trocar heaps. Passes seguintes definem
@@ -507,9 +507,10 @@ namespace Smile {
         // Captura: DEPOIS do tonemap e ANTES dos overlays. O contorno de selecao e os gizmos que
         // vem abaixo sao a ferramenta, nao a imagem — um PNG de regressao com a seta do gizmo
         // atravessada muda pixels que nao tem nada a ver com o estimador.
-        if (Capture.ShouldShoot()) {
-            Capture.RecordCopy(Backend->Device.Native(), CommandList, Backend->SwapChain.CurrentBackBuffer(),
-                               Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
+        if (CaptureState->Session.ShouldShoot()) {
+            CaptureState->Session.RecordCopy(
+                Backend->Device.Native(), CommandList, Backend->SwapChain.CurrentBackBuffer(),
+                Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
             // Aqui tambem estamos depois do RecordResolve do cache, entao esta copia pega a
             // ocupacao que a varredura DESTE frame escreveu — a do anel, feita antes do dispatch,
             // ainda e do frame anterior.

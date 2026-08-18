@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererCaptureState.h"
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
@@ -76,7 +77,7 @@ namespace Smile {
 
     void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg) {
         // A pose permanece imutavel durante o aquecimento de uma captura deterministica.
-        if (Capture.Busy()) {
+        if (CaptureState->Session.Busy()) {
             LogWarning("Camera travada: ha uma captura deterministica em andamento");
             return;
         }
@@ -532,8 +533,8 @@ namespace Smile {
     void Renderer::UpdateCamera(const CameraInput& _Input, f32 _DeltaTime) {
         // Durante a captura, fase de animacao e camera congelam; processos de convergencia usam
         // um delta fixo para manter o aquecimento reproduzivel.
-        if (Capture.Busy()) {
-            FrameState->LastDeltaTime = kCaptureDeltaSeconds;
+        if (CaptureState->Session.Busy()) {
+            FrameState->LastDeltaTime = FRendererCaptureState::kDeltaSeconds;
             return;
         }
         SceneState->Camera.Update(_Input, _DeltaTime);

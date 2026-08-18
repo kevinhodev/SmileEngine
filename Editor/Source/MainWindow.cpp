@@ -23,6 +23,7 @@
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Scene/SceneLoader.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -454,18 +455,18 @@ namespace SmileEditor {
         }
         if (BootSplashActive) emit BootProgress(tr("Preparando cena…"), {}, 0.93);
 
-        using Result = Smile::FPreparedCookedScenePtr;
+        using Result = Smile::FSceneImportResultPtr;
         auto* Watcher = new QFutureWatcher<Result>(this);
         connect(Watcher, &QFutureWatcher<Result>::finished, this,
                 [this, Watcher, Path = _Path, Additive = _Additive]() {
-            Result Prepared = Watcher->result();
+            Result Imported = Watcher->result();
             Watcher->deleteLater();
             if (CloseApproved || RendererShutdownForClose) {
                 SceneLoadInProgress = false;
                 FinishBootStage();
                 return;
             }
-            if (!Prepared) {
+            if (!Imported) {
                 SceneLoadInProgress = false;
                 FinishBootStage();
                 if (StatusBr) StatusBr->ShowMessage(tr("Falha ao preparar a cena"), 5000);
@@ -478,8 +479,8 @@ namespace SmileEditor {
             if (StatusBr) StatusBr->ShowMessage(tr("Finalizando recursos da cena…"));
             if (BootSplashActive)
                 emit BootProgress(tr("Finalizando recursos da cena…"), {}, 0.98);
-            const bool Queued = Viewport && Viewport->CommitPreparedSceneAsync(
-                std::move(Prepared), Additive,
+            const bool Queued = Viewport && Viewport->CommitImportedSceneAsync(
+                std::move(Imported), Additive,
                 [this, Path, Additive](bool _Success, const QString& _Error) {
                     Q_UNUSED(_Error);
                     SceneLoadInProgress = false;
@@ -521,7 +522,7 @@ namespace SmileEditor {
 
         Watcher->setFuture(QtConcurrent::run(
             [ScenePath = _Path.toStdWString()]() {
-                return Smile::Renderer::PrepareCookedScene(ScenePath);
+                return Smile::LoadCookedSceneData(ScenePath);
             }));
     }
 

@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererCaptureState.h"
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
@@ -171,6 +172,22 @@ namespace Smile {
 
     // === Captura deterministica (Docs/CAPTURE-PROTOCOL.md) ==============================
 
+    bool Renderer::RequestCapture(const FCaptureRequest& _Request) {
+        return CaptureState->Session.Request(_Request);
+    }
+
+    bool Renderer::CaptureBusy() const {
+        return CaptureState->Session.Busy();
+    }
+
+    u32 Renderer::CaptureWarmupRemaining() const {
+        return CaptureState->Session.WarmupRemaining();
+    }
+
+    bool Renderer::ConsumeCaptureResult(FFrameCapture::FResult& _Out) {
+        return CaptureState->Session.ConsumeResult(_Out);
+    }
+
     FCaptureSettings Renderer::CurrentCaptureSettings() const {
         FCaptureSettings S;
         S.Upscaler        = static_cast<u32>(Upscaler);
@@ -212,12 +229,13 @@ namespace Smile {
         SetSunDirection(Vec3{ _S.SunDir[0], _S.SunDir[1], _S.SunDir[2] });
         Weather.SetWetness(_S.Wetness);
         // Nao sobrescreva uma escolha feita pelo operador durante a sessao.
-        if (RadianceCache.GetAutoWarmup() == Capture.AppliedByPreset().CacheAutoWarmup)
+        if (RadianceCache.GetAutoWarmup() ==
+            CaptureState->Session.AppliedByPreset().CacheAutoWarmup)
             Settings().SetRadianceCacheAutoWarmup(_S.CacheAutoWarmup);
         if (!_S.KnobsMutated) return;
 
         // Preserve qualquer knob que divergiu do valor aplicado pelo preset.
-        const FCaptureSettings& Applied = Capture.AppliedByPreset();
+        const FCaptureSettings& Applied = CaptureState->Session.AppliedByPreset();
         FCaptureSettings Target = _S;
         if (static_cast<u32>(Upscaler) != Applied.Upscaler) Target.Upscaler = static_cast<u32>(Upscaler);
         if (static_cast<u32>(Denoiser) != Applied.Denoiser) Target.Denoiser = static_cast<u32>(Denoiser);
@@ -232,14 +250,15 @@ namespace Smile {
         struct FGuard {
             bool& Flag;
             ~FGuard() { Flag = false; }
-        } Guard{ CaptureSetupGuard };
-        CaptureSetupGuard = true;
+        } Guard{ CaptureState->SetupGuard };
+        CaptureState->SetupGuard = true;
 
         // Restauracao ANTES de abrir sessao nova: as duas mexem em upscaler/render scale, e as
         // duas so podem acontecer aqui, fora da gravacao do command list.
-        if (Capture.HasPendingRestore()) RestoreCaptureState(Capture.ConsumeRestore());
+        if (CaptureState->Session.HasPendingRestore())
+            RestoreCaptureState(CaptureState->Session.ConsumeRestore());
 
-        if (!Capture.HasPendingRequest()) return;
+        if (!CaptureState->Session.HasPendingRequest()) return;
 
         // O estado a devolver e guardado SEMPRE, nos dois presets: mesmo o gameplay, que nao toca
         // em knob nenhum, muda o relogio.
@@ -247,7 +266,7 @@ namespace Smile {
 
         // O preset cientifico desliga upscaler e TAA para eliminar todo jitter.
         FCaptureSettings Applied = Stash;
-        if (Capture.Pending().Preset == ECapturePreset::Scientific) {
+        if (CaptureState->Session.Pending().Preset == ECapturePreset::Scientific) {
             Stash.KnobsMutated = true;
             FCaptureSettings Sci;
             Sci.Upscaler        = static_cast<u32>(EUpscaler::None);
@@ -269,31 +288,32 @@ namespace Smile {
         // Auto-warmup mudaria o regime e invalidaria historicos no meio da contagem.
         Settings().SetRadianceCacheAutoWarmup(false);
         Applied.CacheAutoWarmup = false;
-        Capture.StashSettings(Stash, Applied);
+        CaptureState->Session.StashSettings(Stash, Applied);
 
         // Fase temporal canonica torna animacoes reproduziveis entre capturas.
-        FrameState->ElapsedTime = kCaptureElapsedSeconds;
+        FrameState->ElapsedTime = FRendererCaptureState::kElapsedSeconds;
         Weather.SetWetness(SettledWetness());
 
         // Hora do dia e estado autorado e so e fixada quando o pedido a declara.
-        const f32 PinHours = Capture.Pending().PinTimeOfDayHours;
-        CapturePinApplied  = -1.0f;
+        const f32 PinHours = CaptureState->Session.Pending().PinTimeOfDayHours;
+        CaptureState->PinnedHoursApplied = -1.0f;
         if (PinHours >= 0.0f && TimeOfDay.Enabled) {
             TimeOfDay.TimeHours = std::fmod(PinHours, 24.0f);
             SetSunDirection(TimeOfDay.SunDirection());
             // O EFETIVO, nao o pedido: com o TOD desligado o sol e autorado a mao e fixar a hora
             // nao faz nada, entao o manifesto nao pode registrar um controle que nao houve.
-            CapturePinApplied = TimeOfDay.TimeHours;
+            CaptureState->PinnedHoursApplied = TimeOfDay.TimeHours;
         }
         // Reafirmados a cada frame da sessao (ver TickWorldClock). Com o TOD desligado o sol e
         // autorado a mao e nao deriva da hora, por isso os dois sao guardados.
-        CaptureSunHours = TimeOfDay.TimeHours;
-        CaptureSunDir   = SunDir;
+        CaptureState->SunHours     = TimeOfDay.TimeHours;
+        CaptureState->SunDirection = SunDir;
 
         // Resete depois do preset, que pode realocar alvos e invalidar historicos.
-        Capture.BeginSession();
+        CaptureState->Session.BeginSession();
         Settings().NotifyDeterministicCapture();
-        LogInfo("Captura: aquecendo " + std::to_string(Capture.Active().WarmupFrames) +
+        LogInfo("Captura: aquecendo " +
+                std::to_string(CaptureState->Session.Active().WarmupFrames) +
                 " frames renderizados");
     }
 
@@ -318,9 +338,9 @@ namespace Smile {
         }
         // Registre o que executou por dominio. RR vale apenas quando o eval ocorreu de fato.
         S.IndirectDenoiserEffective = _Modes.NrdIndirectMode ? "NRD"
-                                    : (RRRanThisFrame ? "DLSS_RR" : "None");
-        S.DirectDenoiserEffective   = _Modes.NrdDirectMode   ? "NRD"
-                                    : (RRRanThisFrame ? "DLSS_RR" : "None");
+                                    : (CaptureState->RRRanThisFrame ? "DLSS_RR" : "None");
+        S.DirectDenoiserEffective   = _Modes.NrdDirectMode ? "NRD"
+                                    : (CaptureState->RRRanThisFrame ? "DLSS_RR" : "None");
         S.UpscalerQuality = UpscalerQuality;
         // EFETIVO, nao selecionado: o preset cientifico desliga o upscaler, e sem upscaler o
         // `TAAActive = UseTAA && !UpscaleActive` decide sozinho se o TAA acendeu.
@@ -331,9 +351,10 @@ namespace Smile {
         S.DDGIReady   = DDGI.IsReady();      // EXISTENCIA do volume (criterio do fallback)
         S.ReSTIRGI    = _Modes.ReSTIRGIActive;
         S.ReSTIRDI    = _Modes.ReSTIRDIActiveFrame;
-        S.ReGIR       = ReGIRRanThisFrame;    // toggle + consumidor + luz na cena
+        // Toggle + consumidor + luz na cena.
+        S.ReGIR       = CaptureState->ReGIRRanThisFrame;
         S.ReGIRRequested     = UseReGIR;      // so o toggle — a diferenca entre os dois e o achado
-        S.PunctualLightCount = GILightCountThisFrame;
+        S.PunctualLightCount = CaptureState->GILightCountThisFrame;
 
         // Levantamento e distribuicao publicada podem divergir durante um rebuild assincrono.
         {
@@ -415,11 +436,11 @@ namespace Smile {
         // Ocupacao vem do pos-resolve; queries e hits, do anel pre-resolve. Nao publique dados
         // antigos quando o cache nao participou, mas preserve configuracoes somente-leitura.
         if (S.CacheUpdate || S.CacheQuery) {
-            S.CacheOccupied  = CaptureCacheStats.Occupied;
-            S.CacheValid     = CaptureCacheStats.HasSamples;
-            S.CacheConfident = CaptureCacheStats.Confident;
-            S.CacheSamples   = CaptureCacheStats.Samples;
-            S.CacheEvicted   = CaptureCacheStats.Evicted;
+            S.CacheOccupied  = CaptureState->CacheStats.Occupied;
+            S.CacheValid     = CaptureState->CacheStats.HasSamples;
+            S.CacheConfident = CaptureState->CacheStats.Confident;
+            S.CacheSamples   = CaptureState->CacheStats.Samples;
+            S.CacheEvicted   = CaptureState->CacheStats.Evicted;
             S.CacheCapacity  = RadianceCache.Capacity();
             const FRadianceCacheStats& Ring = RadianceCache.Stats();
             S.CacheQueries  = Ring.Queries;  // zero sem a instrumentacao ligada
@@ -475,20 +496,20 @@ namespace Smile {
         S.SunDir[0] = SunDir.X; S.SunDir[1] = SunDir.Y; S.SunDir[2] = SunDir.Z;
         S.TimeOfDayHours     = TimeOfDay.TimeHours;
         S.TimeOfDayEnabled   = TimeOfDay.Enabled;
-        S.PinnedHoursApplied = CapturePinApplied;
+        S.PinnedHoursApplied = CaptureState->PinnedHoursApplied;
         return S;
     }
 
     void Renderer::FinishFrameCapture(const FFrameModes& _Modes,
                                       const FEffectiveIndirectPolicy& _Policy, u32 _FrameSlot) {
-        if (!Capture.AdvanceFrame()) return;
+        if (!CaptureState->Session.AdvanceFrame()) return;
         // A captura e offline e paga um unico stall antes de mapear os readbacks.
         Backend->DirectQueue.Flush();
         // O anel contem query/hits pre-resolve; CaptureStats contem ocupacao pos-resolve.
         RadianceCache.CollectStats(_FrameSlot);
-        CaptureCacheStats = {};
-        RadianceCache.CollectCaptureStats(CaptureCacheStats);
-        Capture.Finish(CollectCaptureState(_Modes, _Policy));
+        CaptureState->CacheStats = {};
+        RadianceCache.CollectCaptureStats(CaptureState->CacheStats);
+        CaptureState->Session.Finish(CollectCaptureState(_Modes, _Policy));
     }
     // Nomes sao chaves estaveis do visualizador e preservam selecao entre reconstrucoes.
     void Renderer::RegisterDebugTargets() {

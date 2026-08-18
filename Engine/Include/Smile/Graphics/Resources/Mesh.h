@@ -33,7 +33,7 @@ namespace Smile {
     // FGpuMesh::Upload (primitivas do editor, preview de material) e o FScene::AddMeshesBatch
     // (proxy do terreno) chamam os dois este.
     //
-    // Recebe FMesh const de proposito: a cena cozida chega por `const FPreparedCookedScene&`, e
+    // Recebe FMesh const de proposito: a cena cozida chega por `const FSceneImportResult&`, e
     // mutar o FMesh so para preencher um cache exigiria abrir a constness de todo o caminho de
     // load. O scratch fica com o CHAMADOR, que ja tem escopo para isso.
     inline const std::vector<FRTTriangle>& ResolveRTTriangles(const FMesh& _Mesh,

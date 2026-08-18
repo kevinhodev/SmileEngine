@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererCaptureState.h"
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
@@ -260,9 +261,9 @@ namespace Smile {
 
     void Renderer::TickWorldClock() {
         // A captura reafirma hora e sol porque o painel edita TimeOfDay por referencia.
-        if (Capture.SessionActive()) {
-            TimeOfDay.TimeHours = CaptureSunHours;
-            SunDir              = CaptureSunDir;
+        if (CaptureState->Session.SessionActive()) {
+            TimeOfDay.TimeHours = CaptureState->SunHours;
+            SunDir              = CaptureState->SunDirection;
         } else if (TimeOfDay.Enabled) {
             TimeOfDay.Tick(FrameState->LastDeltaTime);
             SetSunDirection(TimeOfDay.SunDirection());

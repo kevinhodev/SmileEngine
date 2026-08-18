@@ -19,8 +19,10 @@ por motivo de mudança:
    |
    +-- Renderer.cpp          lifecycle, resize, hot reload e política efetiva
    +-- RendererScene.cpp     mutações de cena, câmera e setup de recursos por cena
+   +-- RendererSceneImport.cpp commit GPU do resultado produzido por SceneLoader
    +-- RendererSceneState.h  cena e câmera CPU, seleção, bounds, versões e dirty flags
    +-- RendererCapture.cpp   captura determinística, readbacks e visualizadores
+   +-- RendererCaptureState.h sessão, pins e telemetria efetiva da captura
    +-- RendererFrame.cpp     snapshot CPU e orquestração de um frame
    +-- RendererFrameState.h  históricos, jitter, relógios e contadores temporais
    +-- RendererPasses.cpp    gravação de comandos e listas de draw/luzes
@@ -56,16 +58,30 @@ Essa regra impede que o editor grave comandos, manipule descriptors ou dependa d
 inicialização do backend. Se uma nova tela precisar de dados, prefira um snapshot pequeno; se
 precisar alterar recursos, crie uma operação com intenção explícita no dono apropriado.
 
-Três cortes de ownership já existem. `FRenderBackend` contém a infraestrutura D3D12;
+Quatro cortes de ownership já existem. `FRenderBackend` contém a infraestrutura D3D12;
 `FRendererSceneState` contém o estado CPU persistente da cena; `FRendererFrameState` contém o
-histórico CPU que conecta frames consecutivos. `Renderer.h` mantém ponteiros para esses objetos e
-os `.cpp` incluem apenas as definições que usam. Os cortes continuam por grupos coerentes; um PImpl
-único com todo o renderer apenas esconderia as responsabilidades sem separá-las.
+histórico CPU que conecta frames consecutivos; `FRendererCaptureState` possui a sessão determinística
+e os valores efetivos registrados no manifesto. `Renderer.h` mantém ponteiros para esses objetos e os
+`.cpp` incluem apenas as definições que usam. Os cortes continuam por grupos coerentes; um PImpl único
+com todo o renderer apenas esconderia as responsabilidades sem separá-las.
 
 `Backend` concentra a integração com a API gráfica. `FRenderBackend` compõe e governa o lifecycle;
 `Backend/D3D12` contém os wrappers concretos de baixo nível. A engine não possui hoje uma RHI
 multi-API, então a estrutura assume D3D12 explicitamente em vez de prometer uma abstração que o
 código ainda não oferece.
+
+O carregamento respeita a direção de dependência `Renderer -> Scene`: `SceneLoader.cpp` lê,
+valida e decodifica os arquivos cozidos em `FSceneImportResult`, sem conhecer device ou renderer.
+`RendererSceneImport.cpp` consome esse resultado na thread proprietária e cria texturas, meshes,
+materiais, BLAS/TLAS e GI.
+
+```text
+ SceneLoader.cpp                    RendererSceneImport.cpp
+ I/O + validação + decode CPU       commit na thread do Renderer
+          |                                      |
+          v                                      v
+ FSceneImportResult ---------------------> recursos GPU + FScene
+```
 
 ```text
  Renderer (fachada e orquestração)
@@ -75,6 +91,9 @@ código ainda não oferece.
        |
        +--> FRendererFrameState
        |    matrizes anteriores, jitter, relógios e contadores
+       |
+       +--> FRendererCaptureState
+       |    sessão determinística, pins e telemetria do manifesto
        |
        +--> Graphics/Backend/RenderBackend
               ownership e lifecycle
@@ -250,6 +269,7 @@ canceladas ou limpas antes de a nova ordem ser observada.
                +-- não --> altera cena, câmera ou setup por cena?
                            |
                            +-- sim --> RendererScene.cpp
+                           |            (`RendererSceneImport.cpp` para importação GPU)
                            |
                            +-- não --> captura, readback ou debug target?
                                        |

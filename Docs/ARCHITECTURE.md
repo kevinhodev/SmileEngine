@@ -51,7 +51,8 @@ Princípios de design observados no código:
   serializa o acesso ao seu próprio `Smile::Renderer`. O `Renderer` possui seus subsistemas
   (`FAtmosphere`, `FDDGI`, `FReSTIRGI`, …), delega o estado D3D12 a `FRenderBackend`, o estado
   CPU persistente da cena a `FRendererSceneState` e o histórico entre frames a
-  `FRendererFrameState`.
+  `FRendererFrameState`. A sessão determinística e sua telemetria pertencem a
+  `FRendererCaptureState`.
   *Exceções:* `VramTracker` e `DebugTargets` são registros **globais** por processo (§7.9).
 - **Prefixos por tipo:** `F` para tipos "engine/value-like" (`FD3D12Device`, `FMaterial`,
   `FAtmosphere`), classes "sistema" sem prefixo (`Renderer`).
@@ -185,6 +186,7 @@ Engine/Include/Smile/
 ├── Input/               CameraInput.h
 ├── Scene/
 │   ├── Scene.h          FScene: listas planas de FRenderable/FLight + TransformsVersion
+│   ├── SceneLoader.h    FSceneImportResult + leitura/decodificação CPU independente
 │   ├── Light.h          FLight (point/spot, Id estável, RTWeight)
 │   └── CookedFormat.h   formato cozido binário (kCookedVersion) + sidecars .json
 └── Graphics/
@@ -881,9 +883,10 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 ### Estrutural
 
 - **`Renderer` ainda é um God object, mas não uma TU monolítica.** As ~5.800 linhas de implementação
-  estão separadas entre lifecycle (`Renderer.cpp`), cena (`RendererScene.cpp`), captura/diagnóstico
-  (`RendererCapture.cpp`), frame (`RendererFrame.cpp`) e gravação (`RendererPasses.cpp`).
-  `Renderer.h` tem ~900 linhas após os cortes de backend, cena e estado temporal; `RenderFrame()` caiu
+  estão separadas entre lifecycle (`Renderer.cpp`), cena (`RendererScene.cpp`), importação GPU
+  (`RendererSceneImport.cpp`), captura/diagnóstico (`RendererCapture.cpp`), frame
+  (`RendererFrame.cpp`) e gravação (`RendererPasses.cpp`).
+  `Renderer.h` tem ~890 linhas após os cortes de backend, cena, frame e captura; `RenderFrame()` caiu
   para ~370 após `FFrameModes`,
   `FFrameView`, `FFrameLighting`, `FFrameAmbient` e as fases `Record*` tornarem o fluxo explícito.
   A dívida agora é ownership/superfície de API; `RendererPasses.cpp` ainda é a maior unidade e deve
@@ -903,9 +906,9 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
   ja sairam para `RenderSettingsBridge`, e configuracao/snapshot externos passam por
   `RenderSettingsController`; a separacao restante e sobretudo de telemetria e apresentacao.
 - **Acoplamento de compilação:** 59 dos 73 headers públicos de `Graphics/` puxam
-  `<d3d12.h>`/`<Windows.h>`; `Renderer.h` puxa 69 headers e é incluído por 10 TUs.
-- **Inversão de dependência menor:** `Engine/Source/Scene/SceneLoader.cpp` inclui
-  `Graphics/Renderer/Renderer.h` — a camada de cena depende do renderer.
+  `<d3d12.h>`/`<Windows.h>`; `Renderer.h` ainda puxa cerca de 64 headers e é incluído por 10 TUs.
+- ~~**Inversão `SceneLoader -> Renderer`.**~~ **Resolvido:** `SceneLoader.cpp` produz
+  `FSceneImportResult` sem conhecer o renderer; `RendererSceneImport.cpp` realiza o commit GPU.
 - **Submissão de draws.** O Z-prepass continua front-to-back (Hi-Z). O G-buffer, depois do
   depth EQUAL, agrupa por PSO/material/mesh e o `FDrawSubmitCache` pula Bind/IA repetidos —
   o CSM já fazia o equivalente. Translúcidos seguem back-to-front na lista original.
