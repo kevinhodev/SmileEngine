@@ -1,9 +1,10 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Water/OceanSpectrum.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -35,10 +36,53 @@ namespace Smile {
         }
     }
 
-    Renderer::Renderer() : SettingsImpl(std::make_unique<FRenderSettings>(*this)) {}
+    Renderer::Renderer()
+        : Backend(std::make_unique<FRenderBackend>()),
+          SettingsImpl(std::make_unique<FRenderSettings>(*this)) {}
 
     FRenderSettings&       Renderer::Settings()       { return *SettingsImpl; }
     const FRenderSettings& Renderer::Settings() const { return *SettingsImpl; }
+
+    const FGpuProfiler& Renderer::GetGpuProfiler() const {
+        return Backend->DirectProfiler;
+    }
+
+    std::vector<FGpuProfiler::FScopeResult> Renderer::GetAsyncComputeTimings() const {
+        if (!AsyncGIRanLastFrame) return {};
+        return Backend->ComputeProfiler.Results();
+    }
+
+    u32 Renderer::RenderWidth() const {
+        return static_cast<u32>(Backend->SwapChain.GetWidth() * RenderScale + 0.5f);
+    }
+
+    u32 Renderer::RenderHeight() const {
+        return static_cast<u32>(Backend->SwapChain.GetHeight() * RenderScale + 0.5f);
+    }
+
+    u32 Renderer::OutputWidth() const { return Backend->SwapChain.GetWidth(); }
+    u32 Renderer::OutputHeight() const { return Backend->SwapChain.GetHeight(); }
+
+    const std::wstring& Renderer::GetGpuDescription() const {
+        return Backend->Device.GetAdapterDescription();
+    }
+
+    u64 Renderer::GetDedicatedVideoMemory() const {
+        return Backend->Device.GetAdapterDedicatedVideoMemory();
+    }
+
+    FRendererGpuMemoryInfo Renderer::GetGpuMemoryInfo() const {
+        const FVideoMemoryInfo& Info = Backend->Device.QueryVideoMemory();
+        return {
+            Info.LocalUsage,
+            Info.LocalBudget,
+            Info.NonLocalUsage,
+            Info.NonLocalBudget,
+            Info.DemotedBytes,
+            Info.OverBudget,
+            Info.Valid
+        };
+    }
 
     Renderer::~Renderer() noexcept {
         try {
@@ -70,59 +114,46 @@ namespace Smile {
 
         // Streamline (DLSS) em manual hooking: inicializar ANTES de criar o device D3D12.
         FDlssPass::InitStreamline();
-        Device.Initialize(kDebugLayer);
-        FDlssPass::SetDevice(Device.Native());   // avisa o SL do device (manual hooking)
-        // O adaptador so tem nome depois do Device.Initialize; vira o chip da splash.
+        Backend->Initialize(_hWnd, _Width, _Height, kDebugLayer);
+        FDlssPass::SetDevice(Backend->Device.Native());   // avisa o SL do device (manual hooking)
+        // O adaptador so tem nome depois da inicializacao do backend; vira o chip da splash.
         ReportInitProgress("Criando filas e swap chain",
-                           ToUtf8(Device.GetAdapterDescription()), 0.12f);
-        CommandQueue.Initialize(Device.Native(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-        UploadQueue.Initialize(Device.Native());
-        ComputeQueue.Initialize(Device.Native());
-        GpuProfiler.Initialize(Device.Native(), CommandQueue.Native(),
-                               FCommandQueue::kFramesInFlight);
-        GpuProfilerCompute.Initialize(Device.Native(), ComputeQueue.Native(),
-                                      FAsyncComputeQueue::kSlots);
-        SwapChain.Initialize(Device.GetFactory(),
-                             CommandQueue.Native(),
-                             Device.Native(),
-                             _hWnd, _Width, _Height,
-                             Device.TearingSupported());
-        SRVHeap.Initialize(Device.Native());
+                           ToUtf8(Backend->Device.GetAdapterDescription()), 0.12f);
         ReportInitProgress("Compilando pipelines de raster", {}, 0.22f);
-        PipelineState.Initialize(Device.Native());
-        Targets.SceneColorMipPSO.Initialize(Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
+        PipelineState.Initialize(Backend->Device.Native());
+        Targets.SceneColorMipPSO.Initialize(Backend->Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
 
         ReportInitProgress("Alocando G-Buffer e alvos de cena", {}, 0.40f);
-        Targets.CreateDepthBuffer(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        Targets.CreateNormalBuffer(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        GBuffer.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, Targets.DepthBuffer.Get()); 
-        DebugViewPass.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+        Targets.CreateDepthBuffer(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateNormalBuffer(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        GBuffer.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        GBuffer.WriteDepthSRV(Backend->Device.Native(), Backend->SRVHeap, Targets.DepthBuffer.Get());
+        DebugViewPass.Initialize(Backend->Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
         CreateDebugPreviewTargets();
-        Targets.CreateHDRBuffers(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        Targets.CreateVelocityBuffer(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        Targets.CreateUpscaleMasks(Device.Native(), RenderWidth(), RenderHeight());
-        Targets.CreateSceneCopies(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateHDRBuffers(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateVelocityBuffer(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateUpscaleMasks(Backend->Device.Native(), RenderWidth(), RenderHeight());
+        Targets.CreateSceneCopies(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
         CreateConstantBuffer();
         CreateDefaultMaterial();
         BuildDefaultScene();
 
         ReportInitProgress("Pré-computando IBL, céu e atmosfera", {}, 0.50f);
-        HDREnv.Initialize(Device.Native(), CommandQueue, SRVHeap);
+        HDREnv.Initialize(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap);
         CreateIBLDescriptorTable();
 
-        Skybox.Initialize(Device.Native(),
+        Skybox.Initialize(Backend->Device.Native(),
                           DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
-        Atmosphere.Initialize(Device.Native(), CommandQueue, UploadQueue, SRVHeap,
+        Atmosphere.Initialize(Backend->Device.Native(), Backend->DirectQueue, Backend->UploadQueue, Backend->SRVHeap,
                               DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
         ReportInitProgress("Gerando ruídos de nuvem e cascatas do oceano", {}, 0.60f);
-        CloudNoise.Initialize(Device.Native(), CommandQueue, SRVHeap);
-        VolumetricClouds.Initialize(Device.Native(), SRVHeap, CloudNoise,
+        CloudNoise.Initialize(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap);
+        VolumetricClouds.Initialize(Backend->Device.Native(), Backend->SRVHeap, CloudNoise,
                                     Atmosphere.TransmittanceSRV(), Atmosphere.MultiScatterSRV(),
                                     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
-                                    SwapChain.GetWidth(), SwapChain.GetHeight());
+                                    Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
         static_assert(kDefaultOceanCascades.size() == kOceanCascades);
         for (u32 c = 0; c < kOceanCascades; ++c) {
@@ -132,75 +163,75 @@ namespace Smile {
         }
 
         for (u32 c = 0; c < kOceanCascades; ++c)
-            Ocean[c].Initialize(Device.Native(), SRVHeap);
-        Water.Initialize(Device.Native(), UploadQueue,
+            Ocean[c].Initialize(Backend->Device.Native(), Backend->SRVHeap);
+        Water.Initialize(Backend->Device.Native(), Backend->UploadQueue,
                          DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT,
                          DXGI_FORMAT_R16G16_FLOAT);
 
-        Fog.Initialize(Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+        Fog.Initialize(Backend->Device.Native(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-        VolumetricFog.Initialize(Device.Native(), SRVHeap);
+        VolumetricFog.Initialize(Backend->Device.Native(), Backend->SRVHeap);
 
-        SunShafts.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        SunShafts.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
-        RainWetness.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        RainWetness.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
         ReportInitProgress("Preparando sombras, terreno e pós-processo", {}, 0.70f);
-        SunShadows.Initialize(Device.Native(), SRVHeap);
-        LocalShadows.Initialize(Device.Native(), SRVHeap);
+        SunShadows.Initialize(Backend->Device.Native(), Backend->SRVHeap);
+        LocalShadows.Initialize(Backend->Device.Native(), Backend->SRVHeap);
 
-        Terrain.Initialize(Device.Native());
+        Terrain.Initialize(Backend->Device.Native());
 
-        PostProcessor.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
+        PostProcessor.Initialize(Backend->Device.Native(), Backend->SRVHeap, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
-        ObjectPicker.Initialize(Device.Native(), SwapChain.GetWidth(), SwapChain.GetHeight());
+        ObjectPicker.Initialize(Backend->Device.Native(), Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
-        SelectionOutline.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
+        SelectionOutline.Initialize(Backend->Device.Native(), Backend->SRVHeap, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
-        DebugDraw.Initialize(Device.Native(), FSwapChain::kFormat);
+        DebugDraw.Initialize(Backend->Device.Native(), FSwapChain::kFormat);
 
         ReportInitProgress("Iniciando upscalers e oclusão de ambiente", {}, 0.80f);
-        TemporalAA.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
-        TemporalAA.SetupInputs(Device.Native(), SRVHeap, Targets.HDRColorBuffer.Get(), Targets.DepthBuffer.Get(), Targets.VelocityBuffer.Get());
+        TemporalAA.Initialize(Backend->Device.Native(), Backend->SRVHeap, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
+        TemporalAA.SetupInputs(Backend->Device.Native(), Backend->SRVHeap, Targets.HDRColorBuffer.Get(), Targets.DepthBuffer.Get(), Targets.VelocityBuffer.Get());
 
-        Fsr.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
-                        SwapChain.GetWidth(), SwapChain.GetHeight());
-        Dlss.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
-                        SwapChain.GetWidth(), SwapChain.GetHeight());
-        DlssRR.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
-                          SwapChain.GetWidth(), SwapChain.GetHeight());
-        RRGuides.Initialize(Device.Native());
-        RRGuides.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        BgVelocity.Initialize(Device.Native());
+        Fsr.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
+                        Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
+        Dlss.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
+                        Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
+        DlssRR.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
+                          Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
+        RRGuides.Initialize(Backend->Device.Native());
+        RRGuides.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        BgVelocity.Initialize(Backend->Device.Native());
 
-        Flicker.Initialize(Device.Native(), SRVHeap, SwapChain.GetWidth(), SwapChain.GetHeight());
+        Flicker.Initialize(Backend->Device.Native(), Backend->SRVHeap, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
-        AO.Initialize(Device.Native());
+        AO.Initialize(Backend->Device.Native());
         // O dimensionamento dela sai daqui: e um passe migrado, entao quem o faz e o
         // Passes.ResizeAll logo apos o RegisterPasses (abaixo).
 
-        HiZ.Initialize(Device.Native());
-        HiZ.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        HiZ.Initialize(Backend->Device.Native());
+        HiZ.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
-        if (Device.RaytracingSupported()) {
+        if (Backend->Device.RaytracingSupported()) {
             ReportInitProgress("Compilando pipelines de ray tracing", {}, 0.88f);
             // A NVAPI precisa reservar o slot antes da criacao das PSOs instrumentadas.
             // A falha e esperada em GPUs sem suporte; nesses casos nao ha permutacao de timer.
-            FShaderTimer::InitializeApi(Device.Native(), SRVHeap);
-            BvhDebug.Initialize(Device.Native());
+            FShaderTimer::InitializeApi(Backend->Device.Native(), Backend->SRVHeap);
+            BvhDebug.Initialize(Backend->Device.Native());
             // O fallback precisa existir antes dos consumidores que copiam seus descriptors.
-            GIFallback.Initialize(Device.Native(), CommandQueue, SRVHeap);
-            DDGI.Initialize(Device.Native());
-            ReGIR.Initialize(Device.Native());
-            RadianceCache.Initialize(Device.Native());
-            MeshLights.Initialize(Device.Native());
-            ReSTIRGI.Initialize(Device.Native());
-            Nrd.Initialize(Device.Native());
-            NrdDirect.Initialize(Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
-            Reflections.Initialize(Device.Native());
-            ReSTIRDI.Initialize(Device.Native());
-            TemporalMotion.Initialize(Device.Native());
-            DDGIDebugPass.Initialize(Device.Native(),
+            GIFallback.Initialize(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap);
+            DDGI.Initialize(Backend->Device.Native());
+            ReGIR.Initialize(Backend->Device.Native());
+            RadianceCache.Initialize(Backend->Device.Native());
+            MeshLights.Initialize(Backend->Device.Native());
+            ReSTIRGI.Initialize(Backend->Device.Native());
+            Nrd.Initialize(Backend->Device.Native());
+            NrdDirect.Initialize(Backend->Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
+            Reflections.Initialize(Backend->Device.Native());
+            ReSTIRDI.Initialize(Backend->Device.Native());
+            TemporalMotion.Initialize(Backend->Device.Native());
+            DDGIDebugPass.Initialize(Backend->Device.Native(),
                                      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
         }
 
@@ -216,15 +247,15 @@ namespace Smile {
         Initialized = true;
         ReportInitProgress("Renderizador pronto", {}, 1.0f);
 
-        std::string Features = Device.RaytracingSupported() ? "DXR" : "Raster";
+        std::string Features = Backend->Device.RaytracingSupported() ? "DXR" : "Raster";
         if (Fsr.Available())    Features += " | FSR";
         if (Dlss.Available())   Features += " | DLSS";
         if (DlssRR.Available()) Features += " | DLSS-RR";
         const auto InitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - InitStarted).count();
         LogInfo("Renderer pronto em " + std::to_string(InitMs) + " ms | " +
-                std::to_string(SwapChain.GetWidth()) + "x" +
-                std::to_string(SwapChain.GetHeight()) + " | " + Features);
+                std::to_string(Backend->SwapChain.GetWidth()) + "x" +
+                std::to_string(Backend->SwapChain.GetHeight()) + " | " + Features);
     }
 
     // O registro e incondicional; cada passe decide se esta inicializado/ativo.
@@ -285,8 +316,8 @@ namespace Smile {
 
     FPassInitContext Renderer::MakePassInitContext() {
         FPassInitContext Ctx;
-        Ctx.Device       = Device.Native();
-        Ctx.SRVHeap      = &SRVHeap;
+        Ctx.Device       = Backend->Device.Native();
+        Ctx.SRVHeap      = &Backend->SRVHeap;
         Ctx.Targets      = &Targets;
         Ctx.RenderWidth  = RenderWidth();
         Ctx.RenderHeight = RenderHeight();
@@ -296,7 +327,7 @@ namespace Smile {
     bool Renderer::IsBvhDebugAvailable() const {
         // Precisa da TLAS E do snapshot de instancias — o passe le os dois. Antes da primeira
         // cena carregar, o toggle fica desabilitado em vez de ligar e nao produzir imagem.
-        return Device.RaytracingSupported() && RaytracingScene.IsBuilt() && BvhDebug.IsReady();
+        return Backend->Device.RaytracingSupported() && RaytracingScene.IsBuilt() && BvhDebug.IsReady();
     }
 
     bool Renderer::IsRtShaderTimerAvailable() const {
@@ -321,7 +352,7 @@ namespace Smile {
     bool Renderer::ReloadShaders(const std::string& _ChangedStem) {
         if (!Initialized) return false;
         try {
-            CommandQueue.Flush();
+            Backend->DirectQueue.Flush();
 
             // A captura nao pode misturar frames produzidos por builds diferentes do shader.
             // Cancele antes da primeira mutacao, inclusive quando varias instancias casam o stem.
@@ -355,8 +386,7 @@ namespace Smile {
         if (!Initialized || _Width == 0 || _Height == 0) return;
         // Um resize reinicia historicos e invalida o aquecimento da captura atual.
         Capture.Cancel("a janela foi redimensionada durante o aquecimento");
-        CommandQueue.Flush();
-        SwapChain.Resize(Device.Native(), _Width, _Height);
+        Backend->Resize(_Width, _Height);
         RecreateInternalTargets();
     }
 
@@ -377,8 +407,8 @@ namespace Smile {
         if (!CaptureSetupGuard)
             Capture.Cancel("a escala de renderizacao mudou durante o aquecimento");
         RenderScale = _Scale;
-        if (!Initialized || SwapChain.GetWidth() == 0) return;
-        CommandQueue.Flush();
+        if (!Initialized || Backend->SwapChain.GetWidth() == 0) return;
+        Backend->DirectQueue.Flush();
         RecreateInternalTargets();
     }
 
@@ -386,42 +416,42 @@ namespace Smile {
         if (VolumetricClouds.GetHalfRes() == _HalfRes) return;
         VolumetricClouds.SetHalfRes(_HalfRes);
         if (!Initialized || !VolumetricClouds.IsInitialized()) return;
-        CommandQueue.Flush();
-        VolumetricClouds.Resize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        Backend->DirectQueue.Flush();
+        VolumetricClouds.Resize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
     }
 
     void Renderer::SetCloudWeatherSeed(u32 _Seed) {
         CloudNoise.SetSeed(_Seed);
         if (!Initialized || !CloudNoise.IsInitialized()) return;
-        CommandQueue.Flush();
-        CloudNoise.ClearWeatherOverride(SRVHeap); // mexer no procedural desativa a autorada
-        CloudNoise.RebakeWeather(CommandQueue, SRVHeap);
-        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+        Backend->DirectQueue.Flush();
+        CloudNoise.ClearWeatherOverride(Backend->SRVHeap); // mexer no procedural desativa a autorada
+        CloudNoise.RebakeWeather(Backend->DirectQueue, Backend->SRVHeap);
+        VolumetricClouds.SetWeatherSRV(Backend->Device.Native(), Backend->SRVHeap, CloudNoise.WeatherSRV());
     }
 
     void Renderer::SetCloudWeatherCells(u32 _Mult) {
         CloudNoise.SetCellMult(_Mult);
         if (!Initialized || !CloudNoise.IsInitialized()) return;
-        CommandQueue.Flush();
-        CloudNoise.ClearWeatherOverride(SRVHeap);
-        CloudNoise.RebakeWeather(CommandQueue, SRVHeap);
-        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+        Backend->DirectQueue.Flush();
+        CloudNoise.ClearWeatherOverride(Backend->SRVHeap);
+        CloudNoise.RebakeWeather(Backend->DirectQueue, Backend->SRVHeap);
+        VolumetricClouds.SetWeatherSRV(Backend->Device.Native(), Backend->SRVHeap, CloudNoise.WeatherSRV());
     }
 
     bool Renderer::LoadCloudWeatherTexture(const std::wstring& _Path) {
         if (!Initialized || !CloudNoise.IsInitialized()) return false;
-        CommandQueue.Flush();
-        if (!CloudNoise.LoadWeatherOverride(Device.Native(), UploadQueue, SRVHeap, _Path))
+        Backend->DirectQueue.Flush();
+        if (!CloudNoise.LoadWeatherOverride(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Path))
             return false;
-        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+        VolumetricClouds.SetWeatherSRV(Backend->Device.Native(), Backend->SRVHeap, CloudNoise.WeatherSRV());
         return true;
     }
 
     void Renderer::ClearCloudWeatherTexture() {
         if (!Initialized || !CloudNoise.HasWeatherOverride()) return;
-        CommandQueue.Flush();
-        CloudNoise.ClearWeatherOverride(SRVHeap);
-        VolumetricClouds.SetWeatherSRV(Device.Native(), SRVHeap, CloudNoise.WeatherSRV());
+        Backend->DirectQueue.Flush();
+        CloudNoise.ClearWeatherOverride(Backend->SRVHeap);
+        VolumetricClouds.SetWeatherSRV(Backend->Device.Native(), Backend->SRVHeap, CloudNoise.WeatherSRV());
     }
 
     void Renderer::RecreateInternalTargets() {
@@ -438,47 +468,47 @@ namespace Smile {
 #endif
 
         const u32 RW = RenderWidth(),        RH = RenderHeight();
-        const u32 SW = SwapChain.GetWidth(), SH = SwapChain.GetHeight();
+        const u32 SW = Backend->SwapChain.GetWidth(), SH = Backend->SwapChain.GetHeight();
 
-        Targets.CreateHDRBuffers(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        Targets.CreateDepthBuffer(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        Targets.CreateNormalBuffer(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        GBuffer.Resize(Device.Native(), SRVHeap, RW, RH);
-        GBuffer.WriteDepthSRV(Device.Native(), SRVHeap, Targets.DepthBuffer.Get());
-        Targets.CreateVelocityBuffer(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        Targets.CreateUpscaleMasks(Device.Native(), RenderWidth(), RenderHeight());
+        Targets.CreateHDRBuffers(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateDepthBuffer(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateNormalBuffer(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        GBuffer.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
+        GBuffer.WriteDepthSRV(Backend->Device.Native(), Backend->SRVHeap, Targets.DepthBuffer.Get());
+        Targets.CreateVelocityBuffer(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        Targets.CreateUpscaleMasks(Backend->Device.Native(), RenderWidth(), RenderHeight());
 
-        VolumetricClouds.Resize(Device.Native(), SRVHeap, RW, RH);
-        Water.Resize(Device.Native(), RW, RH);
-        RainWetness.Resize(Device.Native(), SRVHeap, RW, RH);
-        SunShafts.Resize(Device.Native(), SRVHeap, RW, RH);
-        Targets.CreateSceneCopies(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
+        VolumetricClouds.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
+        Water.Resize(Backend->Device.Native(), RW, RH);
+        RainWetness.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
+        SunShafts.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
+        Targets.CreateSceneCopies(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
-        PostProcessor.Resize(Device.Native(), SRVHeap, SW, SH);    
-        ObjectPicker.Resize(Device.Native(), RW, RH);
-        SelectionOutline.Resize(Device.Native(), SRVHeap, SW, SH); 
+        PostProcessor.Resize(Backend->Device.Native(), Backend->SRVHeap, SW, SH);
+        ObjectPicker.Resize(Backend->Device.Native(), RW, RH);
+        SelectionOutline.Resize(Backend->Device.Native(), Backend->SRVHeap, SW, SH);
 
-        TemporalAA.Resize(Device.Native(), SRVHeap, RW, RH);
-        TemporalAA.SetupInputs(Device.Native(), SRVHeap, Targets.HDRColorBuffer.Get(), Targets.DepthBuffer.Get(), Targets.VelocityBuffer.Get());
+        TemporalAA.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
+        TemporalAA.SetupInputs(Backend->Device.Native(), Backend->SRVHeap, Targets.HDRColorBuffer.Get(), Targets.DepthBuffer.Get(), Targets.VelocityBuffer.Get());
         TAARanLastFrame = false;
 
-        Fsr.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
-        Dlss.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
-        DlssRR.Initialize(Device.Native(), SRVHeap, RW, RH, SW, SH);
-        RRGuides.SetupForResize(Device.Native(), SRVHeap, RW, RH);
-        Flicker.Resize(Device.Native(), SRVHeap, RW, RH);
+        Fsr.Initialize(Backend->Device.Native(), Backend->SRVHeap, RW, RH, SW, SH);
+        Dlss.Initialize(Backend->Device.Native(), Backend->SRVHeap, RW, RH, SW, SH);
+        DlssRR.Initialize(Backend->Device.Native(), Backend->SRVHeap, RW, RH, SW, SH);
+        RRGuides.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
+        Flicker.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
         FlickerResetPending = true;
 
         // Passes que ja adotaram o contrato. Fica NESTE ponto (e nao no topo) porque o
         // OnResize deles le Targets.*SRVSlot, que as criacoes acima acabaram de reatribuir.
         Passes.ResizeAll(MakePassInitContext());
 
-        HiZ.SetupForResize(Device.Native(), SRVHeap, RW, RH);
+        HiZ.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
 
         SetupReflectionsForScene();
         if (DDGI.IsReady()) {
             DDGIDebugPass.SetupPointDiagnosticInputs(
-                Device.Native(), SRVHeap, GBuffer.SRVTableStart(), DDGI);
+                Backend->Device.Native(), Backend->SRVHeap, GBuffer.SRVTableStart(), DDGI);
         }
 
         RegisterDebugTargets();
@@ -544,15 +574,14 @@ namespace Smile {
     }
 
     void Renderer::PresentFrame() {
-        SwapChain.Present();
+        Backend->Present();
     }
 
     void Renderer::Shutdown() {
         if (!Initialized) return;
-        CommandQueue.Flush();
+        Backend->FlushDirect();
         Capture.Release();
-        ComputeQueue.Shutdown();
-        UploadQueue.Shutdown();
+        Backend->Shutdown();
         Nrd.Shutdown();
         NrdDirect.Shutdown();
         Fsr.Shutdown();
@@ -561,8 +590,8 @@ namespace Smile {
         RRGuides.Shutdown();
         BgVelocity.Shutdown();
         FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS/RR
-        BvhDebug.Release(SRVHeap);
-        GIFallback.Release(SRVHeap);       // 3 slots + os recursos neutros do fallback indireto
+        BvhDebug.Release(Backend->SRVHeap);
+        GIFallback.Release(Backend->SRVHeap);       // 3 slots + os recursos neutros do fallback indireto
         FShaderTimer::ShutdownApi();       // libera o slot falso da extensao + o buffer dummy
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);

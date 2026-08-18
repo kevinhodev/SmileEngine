@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/PostProcess/Upscaler.h"
 #include <memory>
 

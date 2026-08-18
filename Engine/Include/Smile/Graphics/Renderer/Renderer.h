@@ -8,17 +8,10 @@
 #include <memory>
 #include <unordered_map>
 #include "Smile/Math/Math.h"
-#include "Smile/Input/CameraInput.h"
-#include "Smile/Graphics/RHI/D3D12Device.h"
-#include "Smile/Graphics/RHI/CommandQueue.h"
-#include "Smile/Graphics/RHI/UploadQueue.h"
-#include "Smile/Graphics/RHI/ComputeQueue.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
-#include "Smile/Graphics/RHI/SwapChain.h"
-#include "Smile/Graphics/RHI/PipelineState.h"
-#include "Smile/Graphics/RHI/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Graphics/Scene/Camera.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
 #include "Smile/Graphics/Resources/Texture.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Scene/GBuffer.h"
@@ -73,16 +66,15 @@
 #include "Smile/Graphics/Water/OceanFFT.h"
 #include "Smile/Graphics/Water/Water.h"
 #include "Smile/Graphics/Scene/Terrain.h"
-#include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Scene/Scene.h"
 
 namespace Smile {
+    struct CameraInput;
     struct FPreparedCookedScene;
+    class FRenderBackend;
     using FPreparedCookedScenePtr = std::shared_ptr<FPreparedCookedScene>;
 
-    // Fachada dos knobs de render (RenderSettings.h). Forward-declarada de proposito: o
-    // Renderer a possui por ponteiro para que quem so mexe em parametro nao precise arrastar
-    // este header e seus 69 includes.
+    // Fachada de configuracao. Fica incompleta aqui para evitar dependencia circular.
     class FRenderSettings;
 
     struct alignas(256) FrameConstants {
@@ -121,51 +113,31 @@ namespace Smile {
         Vec4  LightParams2;       // 16 bytes — x = 1/res do cube shadow (point), y = near das
                                   // faces do cubo (formula do refZ), zw = -
 
-        // Amostragem do DDGI (append no fim: nao mexe nos offsets acima).
-        // x = escala do self-shadow bias (0.2 = Flax/legado)
-        // y = TETO do bias em metros (0 = sem teto = comportamento historico). Ver
-        //     DDGI_SurfaceBias em DDGICommon.hlsli: a formula escala com o espacamento do grid,
-        //     que aqui vem da AABB da cena inteira (8 m medidos no Bistro = 1,20 m de bias).
-        // zw = reservados (fallback fora do volume)
+        // x = escala do self-shadow bias; y = teto em metros (0 = sem teto).
         Vec4  DDGIBiasParams;
 
-        // --- Transmitancia do sol/lua POR PIXEL (append no fim: offsets acima intactos) -----
+        // Transmitancia atmosferica por pixel. w = habilitado.
         // x = raio do planeta (km), y = raio do topo da atmosfera (km),
-        // z = km por unidade de mundo, w = liga o caminho por pixel (0 = usa SunColor/MoonColor
-        //     ja transmitidos pela CPU, comportamento historico bit a bit).
+        // z = km por unidade de mundo.
         Vec4  AtmoLightParams;
-        // Cor do sol/lua SEM transmitancia e SEM HorizonFade. So o deferred e o ForwardBlend
-        // consomem estas variantes; fog volumetrico, nuvens, agua, sun shafts e o readout do
-        // editor seguem lendo SunColor/MoonColor (transmitidos na CPU) sem edicao nenhuma —
-        // e isso que torna o .w um A/B de verdade em vez de um rewrite.
+        // Cores sem transmitancia nem HorizonFade, usadas no caminho por pixel.
         Vec4  SunColorRaw;        // rgb = cor base * dim de chuva, w = -
         Vec4  MoonColorRaw;       // rgb = tint da lua * dim de chuva, w = -
 
-        // --- Ambiente do ceu em SH-L1 (append no fim) --------------------------------------
-        // Um float4 por CANAL, cada um com (c0, c1, c2, c3) na base real l=0/l=1. As 2 cores
-        // chapadas (SkyAmbientColor/GroundAmbientColor) continuam preenchidas e sao o fallback
-        // e o botao do A/B — elas so variam com o Y da normal, a SH tem o termo direcional.
+        // Ambiente do ceu em SH-L1: um float4 de coeficientes por canal.
         Vec4  SkyAmbientSHR;
         Vec4  SkyAmbientSHG;
         Vec4  SkyAmbientSHB;
         Vec4  SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas), yzw = -
 
-        // --- Cascatas do DDGI (append no fim) ----------------------------------------------
-        // O MESMO bloco que vai para o fog, o ReSTIR GI, as reflexoes e o DDGICB, preenchido por
-        // FDDGI::CascadeConstants(). O DDGIGridMin/DDGIGridCount acima continuam sendo a cascata
-        // GROSSA — quem le aqueles sem saber de cascata quer dizer "o volume da cena" (fade de
-        // borda, fallback de fora). Ver FDDGI::GridMin.
+        // Cascatas compartilhadas pelos consumidores de GI. Deve permanecer no fim do cbuffer.
         FDDGICascadeConstants DDGICascades;
     };
-    // Offset PRESO, como no DDGIConstants. Nao e zelo: durante a fase 6.2a uma substituicao
-    // deixou dois arrays de cascata sobrepostos num cbuffer, e o segundo caia alem do que a CPU
-    // escreve — lixo lido em silencio. Um assert de offset teria pego na compilacao.
+    // Protege o layout compartilhado com os shaders.
     static_assert(offsetof(FrameConstants, DDGICascades) == 496,
                   "o bloco de cascatas deve permanecer anexado ao fim do FrameConstants");
 
-    // Luz puntual no formato do shader — espelha o FGPULight do DeferredLighting.ps.hlsl
-    // (StructuredBuffer t17, root SRV). PrevPosInvRadius fica no fim para os shaders raster
-    // continuarem com o prefixo historico intacto.
+    // Espelha FGPULight em DeferredLighting.ps.hlsl.
     struct FGPULight {
         Vec4  PosInvRadius;      // xyz = posicao, w = 1/AttenuationRadius
         Vec4  ColorSourceRadius; // rgb = Color*Intensity, w = bulb (distancia minima)
@@ -178,10 +150,7 @@ namespace Smile {
         Vec4  PrevPosInvRadius;  // xyz = posicao no frame anterior (shadow motion vector)
     };
 
-    // Luz puntual COMPACTA pro mundo indireto (F5) — espelha o FPunctualLight do
-    // LightsCommon.hlsli (DDGI/reflexoes/ReSTIR leem nos hits de RT). Sem matriz de sombra:
-    // a visibilidade la e por shadow ray inline. Lista SEM frustum cull (luz atras da camera
-    // ilumina GI).
+    // Formato compacto de luz para GI; visibilidade e resolvida por shadow ray.
     struct FGPULightGI {
         Vec4 PosInvRadius;
         Vec4 ColorSourceRadius;
@@ -196,18 +165,25 @@ namespace Smile {
         Mat44 PrevMVP;        // 64 bytes — PrevModel * PrevViewProjUnjittered — motion vector
     };
 
-    // Sombras locais a rasterizar neste frame, resolvidas no empacotamento das luzes (que ja faz
-    // o cull e a priorizacao por slot) e consumidas pelo passe de sombras. Fora do FPassContext
-    // pelo mesmo criterio do resto: nascem e morrem entre duas fases vizinhas.
+    // Snapshot independente do backend para telemetria de memoria da GPU.
+    struct FRendererGpuMemoryInfo {
+        u64  LocalUsage     = 0;
+        u64  LocalBudget    = 0;
+        u64  NonLocalUsage  = 0;
+        u64  NonLocalBudget = 0;
+        u64  DemotedBytes   = 0;
+        bool OverBudget     = false;
+        bool Valid          = false;
+    };
+
+    // Trabalhos de sombra local produzidos e consumidos dentro do frame.
     struct FLocalShadowJobs {
         std::vector<FLocalShadows::FShadowJob>     Spot;
         std::vector<FLocalShadows::FCubeShadowJob> Cube;
     };
 
     class Renderer {
-        // A fachada roteia os knobs para os subsistemas e carrega a politica de invalidacao de
-        // historico. E friend porque neste passo os corpos foram MOVIDOS bit a bit, sem mudar
-        // a posse do estado — ver a nota de transicao no RenderSettings.h.
+        // FRenderSettings roteia configuracao e invalidacao sem expor o estado interno.
         friend class FRenderSettings;
 
     public:
@@ -217,15 +193,11 @@ namespace Smile {
         Renderer(const Renderer&)            = delete;
         Renderer& operator=(const Renderer&) = delete;
 
-        // Caminho UNICO para parametro de render. O que nao esta aqui nao e knob: selecao,
-        // picking, camera, carga de cena, recursos e o visualizador de debug seguem no Renderer.
+        // Ponto unico para parametros de render e suas invalidacoes.
         FRenderSettings&       Settings();
         const FRenderSettings& Settings() const;
 
-        // Progresso do boot, para a splash screen do editor. Label = etapa corrente, Detail =
-        // texto auxiliar opcional (adaptador, contagens), Fraction = 0..1 monotonica.
-        // Chamada DE DENTRO de Initialize, portanto na thread que a chamou (render thread) e com
-        // o lock do RendererHandle preso: o receptor nao pode tocar no Renderer, so postar p/ a GUI.
+        // Executado na thread de Initialize; o callback nao deve reentrar no Renderer.
         using FInitProgressCallback =
             std::function<void(std::string_view Label, std::string_view Detail, f32 Fraction)>;
         void SetInitProgressCallback(FInitProgressCallback Callback) {
@@ -240,17 +212,7 @@ namespace Smile {
         // nem extensao (ex.: "WaterSurface.ps"). Vazio (ou stem nao mapeado / .hlsli
         // incluido por varios shaders) => reload completo.
         bool ReloadShaders(const std::string& ChangedStem = "");
-        // Um reload FOI ENFILEIRADO — o arquivo mudou no disco e a compilacao vai comecar. Chamar
-        // no instante da deteccao, ANTES de disparar o compilador.
-        //
-        // Existe porque a compilacao e assincrona e demora ~1,5 s: uma captura de 128 frames
-        // termina bem dentro dessa janela e sairia GRAVADA como valida, tendo renderizado parte
-        // dos frames com o .cso antigo e parte com o novo. Cancelar quando o `ReloadShaders`
-        // chega e tarde demais — foi medido, o arquivo ficou pronto 1,4 s antes.
-        //
-        // Só cancela; nao recria nada. Quem recria continua sendo o ReloadShaders, depois que o
-        // compilador termina — e o cancelamento de la fica como segunda defesa, para o caminho em
-        // que o reload chega sem ter passado por aqui.
+        // Cancela capturas antes da compilacao assincrona; ReloadShaders faz a recriacao.
         void NotifyShaderReloadQueued(const std::string& ChangedStem = "");
 
         void UpdateCamera(const CameraInput& Input, f32 DeltaTime);
@@ -293,11 +255,6 @@ namespace Smile {
         // a cena cozida sobre a atual sem limpar meshes/materiais/camera ja carregados.
         bool LoadCookedScene(const std::wstring& ScenePath, bool Additive = false);
 
-        FTexture& GetDefaultWhite()  { return TexDefaultWhite; }
-        FTexture& GetDefaultNormal() { return TexDefaultNormal; }
-        FTexture& GetDefaultBlack()  { return TexDefaultBlack; }
-
-
         // Telemetria de culling (os toggles moraram p/ o FRenderSettings).
         u32  GetOccludedCount() const    { return LastOccludedCount; }
         u32  GetVisibleCount() const     { return LastVisibleCount; }
@@ -307,27 +264,18 @@ namespace Smile {
         // leitura: e a base de medida da separacao static/dynamic dos casters.
         const FSunShadows& GetSunShadows() const { return SunShadows; }
 
-        // Objeto sob arraste do gizmo (0 = nenhum). Enquanto dura, ele e tratado como caster
-        // DINAMICO qualquer que seja a mobilidade dele: um estatico sendo arrastado invalidaria
-        // o mapa cacheado a cada frame de mouse. O editor liga no begin do arraste e desliga no
-        // release, e e no release que a invalidacao do conjunto estatico acontece — uma vez, no
-        // lugar final, em vez de uma por frame ao longo do caminho.
+        // Durante o arraste, o objeto e tratado como caster dinamico. Zero = nenhum.
         void SetDraggingRenderable(u64 Id) { DraggingRenderableId = Id; }
         u64  GetDraggingRenderable() const { return DraggingRenderableId; }
 
 
         bool IsInitialized() const { return Initialized; }
 
-        // Supersampling (SSAA): a cena renderiza em RenderWidth/Height = swapchain * RenderScale;
-        // o PostProcessor faz o downsample pro backbuffer nativo. >1.0 = mais amostras/pixel.
-        // IGNORADO com o denoiser em DLSS_RR: ali a resolucao de ENTRADA e ditada pelo modo de
-        // qualidade (o RR nao suporta DRS e a feature NGX e criada na res otima do modo), entao uma
-        // escala arbitraria faria o render subrect divergir do buffer criado. A UI ja esconde o
-        // slider nesse estado (o RR forca upscaler=DLSS); isto blinda a invariante no motor.
-        u32  RenderWidth()  const { return static_cast<u32>(SwapChain.GetWidth()  * RenderScale + 0.5f); }
-        u32  RenderHeight() const { return static_cast<u32>(SwapChain.GetHeight() * RenderScale + 0.5f); }
-        u32  OutputWidth()  const { return SwapChain.GetWidth(); }
-        u32  OutputHeight() const { return SwapChain.GetHeight(); }
+        // Resolucao interna e de saida. DLSS RR define sua propria escala de entrada.
+        u32  RenderWidth() const;
+        u32  RenderHeight() const;
+        u32  OutputWidth() const;
+        u32  OutputHeight() const;
         u32  GetFrameIndex() const { return FrameIndex; }
 
         // Picking: o ID pass roda em res interna -> escala a coord do mouse (nativa) por RenderScale.
@@ -336,57 +284,23 @@ namespace Smile {
                                      static_cast<u32>(Y * RenderScale + 0.5f));
         }
         bool TryGetPickResult(int& OutIndex) { return ObjectPicker.TryResolve(OutIndex); }
-        // A selecao viaja por INDICE (e o que o picking devolve e o que o loop de draw compara)
-        // mas e GUARDADA tambem por Id, para o OnSceneStructureChanged reancora-la depois de a
-        // lista andar. Sem isso, apagar um objeto acima do selecionado passava a selecao para o
-        // vizinho em silencio.
+        // O indice atende ao draw; o Id mantem a selecao estavel apos alteracoes na cena.
         void SetSelectedObject(int Index);
         int  GetSelectedObject() const;
         u64  GetSelectedObjectId() const; // 0 quando o selecionado nao e um renderavel
         void ClearSelection();
-        // A selecao inteira, sem o chamador precisar saber o tipo. Fonte de verdade dos
-        // acessores acima e dos de luz.
-        FSceneObjectRef GetSelection() const { return Selection; }
-
-        // Criar/remover objeto com a cena JA carregada. Fecham o ciclo que a FScene sozinha nao
-        // fecha: la a lista fica consistente, aqui os cinco sistemas dimensionados ou indexados
-        // por indice de cena voltam a concordar com ela. Devolvem false/0 se o Id nao existe.
+        // Alteram a cena e sincronizam os subsistemas indexados por renderable.
         bool RemoveRenderable(u64 Id);
         u64  DuplicateRenderable(u64 Id);
 
-        // Edicao que muda o MUNDO sem mudar a LISTA: mover objeto ou luz, esconder no outliner,
-        // editar propriedade de luz. So as sondas do DDGI dentro da caixa reavaliam — o resto do
-        // atlas continua valido, que e a diferenca para o SceneStructure.
-        //
-        // Para uma MUDANCA de estado (moveu, mudou de raio), chame DUAS vezes, com a caixa
-        // ANTIGA e com a NOVA: FDDGI::InvalidateRegion une chamadas dentro da janela, e a uniao
-        // e crua — nao ha custo em chamar por frame durante um arraste.
-        //
-        // NAO cobre os historicos sem granularidade espacial (reservoirs, reflexoes, ReGIR,
-        // cache de radiancia). Quem muda ENERGIA ou visibilidade tambem chama
-        // Settings().MarkSceneContentDirty(); mover objeto nao precisa, porque ali os filtros
-        // reprojetam por motion vector e rejeitam o historico invalido sozinhos.
-        // `Change` distingue "mudou a geometria daqui" de "mudou a luz daqui". Os dois invalidam
-        // o atlas igual; so o primeiro reclassifica as sondas — ver EGIRegionChange (DDGI.h).
+        // Invalida apenas a regiao afetada do DDGI. Em mudancas espaciais, informe os bounds
+        // antigo e novo; mudancas de energia tambem exigem MarkSceneContentDirty().
         void NotifyGIRegionChanged(const Vec3& Min, const Vec3& Max, EGIRegionChange Change);
 
-        // Recria o volume do DDGI com os bounds da cena atual. Existe para a contagem de cascatas
-        // ser um A/B de um clique em vez de um restart: ela dimensiona atlas, ProbesTrace, buffers
-        // e dispatch, entao mudar em runtime exige realocar tudo — o SetupForScene ja e reentrante
-        // (libera os recursos antigos antes) e nao ha caminho barato aqui.
-        //
-        // Diferente do load, aqui a GPU esta OCUPADA: o SetupGIForScene drena a fila direta e a de
-        // compute antes de soltar qualquer coisa, senao o frame em voo seguiria lendo o atlas que
-        // acabou de ser liberado. Ver o bloco de drenagem la dentro.
+        // Drena as filas e recria o volume DDGI com os bounds atuais da cena.
         void RebuildGIVolume() { SetupGIForScene(SceneBoundsMin, SceneBoundsMax); }
 
-        // Selecao de LUZ. Indice em Scene.Lights(); -1 = nenhuma.
-        //
-        // A exclusividade com a selecao de renderavel deixou de ser combinada: as duas sao a
-        // MESMA variavel (Selection), entao selecionar luz derruba a mesh e vice-versa por
-        // construcao. Antes eram dois campos e cada call site tinha de lembrar de limpar o
-        // outro — os ClearSelection()/ClearLightSelection() espalhados pelo editor sao os
-        // restos disso, e agora sao no-ops quando o tipo ja nao bate.
+        // Selecao exclusiva de luz. Indice em Scene.Lights(); -1 = nenhuma.
         void SetSelectedLight(int Index);
         int  GetSelectedLight() const;
         void ClearLightSelection();
@@ -398,9 +312,6 @@ namespace Smile {
         FDebugDraw& GetDebugDraw() { return DebugDraw; }
         bool WorldToScreen(const Vec3& World, f32& OutX, f32& OutY) const;
         bool ScreenToRay(u32 X, u32 Y, Vec3& OutOrigin, Vec3& OutDir) const;
-        Vec3 GetOutlineColor() const        { return const_cast<FSelectionOutline&>(SelectionOutline).GetColor(); }
-        f32  GetOutlineThickness() const    { return const_cast<FSelectionOutline&>(SelectionOutline).GetThickness(); }
-
         bool LoadHDREnvironment(const std::wstring& Path);
 
         // Estado do Time-of-Day, exposto p/ o painel TOD do editor (leitura e escrita).
@@ -417,27 +328,19 @@ namespace Smile {
         void SetGBufferDebugMode(u32 Mode)   { GBufferDebugMode = Mode > 8 ? 8 : Mode; }
         u32  GetGBufferDebugMode() const     { return GBufferDebugMode; }
 
-        // === Visualizador de render targets ==============================================
-        // Seleciona QUALQUER alvo publicado em DebugTargets pelo indice em All(). kNoDebugTarget
-        // desliga. Independente do GBufferDebugMode (que continua servindo o menu de view modes
-        // do toolbar); quando os dois estao ativos, o alvo escolhido aqui tem prioridade.
+        // Visualizador de render targets. O alvo escolhido tem prioridade sobre GBufferDebugMode.
         static constexpr u32 kNoDebugTarget = 0xFFFFFFFFu;
         static constexpr u32 kNoDebugProbe  = 0xFFFFFFFFu;
         void SetDebugTargetIndex(u32 Index)  { DebugTargetIndex = Index; }
         u32  GetDebugTargetIndex() const     { return DebugTargetIndex; }
 
-        // === Instrumentacao de timer nos passes de RT (NVAPI) ============================
-        // Liga a captura: os traces de ReSTIR GI e de reflexao passam a rodar a permutacao
-        // instrumentada e publicam um heatmap de custo POR PIXEL em DebugTargets. Custo zero
-        // desligado (a instrumentacao e permutacao, nao branch). Ver FShaderTimer.
+        // Timer por pixel dos passes RT; disponivel apenas com suporte NVAPI.
         void SetRtShaderTimer(bool V)        { RtShaderTimer = V; }
         bool GetRtShaderTimer() const        { return RtShaderTimer; }
         // false em GPU nao-NVIDIA ou build sem o SDK: o editor deve desabilitar o toggle.
         bool IsRtShaderTimerAvailable() const;
 
-        // Debug da BVH (GPU Zen 3, 7.3.3): raio primario por pixel na TLAS, publicado como alvo
-        // em DebugTargets. Complementa o timer acima — aquele mede ciclos nos passes reais e
-        // pede NVAPI; este e portatil e mostra o CONTEUDO e a densidade da estrutura.
+        // Visualizacao portatil de conteudo e densidade da TLAS.
         void SetBvhDebug(bool V)                       { BvhDebugEnabled = V; }
         bool GetBvhDebug() const                       { return BvhDebugEnabled; }
         void SetBvhDebugMode(FBvhDebugView::EMode V)   { BvhDebugMode = V; }
@@ -448,11 +351,7 @@ namespace Smile {
         // false sem suporte a RT ou antes da TLAS existir: o editor desabilita o toggle.
         bool IsBvhDebugAvailable() const;
 
-        // Selecao MULTIPLA da janela de debug. Diferente do alvo unico acima, esta selecao
-        // e composta numa textura offscreen e nunca substitui a imagem do viewport principal.
-        // Colunas 0 = o passe escolhe uma grade aproximadamente quadrada.
-        // Mantem um alvo 16:9 grande o bastante para a janela maximizada. O preview era
-        // 1024x576 e acabava ampliado pelo QML, degradando todos os RTs screen-space.
+        // Preview offscreen de multiplos alvos. Colunas 0 escolhe uma grade automatica.
         static constexpr u32 kDebugPreviewWidth  = 1600;
         static constexpr u32 kDebugPreviewHeight = 900;
         struct FDebugProbeSample {
@@ -497,9 +396,7 @@ namespace Smile {
         void SetDebugProbeContributors(const FDDGIPointDiagnostic& Diagnostic);
         void SetDebugProbeContributors(const u32* Indices, const f32* Weights,
                                        u32 Count, i32 RiskSlot);
-        // Descarta os contribuintes de um point-pick e volta a destacar so a probe da sessao,
-        // preservando-a (ver .cpp): contagem zero no setter acima NAO limpa, e
-        // SetDebugProbeIndex(-1) encerraria a sessao. Restaure a probe-base ANTES de chamar.
+        // Limpa contribuintes preservando a probe-base da sessao.
         void ClearDebugProbeContributors();
         void SetDebugPreviewEnabled(bool Enabled) {
             if (DebugPreviewEnabled == Enabled) return;
@@ -510,13 +407,7 @@ namespace Smile {
         // ficou pronto desde a ultima chamada.
         bool ConsumeDebugPreview(std::vector<u8>& OutPixels);
 
-        // === Captura deterministica (Docs/CAPTURE-PROTOCOL.md) ===========================
-        // A REGUA da serie SHaRC: pose fixa, todo acumulador zerado, N frames RENDERIZADOS de
-        // aquecimento e entao um PNG + manifesto. Enfileira e volta na hora — a sessao inteira
-        // roda dentro do RenderFrame, ao longo de N+1 frames, e o resultado sai pelo Consume.
-        //
-        // A POSE E DO CHAMADOR: restaure o bookmark ANTES de pedir. Aqui nao ha como saber qual
-        // pose e a certa, e um teleporte depois do reset invalidaria o aquecimento.
+        // Captura assincrona e deterministica. O chamador define a pose antes do request.
         bool RequestCapture(const FCaptureRequest& Request) { return Capture.Request(Request); }
         bool CaptureBusy() const              { return Capture.Busy(); }
         u32  CaptureWarmupRemaining() const   { return Capture.WarmupRemaining(); }
@@ -527,9 +418,7 @@ namespace Smile {
         // Terreno (F1: renderizacao apenas). Carregado pelo sidecar <cena>.terrain.json no
         // LoadCookedScene, ou direto via LoadTerrain. O olho do outliner mora no FRenderSettings.
         const FTerrain& GetTerrain() const   { return Terrain; }
-        bool LoadTerrain(const FTerrainDesc& Desc) {
-            return Terrain.Load(Device.Native(), UploadQueue, SRVHeap, Desc);
-        }
+        bool LoadTerrain(const FTerrainDesc& Desc);
 
         // Telemetria da agua (janela de stats). Os knobs moraram p/ o FRenderSettings.
         const FWaterRenderer& GetWater() const { return Water; }
@@ -537,45 +426,32 @@ namespace Smile {
         Vec3 GetCameraPos() const { return Camera.GetPosition(); }
         f32  GetPitch()     const { return Camera.GetPitch(); }
         f32  GetYaw()       const { return Camera.GetYaw(); }
-        // FOV vertical da camera da viewport, em radianos. FONTE UNICA: o RenderFrame monta a
-        // Projection com ele e o editor dimensiona o que precisa ser constante em tela (seta do
-        // gizmo, icone de luz) com ele. Eram dois literais de 60 graus em arquivos diferentes,
-        // amarrados so por um comentario. Quando virar configuravel, vira membro aqui e todo
-        // mundo acompanha.
+        // Fonte unica do FOV vertical da viewport.
         static constexpr f32 kFovYDegrees = 60.0f;
         f32  GetFovY() const { return kFovYDegrees * ToRad; }
-        // Eixos da camera em mundo (colunas da view row-vector) — a mesma base que o VS dos
-        // icones usa p/ expandir o billboard. O editor le p/ medir a extensao do icone EM
-        // TELA (projeta a borda), em vez de carregar um raio em pixels hardcoded.
+        // Eixo direito da camera em mundo (coluna da view row-vector).
         Vec3 GetCameraRight() const {
             const Mat44 V = Camera.GetViewMatrix();
             return Vec3{ V.M[0][0], V.M[1][0], V.M[2][0] };
-        }
-        Vec3 GetCameraUp() const {
-            const Mat44 V = Camera.GetViewMatrix();
-            return Vec3{ V.M[0][1], V.M[1][1], V.M[2][1] };
         }
         // Foco de camera do editor (duplo-clique no Scene Outliner): teleporta mantendo
         // a orientacao atual. Definido no .cpp porque avisa o corte de camera, e o
         // FRenderSettings so e completo no RenderSettings.h.
         void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg);
 
-        const FD3D12Device& GetDevice()  const { return Device; }
-        FCommandQueue&      GetCmdQueue()      { return CommandQueue; }
-        FUploadQueue&       GetUploadQueue()   { return UploadQueue; }
-        const FGpuProfiler& GetGpuProfiler() const { return GpuProfiler; }
+        const std::wstring& GetGpuDescription() const;
+        u64 GetDedicatedVideoMemory() const;
+        FRendererGpuMemoryInfo GetGpuMemoryInfo() const;
+
+        // Atualiza os descritores de um material sem expor device ou heap ao chamador.
+        void UpdateMaterialTextureSlot(FMaterial& Material, u32 LocalSlot, FTexture* Texture);
+
+        const FGpuProfiler& GetGpuProfiler() const;
 
         // Passes medidos na fila de COMPUTE assincrona (frequencia/readback proprios).
         // Vazio quando o DDGI rodou na fila direta (async off/relocation) — a UI nao
         // mostra linha velha de um modo que nao esta mais rodando.
-        std::vector<FGpuProfiler::FScopeResult> GetAsyncComputeTimings() const {
-            if (!AsyncGIRanLastFrame) return {};
-            return GpuProfilerCompute.Results();
-        }
-        FTextureSRVHeap&    GetSRVHeap()       { return SRVHeap; }
-
-        FRaytracingScene&   GetRaytracingScene() { return RaytracingScene; }
-
+        std::vector<FGpuProfiler::FScopeResult> GetAsyncComputeTimings() const;
         // Telemetria do DDGI (spacing, momentos de distancia, contagem de sondas) p/ o painel
         // de GI. Os knobs — inclusive os de amostragem — moraram p/ o FRenderSettings.
         const FDDGI& GetDDGI() const { return DDGI; }
@@ -585,6 +461,9 @@ namespace Smile {
         // BeginFrame, ou seja, fora da gravacao do command list.
 
     private:
+        // Construido primeiro e destruido por ultimo; todos os recursos GPU dependem dele.
+        std::unique_ptr<FRenderBackend> Backend;
+
         // Knobs consumidos pelo FRenderSettings (corpos no Renderer.cpp). Ficam privados p/ que
         // exista UM caminho publico: o editor passa pela fachada, que carrega a invalidacao.
         void SetRenderScale(f32 V); // recria os RTs internos (so a cena; backbuffer fica nativo)
@@ -601,20 +480,9 @@ namespace Smile {
         void ReportInitProgress(std::string_view Label, std::string_view Detail,
                                 f32 Fraction) const;
 
-        // Resolve a politica do indireto do frame e DETECTA A BORDA sobre o valor efetivo. Roda
-        // uma vez, no topo do RenderFrame, antes de qualquer consumidor publicar cbuffer — mesma
-        // posicao e mesmo motivo do TickWarmup do radiance cache.
-        //
-        // O efetivo muda SEM passar por setter nenhum (o volume aparece ou some), entao invalidar
-        // no setter do enum nao bastaria. Invalida por DOMINIO: superficie e volumetria mudam por
-        // motivos diferentes. Ver IndirectPolicy.h, contrato 2.
+        // Resolve a politica efetiva e invalida historicos nas transicoes de dominio.
         FEffectiveIndirectPolicy ResolveIndirectPolicy();
-        // Resolve "que passes rodam neste frame" (FrameContext.h). Chamado uma vez no topo do
-        // RenderFrame; todos os insumos sao membros estaveis durante a gravacao.
-        //
-        // Recebe a politica JA RESOLVIDA em vez de perguntar de novo: `ReSTIRGIActive` sai dela, e
-        // a invariante (1) do IndirectPolicy.h proibe o caminho inverso — o modo e consequencia da
-        // politica, nunca insumo dela.
+        // Congela os modos que todos os passes observarao neste frame.
         FFrameModes ResolveFrameModes(const FEffectiveIndirectPolicy& Policy);
         // Camera/matrizes/jitter do frame (FrameContext.h). Precisa do upscaler ativo p/ o jitter.
         FFrameView  ResolveFrameView(const FFrameModes& Modes, IUpscaler* ActiveUp);
@@ -658,10 +526,7 @@ namespace Smile {
                                  const FFrameLighting& Light, const FFrameAmbient& Ambient,
                                  u32 FrameSlot);
 
-        // === Fases de GRAVACAO (PassContext.h) ===========================================
-        // Daqui em diante existe command list. Cada fase recebe o mesmo FPassContext e abre com
-        // o mesmo prologo de desempacotar o que usa — o idioma e o `CRenderView* pRenderView =
-        // RenderView()` que cada stage da Cry faz no topo do Execute.
+        // Fases de gravacao: todas consomem o mesmo snapshot imutavel do frame.
         FPassContext MakePassContext(const FFrameModes& Modes,
                                      const FEffectiveIndirectPolicy& Policy,
                                      const FFrameView& View,
@@ -686,11 +551,7 @@ namespace Smile {
         void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
-        // Reconstrucao COMPLETA das mesh lights (tasks + buffers + descritores do ReSTIR DI),
-        // com o dreno das duas filas que ela exige. Receita unica: os dois clientes sao o
-        // caminho barato do RefreshSceneObjects e o ramo SetChanged do RenderFrame, e ter isto
-        // inline nos dois foi o que deixou o segundo nascer incompleto. Nao chamar com command
-        // list aberto.
+        // Reconstrucao completa; drena as filas e exige command list fechado.
         void RebuildMeshLights();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
         // Reancora tudo que enderecava a cena por indice depois de a lista mudar de tamanho.
@@ -701,30 +562,15 @@ namespace Smile {
         void CreateConstantBuffer();
         void RecreateInternalTargets(); // recria RTs de cena em RenderWidth/Height (resize + render scale)
 
-        // === Registro de passes (RenderPass.h) ===========================================
-        // Indice sobre os subsistemas que ja adotaram o FRenderPass. Eles continuam sendo
-        // membros por VALOR abaixo, com a mesma ordem de construcao/destruicao: isto aqui nao
-        // muda posse, so permite recriar pipeline / redimensionar / invalidar historico sem
-        // saber o nome de cada um. A adocao e um passe por vez, com a engine verde no meio.
+        // Registro nao-proprietario dos subsistemas que implementam FRenderPass.
         FPassRegistry     Passes;
         void              RegisterPasses();          // chamado uma vez no Initialize
         FPassInitContext  MakePassInitContext();     // device + heap + alvos + render-res
 
-        // === Alocacao sob demanda do NRD ==================================================
-        // As duas instancias (indireta e direta) somam ~336 MB de pools + IO na resolucao cheia
-        // — mais da METADE da categoria "GI e reflexos" — e eram alocadas incondicionalmente,
-        // inclusive no estado padrao, onde o denoiser pode ser DLSS-RR/None e os dois ReSTIR
-        // nascem desligados. Aqui cada instancia so existe enquanto tem consumidor.
-        // NRD selecionado + ReSTIR GI ligado + primario PEDIDO em SHaRC. O volume NAO entra, e o
-        // primario e o pedido e nao o efetivo: isto governa ALOCACAO, que so pode rodar a partir de
-        // um setter. Ver o corpo.
+        // NRD e alocado sob demanda; cada instancia existe apenas com consumidor ativo.
         bool WantNrdIndirect() const;
         bool WantNrdDirect() const;   // NRD selecionado + ReSTIR DI ligado
-        // Slots do fallback indireto para os SetupForResize de ReSTIR GI e reflexoes: os do DDGI
-        // quando o volume EXISTE, os neutros quando nao existe. Nunca kInvalidSlot.
-        // Decide por DDGI.IsReady() e deliberadamente NAO olha o UseGI — o resultado fica latched
-        // na tabela ate o proximo setup, e o UseGI muda sem provocar setup nenhum. A habilitacao
-        // por frame vive no FGIHitSampling::FallbackAvailable. Ver GIFallback.h.
+        // Bindings de setup sempre validos: DDGI pronto ou recursos neutros de fallback.
         FGIFallbackBindings GIFallbackBindingsForSetup() const;
         void SetupNrdIndirect();      // (re)aloca a instancia indireta e os packs que a leem
         void SetupNrdDirect();        // idem p/ a direta
@@ -736,14 +582,7 @@ namespace Smile {
         void CreateDebugPreviewTargets();
         void CollectDebugPreviewReadback(u32 FrameSlot);
 
-        // === Captura deterministica ======================================================
-        // Tres call sites, e cada um esta onde esta por um motivo:
-        //   UpdateFrameCapture  — topo do RenderFrame, ANTES do BeginFrame: preset muda upscaler
-        //                         e render scale, o que realoca alvos, e isso nao pode acontecer
-        //                         no meio da gravacao do command list.
-        //   RecordCopy          — no RecordPost, depois do tonemap e antes dos overlays.
-        //   FinishFrameCapture  — depois do EndFrame e ANTES do ++ dos contadores, para o
-        //                         manifesto gravar o indice com que este frame amostrou.
+        // Captura: prepara antes de BeginFrame, copia apos tonemap e finaliza antes dos contadores.
         void UpdateFrameCapture();
         // Modes deste frame: o manifesto registra o que RODOU (IsReady, gates, TAA acendendo por
         // falta de upscaler), nao o que o operador selecionou.
@@ -772,33 +611,17 @@ namespace Smile {
         // O ReGIR so constroi com consumidor E luz na cena; o gate real e montado no meio do
         // frame, longe do FFrameModes. Guardado aqui para o manifesto registrar o que rodou.
         bool             ReGIRRanThisFrame = false;
-        // O DLSS-RR de fato AVALIOU neste frame. Mesmo padrao do ReGIR acima, e pelo mesmo motivo:
-        // `Modes.RRMode` diz "selecionado e pronto", nao "executou". O `RRPoisoned` — visualizador
-        // de debug ou overlay de sondas escrevendo no HDR — pula o bloco de upscale INTEIRO, e
-        // nesse frame o RR nao denoisa nada. Sem este campo o manifesto gravaria `DLSS_RR` nos dois
-        // dominios de um frame que saiu cru e sem upscale.
+        // Registra execucao real, distinta do modo apenas selecionado.
         bool             RRRanThisFrame    = false;
-        // Luzes PUNTUAIS elegiveis (habilitadas, com intensidade, raio e RTWeight > 0) que o frame
-        // empacotou para o indireto. Vai ao manifesto porque e o numero que EXPLICA um ReGIR
-        // pedido e nao construido: a Bistro tem `"lights": []` e ilumina por geometria emissiva,
-        // entao GILightCount = 0 e a grade nao tem o que pooling. Sem este campo, "regir: false"
-        // com o toggle ligado parece bug e custa uma rodada de medicao para nao ser.
+        // Luzes puntuais elegiveis empacotadas para o indireto neste frame.
         u32              GILightCountThisFrame = 0;
         // Ocupacao lida da copia POS-resolve do frame capturado. Separada do Stats() do painel,
         // que vem do anel e carrega query/hits — as duas metades tem origens diferentes.
         FRadianceCacheStats CaptureCacheStats{};
 
-        FD3D12Device    Device;
-        FCommandQueue   CommandQueue;
-        FUploadQueue    UploadQueue; // fila COPY p/ uploads (texturas/meshes) sem stall
-        FAsyncComputeQueue ComputeQueue; // fila COMPUTE p/ DDGI async (F3)
-        FGpuProfiler    GpuProfilerCompute; // timestamps da fila de compute (DDGI async)
         bool            UseAsyncCompute = true;
         bool            AsyncGIRanLastFrame = false;
-        FGpuProfiler    GpuProfiler;
-        FSwapChain      SwapChain;
         FPipelineState  PipelineState;
-        FTextureSRVHeap SRVHeap;
 
         FMaterialPreview MaterialPreview; // preview offscreen do Editor de Materiais
 
@@ -843,15 +666,8 @@ namespace Smile {
         f32                  BvhDebugComplexityMax = FBvhDebugView::kDefaultComplexityMax;
         bool           RtShaderTimer      = false; // toggle do editor
         bool           TimerCaptureActive = false; // resolvido por frame (toggle && disponivel)
-        // Escala do heatmap: 1/valor considerado "quente" em ciclos. UMA POR PASSE, porque os
-        // dois vivem em ordens de grandeza diferentes — com o 65000 do artigo nos dois, o gather
-        // do ReSTIR saturava a tela inteira de vermelho e o trace de reflexao afundava todo no
-        // azul do piso. Valores lidos da primeira captura na 3060 Ti; o slider de exposicao do
-        // visualizador multiplica por cima, entao recalibrar nao exige recompilar.
-        // GI: full-res, 1 raio + reuso temporal + revalidacao — o pixel tipico ja passa de 65k.
+        // Escalas independentes porque os passes operam em ordens de grandeza distintas.
         static constexpr f32 kShaderTimerScaleGI = 1.0f / 250000.0f;
-        // Reflexao: half-res e a maioria dos pixels sai cedo por rugosidade (sem traçar raio),
-        // entao o interessante mora numa faixa bem mais baixa.
         static constexpr f32 kShaderTimerScaleReflections = 1.0f / 32000.0f;
 
         u32            GBufferDebugMode = 0;
@@ -968,30 +784,10 @@ namespace Smile {
         // ViewportWidget::ResetRenderSettings().
         int                      UpscalerQuality = 0;       // 0=100% 1=Quality 2=Balanced 3=Perf 4=Ultra
 
-        // Upscaler pronto p/ dispatch (output criado). None/indisponivel/nao-inicializado => nullptr.
-        // Com o denoiser em DLSS_RR, o passe ATIVO e o proprio RR (faz denoise+upscale) — reusa todo o
-        // plumbing display-res -> post do FSR/DLSS-SR.
-        IUpscaler* ActiveUpscaler() {
-            // Os guides entram na conta: sem eles o Dispatch do RR aborta (guides nulos) sem escrever o
-            // output, e o PostInput apontaria p/ textura estagnada. Devolver nullptr aqui degrada p/ o
-            // caminho sem upscale (TAA/nativo), que e coerente, em vez de uma tela suja + log por frame.
-            if (Denoiser == EDenoiser::DLSS_RR)
-                return (DlssRR.IsInitialized() && RRGuides.IsReady()) ? static_cast<IUpscaler*>(&DlssRR)
-                                                                      : nullptr;
-            switch (Upscaler) {
-                case EUpscaler::FSR:  return Fsr.IsInitialized()  ? static_cast<IUpscaler*>(&Fsr)  : nullptr;
-                case EUpscaler::DLSS: return Dlss.IsInitialized() ? static_cast<IUpscaler*>(&Dlss) : nullptr;
-                default:              return nullptr;
-            }
-        }
-        // Razao render/display pura do upscaler/denoiser SELECIONADO (independe de estar inicializado).
-        void ApplyUpscalerScale() {
-            f32 R = 1.0f;
-            if      (Denoiser == EDenoiser::DLSS_RR) R = DlssRR.RenderRatioForQuality(UpscalerQuality);
-            else if (Upscaler == EUpscaler::FSR)     R = Fsr.RenderRatioForQuality(UpscalerQuality);
-            else if (Upscaler == EUpscaler::DLSS)    R = Dlss.RenderRatioForQuality(UpscalerQuality);
-            ApplyRenderScale(R);   // worker: escapa o gate do RR (esta razao E a ditada pelo modo)
-        }
+        // Upscaler pronto para dispatch; nullptr ativa o caminho nativo/TAA.
+        IUpscaler* ActiveUpscaler();
+        // Aplica a razao render/display do modo selecionado.
+        void ApplyUpscalerScale();
         void ApplyRenderScale(f32 V);   // aplica de fato (clamp + flush + RecreateInternalTargets)
 
         FFlickerHeatmap          Flicker;
@@ -1029,110 +825,52 @@ namespace Smile {
         FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame
  
         FRaytracingScene RaytracingScene;
-        // Recursos neutros que respondem pelo fallback indireto quando nao ha volume DDGI. Vivem
-        // aqui, e nao no FDDGI, exatamente porque a pergunta que respondem e "e se o FDDGI nao
-        // existir". Criados uma vez no Initialize; nao dependem de cena nem de resolucao.
+        // Recursos neutros quando nao existe volume DDGI.
         FGIFallbackResources GIFallback;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
-        // Idem para o transform BAKEADO nas tasks das mesh lights. Contador separado do da TLAS
-        // porque os dois nao andam juntos: a TLAS reconstroi por frame durante um arraste, e o
-        // refresh das mesh lights e segurado ate o gesto acabar (ver o call site).
+        // Versao separada: mesh lights aguardam o fim do arraste; a TLAS nao.
         u64              MeshLightTransformsVersion = 0;
         bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
         bool             MaterialRTStateDirty  = false;
-        // Pedido de reconciliacao das mesh lights por causa de MATERIAL (nao de transform).
-        // Separado do MaterialRTStateDirty porque aquele e consumido no mesmo frame e este pode
-        // ter de esperar: se a extracao estiver em voo, o pedido tem de sobreviver ao frame.
+        // Persiste enquanto uma extracao de mesh lights estiver em voo.
         bool             MeshLightEmissiveDirty = false; // pedido de refresh coalescido p/ o proximo frame
         bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
         bool             SceneContentDirty     = false; // idem (ver MarkSceneContentDirty)
         FDDGI            DDGI;
         FReGIR           ReGIR;
-        // Cache de radiancia de saida em hash de mundo. Terminador dos raios secundarios, lido e
-        // escrito de dentro do ShadeSurfaceHit — nao substitui o atlas do DDGI acima.
+        // Terminador esparso dos raios secundarios; nao substitui o atlas DDGI.
         FRadianceCache   RadianceCache;
-        // Fase 1 do projeto de mesh lights: so levanta a contagem de triangulos emissivos por
-        // cena. Ainda nao produz luz — existe para medir antes de escolher a amostragem.
         FMeshLights      MeshLights;
         bool             UseReGIR = false; // bring-up: hits secundarios; default OFF para A/B
         FDDGIDebug       DDGIDebugPass; 
-        // `UseGI` e, e sempre foi, o interruptor do VOLUME DDGI — grid, trace e update das sondas.
-        // O nome sugere "iluminacao global ligada" e por isso ja induziu erro (ver
-        // IndirectPolicy.h); a politica de quem PRODUZ e de quem RESPONDE mora nos dois enums
-        // abaixo, e nao aqui.
+        // Controla apenas o volume DDGI; a politica do indireto vive nos enums abaixo.
         bool             UseGI       = true;
-        // Politica do indireto (Fase 6). Os defaults reproduzem EXATAMENTE o comportamento da Fase
-        // 5: o cache/ReSTIR produz, o DDGI responde o que sobra. Trocar o primario invalida
-        // acumulador — sao estimadores diferentes, nao niveis de qualidade.
+        // Trocar o produtor primario invalida o acumulador.
         EIndirectPrimary  IndirectPrimary  = EIndirectPrimary::ReSTIR_SHaRC;
         EIndirectFallback IndirectFallback = EIndirectFallback::DDGI;
-        // O volume esta VIVO neste frame — existe e esta ligado. Era `UseGI && DDGI.IsReady()`
-        // repetido em oito pontos, servindo tres perguntas diferentes; agora tem nome e uma
-        // definicao so. Ele NAO responde "o DDGI e o fallback" nem "o DDGI e o primario": para
-        // isso existem os enums.
+        // Disponibilidade fisica do volume, independente de seu papel na politica.
         bool             DDGIVolumeLive() const;
-        // CAPACIDADE dos dois produtores de RT que a politica consulta: "o passe conseguiria
-        // tracar". Nao sao modos — o FFrameModes sai da politica, e a politica sai daqui. Existem
-        // como funcao para as duas leituras nao poderem divergir.
+        // Capacidades consultadas pela politica; nao representam o modo selecionado.
         bool             ReSTIRGIReady() const;
         bool             ReflectionsReady() const;
-        // O fallback EFETIVO do frame: a politica pedida, degradada pelo que existe. Pedir DDGI
-        // sem volume vivo nao e erro — e Black, e o manifesto tem de registrar o que valeu.
+        // Politica pedida, degradada conforme os recursos disponiveis.
         EIndirectFallback EffectiveFallback() const;
-        // O primario EFETIVO — o que o pipeline de fato fez neste frame, lido dos flags que hoje
-        // mandam de verdade. Enquanto o seletor nao rotear nada, ele pode DIVERGIR do pedido, e
-        // essa divergencia e informacao: ela diz "o enum ainda nao esta ligado", e nao "o pedido
-        // foi degradado por indisponibilidade". Ver a nota no CollectCaptureState.
+        // Produtor primario que o pipeline executou de fato.
         EIndirectPrimary  EffectivePrimary() const;
-        // A QUARTA pergunta: o deferred e a nevoa podem ler o atlas? Hoje ela vale o mesmo que
-        // `DDGIVolumeLive()`, e existir separada NAO e redundancia — e o contrato. O consumo
-        // volumetrico nao depende da politica de superficie: com `fallback = Black` ou
-        // `primario = ReSTIR_SHaRC`, a nevoa continua lendo o atlas, porque irradiancia
-        // volumetrica nao tem substituto no cache (esparso e cego a direcao). Amarrar os dois pelo
-        // mesmo booleano foi a origem da confusao que a Fase 6 veio desfazer.
+        // Volumetria pode consumir o atlas mesmo quando a politica de superficie nao o usa.
         bool              DDGIVolumetricAvailable() const;
-        // A QUINTA: o atlas pode iluminar SUPERFICIE? Deferred (GI primaria, fill de folhagem,
-        // termo traseiro de subsurface, debug de GI) e translucidos do ForwardBlend.
-        //
-        // Ler o atlas NAO e ser consumidor volumetrico — foi assim que a primeira classificacao
-        // errou. A nevoa integra meio participante; o deferred sombreia superficie. As duas leem a
-        // mesma textura e respondem a POLITICAS DIFERENTES: com `primario = Off` a superficie para
-        // de receber DDGI e a nevoa continua integrando, porque irradiancia volumetrica nao tem
-        // substituto. Chamar o helper volumetrico no deferred manteria a imagem identica HOJE e
-        // mentiria no dia em que as duas divergissem — que e o dia em que estes nomes existem.
-        //
-        // ⚠️ SEMANTICA FIXADA ANTES DO SELETOR, e ela NAO e `EffectivePrimary() == DDGI`. Mesmo em
-        // `ReSTIR_SHaRC` o atlas atende tres excecoes de superficie que ninguem mais atende:
-        // fill de folhagem, termo traseiro de subsurface, e os TRANSLUCIDOS do ForwardBlend, que
-        // nao recebem a textura do ReSTIR GI. Amarrar este helper ao primario faria selecionar
-        // SHaRC apagar as tres de uma vez, em silencio.
-        //
-        // A regra e `DDGIVolumeLive() && EffectivePrimary() != Off`: o atlas ilumina superficie
-        // enquanto houver indireto de superficie, seja ele quem for. As tres sao DDGI AUXILIAR DE
-        // SUPERFICIE — terceiro papel, nem primario nem fallback dos raios.
+        // Superficies auxiliares ainda usam DDGI com SHaRC; apenas Primary::Off as desliga.
         bool              DDGISurfaceAvailable() const;
         // Os cinco efetivos num valor so, para o detector de borda comparar por frame.
         FEffectiveIndirectPolicy EffectiveIndirectPolicy() const;
-        // O que o detector viu no frame ANTERIOR. Atualizado no fim do ResolveIndirectPolicy, ou
-        // seja depois de a politica deste frame estar fixada — atualizar dentro da comparacao
-        // apagaria a borda para quem lesse depois (invariante 4).
-        //
-        // O primeiro valor observado apenas INICIALIZA: `indefinido -> DDGI` nao e borda, so passou
-        // a existir observador. Tratado como borda, ele derrubaria historico no primeiro frame de
-        // toda cena e cancelaria a sessao de captura recem-aberta, porque a invalidacao passa pelo
-        // funil. Ver IndirectPolicy.h, nota 2a.
+        // Primeiro valor inicializa o detector; somente transicoes posteriores geram borda.
         FEffectiveIndirectPolicy PrevIndirectPolicy;
         bool                     HasPrevIndirectPolicy = false;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;
         bool             GISkipInactiveFallback = false;
-        // Gate de MEDICAO, nao knob de qualidade: zera a contribuicao do DDGI como TERMINADOR
-        // dos hits de RT (2o bounce das sondas, Lo do ReSTIR GI, indireto das reflexoes) com
-        // todo o resto — volume, atlas, relocacao, sondas — intacto e rodando. Serve para
-        // responder "quanto o DDGI realmente entrega neste pipeline" com numero em vez de
-        // opiniao, que e a pergunta que decide se ele vira fallback ou continua o nucleo da GI.
-        // Ver FGIHitSampling::TerminatorOff.
+        // Gate de medicao: desliga DDGI apenas como terminador de hits RT.
         bool             GIMeasureTerminatorOff = false;
 
         FReSTIRGI        ReSTIRGI;
@@ -1198,18 +936,8 @@ namespace Smile {
         f32             IBLRotation   = 0.0f; 
         u32             IBLTableStart = 0;
 
-        // Direcao AUTORADA do sol padrao — o vetor legivel, nao o valor do membro.
+        // O vetor padrao e normalizado uma unica vez e todo setter preserva a invariante.
         static Vec3 DefaultSunDirection() { return Vec3{ 0.3f, 0.6f, 0.5f }.Normalized(); }
-        // INVARIANTE: unitario. Todo caminho de escrita passa pelo SetSunDirection, que normaliza,
-        // e o inicializador abaixo estabelece a invariante em vez de deixar o primeiro setter
-        // faze-lo.
-        //
-        // Nascia com o literal CRU, e isso ficou visivel na primeira captura deterministica: a
-        // restauracao de estado no fim da sessao passa pelo SetSunDirection, entao a captura A
-        // gravava (0,3 0,6 0,5) e a B gravava o mesmo vetor normalizado. A imagem quase nao mudava
-        // — quem consome ja normaliza (ver ResolveFrameLighting) —, mas o manifesto divergia, e um
-        // manifesto que muda sozinho entre duas capturas identicas e o oposto do que ele existe
-        // para ser.
         Vec3 SunDir       = DefaultSunDirection();
         Vec3 SunColorRGB  = { 1.0f, 0.96f, 0.9f };
         f32  SunIntensity = 5.0f;
@@ -1221,32 +949,12 @@ namespace Smile {
 
         f32  ElapsedTime   = 0.0f;
         f32  LastDeltaTime = 0.0f;
-        // Passo de tempo durante uma captura deterministica. Fixo de proposito: o delta real vem
-        // do relogio de parede e faria dois aquecimentos do mesmo N assentarem fades em pontos
-        // diferentes. Ver a nota dos DOIS RELOGIOS no UpdateCamera.
+        // Relogio canonico de captura: independente do tempo de parede.
         static constexpr f32 kCaptureDeltaSeconds = 1.0f / 60.0f;
-        // FASE canonica da animacao durante a captura. O valor em si nao importa — importa ser o
-        // MESMO em toda captura, senao nuvem, oceano e vento entram no A/B como variavel.
         static constexpr f32 kCaptureElapsedSeconds = 0.0f;
-        // Contador ABSOLUTO de frames desde o boot. Monotonico e nunca reiniciado: quem depende de
-        // "quantos frames ja passaram" — lifetime, contadores, diagnostico — le daqui.
+        // FrameIndex e monotonico; TemporalSampleIndex pode reiniciar para capturas repetiveis.
         u32  FrameIndex    = 0;
-        // Semente das sequencias TEMPORAIS: jitter de upscaler/TAA e todo RNG por frame (ReSTIR,
-        // reflexoes, DDGI, ReGIR, AO, sombras, nevoa, nuvens, NRD).
-        //
-        // Existe separado porque a captura deterministica precisa REINICIAR a amostragem sem
-        // reiniciar o resto. Comecar cada captura num FrameIndex diferente produz ruido diferente,
-        // e ai o A/B do commit "refactor sem mudanca de imagem" mediria a semente em vez do
-        // refactor. Reiniciar o FrameIndex global para conseguir isso quebraria tudo que conta
-        // frames absolutos — dois papeis que so pareciam um.
-        //
-        // Fora da captura os dois andam juntos; so o reset deterministico os separa.
-        //
-        // Isso NAO quer dizer imagem identica a de antes deste commit. Os dois passaram a avancar
-        // no FIM do frame (ver o comentario no RenderFrame): antes o `++` ficava logo depois do
-        // ResolveFrameView, entao o jitter usava um valor e todo o resto do frame usava o
-        // seguinte. Corrigir isso desloca algumas sementes em -1 — mudanca de RUIDO, nao de
-        // energia, e o preco de o contrato de warm-up ser verdadeiro por construcao.
+        // Semente comum de jitter e RNGs temporais; avanca ao fim do frame.
         u32  TemporalSampleIndex = 0;
 
         bool Initialized = false;
@@ -1254,9 +962,7 @@ namespace Smile {
         // Vive so durante Initialize: o editor a instala antes e limpa depois de inicializar.
         FInitProgressCallback InitProgressCallback;
 
-        // Por ponteiro porque o FRenderSettings so e completo no RenderSettings.h, que por sua
-        // vez precisa deste header. Construida no ctor; o dtor do Renderer e out-of-line (ja
-        // era) para que o unique_ptr veja o tipo completo.
+        // Ponteiro permite manter FRenderSettings incompleto neste header.
         std::unique_ptr<FRenderSettings> SettingsImpl;
     };
 } 

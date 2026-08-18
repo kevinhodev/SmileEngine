@@ -923,8 +923,7 @@ namespace SmileEditor {
         *Ptr  = Valid ? _T : nullptr;
         *Flag = Valid ? 1 : 0;
         if (Valid && _M.IsFinalized())
-            _M.UpdateTextureSlot(Renderer->GetDevice().Native(), Renderer->GetSRVHeap(),
-                                 Smile::u32(_Slot), _T);
+            Renderer->UpdateMaterialTextureSlot(_M, Smile::u32(_Slot), _T);
         _M.UpdateConstants();
         // Os slots 0/2/4 viram indices bindless no InstanceGeo (Albedo/MrMap/EmissiveMap) e o
         // HasAlbedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste quando e 0). Sem
@@ -1307,8 +1306,7 @@ namespace SmileEditor {
             Smile::FTexture* Orig = It.value().Slots[i];
             if (Smile::FTexture** Ptr = SlotPointer(*M, i)) *Ptr = Orig;
             if (Orig && Orig->IsValid() && M->IsFinalized() && Renderer)
-                M->UpdateTextureSlot(Renderer->GetDevice().Native(), Renderer->GetSRVHeap(),
-                                     Smile::u32(i), Orig);
+                Renderer->UpdateMaterialTextureSlot(*M, Smile::u32(i), Orig);
         }
         TexOverrides.remove(M);
         M->UpdateConstants();

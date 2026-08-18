@@ -1,4 +1,4 @@
-#include "Smile/Graphics/RHI/SwapChain.h"
+#include "Smile/Graphics/Backend/D3D12/SwapChain.h"
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {

@@ -1,6 +1,6 @@
 #include "Smile/Graphics/Resources/Texture.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
-#include "Smile/Graphics/RHI/UploadQueue.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/UploadQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <wincodec.h>

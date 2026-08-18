@@ -2,8 +2,8 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Mat44.h"
-#include "Smile/Graphics/RHI/DescriptorHeap.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>

@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Graphics/Debug/VramTracker.h"
@@ -42,7 +43,7 @@ namespace Smile {
 
 
     void Renderer::RecreateObjectCB() {
-        CommandQueue.Flush(); 
+        Backend->DirectQueue.Flush();
         if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB.Reset();
 
@@ -50,14 +51,14 @@ namespace Smile {
                       "o CB de objeto e indexado por sizeof(); root CBV exige 256-alinhado");
 
         const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
-            Device.Native(), sizeof(ObjectConstants),
+            Backend->Device.Native(), sizeof(ObjectConstants),
             FCommandQueue::kFramesInFlight * MaxObjects);
         ObjectCB       = Upload.Resource;
         MappedObjectCB = Upload.Mapped;
 
         // Buffers de bounds/visibilidade do occlusion culling acompanham a capacidade
         // (a fila ja foi flushada acima; recriar aqui e seguro).
-        HiZ.SetupObjects(Device.Native(), SRVHeap, MaxObjects);
+        HiZ.SetupObjects(Backend->Device.Native(), Backend->SRVHeap, MaxObjects);
     }
 
     namespace {
@@ -343,12 +344,12 @@ namespace Smile {
             // Finalize cai no endereco que o root CBV do frame anterior aponta). Sem drenar a fila
             // antes, isso e use-after-free — e o editor chama LoadCookedScene direto do handler de
             // menu, com o timer de render ativo. Mesmo motivo do Flush em RecreateObjectCB.
-            CommandQueue.Flush();
+            Backend->DirectQueue.Flush();
 
             Scene.Clear();
-            for (auto& m : ImportedMaterials) m->Release(SRVHeap);
+            for (auto& m : ImportedMaterials) m->Release(Backend->SRVHeap);
             ImportedMaterials.clear();
-            for (auto& t : ImportedTextures) t->Release(SRVHeap);
+            for (auto& t : ImportedTextures) t->Release(Backend->SRVHeap);
             ImportedTextures.clear();
         }
 
@@ -363,7 +364,7 @@ namespace Smile {
         const Clock::time_point TextureUploadStart = Clock::now();
         const auto TexCreationBase = GpuResources::CreationStats();
         std::vector<FTexture> texs = FTexture::CreateBatchFromCPU(
-            Device.Native(), UploadQueue, SRVHeap, Prepared.TextureData);
+            Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, Prepared.TextureData);
         const double msTexUpload = MsSince(TextureUploadStart);
         GpuResources::AccumulatePhase(PhaseSum, "commit/texturas", TexCreationBase);
         const std::vector<std::string>& relList = Prepared.TexturePaths;
@@ -427,7 +428,7 @@ namespace Smile {
                                                    sm.EmissiveFactor[2], 1.0f };
             mat->Constants.EmissiveStrength = sm.EmissiveStrength;
 
-            mat->Finalize(Device.Native(), SRVHeap); 
+            mat->Finalize(Backend->Device.Native(), Backend->SRVHeap);
 
             mat->Constants.HasAlbedoMap            = baseT ? 1u : 0u;
             mat->Constants.HasNormalMap            = normT ? 1u : 0u;
@@ -485,7 +486,7 @@ namespace Smile {
         const Clock::time_point tMeshUploadStart = Clock::now();
         const auto MeshCreationBase = GpuResources::CreationStats();
         std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(
-            Device.Native(), UploadQueue, Prepared.Meshes);
+            Backend->Device.Native(), Backend->UploadQueue, Prepared.Meshes);
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
             const SSceneRenderable& r = rnds[i];
             if (r.MeshIndex >= mh.MeshCount) continue;
@@ -515,7 +516,7 @@ namespace Smile {
         // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
         // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
         const Clock::time_point tSyncStart = Clock::now();
-        UploadQueue.WaitIdle();
+        Backend->UploadQueue.WaitIdle();
         const double msSync = MsSince(tSyncStart);
 
         const Clock::time_point ObjectSetupStart = Clock::now();
@@ -618,7 +619,7 @@ namespace Smile {
                     td.HighEnd        = FindNum("highEnd",        td.HighEnd);
                     td.BlendContrast  = FindNum("blendContrast",  td.BlendContrast);
                     td.MacroAmount    = FindNum("macroAmount",    td.MacroAmount);
-                    if (Terrain.Load(Device.Native(), UploadQueue, SRVHeap, td)) {
+                    if (Terrain.Load(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, td)) {
                         // F3: proxy do terreno na TLAS — renderable RaytracingOnly (fora do
                         // raster/CSM/picking; o terreno real rasteriza pelo FTerrain). Entra
                         // ANTES do BuildRaytracingScene logo abaixo, e DEPOIS da uniao de
@@ -629,8 +630,8 @@ namespace Smile {
                             std::vector<FMesh> ProxyList;
                             ProxyList.push_back(std::move(Proxy));
                             std::vector<FGpuMesh*> ProxyMesh =
-                                Scene.AddMeshesBatch(Device.Native(), UploadQueue, ProxyList);
-                            UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
+                                Scene.AddMeshesBatch(Backend->Device.Native(), Backend->UploadQueue, ProxyList);
+                            Backend->UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
 
                             // Albedo do proxy: textura bakeada com o blend de 4 camadas quando o
                             // terreno tem camadas (ver FTerrain::BakeProxyAlbedo); sem elas, o
@@ -641,7 +642,7 @@ namespace Smile {
                             FTextureCPUData proxyAlbedoCPU;
                             if (Terrain.TakeProxyAlbedoCPU(proxyAlbedoCPU)) {
                                 auto tex = std::make_unique<FTexture>(
-                                    FTexture::CreateFromCPU(Device.Native(), UploadQueue, SRVHeap,
+                                    FTexture::CreateFromCPU(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap,
                                                             proxyAlbedoCPU, EVramCategory::Terrain));
                                 if (tex->IsValid()) {
                                     proxyAlbedo = tex.get();
@@ -665,7 +666,7 @@ namespace Smile {
                                 : Vec4{ 0.26f, 0.32f, 0.19f, 1.0f }; // cor media do vale
                             mat->Constants.MetallicFactor  = 0.0f;
                             mat->Constants.RoughnessFactor = 0.95f;
-                            mat->Finalize(Device.Native(), SRVHeap);
+                            mat->Finalize(Backend->Device.Native(), Backend->SRVHeap);
                             mat->UpdateConstants();
 
                             FRenderable proxy;
@@ -690,7 +691,7 @@ namespace Smile {
                     LogError("Terreno: sidecar sem chave \"heightmap\": " + terrainPath.string());
                 }
             } else if (!_Additive) {
-                Terrain.Unload(SRVHeap);
+                Terrain.Unload(Backend->SRVHeap);
             }
         }
         const double msTerrain = MsSince(TerrainStart);
@@ -733,7 +734,7 @@ namespace Smile {
                 std::to_string(uploaded) + " texturas");
         // Depois do commit: texturas, meshes, BLAS/TLAS e o setup de GI ja existem, entao este e
         // o primeiro ponto em que o breakdown descreve a cena inteira.
-        VramTracker::LogBreakdown(Device.QueryVideoMemory().LocalUsage);
+        VramTracker::LogBreakdown(Backend->Device.QueryVideoMemory().LocalUsage);
         // O par do breakdown: aquele diz QUANTO esta alocado, este diz quanto CUSTOU alocar.
         GpuResources::LogCreationUnattributed("commit/nao-atribuido", PhaseSum);
         GpuResources::LogCreationStats("load da cena");

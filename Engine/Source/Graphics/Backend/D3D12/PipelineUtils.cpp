@@ -1,7 +1,7 @@
-#include "Smile/Graphics/RHI/PipelineUtils.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineUtils.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-#include "Smile/Graphics/RHI/ShaderUtils.h"
+#include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
 
 namespace Smile::PipelineUtils {
     Microsoft::WRL::ComPtr<ID3D12RootSignature> CreateRootSignature(

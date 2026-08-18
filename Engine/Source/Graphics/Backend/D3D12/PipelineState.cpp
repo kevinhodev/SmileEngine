@@ -1,10 +1,10 @@
-#include "Smile/Graphics/RHI/PipelineState.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Graphics/Scene/GBuffer.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-#include "Smile/Graphics/RHI/ShaderUtils.h"
-#include "Smile/Graphics/RHI/SwapChain.h"
+#include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
+#include "Smile/Graphics/Backend/D3D12/SwapChain.h"
 #include <d3d12.h>
 #include <fstream>
 #include <vector>

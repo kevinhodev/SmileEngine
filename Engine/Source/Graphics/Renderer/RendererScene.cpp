@@ -1,9 +1,12 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Input/CameraInput.h"
+#include "Smile/Graphics/Resources/GpuMesh.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Water/OceanSpectrum.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -20,14 +23,24 @@
 #include <type_traits>
 
 namespace Smile {
+    bool Renderer::LoadTerrain(const FTerrainDesc& _Desc) {
+        return Terrain.Load(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Desc);
+    }
+
+    void Renderer::UpdateMaterialTextureSlot(FMaterial& _Material, u32 _LocalSlot,
+                                             FTexture* _Texture) {
+        if (!Initialized || !_Texture || !_Texture->IsValid() || !_Material.IsFinalized()) return;
+        _Material.UpdateTextureSlot(Backend->Device.Native(), Backend->SRVHeap, _LocalSlot, _Texture);
+    }
+
     // O build libera recursos ainda usados por ambas as filas; drene direta antes da compute
     // porque o trabalho async espera um fence da direta. Depois de reconstruir uma cena viva,
     // SetupGIForScene deve remontar as tabelas que copiam descriptors do snapshot.
     void Renderer::BuildRaytracingScene() {
-        if (!Device.RaytracingSupported()) return;
-        CommandQueue.Flush();
-        ComputeQueue.WaitIdle();
-        RaytracingScene.Build(Device, CommandQueue, SRVHeap, Scene);
+        if (!Backend->Device.RaytracingSupported()) return;
+        Backend->DirectQueue.Flush();
+        Backend->ComputeQueue.WaitIdle();
+        RaytracingScene.Build(Backend->Device, Backend->DirectQueue, Backend->SRVHeap, Scene);
         TlasTransformsVersion = Scene.TransformsVersion();
     }
 
@@ -144,13 +157,13 @@ namespace Smile {
                 MaxObjects = SceneCapacityFor(Count);
                 RecreateObjectCB(); // ja da Flush na fila (e recria a tabela do HiZ)
             }
-            HiZ.SetupObjects(Device.Native(), SRVHeap, MaxObjects);
+            HiZ.SetupObjects(Backend->Device.Native(), Backend->SRVHeap, MaxObjects);
             BuildRaytracingScene();
             SetupGIForScene(SceneBoundsMin, SceneBoundsMax);
         } else {
             // InstanceGeo nao e versionado por frame e pode estar sendo lido nas duas filas.
-            CommandQueue.Flush();
-            ComputeQueue.WaitIdle();
+            Backend->DirectQueue.Flush();
+            Backend->ComputeQueue.WaitIdle();
             RaytracingScene.RefreshInstanceGeo(Scene);
             // As tasks de MeshLights guardam InstanceIndex e precisam ser reconstruidas.
             RebuildMeshLights();
@@ -161,14 +174,14 @@ namespace Smile {
 
     void Renderer::RebuildMeshLights() {
         // SetupForScene substitui buffers lidos pelas filas direta e compute.
-        CommandQueue.Flush();
-        ComputeQueue.WaitIdle();
-        MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
+        Backend->DirectQueue.Flush();
+        Backend->ComputeQueue.WaitIdle();
+        MeshLights.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, Scene,
                                  RaytracingScene.InstanceGeoSRV());
         MeshLightTransformsVersion = Scene.TransformsVersion();
         MeshLightEmissiveDirty = false;
         // ReSTIR DI copia estes descriptors e precisa acompanhar a troca dos buffers.
-        ReSTIRDI.RefreshMeshLightDescriptors(Device.Native(), SRVHeap,
+        ReSTIRDI.RefreshMeshLightDescriptors(Backend->Device.Native(), Backend->SRVHeap,
                                              MeshLights.LightSRVSlot(),
                                              MeshLights.AliasSRVSlot());
     }
@@ -182,33 +195,33 @@ namespace Smile {
         SetDebugProbeIndex(-1);
         PreviousDirectLightPositions.clear();
 
-        if (!Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
+        if (!Backend->Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
         if (!Atmosphere.IsInitialized()) return;
 
         // O setup substitui recursos usados pelas duas filas. Drene direta antes da compute,
         // pois o update async do DDGI pode estar esperando um fence da fila direta.
-        CommandQueue.Flush();
-        ComputeQueue.WaitIdle();
+        Backend->DirectQueue.Flush();
+        Backend->ComputeQueue.WaitIdle();
 
-        DDGI.SetupForScene(Device.Native(), CommandQueue, SRVHeap, Scene, _AABBMin, _AABBMax,
+        DDGI.SetupForScene(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap, Scene, _AABBMin, _AABBMax,
                            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
                            RaytracingScene.InstanceGeoSRV());
-        TemporalMotion.SetupForScene(Device.Native(), SRVHeap, Scene,
+        TemporalMotion.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, Scene,
                                      RaytracingScene.TlasSRVSlot(),
                                      RaytracingScene.InstanceGeoSRV());
-        ReGIR.SetupForScene(Device.Native(), SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
+        ReGIR.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
         // O cache usa hash de mundo e nao depende dos limites da cena.
-        RadianceCache.SetupForScene(Device.Native(), SRVHeap);
+        RadianceCache.SetupForScene(Backend->Device.Native(), Backend->SRVHeap);
         // A extracao usa InstanceGeo, portanto roda depois da construcao da cena de RT.
-        MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
+        MeshLights.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, Scene,
                                  RaytracingScene.InstanceGeoSRV());
         MeshLightTransformsVersion = Scene.TransformsVersion();
 
         SetupReflectionsForScene();
 
-        DDGIDebugPass.SetupForScene(Device.Native(), SRVHeap, DDGI.NumProbesCount());
+        DDGIDebugPass.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, DDGI.NumProbesCount());
         DDGIDebugPass.SetupPointDiagnosticInputs(
-            Device.Native(), SRVHeap, GBuffer.SRVTableStart(), DDGI);
+            Backend->Device.Native(), Backend->SRVHeap, GBuffer.SRVTableStart(), DDGI);
 
         // DDGI/reflexoes so ganham SRV aqui (por cena), DEPOIS do registro feito em
         // RecreateInternalTargets — sem esta 2a passada eles nunca apareciam na lista.
@@ -217,34 +230,34 @@ namespace Smile {
     }
 
     void Renderer::CreateIBLDescriptorTable() {
-        IBLTableStart = SRVHeap.Allocate(3);
+        IBLTableStart = Backend->SRVHeap.Allocate(3);
 
-        D3D12_CPU_DESCRIPTOR_HANDLE DstStart = SRVHeap.CpuHandle(IBLTableStart);
+        D3D12_CPU_DESCRIPTOR_HANDLE DstStart = Backend->SRVHeap.CpuHandle(IBLTableStart);
         D3D12_CPU_DESCRIPTOR_HANDLE Sources[3] = {
-            SRVHeap.CpuHandleStaging(HDREnv.IrradianceSRV()),
-            SRVHeap.CpuHandleStaging(HDREnv.SpecularSRV()),
-            SRVHeap.CpuHandleStaging(HDREnv.BRDFLutSRV()),
+            Backend->SRVHeap.CpuHandleStaging(HDREnv.IrradianceSRV()),
+            Backend->SRVHeap.CpuHandleStaging(HDREnv.SpecularSRV()),
+            Backend->SRVHeap.CpuHandleStaging(HDREnv.BRDFLutSRV()),
         };
         UINT DstCount = 3;
         UINT SrcCounts[3] = { 1, 1, 1 };
-        Device.Native()->CopyDescriptors(1, &DstStart, &DstCount,
+        Backend->Device.Native()->CopyDescriptors(1, &DstStart, &DstCount,
                                           3, Sources, SrcCounts,
                                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
     bool Renderer::LoadHDREnvironment(const std::wstring& _Path) {
         if (!Initialized) return false;
-        CommandQueue.Flush();
-        return HDREnv.LoadFromFile(Device.Native(), CommandQueue, SRVHeap, _Path);
+        Backend->DirectQueue.Flush();
+        return HDREnv.LoadFromFile(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap, _Path);
     }
 
     void Renderer::CreateDefaultMaterial() {
-        auto* Dev = Device.Native();
+        auto* Dev = Backend->Device.Native();
 
-        TexDefaultWhite  = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::White);
-        TexDefaultNormal = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::FlatNormal);
-        TexDefaultORM    = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::ORM);
-        TexDefaultBlack  = FTexture::CreateDefault(Dev, UploadQueue, SRVHeap, EDefaultTexture::Black);
+        TexDefaultWhite  = FTexture::CreateDefault(Dev, Backend->UploadQueue, Backend->SRVHeap, EDefaultTexture::White);
+        TexDefaultNormal = FTexture::CreateDefault(Dev, Backend->UploadQueue, Backend->SRVHeap, EDefaultTexture::FlatNormal);
+        TexDefaultORM    = FTexture::CreateDefault(Dev, Backend->UploadQueue, Backend->SRVHeap, EDefaultTexture::ORM);
+        TexDefaultBlack  = FTexture::CreateDefault(Dev, Backend->UploadQueue, Backend->SRVHeap, EDefaultTexture::Black);
 
         DefaultMaterial.Albedo            = &TexDefaultWhite;
         DefaultMaterial.Normal            = &TexDefaultNormal;
@@ -259,7 +272,7 @@ namespace Smile {
         DefaultMaterial.Constants.MetallicFactor   = 0.0f;
         DefaultMaterial.Constants.RoughnessFactor  = 0.5f;
 
-        DefaultMaterial.Finalize(Dev, SRVHeap);
+        DefaultMaterial.Finalize(Dev, Backend->SRVHeap);
         ActiveMaterial = &DefaultMaterial;
     }
 
@@ -276,7 +289,7 @@ namespace Smile {
     }
 
     void Renderer::BuildDefaultScene() {
-        FGpuMesh* Sphere = Scene.AddMesh(Device.Native(), FMesh::CreateSphere());
+        FGpuMesh* Sphere = Scene.AddMesh(Backend->Device.Native(), FMesh::CreateSphere());
 
         FRenderable Renderable;
         Renderable.Name     = "Sphere";
@@ -290,26 +303,26 @@ namespace Smile {
                       "o CB do frame e indexado por sizeof(); root CBV exige 256-alinhado");
 
         const GpuResources::FUploadBuffer Frame = GpuResources::CreateUploadBuffer(
-            Device.Native(), sizeof(FrameConstants), FCommandQueue::kFramesInFlight);
+            Backend->Device.Native(), sizeof(FrameConstants), FCommandQueue::kFramesInFlight);
         ConstantBuffer  = Frame.Resource;
         MappedFrameBase = Frame.Mapped;
 
         // As duas listas de luz sao lidas como StructuredBuffer (root SRV), nao como CB: o
         // passo e kMaxLights * sizeof(), e arredondar para 256 mudaria o offset por frame.
         const GpuResources::FUploadBuffer Lights = GpuResources::CreateUploadBuffer(
-            Device.Native(), static_cast<u64>(kMaxLights) * sizeof(FGPULight),
+            Backend->Device.Native(), static_cast<u64>(kMaxLights) * sizeof(FGPULight),
             FCommandQueue::kFramesInFlight, false);
         LightBuffer     = Lights.Resource;
         MappedLightBase = Lights.Mapped;
 
         const GpuResources::FUploadBuffer GILights = GpuResources::CreateUploadBuffer(
-            Device.Native(), static_cast<u64>(kMaxLights) * sizeof(FGPULightGI),
+            Backend->Device.Native(), static_cast<u64>(kMaxLights) * sizeof(FGPULightGI),
             FCommandQueue::kFramesInFlight, false);
         GILightBuffer     = GILights.Resource;
         MappedGILightBase = GILights.Mapped;
 
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i) {
-            GILightSRVSlot[i] = SRVHeap.Allocate(1);
+            GILightSRVSlot[i] = Backend->SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
             Srv.Format                     = DXGI_FORMAT_UNKNOWN;
             Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -317,12 +330,12 @@ namespace Smile {
             Srv.Buffer.FirstElement        = static_cast<UINT64>(i) * kMaxLights;
             Srv.Buffer.NumElements         = kMaxLights;
             Srv.Buffer.StructureByteStride = sizeof(FGPULightGI);
-            SRVHeap.CreateSRV(Device.Native(), GILightBuffer.Get(), Srv, GILightSRVSlot[i]);
+            Backend->SRVHeap.CreateSRV(Backend->Device.Native(), GILightBuffer.Get(), Srv, GILightSRVSlot[i]);
         }
 
         // O deferred usa root SRV; ReSTIR DI usa sua propria tabela de descriptors.
         for (u32 i = 0; i < FCommandQueue::kFramesInFlight; ++i) {
-            DirectLightSRVSlot[i] = SRVHeap.Allocate(1);
+            DirectLightSRVSlot[i] = Backend->SRVHeap.Allocate(1);
             D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
             Srv.Format                     = DXGI_FORMAT_UNKNOWN;
             Srv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -330,7 +343,7 @@ namespace Smile {
             Srv.Buffer.FirstElement        = static_cast<UINT64>(i) * kMaxLights;
             Srv.Buffer.NumElements         = kMaxLights;
             Srv.Buffer.StructureByteStride = sizeof(FGPULight);
-            SRVHeap.CreateSRV(Device.Native(), LightBuffer.Get(), Srv, DirectLightSRVSlot[i]);
+            Backend->SRVHeap.CreateSRV(Backend->Device.Native(), LightBuffer.Get(), Srv, DirectLightSRVSlot[i]);
         }
 
         RecreateObjectCB();
@@ -339,13 +352,13 @@ namespace Smile {
 
 
     void Renderer::SetupReflectionsForScene() {
-        if (!Device.RaytracingSupported()) return;
+        if (!Backend->Device.RaytracingSupported()) return;
         if (!GBuffer.IsInitialized() || Targets.DepthSRVSlot == kInvalidSlot) return;
 
         // A direta local usa o snapshot InstanceGeo (do FRaytracingScene), mas nao usa
         // atlas/probes. Se o snapshot ainda nao existe, o passe degenera para not-ready por conta
         // propria; assim uma troca de cena nunca deixa um alvo direto antigo aparentemente valido.
-        TemporalMotion.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+        TemporalMotion.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
                                       Targets.DepthSRVSlot, Targets.VelocitySRVSlot);
         const u32 ReliableVelocitySlot = TemporalMotion.IsReady()
             ? TemporalMotion.MotionSRV() : Targets.VelocitySRVSlot;
@@ -354,7 +367,7 @@ namespace Smile {
         const u32 TemporalSurfaceSlots[FCommandQueue::kFramesInFlight] = {
             TemporalMotion.SurfaceSRV(0), TemporalMotion.SurfaceSRV(1) };
 
-        ReSTIRDI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+        ReSTIRDI.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), Targets.DepthSRVSlot,
             ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV(),
             MeshLights.LightSRVSlot(), MeshLights.AliasSRVSlot(),
@@ -369,7 +382,7 @@ namespace Smile {
 
         Reflections.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                                 DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
-        Reflections.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+        Reflections.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             RaytracingScene.InstanceGeoSRV(), GIFb,
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), HDREnv.BRDFLutSRV(),
@@ -381,28 +394,28 @@ namespace Smile {
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());
-        ReSTIRGI.SetupForResize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight(),
+        ReSTIRGI.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             RaytracingScene.InstanceGeoSRV(), GIFb,
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), ReliableVelocitySlot);
 
         // O update do cache possui historico de mundo e nao consome velocity nem DDGI.
-        RadianceCache.SetupUpdatePass(Device.Native(), SRVHeap,
+        RadianceCache.SetupUpdatePass(Backend->Device.Native(), Backend->SRVHeap,
             RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
             RaytracingScene.InstanceGeoSRV(), GIFb,
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), RenderWidth(), RenderHeight());
 
         // Alvos de timer: cada um no dominio do SEU dispatch — o gather do ReSTIR e full-res e o
         // trace de reflexao e half-res. Sem NVAPI, Initialize() e no-op e os alvos nao existem.
-        TimerGI.Initialize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        TimerReflections.Initialize(Device.Native(), SRVHeap,
+        TimerGI.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        TimerReflections.Initialize(Backend->Device.Native(), Backend->SRVHeap,
                                     Reflections.TraceWidth(), Reflections.TraceHeight());
 
         // Debug da BVH: alvo full-res + a tabela t0/t1 (TLAS + snapshot de instancias). Fica aqui
         // porque este ponto e o unico que roda nos DOIS eventos que invalidam a tabela — resize
         // da tela e reconstrucao da cena de RT (os slots mudam nos dois).
-        BvhDebug.Resize(Device.Native(), SRVHeap, RenderWidth(), RenderHeight());
-        BvhDebug.SetSceneSRVs(Device.Native(), SRVHeap,
+        BvhDebug.Resize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        BvhDebug.SetSceneSRVs(Backend->Device.Native(), Backend->SRVHeap,
                               RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV());
 
         SetupNrdIndirect();
@@ -441,9 +454,9 @@ namespace Smile {
         if (!WantNrdDirect()) { NrdDirect.ReleaseResources(); return; }
         const u32 ReliableVelocitySlot = TemporalMotion.IsReady()
             ? TemporalMotion.MotionSRV() : Targets.VelocitySRVSlot;
-        NrdDirect.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
+        NrdDirect.SetupForResize(Backend->Device.Native(), RenderWidth(), RenderHeight());
         if (!NrdDirect.IsReady()) return;
-        ReSTIRDI.SetupNrdPack(Device.Native(), SRVHeap,
+        ReSTIRDI.SetupNrdPack(Backend->Device.Native(), Backend->SRVHeap,
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2),
             Targets.DepthSRVSlot, ReliableVelocitySlot,
             NrdDirect.IoResource(FNrdDenoiser::IO_VIEWZ),
@@ -457,15 +470,15 @@ namespace Smile {
 
     void Renderer::SetupNrdIndirect() {
         if (!WantNrdIndirect()) { Nrd.ReleaseResources(); return; }
-        Nrd.SetupForResize(Device.Native(), RenderWidth(), RenderHeight());
+        Nrd.SetupForResize(Backend->Device.Native(), RenderWidth(), RenderHeight());
         if (!Nrd.IsReady()) return;
-        ReSTIRGI.SetupNrdPack(Device.Native(), SRVHeap,
+        ReSTIRGI.SetupNrdPack(Backend->Device.Native(), Backend->SRVHeap,
             Nrd.IoResource(FNrdDenoiser::IO_VIEWZ),
             Nrd.IoResource(FNrdDenoiser::IO_NORMAL_ROUGHNESS),
             Nrd.IoResource(FNrdDenoiser::IO_MV),
             Nrd.IoResource(FNrdDenoiser::IO_DIFF_RADIANCE_HITDIST),
             Nrd.IoResource(FNrdDenoiser::IO_OUT_DIFF));
-        Reflections.SetupNrdSpec(Device.Native(), SRVHeap,
+        Reflections.SetupNrdSpec(Backend->Device.Native(), Backend->SRVHeap,
             Nrd.IoResource(FNrdDenoiser::IO_SPEC_RADIANCE_HITDIST),
             Nrd.IoResource(FNrdDenoiser::IO_OUT_SPEC));
     }
@@ -474,7 +487,7 @@ namespace Smile {
         if (!Initialized || RenderWidth() == 0 || RenderHeight() == 0) return;
         if (WantNrdIndirect() == Nrd.IsReady() && WantNrdDirect() == NrdDirect.IsReady()) return;
         // Os packs guardam descriptors dos recursos NRD; eles nao podem mudar em voo.
-        CommandQueue.Flush();
+        Backend->DirectQueue.Flush();
         SetupNrdDirect();
         SetupNrdIndirect();
         // A OUT do NRD entra e sai da lista do visualizador junto com a alocacao.
@@ -507,7 +520,7 @@ namespace Smile {
 
     void Renderer::LoadMoonTexture(const std::wstring& _Path) {
         if (!Initialized || !Atmosphere.IsInitialized()) return;
-        Atmosphere.LoadMoonTexture(Device.Native(), UploadQueue, SRVHeap, _Path);
+        Atmosphere.LoadMoonTexture(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Path);
     }
 
     FTexture* Renderer::ImportRuntimeTexture(const std::wstring& _Path, bool _IsNormalMap,
@@ -521,8 +534,8 @@ namespace Smile {
         };
 
         FTexture Tex = EndsWith(L".dds")
-            ? FTexture::LoadDDS(Device.Native(), UploadQueue, SRVHeap, _Path, _sRGB)
-            : FTexture::CreateFromCPU(Device.Native(), UploadQueue, SRVHeap,
+            ? FTexture::LoadDDS(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Path, _sRGB)
+            : FTexture::CreateFromCPU(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap,
                                       FTexture::LoadCPU(_Path, _IsNormalMap, _sRGB));
         if (!Tex.IsValid()) return nullptr;
 
@@ -563,7 +576,7 @@ namespace Smile {
             }
         }
 
-        return MaterialPreview.Submit(Device.Native(), CommandQueue, SRVHeap,
+        return MaterialPreview.Submit(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap,
                                       *_Material, _Params, _RequestId, SceneMesh, SceneModel);
     }
 
@@ -571,13 +584,13 @@ namespace Smile {
         if (!Initialized) return false;
         // O HDRI e seus descritores sao compartilhados por jobs de preview. Drenar aqui e raro
         // (browse explicito) e impede sobrescrever a tabela enquanto uma list assincrona a usa.
-        CommandQueue.Flush();
-        return MaterialPreview.LoadEnvironment(Device.Native(), CommandQueue, SRVHeap, _Path);
+        Backend->DirectQueue.Flush();
+        return MaterialPreview.LoadEnvironment(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap, _Path);
     }
 
     void Renderer::LoadStarCatalog(const std::wstring& _Path) {
         if (!Initialized || !Atmosphere.IsInitialized()) return;
-        Atmosphere.LoadStarCatalog(Device.Native(), SRVHeap, _Path);
+        Atmosphere.LoadStarCatalog(Backend->Device.Native(), Backend->SRVHeap, _Path);
     }
 
     bool Renderer::WorldToScreen(const Vec3& _W, f32& _Sx, f32& _Sy) const {
@@ -587,13 +600,13 @@ namespace Smile {
         const f32 cw = _W.X*M.M[0][3] + _W.Y*M.M[1][3] + _W.Z*M.M[2][3] + M.M[3][3];
         if (cw <= 1e-5f) return false;
         const f32 ndcx = cx / cw, ndcy = cy / cw;
-        _Sx = (ndcx * 0.5f + 0.5f) * static_cast<f32>(SwapChain.GetWidth());
-        _Sy = (0.5f - ndcy * 0.5f) * static_cast<f32>(SwapChain.GetHeight());
+        _Sx = (ndcx * 0.5f + 0.5f) * static_cast<f32>(Backend->SwapChain.GetWidth());
+        _Sy = (0.5f - ndcy * 0.5f) * static_cast<f32>(Backend->SwapChain.GetHeight());
         return true;
     }
 
     bool Renderer::ScreenToRay(u32 _X, u32 _Y, Vec3& _O, Vec3& _D) const {
-        const u32 Wd = SwapChain.GetWidth(), Ht = SwapChain.GetHeight();
+        const u32 Wd = Backend->SwapChain.GetWidth(), Ht = Backend->SwapChain.GetHeight();
         if (Wd == 0 || Ht == 0) return false;
         const f32 ndcx = ((static_cast<f32>(_X) + 0.5f) / Wd) * 2.0f - 1.0f;
         const f32 ndcy = 1.0f - ((static_cast<f32>(_Y) + 0.5f) / Ht) * 2.0f;

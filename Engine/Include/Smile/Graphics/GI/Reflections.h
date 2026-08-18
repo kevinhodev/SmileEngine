@@ -2,14 +2,14 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/RHI/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
 #include "Smile/Graphics/GI/GIHitSampling.h"
 #include "Smile/Graphics/GI/DDGI.h" // FDDGICascadeConstants
 #include "Smile/Graphics/GI/GIFallback.h"
 #include "Smile/Graphics/GI/ReGIR.h"
 #include "Smile/Graphics/GI/RadianceCache.h"
-#include "Smile/Graphics/RHI/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>

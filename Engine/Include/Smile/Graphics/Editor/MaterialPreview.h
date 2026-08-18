@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/RHI/DescriptorHeap.h"
+#include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Environment/HDREnvironment.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"

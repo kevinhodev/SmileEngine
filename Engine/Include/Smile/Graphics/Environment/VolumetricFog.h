@@ -2,9 +2,9 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Resources/VolumeTexture.h"
-#include "Smile/Graphics/RHI/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include "Smile/Graphics/GI/DDGI.h" // FDDGICascadeConstants: bloco comum aos cinco cbuffers
 #include <d3d12.h>

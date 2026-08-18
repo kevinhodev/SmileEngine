@@ -1,12 +1,12 @@
 #include "Smile/Graphics/GI/ReSTIRGI.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h"
 #include "Smile/Graphics/Debug/ShaderTimer.h"
 #include "Smile/Graphics/Debug/DebugTargets.h"
 #include "Smile/Core/Logger.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
-#include "Smile/Graphics/RHI/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 #include <exception>

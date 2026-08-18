@@ -2,8 +2,8 @@
 
 #include <d3d12.h>
 #include "Smile/Core/Types.h"
-#include "Smile/Graphics/RHI/DescriptorHeap.h"
-#include "Smile/Graphics/RHI/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
+#include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 
 // Render targets da CENA — os que vivem em RenderWidth/Height e sao recriados juntos no
 // resize e na troca de render scale. Nao entram aqui: os alvos dos subsistemas (que cada um

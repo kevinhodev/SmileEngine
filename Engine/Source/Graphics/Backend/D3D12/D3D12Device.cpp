@@ -1,5 +1,5 @@
-#include "Smile/Graphics/RHI/D3D12Device.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/D3D12Device.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <d3d12sdklayers.h>

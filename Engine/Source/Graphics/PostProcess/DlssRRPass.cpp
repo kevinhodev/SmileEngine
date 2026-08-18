@@ -1,6 +1,6 @@
 #include "Smile/Graphics/PostProcess/DlssRRPass.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Core/Logger.h"
 
 #if SMILE_SL_ENABLED

@@ -1,5 +1,5 @@
 #include "Smile/Graphics/Resources/GpuMesh.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>

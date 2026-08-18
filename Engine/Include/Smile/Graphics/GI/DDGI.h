@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/RHI/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
 #include "Smile/Graphics/GI/GIHitSampling.h"
 #include "Smile/Graphics/GI/ReGIR.h"

@@ -1,4 +1,4 @@
-#include "Smile/Graphics/RHI/DescriptorHeap.h"
+#include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {

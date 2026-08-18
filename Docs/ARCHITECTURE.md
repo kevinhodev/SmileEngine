@@ -17,7 +17,7 @@
 1. [Visão geral](#1-visão-geral)
 2. [Topologia do projeto / build](#2-topologia-do-projeto--build)
 3. [Mapa de módulos](#3-mapa-de-módulos)
-4. [Camada de abstração DX12 (RHI)](#4-camada-de-abstração-dx12-rhi)
+4. [Backend Direct3D 12](#4-backend-direct3d-12)
 5. [O frame: render loop e frame graph](#5-o-frame-render-loop-e-frame-graph)
 6. [Modelo de binding (root signatures & descriptors)](#6-modelo-de-binding-root-signatures--descriptors)
 7. [Subsistemas de rendering](#7-subsistemas-de-rendering)
@@ -40,7 +40,7 @@ quatro artefatos:
 
 | Artefato | Pasta | Namespace | Tipo | Descrição |
 |----------|-------|-----------|------|-----------|
-| **Engine** | `Engine/` | `Smile` | Biblioteca **estática** | RHI DX12 + subsistemas de rendering |
+| **Engine** | `Engine/` | `Smile` | Biblioteca **estática** | Backend D3D12 + subsistemas de rendering |
 | **Editor** | `Editor/` | `SmileEditor` | Executável **Qt 6** | Host do viewport, painéis QML, tema dark |
 | **Shaders** | `Shaders/` | — | Alvo de build (DXC) | 130 HLSL compilados para `.cso` em build time |
 | **Cooker** | `Tools/Cooker/` | `Smile` | Executável CLI | FBX (ufbx) + texturas (dds/png/tga/jpg/bmp) → `.smesh`/`.sscene` |
@@ -48,8 +48,8 @@ quatro artefatos:
 Princípios de design observados no código:
 
 - **Composição, não singletons.** Cada `ViewportWidget` possui um `RenderThread`, que cria e
-  serializa o acesso ao seu próprio `Smile::Renderer`. O `Renderer` é dono (por valor) de
-  todos os subsistemas (`FAtmosphere`, `FDDGI`, `FReSTIRGI`, …).
+  serializa o acesso ao seu próprio `Smile::Renderer`. O `Renderer` possui seus subsistemas
+  (`FAtmosphere`, `FDDGI`, `FReSTIRGI`, …) e delega o estado D3D12 a `FRenderBackend`.
   *Exceções:* `VramTracker` e `DebugTargets` são registros **globais** por processo (§7.9).
 - **Prefixos por tipo:** `F` para tipos "engine/value-like" (`FD3D12Device`, `FMaterial`,
   `FAtmosphere`), classes "sistema" sem prefixo (`Renderer`).
@@ -74,7 +74,7 @@ Princípios de design observados no código:
   │        ┌──────────┴──────────┐       │     │   │                           │        │
   │        ▼                     ▼       │     │   ▼                           ▼        │
   │  ┌──────────────┐   ┌──────────────┐ │     │ ┌──────────────────┐  ┌──────────────┐ │
-  │  │ViewportWidget│   │ Bridges QML: │ │     │ │ RHI: Device ·    │  │ Subsistemas: │ │
+  │  │ViewportWidget│   │ Bridges QML: │ │     │ │ Backend: Device ·│  │ Subsistemas: │ │
   │  │ QWidget HWND │   │ Materials ·  │ │     │ │ CmdQueue ·       │  │ Atmosphere · │ │
   │  │ nativo       │   │ Lights ·     │ │     │ │ Upload/Compute · │  │ DDGI ·       │ │
   │  └──────┬───────┘   │ Outliner ·   │ │     │ │ SwapChain ·      │  │ ReSTIR ·     │ │
@@ -186,20 +186,20 @@ Engine/Include/Smile/
 │   ├── Light.h          FLight (point/spot, Id estável, RTWeight)
 │   └── CookedFormat.h   formato cozido binário (kCookedVersion) + sidecars .json
 └── Graphics/
-    ├── ── RHI / núcleo ──
-    │   ├── D3D12Device       device + DXGI factory6 + adapter + tearing + suporte a RT
-    │   ├── CommandQueue      fila DIRECT, 2 frames in-flight, fence ring, segmentação p/ async
-    │   ├── UploadQueue       fila COPY dedicada (texturas/meshes sem stall)
-    │   ├── ComputeQueue      fila COMPUTE assíncrona (DDGI sobreposto ao raster)
-    │   ├── SwapChain         2 buffers, R8G8B8A8_UNORM, tearing opcional
-    │   ├── DescriptorHeap    wrapper genérico (RTV/DSV, não-shader-visible)
-    │   ├── TextureSRVHeap    heap CBV/SRV/UAV compartilhado (16384, shader-visible, free-list)
-    │   ├── Barriers.h        FBarrierBatch — acumula transições, 1 ResourceBarrier no Flush
-    │   ├── PipelineState     root signature principal + 10 PSOs (prepass/G-buffer/lighting/blend)
-    │   ├── ComputePipeline   PSO de compute com layouts fixo e parametrizável
-    │   ├── PipelineUtils     criação comum de root signatures e compute PSOs
-    │   ├── DepthConfig.h     kReverseZ (true) + funções de comparação derivadas
-    │   └── GpuProfiler       timestamps por escopo (FGpuScope), por fila
+    ├── Backend/
+    │   ├── RenderBackend     ownership e lifecycle de device, filas, swapchain e heap
+    │   └── D3D12/
+    │       ├── D3D12Device   device + DXGI factory6 + adapter + tearing + suporte a RT
+    │       ├── CommandQueue  fila DIRECT, 2 frames in-flight, fence ring, segmentação p/ async
+    │       ├── UploadQueue   fila COPY dedicada (texturas/meshes sem stall)
+    │       ├── ComputeQueue  fila COMPUTE assíncrona (DDGI sobreposto ao raster)
+    │       ├── SwapChain     2 buffers, R8G8B8A8_UNORM, tearing opcional
+    │       ├── DescriptorHeap wrapper genérico (RTV/DSV, não-shader-visible)
+    │       ├── TextureSRVHeap heap CBV/SRV/UAV compartilhado (16384, shader-visible, free-list)
+    │       ├── Barriers.h    FBarrierBatch — acumula transições, 1 ResourceBarrier no Flush
+    │       ├── PipelineState root signature principal + 10 PSOs (prepass/G-buffer/lighting/blend)
+    │       ├── ComputePipeline PSO de compute com layouts fixo e parametrizável
+    │       └── PipelineUtils criação comum de root signatures e compute PSOs
     ├── ── recursos / cena ──
     │   ├── Texture / CubeTexture / VolumeTexture · Mesh / GpuMesh
     │   ├── Material          FMaterial (8 slots de textura + MaterialConstants 256B)
@@ -235,9 +235,11 @@ Engine/Include/Smile/
 
 ---
 
-## 4. Camada de abstração DX12 (RHI)
+## 4. Backend Direct3D 12
 
-A "RHI" é deliberadamente fina — wrappers diretos sobre objetos DX12, sem indireção.
+O backend é deliberadamente concreto: `FRenderBackend` concentra ownership e lifecycle, enquanto
+`Backend/D3D12` oferece wrappers diretos sobre objetos DX12. Ainda não há uma interface multi-API;
+ela só deve ser introduzida quando existir um segundo backend com contratos realmente compartilhados.
 
 ### `FD3D12Device`
 Cria `ID3D12Device` + `IDXGIFactory6` + escolhe o `IDXGIAdapter1` (com descrição e VRAM).
@@ -792,7 +794,7 @@ Mapeamento de conceitos de outras engines para onde encaixam na Smile.
 
 | Conceito (Unreal / Cry / Flax) | Equivalente Smile | Onde tocar |
 |--------------------------------|-------------------|------------|
-| RHI / `FRHICommandList` | `FCommandQueue` + `ID3D12GraphicsCommandList` | `Graphics/RHI/CommandQueue.*` |
+| RHI / `FRHICommandList` | `FCommandQueue` + `ID3D12GraphicsCommandList` | `Graphics/Backend/D3D12/CommandQueue.*` |
 | `FRDGBuilder` / frame graph | **manual** em `Renderer::RenderFrame` (barriers explícitos) | `Graphics/Renderer/RendererFrame.cpp` |
 | `UMaterial` / material graph | `FMaterial` + `MaterialConstants` (uber-shader, sem grafo) | `Graphics/Resources/Material.*`, `Shaders/MaterialCB.hlsli`, `Shaders/GBuffer.ps.hlsl` |
 | Lumen (difuso) | `FDDGI` + `FReSTIRGI` | `Graphics/GI/DDGI.*`, `Graphics/GI/ReSTIRGI.*` |
@@ -805,7 +807,7 @@ Mapeamento de conceitos de outras engines para onde encaixam na Smile.
 | Cascaded Shadow Maps | `FSunShadows` | `Graphics/Lighting/SunShadows.*` (§15) |
 | Post Process Volume | `FPostProcessor` (bloom + ACES) | `Graphics/PostProcess/PostProcess.*` |
 | TAA / TSR / DLSS | `FTemporalAA` + `IUpscaler` (FSR/DLSS/RR) | `Graphics/PostProcess/Upscaler.h` e implementações |
-| Bindless / descriptor heap | `FTextureSRVHeap` (16384 slots) + `InstanceGeo` no RT | `Graphics/RHI/TextureSRVHeap.*`, `Graphics/RayTracing/RaytracingScene.*` |
+| Bindless / descriptor heap | `FTextureSRVHeap` (16384 slots) + `InstanceGeo` no RT | `Graphics/Backend/D3D12/TextureSRVHeap.*`, `Graphics/RayTracing/RaytracingScene.*` |
 | `SCENE_VIEW` / view uniforms | `FrameConstants` (b0) | `Graphics/Renderer/Renderer.h` |
 | `r.ShowRenderTarget` / debug views | `DebugTargets` + `FDebugView` | `Graphics/Debug/DebugTargets.*` |
 

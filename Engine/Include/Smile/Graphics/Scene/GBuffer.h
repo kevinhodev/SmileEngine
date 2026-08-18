@@ -2,8 +2,8 @@
 
 #include <d3d12.h>
 #include "Smile/Core/Types.h"
-#include "Smile/Graphics/RHI/Barriers.h"
-#include "Smile/Graphics/RHI/DescriptorHeap.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
 
 namespace Smile {
     class FTextureSRVHeap;

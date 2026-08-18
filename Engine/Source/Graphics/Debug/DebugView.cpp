@@ -1,8 +1,8 @@
 #include "Smile/Graphics/Debug/DebugView.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-#include "Smile/Graphics/RHI/ShaderUtils.h"
+#include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <string>

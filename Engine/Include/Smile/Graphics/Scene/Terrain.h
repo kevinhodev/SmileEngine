@@ -4,7 +4,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Resources/Texture.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>

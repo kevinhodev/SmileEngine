@@ -1,4 +1,4 @@
-#include "Smile/Graphics/RHI/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Core/HResultCheck.h"
 
 namespace Smile {

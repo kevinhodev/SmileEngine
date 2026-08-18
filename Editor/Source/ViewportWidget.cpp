@@ -193,7 +193,7 @@ namespace SmileEditor {
     // swapchain, upload heaps e o que nao foi instrumentado). frac e relativo ao uso total.
     QVariantList ViewportWidget::BuildVRAMBreakdown(Smile::Renderer& _Renderer) const {
         QVariantList Rows;
-        const auto& VM   = _Renderer.GetDevice().QueryVideoMemory();
+        const auto VM    = _Renderer.GetGpuMemoryInfo();
         const auto  Snap = Smile::VramTracker::Snapshot();
         const double Total = VM.Valid && VM.LocalUsage > 0
             ? static_cast<double>(VM.LocalUsage)
@@ -525,15 +525,15 @@ namespace SmileEditor {
         Next.OutputResolution = QStringLiteral("%1×%2")
             .arg(_Renderer.OutputWidth()).arg(_Renderer.OutputHeight());
         Next.GPUName = QString::fromStdWString(
-            _Renderer.GetDevice().GetAdapterDescription());
+            _Renderer.GetGpuDescription());
 
         const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
         constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
         Next.VRAMText = Loc.toString(
-            static_cast<double>(_Renderer.GetDevice().GetAdapterDedicatedVideoMemory()) / GiB,
+            static_cast<double>(_Renderer.GetDedicatedVideoMemory()) / GiB,
             'f', 1) + QStringLiteral(" GB");
 
-        const auto& VM = _Renderer.GetDevice().QueryVideoMemory();
+        const auto VM = _Renderer.GetGpuMemoryInfo();
         if (VM.Valid) {
             Next.VRAMUsageText =
                 Loc.toString(static_cast<double>(VM.LocalUsage) / GiB, 'f', 2) +

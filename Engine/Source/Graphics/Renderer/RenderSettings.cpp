@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
 
 namespace Smile {
 
@@ -24,8 +25,8 @@ namespace Smile {
 
     // === Apresentacao e escala ==========================================================
 
-    void FRenderSettings::SetVSync(bool _Enabled) { R.SwapChain.SetVSync(_Enabled); }
-    bool FRenderSettings::GetVSync() const        { return R.SwapChain.GetVSync(); }
+    void FRenderSettings::SetVSync(bool _Enabled) { R.Backend->SwapChain.SetVSync(_Enabled); }
+    bool FRenderSettings::GetVSync() const        { return R.Backend->SwapChain.GetVSync(); }
 
     void FRenderSettings::SetRenderScale(f32 _V) { R.SetRenderScale(_V); }
     f32  FRenderSettings::GetRenderScale() const { return R.RenderScale; }
@@ -1080,7 +1081,7 @@ namespace Smile {
     // atlas do DDGI entram aqui.
     //
     // Sem coalescer, apesar de serem sliders: o dominio e so escrita de flag (nenhum
-    // CommandQueue.Flush, ao contrario do NotifyMaterialRTStateChanged) e os historicos sao
+    // Backend->DirectQueue.Flush, ao contrario do NotifyMaterialRTStateChanged) e os historicos sao
     // curtos (Reflections MaxFrames = 12). Durante o arraste o especular fica reconvergindo, o
     // que e a leitura honesta do que esta acontecendo. Se virar incomodo, a generalizacao certa
     // e coalescer POR DOMINIO, nao uma flag ad-hoc por knob.
@@ -1163,8 +1164,8 @@ namespace Smile {
         // As DUAS filas: havia so o Flush da direta, e o trace do DDGI le o snapshot na COMPUTE.
         // Ver a nota do caminho barato do Renderer::OnSceneStructureChanged, que tinha o mesmo
         // buraco pelo mesmo motivo.
-        R.CommandQueue.Flush();
-        R.ComputeQueue.WaitIdle();
+        R.Backend->DirectQueue.Flush();
+        R.Backend->ComputeQueue.WaitIdle();
         R.RaytracingScene.RefreshInstanceGeo(R.Scene);
         R.TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
         // E os historicos acumulados sobre a aparencia antiga.

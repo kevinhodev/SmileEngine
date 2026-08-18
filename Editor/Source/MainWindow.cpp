@@ -23,7 +23,6 @@
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
-#include "Smile/Graphics/RHI/D3D12Device.h"
 
 #include <QAction>
 #include <QActionGroup>

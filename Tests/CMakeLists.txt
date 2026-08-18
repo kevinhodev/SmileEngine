@@ -55,9 +55,9 @@ add_executable(SmileSceneIdentityTests
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/GpuMesh.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/Material.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/RHI/TextureSRVHeap.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/RHI/GpuResources.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/RHI/UploadQueue.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/TextureSRVHeap.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/GpuResources.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/UploadQueue.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Debug/VramTracker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Logger.cpp
     ${PROJECT_SOURCE_DIR}/Engine/ThirdParty/D3D12MA/D3D12MemAlloc.cpp

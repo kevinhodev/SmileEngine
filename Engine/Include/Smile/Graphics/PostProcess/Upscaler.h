@@ -2,7 +2,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 
 struct ID3D12Device;
 struct ID3D12Resource;

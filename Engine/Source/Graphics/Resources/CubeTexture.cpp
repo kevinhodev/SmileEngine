@@ -1,5 +1,5 @@
 #include "Smile/Graphics/Resources/CubeTexture.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 
 namespace Smile {
     void FCubeTexture::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,

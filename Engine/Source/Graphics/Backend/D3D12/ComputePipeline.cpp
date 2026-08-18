@@ -1,5 +1,5 @@
-#include "Smile/Graphics/RHI/ComputePipeline.h"
-#include "Smile/Graphics/RHI/PipelineUtils.h"
+#include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineUtils.h"
 #include "Smile/Graphics/Debug/ShaderTimer.h"
 
 namespace Smile {

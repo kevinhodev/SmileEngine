@@ -1,9 +1,10 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Water/OceanSpectrum.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -56,7 +57,7 @@ namespace Smile {
     }
 
     void Renderer::CreateDebugPreviewTargets() {
-        DebugPreviewPass.Initialize(Device.Native(), kDebugPreviewFormat);
+        DebugPreviewPass.Initialize(Backend->Device.Native(), kDebugPreviewFormat);
 
         D3D12_CLEAR_VALUE Clear{};
         Clear.Format   = kDebugPreviewFormat;
@@ -65,13 +66,13 @@ namespace Smile {
         Clear.Color[2] = 0.031f;
         Clear.Color[3] = 1.0f;
         DebugPreviewTarget = GpuResources::CreateTex2D(
-            Device.Native(), kDebugPreviewWidth, kDebugPreviewHeight, kDebugPreviewFormat,
+            Backend->Device.Native(), kDebugPreviewWidth, kDebugPreviewHeight, kDebugPreviewFormat,
             D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET,
             EVramCategory::RenderTargets, &Clear, 1, 1, "Preview de debug");
 
         DebugPreviewRTVHeap.Initialize(
-            Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
-        Device.Native()->CreateRenderTargetView(
+            Backend->Device.Native(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
+        Backend->Device.Native()->CreateRenderTargetView(
             DebugPreviewTarget.Get(), nullptr, DebugPreviewRTVHeap.CpuHandle(0));
 
         // Preview e probe possuem buffers separados porque seus tamanhos diferem muito.
@@ -79,12 +80,12 @@ namespace Smile {
 
         for (u32 I = 0; I < FCommandQueue::kFramesInFlight; ++I) {
             DebugPreviewReadback[I] =
-                GpuResources::CreateReadbackBuffer(Device.Native(), PreviewBytes);
+                GpuResources::CreateReadbackBuffer(Backend->Device.Native(), PreviewBytes);
             DebugPreviewReadbackPending[I] = false;
             DebugPreviewReadbackVersion[I] = 0;
 
             DebugProbeSampleReadback[I] =
-                GpuResources::CreateReadbackBuffer(Device.Native(), kDebugProbeReadbackSize);
+                GpuResources::CreateReadbackBuffer(Backend->Device.Native(), kDebugProbeReadbackSize);
             DebugProbeSamplePending[I] = false;
             DebugProbeSampleVersion[I] = 0;
             DebugProbeSampleIndex[I]   = kNoDebugProbe;
@@ -480,7 +481,7 @@ namespace Smile {
                                       const FEffectiveIndirectPolicy& _Policy, u32 _FrameSlot) {
         if (!Capture.AdvanceFrame()) return;
         // A captura e offline e paga um unico stall antes de mapear os readbacks.
-        CommandQueue.Flush();
+        Backend->DirectQueue.Flush();
         // O anel contem query/hits pre-resolve; CaptureStats contem ocupacao pos-resolve.
         RadianceCache.CollectStats(_FrameSlot);
         CaptureCacheStats = {};
@@ -834,7 +835,7 @@ namespace Smile {
                     0.0f, 1.0f
                 };
                 DebugPreviewPass.Execute(
-                    CommandList, SRVHeap, PreviewTiles, PreviewTileCount, DebugColumns,
+                    CommandList, Backend->SRVHeap, PreviewTiles, PreviewTileCount, DebugColumns,
                     GBuffer.SRVTableStart(), Targets.VelocitySRVSlot, PreviewViewport,
                     Vw.JitterUv, /*EncodeForDisplay=*/true);
 
@@ -973,7 +974,7 @@ namespace Smile {
                     Tile.Decode   = EDebugDecode::GBufferField;
                     Tile.SubIndex = GBufferDebugMode;
                 }
-                DebugViewPass.Execute(CommandList, SRVHeap, &Tile, 1, 1,
+                DebugViewPass.Execute(CommandList, Backend->SRVHeap, &Tile, 1, 1,
                                       GBuffer.SRVTableStart(), Targets.VelocitySRVSlot, Viewport,
                                       Vec2{ 0.0f, 0.0f }, /*EncodeForDisplay=*/false);
             }

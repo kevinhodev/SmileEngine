@@ -1,9 +1,10 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Water/OceanSpectrum.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -20,6 +21,27 @@
 #include <type_traits>
 
 namespace Smile {
+    IUpscaler* Renderer::ActiveUpscaler() {
+        if (Denoiser == EDenoiser::DLSS_RR)
+            return (DlssRR.IsInitialized() && RRGuides.IsReady())
+                ? static_cast<IUpscaler*>(&DlssRR)
+                : nullptr;
+
+        switch (Upscaler) {
+            case EUpscaler::FSR:  return Fsr.IsInitialized()  ? static_cast<IUpscaler*>(&Fsr)  : nullptr;
+            case EUpscaler::DLSS: return Dlss.IsInitialized() ? static_cast<IUpscaler*>(&Dlss) : nullptr;
+            default:              return nullptr;
+        }
+    }
+
+    void Renderer::ApplyUpscalerScale() {
+        f32 Ratio = 1.0f;
+        if      (Denoiser == EDenoiser::DLSS_RR) Ratio = DlssRR.RenderRatioForQuality(UpscalerQuality);
+        else if (Upscaler == EUpscaler::FSR)     Ratio = Fsr.RenderRatioForQuality(UpscalerQuality);
+        else if (Upscaler == EUpscaler::DLSS)    Ratio = Dlss.RenderRatioForQuality(UpscalerQuality);
+        ApplyRenderScale(Ratio);
+    }
+
     namespace {
         f32 Halton(u32 i, u32 b) {
             f32 f = 1.0f, r = 0.0f;
@@ -103,8 +125,8 @@ namespace Smile {
     // entao juntar os dois aqui e equivalente (verificado).
     FFrameView Renderer::ResolveFrameView(const FFrameModes& _Modes, IUpscaler* _ActiveUp) {
         FFrameView V;
-        V.Aspect = SwapChain.GetWidth() > 0 && SwapChain.GetHeight() > 0
-                   ? static_cast<f32>(SwapChain.GetWidth()) / static_cast<f32>(SwapChain.GetHeight())
+        V.Aspect = Backend->SwapChain.GetWidth() > 0 && Backend->SwapChain.GetHeight() > 0
+                   ? static_cast<f32>(Backend->SwapChain.GetWidth()) / static_cast<f32>(Backend->SwapChain.GetHeight())
                    : 1.0f;
         V.View  = Camera.GetViewMatrix();
         V.NearZ = 0.1f;
@@ -577,11 +599,11 @@ namespace Smile {
             _CB->CloudShadowParams  = CloudShadowP;
             _CB->CloudShadowParams2 = CloudShadowP2;
             if (VolumetricClouds.IsInitialized()) {
-                D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(GBuffer.SRVTableStart() + 4);
+                D3D12_CPU_DESCRIPTOR_HANDLE Dst = Backend->SRVHeap.CpuHandle(GBuffer.SRVTableStart() + 4);
                 D3D12_CPU_DESCRIPTOR_HANDLE Src =
-                    SRVHeap.CpuHandleStaging(VolumetricClouds.ShadowSRV());
+                    Backend->SRVHeap.CpuHandleStaging(VolumetricClouds.ShadowSRV());
                 UINT One = 1;
-                Device.Native()->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
+                Backend->Device.Native()->CopyDescriptors(1, &Dst, &One, 1, &Src, &One,
                                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             }
         }
@@ -648,10 +670,10 @@ namespace Smile {
                                            const FFrameLighting& _Lt, const FFrameAmbient& _Amb,
                                            u32 _FrameSlot) {
         FPassContext C;
-        C.Cmd      = CommandQueue.List();
-        C.Device   = Device.Native();
-        C.SRVHeap  = &SRVHeap;
-        C.Profiler = &GpuProfiler;
+        C.Cmd      = Backend->DirectQueue.List();
+        C.Device   = Backend->Device.Native();
+        C.SRVHeap  = &Backend->SRVHeap;
+        C.Profiler = &Backend->DirectProfiler;
 
         C.FrameSlot    = _FrameSlot;
         C.RenderWidth  = RenderWidth();
@@ -744,10 +766,10 @@ namespace Smile {
         // command list aberto.
         UpdateFrameCapture();
 
-        CommandQueue.BeginFrame();
+        Backend->DirectQueue.BeginFrame();
 
-        GpuProfiler.BeginFrame(CommandQueue.FrameIndex());
-        GpuProfiler.Begin(CommandQueue.List(), "Frame (GPU)");
+        Backend->DirectProfiler.BeginFrame(Backend->DirectQueue.FrameIndex());
+        Backend->DirectProfiler.Begin(Backend->DirectQueue.List(), "Frame (GPU)");
 
         ObjectPicker.Tick();
 
@@ -758,7 +780,7 @@ namespace Smile {
         const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
         LastViewProj = Vw.ViewProjUnjittered;
 
-        const u32 FrameSlot = CommandQueue.FrameIndex();
+        const u32 FrameSlot = Backend->DirectQueue.FrameIndex();
         // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
         // utilizacao anterior do slot ja pode ser mapeado sem stall.
         CollectDebugPreviewReadback(FrameSlot);
@@ -825,14 +847,14 @@ namespace Smile {
         // O update nasce do G-buffer e pode sobrepor o DDGI async porque nao o consome.
         // Restaure o depth para DEPTH_WRITE; o G-buffer rastreia o proprio estado.
         if (Modes.RadianceCacheUpdateActive) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Radiance cache (update)");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Radiance cache (update)");
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
-            RadianceCache.RecordUpdate(CommandList, SRVHeap);
+            RadianceCache.RecordUpdate(CommandList, Backend->SRVHeap);
 
             FBarrierBatch Restore;
             Restore.Transition(Targets.DepthBuffer.Get(),
@@ -844,11 +866,11 @@ namespace Smile {
         if (GIComputeFence != 0) {
             // Meça o stall com dois timestamps da fila direta; clocks de filas diferentes nao
             // sao correlacionados. O valor inclui o overhead de segmentacao e nao mede folga.
-            GpuProfiler.Begin(CommandList, "Espera do DDGI (async)");
-            CommandQueue.SubmitSegmentAndContinue();
-            CommandQueue.GpuWait(ComputeQueue.NativeFence(), GIComputeFence);
-            GpuProfiler.End(CommandList); // ja no segmento de DEPOIS do wait
-            ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+            Backend->DirectProfiler.Begin(CommandList, "Espera do DDGI (async)");
+            Backend->DirectQueue.SubmitSegmentAndContinue();
+            Backend->DirectQueue.GpuWait(Backend->ComputeQueue.NativeFence(), GIComputeFence);
+            Backend->DirectProfiler.End(CommandList); // ja no segmento de DEPOIS do wait
+            ID3D12DescriptorHeap* Heaps[] = { Backend->SRVHeap.Native() };
             CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
@@ -858,8 +880,8 @@ namespace Smile {
         // Antes dos dois traces instrumentados: pixel que sai cedo nao escreve, e sem zerar o
         // alvo ele mostraria a medida de um frame antigo — quente onde nao houve trabalho nenhum.
         if (TimerCaptureActive) {
-            TimerGI.Clear(CommandList, SRVHeap);
-            TimerReflections.Clear(CommandList, SRVHeap);
+            TimerGI.Clear(CommandList, Backend->SRVHeap);
+            TimerReflections.Clear(CommandList, Backend->SRVHeap);
         }
 
         // Debug da BVH (GPU Zen 3, 7.3.3). Dispatch proprio, independente do resto do frame: ele
@@ -867,7 +889,7 @@ namespace Smile {
         // depth e nao entra em nenhuma cadeia de dependencia. Sem o toggle, nao custa nada.
         // Nao precisa de clear: todo pixel do dominio escreve (o miss tem cor propria).
         if (BvhDebugEnabled && BvhDebug.IsReady()) {
-            BvhDebug.Render(CommandList, SRVHeap, Vw.InvViewProjFull, Vw.CameraPosition,
+            BvhDebug.Render(CommandList, Backend->SRVHeap, Vw.InvViewProjFull, Vw.CameraPosition,
                             BvhDebugMode, DDGI.MaxRayDistance(), BvhDebugComplexityMax,
                             FrameSlot);
         }
@@ -879,12 +901,12 @@ namespace Smile {
         // Registrado no proprio sitio (e nao reavaliando a condicao la embaixo) porque o que importa
         // p/ o RR e se a geometria de debug FOI desenhada no HDR, nao se ela estava habilitada.
         bool DDGIDebugDrew = false;
-        if (Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {
+        if (Backend->Device.RaytracingSupported() && DDGIDebugPass.GetEnabled() && DDGI.IsReady()) {
             auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            DDGIDebugPass.Render(FrameSlot, CommandList, SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
+            DDGIDebugPass.Render(FrameSlot, CommandList, Backend->SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
                                  TemporalSampleIndex);
             DDGIDebugDrew = true;
         }
@@ -912,14 +934,14 @@ namespace Smile {
 
         RecordPost(Ctx, PostSrc);
 
-        GpuProfiler.End(CommandList);
-        GpuProfiler.Resolve(CommandList);
+        Backend->DirectProfiler.End(CommandList);
+        Backend->DirectProfiler.Resolve(CommandList);
 
         SMILE_HR(CommandList->Close());
         ID3D12CommandList* CommandLists[] = { CommandList };
 
         AsyncGIRanLastFrame = (GIComputeFence != 0);
-        CommandQueue.EndFrame(CommandLists, 1);
+        Backend->DirectQueue.EndFrame(CommandLists, 1);
 
         // Avanca o aquecimento e, no frame de captura, grava PNG + manifesto. ANTES do ++ dos
         // contadores logo abaixo: o manifesto grava o TemporalSampleIndex com que este frame

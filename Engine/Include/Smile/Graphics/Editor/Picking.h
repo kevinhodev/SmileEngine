@@ -3,7 +3,7 @@
 #include <d3d12.h>
 #include <cstddef>
 #include "Smile/Core/Types.h"
-#include "Smile/Graphics/RHI/DescriptorHeap.h"
+#include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 
 namespace Smile {

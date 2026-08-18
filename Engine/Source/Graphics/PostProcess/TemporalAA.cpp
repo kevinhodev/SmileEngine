@@ -1,10 +1,10 @@
 #include "Smile/Graphics/PostProcess/TemporalAA.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
-#include "Smile/Graphics/RHI/Barriers.h"
-#include "Smile/Graphics/RHI/ShaderUtils.h"
-#include "Smile/Graphics/RHI/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include <cstring>
 #include <iterator>
 

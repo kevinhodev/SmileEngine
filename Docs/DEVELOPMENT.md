@@ -79,14 +79,14 @@ a um parágrafo que promete uma invariante sem verificá-la.
 
 - Headers públicos ficam em `Engine/Include/Smile/Graphics/<Domínio>`; implementações ficam no
   domínio espelhado em `Engine/Source/Graphics/<Domínio>`.
-- Um include sempre carrega o domínio: `#include "Smile/Graphics/RHI/D3D12Device.h"`.
+- Um include sempre carrega o domínio: `#include "Smile/Graphics/Backend/D3D12/D3D12Device.h"`.
 - No Visual Studio, a separação `Include`/`Source` é removida dos filtros: `.h` e `.cpp` aparecem
   juntos em `Graphics/<Domínio>`.
 - A implementação de `Renderer` é dividida por responsabilidade: lifecycle em `Renderer.cpp`,
   cena em `RendererScene.cpp`, captura/diagnóstico em `RendererCapture.cpp`, frame em
   `RendererFrame.cpp` e gravação de passes em `RendererPasses.cpp`. O mapa de ownership e fluxo
   está em [`RENDERER.md`](RENDERER.md).
-- Escolha primeiro um dos domínios existentes: `Renderer`, `RHI`, `Resources`, `Scene`, `Lighting`,
+- Escolha primeiro um dos domínios existentes: `Renderer`, `Backend`, `Resources`, `Scene`, `Lighting`,
   `GI`, `RayTracing`, `Environment`, `PostProcess`, `Water`, `Editor` ou `Debug`. Crie outro apenas
   quando houver responsabilidade própria e mais de um componente relacionado.
 

@@ -32,6 +32,7 @@ endfunction()
 
 function(smile_graphics_domain domain)
     set(domain_files "")
+    string(REPLACE "/" "\\" domain_group "${domain}")
 
     foreach(component IN LISTS ARGN)
         set(header "Include/Smile/Graphics/${domain}/${component}.h")
@@ -54,7 +55,7 @@ function(smile_graphics_domain domain)
         endif()
     endforeach()
 
-    smile_engine_group("Graphics\\${domain}" ${domain_files})
+    smile_engine_group("Graphics\\${domain_group}" ${domain_files})
     set(SMILE_ENGINE_FILES ${SMILE_ENGINE_FILES} PARENT_SCOPE)
 endfunction()
 
@@ -102,7 +103,11 @@ smile_graphics_domain(Renderer
     SceneTargets
 )
 
-smile_graphics_domain(RHI
+smile_graphics_domain(Backend
+    RenderBackend
+)
+
+smile_graphics_domain(Backend/D3D12
     Barriers
     CommandQueue
     ComputePipeline

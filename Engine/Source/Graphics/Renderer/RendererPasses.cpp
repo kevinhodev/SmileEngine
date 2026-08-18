@@ -1,9 +1,10 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Water/OceanSpectrum.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -51,7 +52,7 @@ namespace Smile {
         CommandList->RSSetViewports(1, &_Ctx.Viewport);
         CommandList->RSSetScissorRects(1, &_Ctx.Scissor);
 
-        ID3D12DescriptorHeap* DescriptorHeaps[] = { SRVHeap.Native() };
+        ID3D12DescriptorHeap* DescriptorHeaps[] = { Backend->SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
     }
 
@@ -65,12 +66,12 @@ namespace Smile {
         const u32 FrameSlot      = _Ctx.FrameSlot;
 
         if (UseWater && Ocean[0].IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Água — FFT");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Água — FFT");
             for (u32 c = 0; c < kOceanCascades; ++c)
-                Ocean[c].RecordCompute(FrameSlot, CommandList, SRVHeap);
+                Ocean[c].RecordCompute(FrameSlot, CommandList, Backend->SRVHeap);
         }
 
-        GpuProfiler.Begin(CommandList, "Céu e atmosfera");
+        Backend->DirectProfiler.Begin(CommandList, "Céu e atmosfera");
         // Antes do sky-view: se algum parametro fisico mudou (MarkDirty), transmitancia e
         // multiscatter sao re-bakeadas na command list deste frame. No-op no caso comum.
         if (Atmosphere.IsInitialized()) Atmosphere.RecordBakeIfDirty(CommandList);
@@ -79,22 +80,22 @@ namespace Smile {
             Atmosphere.RecordSkyAmbientIntegration(CommandList);
             if (UseWater && Water.IsInitialized())
                 Atmosphere.RecordSkyReflectionBake(CommandList);
-            Atmosphere.RenderSky(CommandList, SRVHeap);
+            Atmosphere.RenderSky(CommandList, Backend->SRVHeap);
             if (Lt.NightFactor > 0.001f && TimeOfDay.StarIntensity > 0.0f)
-                Atmosphere.RenderStars(CommandList, SRVHeap);
+                Atmosphere.RenderStars(CommandList, Backend->SRVHeap);
         } else if (ShowSkybox && HDREnv.HasHDRLoaded()) {
-            Skybox.Render(FrameSlot, CommandList, SRVHeap, HDREnv.EnvCubeSRV(),
+            Skybox.Render(FrameSlot, CommandList, Backend->SRVHeap, HDREnv.EnvCubeSRV(),
                           Vw.InvVPNoTrans, IBLIntensity, IBLRotation);
         }
 
         if (Atmosphere.IsInitialized()) {
             Atmosphere.RecordAerialPerspectiveBake(CommandList);
         }
-        GpuProfiler.End(CommandList); // Céu e atmosfera
+        Backend->DirectProfiler.End(CommandList); // Céu e atmosfera
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Sombra das nuvens");
-            VolumetricClouds.RecordShadowMap(CommandList, SRVHeap);
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombra das nuvens");
+            VolumetricClouds.RecordShadowMap(CommandList, Backend->SRVHeap);
         }
     }
 
@@ -178,8 +179,8 @@ namespace Smile {
         // Extracao dos triangulos emissivos. Sai de graca no caso comum: a geometria emissiva e
         // estatica, entao o Record so faz trabalho no primeiro frame apos carregar a cena.
         if (MeshLights.IsReady()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "MeshLights (extract)");
-            MeshLights.Record(CommandList, SRVHeap);
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "MeshLights (extract)");
+            MeshLights.Record(CommandList, Backend->SRVHeap);
         }
 
         const bool ReGIROn = Settings().ReGIRActive() && HasReGIRConsumer && GILightCount > 0;
@@ -189,9 +190,9 @@ namespace Smile {
         ReGIRRanThisFrame     = ReGIROn;
         GILightCountThisFrame = GILightCount;
         if (ReGIROn) {
-            FGpuScope Scope(GpuProfiler, CommandList, "ReGIR (build)");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "ReGIR (build)");
             ReGIR.UpdatePerFrame(FrameSlot, TemporalSampleIndex, GILightCount, GILightSetSignature);
-            ReGIR.RecordBuild(CommandList, SRVHeap);
+            ReGIR.RecordBuild(CommandList, Backend->SRVHeap);
         }
         const FReGIRShaderParams ReGIRCB = ReGIR.ShaderParams(ReGIROn);
         DDGI.SetReGIRParams(ReGIRCB);
@@ -239,39 +240,39 @@ namespace Smile {
 
         GIComputeFence = 0;
         if (Policy.VolumeLive) {
-            DDGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
+            DDGI.SetPunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, TemporalSampleIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
                 DDGI.TransitionForUpdate(CommandList);
-                const u64 S1 = CommandQueue.SubmitSegmentAndContinue();
+                const u64 S1 = Backend->DirectQueue.SubmitSegmentAndContinue();
 
-                ID3D12GraphicsCommandList* CCL = ComputeQueue.Begin();
-                GpuProfilerCompute.BeginFrame(ComputeQueue.CurrentSlot());
-                ID3D12DescriptorHeap* CHeaps[] = { SRVHeap.Native() };
+                ID3D12GraphicsCommandList* CCL = Backend->ComputeQueue.Begin();
+                Backend->ComputeProfiler.BeginFrame(Backend->ComputeQueue.CurrentSlot());
+                ID3D12DescriptorHeap* CHeaps[] = { Backend->SRVHeap.Native() };
                 CCL->SetDescriptorHeaps(_countof(CHeaps), CHeaps);
                 {
-                    FGpuScope Scope(GpuProfilerCompute, CCL, "DDGI (async)");
-                    DDGI.RecordUpdate(CCL, SRVHeap);
+                    FGpuScope Scope(Backend->ComputeProfiler, CCL, "DDGI (async)");
+                    DDGI.RecordUpdate(CCL, Backend->SRVHeap);
                 }
-                GpuProfilerCompute.Resolve(CCL);
-                GIComputeFence = ComputeQueue.SubmitAfter(CommandQueue.NativeFence(), S1);
+                Backend->ComputeProfiler.Resolve(CCL);
+                GIComputeFence = Backend->ComputeQueue.SubmitAfter(Backend->DirectQueue.NativeFence(), S1);
 
-                ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+                ID3D12DescriptorHeap* Heaps[] = { Backend->SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
             } else {
-                FGpuScope Scope(GpuProfiler, CommandList, "DDGI");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "DDGI");
                 DDGI.TransitionForUpdate(CommandList);
-                DDGI.RecordUpdate(CommandList, SRVHeap);
+                DDGI.RecordUpdate(CommandList, Backend->SRVHeap);
                 DDGI.TransitionForRead(CommandList);
             }
         }
 
         if (Modes.ReflectionsActive) {
-            Reflections.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
+            Reflections.SetPunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
             const f32 ReflSkyIntensity = Lt.RainSkyDim;
             const bool WaterUsesAtmosphere = UseAtmosphereSky && Atmosphere.IsInitialized();
             const f32 WaterEnvironmentIntensity =
@@ -285,7 +286,7 @@ namespace Smile {
         }
 
         if (Modes.ReSTIRGIActive) {
-            ReSTIRGI.SetPunctualLightsSRV(Device.Native(), SRVHeap, GILightSRVSlot[FrameSlot]);
+            ReSTIRGI.SetPunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap, GILightSRVSlot[FrameSlot]);
             // O x1 do reuso temporal vem do historico de superficie do frame ANTERIOR (o reservoir
             // deixou de guardar o ponto visivel). Mesma convencao do ReSTIR DI e das reflexoes:
             // FrameSlot e o corrente, 1 - FrameSlot e o anterior. Sem motion confiavel neste frame
@@ -300,7 +301,7 @@ namespace Smile {
 
         // Cache e ReSTIR GI compartilham a mascara de sombra para produzir a mesma radiancia.
         if (Modes.RadianceCacheUpdateActive) {
-            RadianceCache.SetUpdatePunctualLightsSRV(Device.Native(), SRVHeap,
+            RadianceCache.SetUpdatePunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap,
                                                      GILightSRVSlot[FrameSlot], FrameSlot);
             RadianceCache.UpdatePassPerFrame(
                 FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
@@ -335,8 +336,8 @@ namespace Smile {
             Batch.Flush(CommandList);
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "TAA");
-                TemporalAA.Execute(CommandList, SRVHeap, FrameSlot, Vw.InvViewProjUnjit, PrevViewProj,
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "TAA");
+                TemporalAA.Execute(CommandList, Backend->SRVHeap, FrameSlot, Vw.InvViewProjUnjit, PrevViewProj,
                                    TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
                                    TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, Vw.CameraPosition,
                                    Vw.NearZ, Vw.FarZ, TAADebugMode);
@@ -375,10 +376,10 @@ namespace Smile {
                 // Guides de material do RR (albedo difuso/especular, normal-roughness) do G-buffer
                 // [A,B,C,Depth] (mesma tabela contigua do deferred) + FrameCB. O specHitDist ja foi
                 // extraido no bloco da reflexao (ou fica zerado sem reflexoes). Deixa tudo em NON_PIXEL.
-                FGpuScope Scope(GpuProfiler, CommandList, "DLSS-RR guides");
-                RRGuides.RecordGuides(CommandList, SRVHeap, SRVHeap.GpuHandle(GBuffer.SRVTableStart()),
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "DLSS-RR guides");
+                RRGuides.RecordGuides(CommandList, Backend->SRVHeap, Backend->SRVHeap.GpuHandle(GBuffer.SRVTableStart()),
                                       _Ctx.FrameCB);
-                if (!Modes.ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, SRVHeap);
+                if (!Modes.ReflectionsActive) RRGuides.ClearSpecHitDist(CommandList, Backend->SRVHeap);
                 RRGuides.TransitionForRR(CommandList);
             }
 
@@ -421,7 +422,7 @@ namespace Smile {
             }
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList,
+                FGpuScope Scope(Backend->DirectProfiler, CommandList,
                                 IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
                 ActiveUp->Dispatch(CommandList, UpParams);
             }
@@ -432,7 +433,7 @@ namespace Smile {
             // Streamline com state tracking manual pode trocar heaps. Passes seguintes definem
             // root signature e PSO proprios, mas dependem deste rebind dos descriptor heaps.
             {
-                ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+                ID3D12DescriptorHeap* Heaps[] = { Backend->SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
             }
 
@@ -477,7 +478,7 @@ namespace Smile {
         const FSelectionDraw& Sel = _Ctx.Selection;
 
         if (FlickerMode > 0 && Flicker.IsInitialized()) {
-            Flicker.Execute(CommandList, SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),
+            Flicker.Execute(CommandList, Backend->SRVHeap, PostInputSRV, static_cast<f32>(FlickerMode),
                             FlickerScale, FlickerAlpha, FlickerResetPending,
                             RenderWidth(), RenderHeight());
             FlickerResetPending = false;
@@ -486,22 +487,22 @@ namespace Smile {
         }
 
         FBarrierBatch BackBatch;
-        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT,
+        BackBatch.Transition(Backend->SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT,
                              D3D12_RESOURCE_STATE_RENDER_TARGET);
         BackBatch.Flush(CommandList);
 
         {
-            FGpuScope Scope(GpuProfiler, CommandList, "Pós (bloom+tonemap)");
-            PostProcessor.Execute(CommandList, SRVHeap, PostInput, SwapChain.CurrentRTV(),
-                                  PostInputSRV, FrameSlot, SwapChain.GetWidth(), SwapChain.GetHeight());
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Pós (bloom+tonemap)");
+            PostProcessor.Execute(CommandList, Backend->SRVHeap, PostInput, Backend->SwapChain.CurrentRTV(),
+                                  PostInputSRV, FrameSlot, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
         }
 
         // Captura: DEPOIS do tonemap e ANTES dos overlays. O contorno de selecao e os gizmos que
         // vem abaixo sao a ferramenta, nao a imagem — um PNG de regressao com a seta do gizmo
         // atravessada muda pixels que nao tem nada a ver com o estimador.
         if (Capture.ShouldShoot()) {
-            Capture.RecordCopy(Device.Native(), CommandList, SwapChain.CurrentBackBuffer(),
-                               SwapChain.GetWidth(), SwapChain.GetHeight());
+            Capture.RecordCopy(Backend->Device.Native(), CommandList, Backend->SwapChain.CurrentBackBuffer(),
+                               Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
             // Aqui tambem estamos depois do RecordResolve do cache, entao esta copia pega a
             // ocupacao que a varredura DESTE frame escreveu — a do anel, feita antes do dispatch,
             // ainda e do frame anterior.
@@ -510,16 +511,16 @@ namespace Smile {
 
         if (Sel.Renderable >= 0 && Sel.Slot != FSelectionDraw::kNoSlot && Sel.Mesh
             && SelectionOutline.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Contorno da seleção");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Contorno da seleção");
             FSelectionOutline::FDrawItem Item{ Sel.Mesh, Sel.Model * Vw.ViewProjUnjittered };
             SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
-            auto BackRTV = SwapChain.CurrentRTV();
-            SelectionOutline.RecordOutline(CommandList, SRVHeap, BackRTV,
-                                           SwapChain.GetWidth(), SwapChain.GetHeight(), FrameSlot);
+            auto BackRTV = Backend->SwapChain.CurrentRTV();
+            SelectionOutline.RecordOutline(CommandList, Backend->SRVHeap, BackRTV,
+                                           Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight(), FrameSlot);
         }
 
         if (DebugDraw.IsInitialized() && !DebugDraw.Empty()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Debug draw (gizmo/ícones)");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Debug draw (gizmo/ícones)");
             const bool WantDepth = DebugDraw.NeedsSceneDepth() && Targets.DepthSRVSlot != kInvalidSlot;
             FBarrierBatch Batch;
             if (WantDepth) {
@@ -530,9 +531,9 @@ namespace Smile {
             // Eixos da camera em mundo (colunas da view row-vector) p/ os billboards de icone.
             const Vec3 CamRight{ Vw.View.M[0][0], Vw.View.M[1][0], Vw.View.M[2][0] };
             const Vec3 CamUp   { Vw.View.M[0][1], Vw.View.M[1][1], Vw.View.M[2][1] };
-            DebugDraw.Render(CommandList, FrameSlot, Vw.ViewProjUnjittered, SwapChain.CurrentRTV(),
-                             SwapChain.GetWidth(), SwapChain.GetHeight(), CamRight, CamUp,
-                             WantDepth ? SRVHeap.GpuHandle(Targets.DepthSRVSlot)
+            DebugDraw.Render(CommandList, FrameSlot, Vw.ViewProjUnjittered, Backend->SwapChain.CurrentRTV(),
+                             Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight(), CamRight, CamUp,
+                             WantDepth ? Backend->SRVHeap.GpuHandle(Targets.DepthSRVSlot)
                                        : D3D12_GPU_DESCRIPTOR_HANDLE{});
             if (WantDepth) {
                 Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -542,7 +543,7 @@ namespace Smile {
         }
         // (o Clear e da FDebugDrawClearGuard no topo do metodo)
 
-        BackBatch.Transition(SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+        BackBatch.Transition(Backend->SwapChain.CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                              D3D12_RESOURCE_STATE_PRESENT);
         BackBatch.Flush(CommandList);
     }
@@ -567,10 +568,10 @@ namespace Smile {
 
             const bool VolFogOn = UseVolumetricFog && UseHeightFog && VolumetricFog.IsInitialized();
             if (VolFogOn) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Volumetric fog");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Volumetric fog");
                 SunShadows.EnsureReadableCompute(CommandList);
                 LocalShadows.EnsureReadableCompute(CommandList);
-                VolumetricFog.Execute(CommandList, SRVHeap, SunShadows.ConstantsAddress(),
+                VolumetricFog.Execute(CommandList, Backend->SRVHeap, SunShadows.ConstantsAddress(),
                                       SunShadows.ShadowSRVSlot(),
                                       Policy.DDGIVolumetric ? DDGI.IrradianceAtlasSRV()
                                                             : Targets.DepthSRVSlot,
@@ -584,9 +585,9 @@ namespace Smile {
 
             const bool VolShaftsOn = UseSunShafts && SunShafts.IsInitialized() && UseHeightFog;
             if (VolShaftsOn) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Sun shafts");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sun shafts");
                 SunShadows.EnsureReadable(CommandList);
-                SunShafts.RecordVolumetric(CommandList, SRVHeap, Targets.DepthSRVSlot,
+                SunShafts.RecordVolumetric(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
                                            SunShadows.ConstantsAddress(),
                                            SunShadows.ShadowSRVSlot(),
                                            VolumetricClouds.IsInitialized()
@@ -596,15 +597,15 @@ namespace Smile {
                 CommandList->RSSetScissorRects(1, &ScissorRect);
             }
 
-            GpuProfiler.Begin(CommandList, "Fog");
+            Backend->DirectProfiler.Begin(CommandList, "Fog");
             auto Fog_RTV = Targets.HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &Fog_RTV, FALSE, nullptr);
-            Fog.Execute(CommandList, SRVHeap, Targets.DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
+            Fog.Execute(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot, Atmosphere.AerialVolumeSRV(),
                         SunShafts.IsInitialized() ? SunShafts.VolumetricSRVSlot()
                                                   : Targets.DepthSRVSlot,
                         VolFogOn ? VolumetricFog.IntegratedSRVSlot() : Targets.DepthSRVSlot,
                         Atmosphere.IsInitialized() ? Atmosphere.SkyViewSRV() : Targets.DepthSRVSlot);
-            GpuProfiler.End(CommandList); // Fog
+            Backend->DirectProfiler.End(CommandList); // Fog
 
             Batch.Transition(Targets.DepthBuffer.Get(), FogDepthRead,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -618,16 +619,16 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
 
-            GpuProfiler.Begin(CommandList, "Chuva — cortina/gotas");
+            Backend->DirectProfiler.Begin(CommandList, "Chuva — cortina/gotas");
             auto RainRTV = Targets.HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &RainRTV, FALSE, nullptr);
             if (Weather.GetCurtainAmount() > 0.001f)
-                RainWetness.ExecuteCurtain(CommandList, SRVHeap, Targets.DepthSRVSlot,
+                RainWetness.ExecuteCurtain(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
                                            RenderWidth(), RenderHeight());
             if (Weather.GetRainParticles())
-                RainWetness.ExecuteParticles(CommandList, SRVHeap, Targets.DepthSRVSlot,
+                RainWetness.ExecuteParticles(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
                                              RenderWidth(), RenderHeight());
-            GpuProfiler.End(CommandList); // Chuva — cortina/gotas
+            Backend->DirectProfiler.End(CommandList); // Chuva — cortina/gotas
 
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -662,35 +663,35 @@ namespace Smile {
             Batch.Flush(CommandList);
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR GI");
-                ReSTIRGI.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "ReSTIR GI");
+                ReSTIRGI.RecordTrace(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
             }
 
             if (Modes.NrdIndirectMode) {
                 if (Modes.ReflectionsActive) {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (trace)");
-                    Reflections.RecordTrace(CommandList, SRVHeap, &GpuProfiler);
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "Reflexos (trace)");
+                    Reflections.RecordTrace(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
                 }
-                GpuProfiler.Begin(CommandList, "NRD denoise");
+                Backend->DirectProfiler.Begin(CommandList, "NRD denoise");
                 {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Pack GI + reflexos");
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "Pack GI + reflexos");
                     Nrd.TransitionInputsToWrite(CommandList);
-                    ReSTIRGI.RecordNrdPack(CommandList, SRVHeap);
-                    if (Modes.ReflectionsActive) Reflections.RecordNrdPack(CommandList, SRVHeap);
-                    else                   Reflections.RecordNrdSpecZero(CommandList, SRVHeap);
+                    ReSTIRGI.RecordNrdPack(CommandList, Backend->SRVHeap);
+                    if (Modes.ReflectionsActive) Reflections.RecordNrdPack(CommandList, Backend->SRVHeap);
+                    else                   Reflections.RecordNrdSpecZero(CommandList, Backend->SRVHeap);
                 }
                 {
-                    FGpuScope Scope(GpuProfiler, CommandList, "RELAX indireto");
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "RELAX indireto");
                     Nrd.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
                                  Vw.JitterPx, PrevJitterPx, TemporalSampleIndex);
                     Nrd.Denoise(CommandList);
                 }
                 {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Saida NRD indireta");
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "Saida NRD indireta");
                     Nrd.TransitionOutputToRead(CommandList);
                 }
-                GpuProfiler.End(CommandList); // NRD denoise
-                ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                Backend->DirectProfiler.End(CommandList); // NRD denoise
+                ID3D12DescriptorHeap* ReHeaps[] = { Backend->SRVHeap.Native() };
                 CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
             }
 
@@ -729,7 +730,7 @@ namespace Smile {
             // manda no dispatch e no gate do shader: divergir dobra ou apaga a luz.
             if (ReSTIRDIOn) {
                 {
-                    FGpuScope Scope(GpuProfiler, CommandList, "ReSTIR DI");
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "ReSTIR DI");
                     ReSTIRDI.SetRayEpsilons(RayEps);
                     ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View, PrevViewProj,
                                             Vw.CameraPosition,
@@ -739,29 +740,29 @@ namespace Smile {
                                             TemporalMotion.InstanceCount(),
                                             Modes.MotionHistoryValidThisFrame,
                                             MeshLights.LightCount());
-                    ReSTIRDI.Record(CommandList, SRVHeap, &GpuProfiler);
+                    ReSTIRDI.Record(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
                 }
 
                 if (Modes.NrdDirectMode) {
-                    FGpuScope Scope(GpuProfiler, CommandList, "NRD direta");
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "NRD direta");
                     {
-                        FGpuScope ChildScope(GpuProfiler, CommandList, "Pack direto");
+                        FGpuScope ChildScope(Backend->DirectProfiler, CommandList, "Pack direto");
                         NrdDirect.TransitionInputsToWrite(CommandList);
-                        ReSTIRDI.RecordNrdPack(CommandList, SRVHeap);
+                        ReSTIRDI.RecordNrdPack(CommandList, Backend->SRVHeap);
                     }
                     {
-                        FGpuScope ChildScope(GpuProfiler, CommandList, "RELAX direto");
+                        FGpuScope ChildScope(Backend->DirectProfiler, CommandList, "RELAX direto");
                         NrdDirect.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
                                            Vw.JitterPx, PrevJitterPx, TemporalSampleIndex);
                         NrdDirect.Denoise(CommandList);
                     }
                     {
-                        FGpuScope ChildScope(GpuProfiler, CommandList, "Composite direto");
+                        FGpuScope ChildScope(Backend->DirectProfiler, CommandList, "Composite direto");
                         NrdDirect.TransitionOutputToRead(CommandList);
                         // O NRD liga seu heap privado; o composite pertence ao heap da engine.
-                        ID3D12DescriptorHeap* ReHeaps[] = { SRVHeap.Native() };
+                        ID3D12DescriptorHeap* ReHeaps[] = { Backend->SRVHeap.Native() };
                         CommandList->SetDescriptorHeaps(_countof(ReHeaps), ReHeaps);
-                        ReSTIRDI.RecordNrdComposite(CommandList, SRVHeap);
+                        ReSTIRDI.RecordNrdComposite(CommandList, Backend->SRVHeap);
                     }
                 }
 
@@ -779,22 +780,22 @@ namespace Smile {
             CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
-            CommandList->SetGraphicsRootDescriptorTable(2, SRVHeap.GpuHandle(GBuffer.SRVTableStart()));
-            CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+            CommandList->SetGraphicsRootDescriptorTable(2, Backend->SRVHeap.GpuHandle(GBuffer.SRVTableStart()));
+            CommandList->SetGraphicsRootDescriptorTable(3, Backend->SRVHeap.GpuHandle(IBLTableStart));
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            CommandList->SetGraphicsRootDescriptorTable(6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
             {
                 const u32 GITable = Policy.DDGISurface ? DDGI.SceneGITableStart()
                                                        : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+                CommandList->SetGraphicsRootDescriptorTable(7, Backend->SRVHeap.GpuHandle(GITable));
             }
             {
                 const u32 AOTable = AO.IsReady() ? AO.AOSRVSlot() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(8, SRVHeap.GpuHandle(AOTable));
+                CommandList->SetGraphicsRootDescriptorTable(8, Backend->SRVHeap.GpuHandle(AOTable));
             }
             {
                 const u32 ReSTIRTable = Modes.ReSTIRGIActive ? ReSTIRGI.GITexSRVSlot() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(9, SRVHeap.GpuHandle(ReSTIRTable));
+                CommandList->SetGraphicsRootDescriptorTable(9, Backend->SRVHeap.GpuHandle(ReSTIRTable));
             }
             {
                 // t20. Fallback no IBLTableStart quando inativo — descritor VALIDO, exatamente como
@@ -802,14 +803,14 @@ namespace Smile {
                 // shader nao a leia (LightParams.w = 0 fecha a leitura).
                 const u32 DirectLocalTable = ReSTIRDIOn ? ReSTIRDI.OutputSRVSlot()
                                                         : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(12, SRVHeap.GpuHandle(DirectLocalTable));
+                CommandList->SetGraphicsRootDescriptorTable(12, Backend->SRVHeap.GpuHandle(DirectLocalTable));
             }
             {
                 // t21. Mesmo padrao: descritor VALIDO sempre; AtmoLightParams.w fecha a leitura
                 // quando a atmosfera esta off ou o caminho por pixel esta desligado.
                 const u32 AtmoTable = Atmosphere.IsInitialized()
                     ? Atmosphere.TransmittanceSRV() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
+                CommandList->SetGraphicsRootDescriptorTable(13, Backend->SRVHeap.GpuHandle(AtmoTable));
             }
             CommandList->SetGraphicsRootShaderResourceView(
                 10, LightBuffer->GetGPUVirtualAddress() +
@@ -817,9 +818,9 @@ namespace Smile {
             {
                 const u32 LocalShadowTable = LocalShadows.IsInitialized()
                     ? LocalShadows.ShadowSRVSlot() : IBLTableStart;
-                CommandList->SetGraphicsRootDescriptorTable(11, SRVHeap.GpuHandle(LocalShadowTable));
+                CommandList->SetGraphicsRootDescriptorTable(11, Backend->SRVHeap.GpuHandle(LocalShadowTable));
             }
-            GpuProfiler.Begin(CommandList, "Deferred lighting");
+            Backend->DirectProfiler.Begin(CommandList, "Deferred lighting");
             // Aditivo (soma sobre o emissivo do geometry pass); nas views de debug SSAO/GI o
             // shader retorna a visualizacao inteira -> PSO opaco p/ substituir a tela.
             const bool DeferredDebugView = AODebug || (Policy.DDGISurface && GIDebug);
@@ -830,14 +831,14 @@ namespace Smile {
             CommandList->IASetVertexBuffers(0, 0, nullptr);
             CommandList->IASetIndexBuffer(nullptr);
             CommandList->DrawInstanced(3, 1, 0, 0);
-            GpuProfiler.End(CommandList);
+            Backend->DirectProfiler.End(CommandList);
 
             const u32 PointGIFlags =
                 (GIChebyshev ? 1u : 0u) |
                 (GISkipInactiveProbes ? 2u : 0u) |
                 (GISkipInactiveFallback ? 4u : 0u);
             DDGIDebugPass.RecordPointDiagnostic(
-                FrameSlot, CommandList, SRVHeap, DDGI,
+                FrameSlot, CommandList, Backend->SRVHeap, DDGI,
                 Vw.InvViewProjFull, Vw.CameraPosition,
                 RenderWidth(), RenderHeight(), PointGIFlags);
 
@@ -866,7 +867,7 @@ namespace Smile {
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
                 CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+                CommandList->SetGraphicsRootDescriptorTable(6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
             }
         }
 
@@ -874,7 +875,7 @@ namespace Smile {
         // Depois do resolve mostraria o estado ja envelhecido/despejado, que nao e o que as
         // consultas do frame enxergaram.
         if (Modes.RadianceCacheDebugActive) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Radiance cache (debug)");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Radiance cache (debug)");
 
             // O deferred devolve depth para DEPTH_WRITE e a normal pode estar em RENDER_TARGET
             // quando GTAO esta off. O compute precisa dos dois em NON_PIXEL; restaure exatamente
@@ -887,7 +888,7 @@ namespace Smile {
                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Inputs.Flush(CommandList);
 
-            RadianceCache.RecordDebug(CommandList, SRVHeap, Vw.InvViewProjFull,
+            RadianceCache.RecordDebug(CommandList, Backend->SRVHeap, Vw.InvViewProjFull,
                                       Vw.CameraPosition, FrameSlot);
 
             FBarrierBatch Restore;
@@ -903,8 +904,8 @@ namespace Smile {
         // a acumulacao vira o valor que o proximo frame vai consultar. Rodar antes leria um
         // acumulador vazio e, pior, zeraria o que os traces acabaram de escrever.
         if (RadianceCache.IsActive(Modes)) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Radiance cache (resolve)");
-            RadianceCache.RecordResolve(CommandList, SRVHeap);
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Radiance cache (resolve)");
+            RadianceCache.RecordResolve(CommandList, Backend->SRVHeap);
         }
     }
 
@@ -933,15 +934,15 @@ namespace Smile {
             Batch.Flush(CommandList);
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "Reflexos (composite)");
-                if (!Modes.NrdIndirectMode) Reflections.RecordTrace(CommandList, SRVHeap);
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Reflexos (composite)");
+                if (!Modes.NrdIndirectMode) Reflections.RecordTrace(CommandList, Backend->SRVHeap);
                 // RR: extrai o hitDist especular do Resolved ENQUANTO ele esta NON_PIXEL (o composite
                 // cru abaixo o transiciona p/ PIXEL). O RecordTrace acima parou no Resolved (RawSpec).
                 if (Modes.RRMode)
-                    RRGuides.RecordSpecHitDist(CommandList, SRVHeap,
-                                               SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()),
+                    RRGuides.RecordSpecHitDist(CommandList, Backend->SRVHeap,
+                                               Backend->SRVHeap.GpuHandle(Reflections.GetResolvedSRVSlot()),
                                                Ctx.FrameCB);
-                Reflections.RecordComposite(CommandList, SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
+                Reflections.RecordComposite(CommandList, Backend->SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
                                             RenderWidth(), RenderHeight());
             }
 
@@ -957,7 +958,7 @@ namespace Smile {
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            CommandList->SetGraphicsRootDescriptorTable(6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
         if (UseWater && Water.IsInitialized() && Modes.WaterSceneCopiesReady) {
@@ -1009,9 +1010,9 @@ namespace Smile {
                     Batch.Flush(CommandList);
 
                     CommandList->SetComputeRootDescriptorTable(
-                        1, SRVHeap.GpuHandle(Targets.SceneColorMipSRVStart + Mip - 1));
+                        1, Backend->SRVHeap.GpuHandle(Targets.SceneColorMipSRVStart + Mip - 1));
                     CommandList->SetComputeRootDescriptorTable(
-                        2, SRVHeap.GpuHandle(Targets.SceneColorMipUAVStart + Mip));
+                        2, Backend->SRVHeap.GpuHandle(Targets.SceneColorMipUAVStart + Mip));
                     const u32 MipWidth  = std::max(1u, RenderWidth() >> Mip);
                     const u32 MipHeight = std::max(1u, RenderHeight() >> Mip);
                     CommandList->Dispatch((MipWidth + 7u) / 8u, (MipHeight + 7u) / 8u, 1);
@@ -1035,7 +1036,7 @@ namespace Smile {
         }
 
         if (UseWater && Water.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Água — superfície");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Água — superfície");
 
             FBarrierBatch WaterBatch;
             WaterBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
@@ -1092,7 +1093,7 @@ namespace Smile {
                 Ocean[2].PreviousSRVSlot() };
             const u32 OceanNormalSlots[kOceanCascades] = {
                 Ocean[0].NormalSRVSlot(), Ocean[1].NormalSRVSlot(), Ocean[2].NormalSRVSlot() };
-            Water.RenderSurface(CommandList, SRVHeap, WaterReflCube, OceanDispSlots,
+            Water.RenderSurface(CommandList, Backend->SRVHeap, WaterReflCube, OceanDispSlots,
                                 OceanPreviousDispSlots, OceanNormalSlots, Targets.SceneCopyTableStart,
                                 SunShadows.ConstantsAddress(),
                                 SunShadows.ShadowSRVSlot(), WaterOutputMode);
@@ -1105,14 +1106,14 @@ namespace Smile {
                 GBuffer.AppendTransitions(WaterBatch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 WaterBatch.Flush(CommandList);
 
-                Reflections.RecordWaterTrace(CommandList, SRVHeap, &GpuProfiler);
+                Reflections.RecordWaterTrace(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
                 if (Modes.RRMode) {
                     RRGuides.RecordWaterSpecHitDist(
-                        CommandList, SRVHeap,
-                        SRVHeap.GpuHandle(Reflections.GetWaterSpecHitTable()),
+                        CommandList, Backend->SRVHeap,
+                        Backend->SRVHeap.GpuHandle(Reflections.GetWaterSpecHitTable()),
                         Ctx.FrameCB);
                 }
-                Reflections.RecordWaterComposite(CommandList, SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
+                Reflections.RecordWaterComposite(CommandList, Backend->SRVHeap, Targets.HDRRTVHeap.CpuHandle(0),
                                                  RenderWidth(), RenderHeight());
 
                 WaterBatch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -1137,7 +1138,7 @@ namespace Smile {
             for (const FVisibleItem& V : VisibleScratch)
                 if (V.Mat->Blend) { AnyBlend = true; break; }
             if (AnyBlend) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Translúcidos");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Translúcidos");
                 D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[3] = {
                     Targets.HDRRTVHeap.CpuHandle(0), Targets.UpscaleMaskRTVHeap.CpuHandle(0),
                     Targets.UpscaleMaskRTVHeap.CpuHandle(1) };
@@ -1147,21 +1148,21 @@ namespace Smile {
                 CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
-                CommandList->SetGraphicsRootDescriptorTable(3, SRVHeap.GpuHandle(IBLTableStart));
+                CommandList->SetGraphicsRootDescriptorTable(3, Backend->SRVHeap.GpuHandle(IBLTableStart));
                 CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
                 CommandList->SetGraphicsRootDescriptorTable(
-                    6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+                    6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
                 {
                     // Translucidos: ambiente difuso do ForwardBlend, que nao recebe a textura do
                     // ReSTIR GI — por isso superficie, e nao volumetrico.
                     const u32 GITable = Policy.DDGISurface
                         ? DDGI.SceneGITableStart() : IBLTableStart;
-                    CommandList->SetGraphicsRootDescriptorTable(7, SRVHeap.GpuHandle(GITable));
+                    CommandList->SetGraphicsRootDescriptorTable(7, Backend->SRVHeap.GpuHandle(GITable));
                 }
                 {
                     const u32 AtmoTable = Atmosphere.IsInitialized()
                         ? Atmosphere.TransmittanceSRV() : IBLTableStart;
-                    CommandList->SetGraphicsRootDescriptorTable(13, SRVHeap.GpuHandle(AtmoTable));
+                    CommandList->SetGraphicsRootDescriptorTable(13, Backend->SRVHeap.GpuHandle(AtmoTable));
                 }
                 CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1170,14 +1171,14 @@ namespace Smile {
                     if (!It->Mat->Blend) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
-                    Submit.BindMaterial(CommandList, SRVHeap, It->Mat);
+                    Submit.BindMaterial(CommandList, Backend->SRVHeap, It->Mat);
                     Submit.DrawMesh(CommandList, It->R->Mesh);
                 }
             }
         }
 
         if (UseClouds && VolumetricClouds.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Nuvens");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Nuvens");
 
             const D3D12_RESOURCE_STATES CloudReadState =
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
@@ -1186,11 +1187,11 @@ namespace Smile {
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, CloudReadState);
             Batch.Flush(CommandList);
 
-            VolumetricClouds.RecordRaymarch(CommandList, SRVHeap, Targets.DepthSRVSlot);
+            VolumetricClouds.RecordRaymarch(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot);
 
             auto CloudRTV = Targets.HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &CloudRTV, FALSE, nullptr); // sem DSV: depth e SRV
-            VolumetricClouds.Composite(CommandList, SRVHeap, Targets.DepthSRVSlot);
+            VolumetricClouds.Composite(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot);
 
             Batch.Transition(Targets.DepthBuffer.Get(), CloudReadState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
             Batch.Flush(CommandList);
@@ -1244,16 +1245,16 @@ namespace Smile {
                               return a.Mesh < b.Mesh;
                           });
                 {
-                    FGpuScope Scope(GpuProfiler, CommandList, "Sombras — sol (CSM)");
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombras — sol (CSM)");
                     FSunShadows::FExtraCascadeDraw TerrainCasters;
                     if (UseTerrain && Terrain.IsLoaded())
                         TerrainCasters = [this](ID3D12GraphicsCommandList* Cmd, u32,
                                                 D3D12_GPU_VIRTUAL_ADDRESS CascadeCB,
                                                 const Mat44& CascadeVP) {
-                            Terrain.RenderShadowCascade(Cmd, SRVHeap, CascadeCB, CascadeVP);
+                            Terrain.RenderShadowCascade(Cmd, Backend->SRVHeap, CascadeCB, CascadeVP);
                         };
-                    SunShadows.RecordDepthPass(CommandList, SRVHeap, Casters.data(), Casters.size(),
-                                               TerrainCasters, &GpuProfiler);
+                    SunShadows.RecordDepthPass(CommandList, Backend->SRVHeap, Casters.data(), Casters.size(),
+                                               TerrainCasters, &Backend->DirectProfiler);
                 }
 
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
@@ -1268,7 +1269,7 @@ namespace Smile {
             }
 
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            CommandList->SetGraphicsRootDescriptorTable(6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         }
 
         if (!LocalShadowJobs.empty() || !LocalCubeJobs.empty()) {
@@ -1292,7 +1293,7 @@ namespace Smile {
                           return a.Mesh < b.Mesh;
                       });
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "Sombras — locais");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombras — locais");
                 // Terreno tambem projeta nas luzes locais. Sem isto o terreno era iluminado
                 // por point/spot (escreve G-buffer) mas nao aparecia nos shadow maps delas:
                 // poste atravessava a colina, e a volumetrica — que le os MESMOS t18/t19 —
@@ -1306,10 +1307,10 @@ namespace Smile {
                         // Perspectiva com depth clip (o near corta de verdade, ao contrario da
                         // cascata ortho do sol) + a esfera da luz, o mesmo filtro que os meshes
                         // recebem na broad phase.
-                        Terrain.RenderShadowCascade(Cmd, SRVHeap, SliceCB, SliceVP, true,
+                        Terrain.RenderShadowCascade(Cmd, Backend->SRVHeap, SliceCB, SliceVP, true,
                                                     LightPos, Radius);
                     };
-                LocalShadows.RecordDepthPass(CommandList, SRVHeap, FrameSlot,
+                LocalShadows.RecordDepthPass(CommandList, Backend->SRVHeap, FrameSlot,
                                              LocalCasters.data(), LocalCasters.size(),
                                              LocalShadowJobs.data(),
                                              static_cast<u32>(LocalShadowJobs.size()),
@@ -1326,7 +1327,7 @@ namespace Smile {
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-            CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+            CommandList->SetGraphicsRootDescriptorTable(6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
         } else if (LocalShadows.IsInitialized()) {
             LocalShadows.EnsureReadable(CommandList);
         }
@@ -1346,7 +1347,7 @@ namespace Smile {
 
         const bool DoPrepass = true;
         if (DoPrepass) {
-            GpuProfiler.Begin(CommandList, "Z-prepass");
+            Backend->DirectProfiler.Begin(CommandList, "Z-prepass");
             if (Modes.GeometricNormalWillRun) {
                 FBarrierBatch Batch;
                 Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
@@ -1362,7 +1363,7 @@ namespace Smile {
             }
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "Z - opacos");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - opacos");
                 FDrawSubmitCache Submit;
                 for (const FVisibleItem& V : VisibleScratch) {
                     if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
@@ -1376,23 +1377,23 @@ namespace Smile {
                                               ? PipelineState.PSODepthNormalMasked()
                                               : PipelineState.PSODepthOnlyMasked());
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "Z - mascarados");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - mascarados");
                 FDrawSubmitCache Submit;
                 for (const FVisibleItem& V : VisibleScratch) {
                     if (V.Mat->Blend) continue;
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    Submit.BindMaterial(CommandList, SRVHeap, V.Mat);
+                    Submit.BindMaterial(CommandList, Backend->SRVHeap, V.Mat);
                     Submit.DrawMesh(CommandList, V.R->Mesh);
                 }
             }
 
             if (UseTerrain && Terrain.IsLoaded()) {
-                FGpuScope Scope(GpuProfiler, CommandList, "Z - terreno");
-                Terrain.RenderDepthPrepass(CommandList, SRVHeap, Modes.GeometricNormalWillRun);
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - terreno");
+                Terrain.RenderDepthPrepass(CommandList, Backend->SRVHeap, Modes.GeometricNormalWillRun);
             }
-            GpuProfiler.End(CommandList); // Z-prepass
+            Backend->DirectProfiler.End(CommandList); // Z-prepass
         }
 
         // HZB do depth do prepass (min-reduce reverse-Z) + teste dos AABBs com a VP
@@ -1404,9 +1405,9 @@ namespace Smile {
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "HZB");
-                HiZ.RecordBuild(CommandList, SRVHeap, Targets.DepthSRVSlot);
-                HiZ.RecordTest(CommandList, SRVHeap, FrameSlot,
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "HZB");
+                HiZ.RecordBuild(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot);
+                HiZ.RecordTest(CommandList, Backend->SRVHeap, FrameSlot,
                                static_cast<u32>(Scene.Renderables().size()),
                                Vw.ViewProjUnjittered);
             }
@@ -1435,8 +1436,8 @@ namespace Smile {
                                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 Batch.Flush(CommandList);
                 {
-                    FGpuScope Scope(GpuProfiler, CommandList, "GTAO");
-                    AO.Execute(CommandList, SRVHeap);
+                    FGpuScope Scope(Backend->DirectProfiler, CommandList, "GTAO");
+                    AO.Execute(CommandList, Backend->SRVHeap);
                 }
 
                 Batch.Transition(Targets.DepthBuffer.Get(),
@@ -1450,9 +1451,9 @@ namespace Smile {
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
                 CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
-                CommandList->SetGraphicsRootDescriptorTable(6, SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
+                CommandList->SetGraphicsRootDescriptorTable(6, Backend->SRVHeap.GpuHandle(SunShadows.ShadowSRVSlot()));
             } else {
-                AO.ClearToWhite(CommandList, SRVHeap);
+                AO.ClearToWhite(CommandList, Backend->SRVHeap);
             }
         }
     }
@@ -1475,7 +1476,7 @@ namespace Smile {
         const auto ObjectCBBase        = _Ctx.ObjectCBBase;
 
         {
-            GpuProfiler.Begin(CommandList, "G-buffer (geometria)");
+            Backend->DirectProfiler.Begin(CommandList, "G-buffer (geometria)");
             FBarrierBatch Batch;
             GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
@@ -1498,7 +1499,7 @@ namespace Smile {
                 0, Ctx.FrameCB);
 
             {
-                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - meshes");
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "G-buffer - meshes");
                 // Front-to-back serve o Z-prepass (Hi-Z). Depois do EQUAL, ordem de
                 // profundidade nao reduz overdraw — so espalha PSO/material/IA. Agrupar
                 // como o CSM ja faz: PSO (two-sided) -> material -> mesh.
@@ -1527,26 +1528,26 @@ namespace Smile {
                     if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V->Slot) * sizeof(ObjectConstants));
-                    Submit.BindMaterial(CommandList, SRVHeap, Mat);
+                    Submit.BindMaterial(CommandList, Backend->SRVHeap, Mat);
                     Submit.DrawMesh(CommandList, V->R->Mesh);
                 }
             }
 
             if (UseTerrain && Terrain.IsLoaded()) {
-                FGpuScope Scope(GpuProfiler, CommandList, "G-buffer - terreno");
-                Terrain.RenderGBuffer(CommandList, SRVHeap);
+                FGpuScope Scope(Backend->DirectProfiler, CommandList, "G-buffer - terreno");
+                Terrain.RenderGBuffer(CommandList, Backend->SRVHeap);
             }
             Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
-            GpuProfiler.End(CommandList); // G-buffer (geometria)
+            Backend->DirectProfiler.End(CommandList); // G-buffer (geometria)
         }
 
         // Motion vector do BACKGROUND: o G-buffer so escreveu velocity p/ geometria+terreno; ceu/nuvens/fog
         // ficaram ZERO (clear acima). Preenche o velocity do ceu (reproj rotacao-only, sem parallax) p/ o
         // DLSS/RR/TAA nao arrastar o historico do ceu ao girar a camera. So roda com consumidor temporal.
         if ((Modes.UpscaleActive || Modes.TAAActive) && BgVelocity.IsReady()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Velocity do background");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Velocity do background");
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1554,8 +1555,8 @@ namespace Smile {
                                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Batch.Flush(CommandList);
 
-            BgVelocity.Record(CommandList, FrameSlot, SRVHeap.GpuHandle(Targets.DepthSRVSlot),
-                              SRVHeap.GpuHandle(Targets.VelocityUavSlot), Vw.SkyClipToPrevClip,
+            BgVelocity.Record(CommandList, FrameSlot, Backend->SRVHeap.GpuHandle(Targets.DepthSRVSlot),
+                              Backend->SRVHeap.GpuHandle(Targets.VelocityUavSlot), Vw.SkyClipToPrevClip,
                               RenderWidth(), RenderHeight());
 
             FBarrierBatch Restore;
@@ -1567,7 +1568,7 @@ namespace Smile {
         }
 
         if (Weather.Active() && RainWetness.IsInitialized()) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Chuva — wetness");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Chuva — wetness");
             if (Weather.GetRainOcclusion()) {
                 std::vector<FRainWetness::FOccluderItem> RainOccluders;
                 RainOccluders.reserve(AllItems.size());
@@ -1575,7 +1576,7 @@ namespace Smile {
                     RainOccluders.push_back({ A.R->Mesh, A.Mat,
                                               ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                               A.R->AABBMin, A.R->AABBMax });
-                RainWetness.RecordOcclusionMap(CommandList, SRVHeap, FrameSlot, Vw.CameraPosition,
+                RainWetness.RecordOcclusionMap(CommandList, Backend->SRVHeap, FrameSlot, Vw.CameraPosition,
                                                RainOccluders.data(), RainOccluders.size());
             }
             const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
@@ -1583,19 +1584,19 @@ namespace Smile {
             RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
                                        Vw.CameraPosition, ElapsedTime, Weather, Lt.KeyDir,
                                        KeyColorInt, Amb.Sky);
-            RainWetness.Execute(CommandList, SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
+            RainWetness.Execute(CommandList, Backend->SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
         }
 
         if (Modes.ReliableMotionActive) {
-            FGpuScope Scope(GpuProfiler, CommandList, "Motion temporal confiavel");
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "Motion temporal confiavel");
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
-            TemporalMotion.Record(CommandList, SRVHeap, &GpuProfiler);
+            TemporalMotion.Record(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
             Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,

@@ -1,6 +1,5 @@
 #include "SmileEditor/RenderSettingsController.h"
 #include "SmileEditor/ViewportWidget.h"
-#include "Smile/Graphics/RHI/D3D12Device.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
@@ -161,7 +160,7 @@ namespace SmileEditor {
             return std::nullopt;
         }
 
-        const auto VM = Access->GetDevice().QueryVideoMemory();
+        const auto VM = Access->GetGpuMemoryInfo();
         FProfileSnapshot Result;
         Result.FrameIndex   = Access->GetFrameIndex();
         Result.CpuFps       = Viewport->GetFPS();
@@ -169,7 +168,7 @@ namespace SmileEditor {
         Result.OutputHeight = static_cast<int>(Access->OutputHeight());
         Result.RenderWidth  = static_cast<int>(Access->RenderWidth());
         Result.RenderHeight = static_cast<int>(Access->RenderHeight());
-        Result.Gpu          = QString::fromStdWString(Access->GetDevice().GetAdapterDescription());
+        Result.Gpu          = QString::fromStdWString(Access->GetGpuDescription());
         Result.Direct       = CopyTimings(Access->GetGpuProfiler().Results(),
                                           QStringLiteral("direct"));
         Result.AsyncCompute = CopyTimings(Access->GetAsyncComputeTimings(),

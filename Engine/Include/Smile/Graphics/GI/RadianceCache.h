@@ -2,9 +2,9 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/RHI/ComputePipeline.h"
+#include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
-#include "Smile/Graphics/RHI/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 // Insumos do passe dedicado de update (Fase 3). Os quatro sao headers de contrato, sem
 // dependencia de volta para este — nenhum ciclo. O DDGI.h, que TEM ciclo (ele inclui este
 // arquivo), fica de fora de proposito: ver a nota na cauda de cascatas do

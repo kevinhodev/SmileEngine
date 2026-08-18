@@ -1,7 +1,7 @@
 #include "Smile/Graphics/Scene/HiZOcclusion.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
-#include "Smile/Graphics/RHI/Barriers.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/Barriers.h"
 #include "Smile/Core/HResultCheck.h"
 #include <algorithm>
 #include <cstring>

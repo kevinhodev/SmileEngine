@@ -22,11 +22,62 @@ por motivo de mudança:
    +-- RendererCapture.cpp   captura determinística, readbacks e visualizadores
    +-- RendererFrame.cpp     snapshot CPU e orquestração de um frame
    +-- RendererPasses.cpp    gravação de comandos e listas de draw/luzes
+
+ Engine/Include/Smile/Graphics/Backend/RenderBackend.h
+ Engine/Source/Graphics/Backend/RenderBackend.cpp
+   +-- device, filas, profilers, swapchain, heap e lifecycle do backend D3D12
 ```
 
 Essa divisão é uma fronteira de manutenção, não cinco objetos independentes. Os arquivos ainda
 implementam a mesma classe e compartilham seu estado. Uma feature nova deve preferir um subsistema
 proprietário em `Graphics/<Domínio>`; o `Renderer` deve apenas coordená-lo.
+
+## Fronteira pública
+
+O `Renderer` é a fachada da render thread, não um localizador de serviços do backend. Consumidores
+externos devem pedir uma operação de domínio ou uma leitura de telemetria, sem receber os objetos
+internos usados para executá-la:
+
+```text
+ Editor / aplicação
+        |
+        +-- Settings() ----------------------> configuração + invalidação
+        +-- UpdateMaterialTextureSlot(...) --> operação de domínio
+        +-- GetGpuMemoryInfo() -------------> snapshot de telemetria
+        +-- cena, seleção, câmera -----------> integração do editor
+        |
+        x-- Device / CommandQueue / UploadQueue / SRVHeap
+                         não fazem parte da API pública
+```
+
+Essa regra impede que o editor grave comandos, manipule descriptors ou dependa da sequência de
+inicialização do backend. Se uma nova tela precisar de dados, prefira um snapshot pequeno; se
+precisar alterar recursos, crie uma operação com intenção explícita no dono apropriado.
+
+O primeiro corte de ownership já existe em `FRenderBackend`: `Renderer.h` mantém apenas um ponteiro
+para ele, enquanto os `.cpp` que realmente usam D3D12 incluem seu header. Os próximos candidatos
+são estado de cena e estado temporal do frame. Esses passos devem continuar por grupos coerentes;
+um PImpl único com todo o renderer apenas esconderia as responsabilidades sem separá-las.
+
+`Backend` concentra a integração com a API gráfica. `FRenderBackend` compõe e governa o lifecycle;
+`Backend/D3D12` contém os wrappers concretos de baixo nível. A engine não possui hoje uma RHI
+multi-API, então a estrutura assume D3D12 explicitamente em vez de prometer uma abstração que o
+código ainda não oferece.
+
+```text
+ Renderer (orquestra o frame)
+       |
+       v
+ Graphics/Backend/RenderBackend
+ (ownership e lifecycle)
+       |
+       v
+ Graphics/Backend/D3D12
+ (device, filas, heaps e swapchain)
+       |
+       v
+ Direct3D 12
+```
 
 ## Fluxo de controle
 

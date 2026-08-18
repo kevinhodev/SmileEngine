@@ -1,9 +1,9 @@
 #include "Smile/Graphics/RayTracing/RaytracingScene.h"
-#include "Smile/Graphics/RHI/GpuResources.h"
-#include "Smile/Graphics/RHI/D3D12Device.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/D3D12Device.h"
 #include "Smile/Graphics/Debug/VramTracker.h"
-#include "Smile/Graphics/RHI/CommandQueue.h"
-#include "Smile/Graphics/RHI/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Mesh.h" // sizeof(Vertex): stride do SRV bindless de VB
 #include "Smile/Graphics/RayTracing/RTMasks.h"
