@@ -52,6 +52,8 @@ add_executable(SmileSceneIdentityTests
     SceneIdentityTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuMesh.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Material.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/TextureSRVHeap.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuResources.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/UploadQueue.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/VramTracker.cpp
