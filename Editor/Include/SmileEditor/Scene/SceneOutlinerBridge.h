@@ -58,7 +58,13 @@ namespace SmileEditor {
         Q_ENUM(EGroup)
 
         // Itens de ambiente (id em `sceneIdx` quando kind == KEnv).
-        enum EEnvItem { EnvSol = 0, EnvNuvens = 1, EnvOceano = 2, EnvTerreno = 3 };
+        enum EEnvItem {
+            EnvSol = 0,
+            EnvNuvens = 1,
+            EnvOceano = 2,
+            EnvTerreno = 3,
+            EnvClima = 4
+        };
         Q_ENUM(EEnvItem)
 
         enum ERoles {

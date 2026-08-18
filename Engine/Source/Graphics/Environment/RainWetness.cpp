@@ -308,15 +308,14 @@ namespace Smile {
         // F3: cortina — queda ~12 m/s (chuva real ~9, um pouco mais rapido le melhor em tela).
         // F4: pre-multiplicada pelo RainAmount INSTANTANEO (parou de chover = gota some na
         // hora, mesmo com o chao ainda molhado pela inercia do Wetness).
-        // F5: com particulas ON a cortina poupa os 2 cilindros proximos (CurtainParams.z);
-        // as particulas so existem com o occlusion map valido (a colisao vem dele).
-        const bool ParticlesOn = _Weather.GetRainParticles() && OccEverRendered &&
-                                 _Weather.GetRainAmount() > 0.001f;
-        ParticleCount = ParticlesOn
+        // As particulas cobrem o near-field e precisam do mapa para colisao; a cortina fica
+        // responsavel apenas pelo medio/longo alcance quando elas estao prontas.
+        const bool ParticlesReady = OccEverRendered && _Weather.GetRainAmount() > 0.001f;
+        ParticleCount = ParticlesReady
             ? static_cast<u32>(static_cast<f32>(kMaxRainParticles) * _Weather.GetRainAmount())
             : 0u;
         c.CurtainParams  = { _Weather.GetCurtainAmount() * _Weather.GetRainAmount(), 12.0f,
-                             ParticlesOn ? 1.0f : 0.0f, 0.0f };
+                             ParticlesReady ? 1.0f : 0.0f, 0.0f };
         c.KeyLightDir    = { _KeyDir.X, _KeyDir.Y, _KeyDir.Z, 0.0f };
         c.KeyLightColor  = { _KeyColorTimesInt.X, _KeyColorTimesInt.Y, _KeyColorTimesInt.Z, 0.0f };
         c.SkyAmbientRain = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };

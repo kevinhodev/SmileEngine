@@ -50,8 +50,8 @@ Rectangle {
     function pageTitle() {
         const titles = [
             "Renderização", "Iluminação global", "Path tracer", "Reflexos e denoise",
-            "Água — FFT", "Pós-processo", "Sombras e céu", "Clima", "Interface",
-            "Atalhos", "Projeto"
+            "Água — FFT", "Pós-processo", "Sombras e céu", "Interface", "Atalhos",
+            "Projeto"
         ]
         return titles[selectedPage]
     }
@@ -65,8 +65,6 @@ Rectangle {
             return "Espectro físico, ganho das ondas e deslocamento geométrico do oceano FFT"
         if (selectedPage === 6)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
-        if (selectedPage === 7)
-            return "Chuva: wetness deferred, poças, cortina de gotas e acoplamento com o céu"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
     }
 
@@ -621,22 +619,21 @@ Rectangle {
             NavItem { page: 4; glyph: "≋"; label: "Água — FFT" }
             NavItem { page: 5; glyph: "☷"; label: "Pós-processo" }
             NavItem { page: 6; glyph: "☾"; label: "Sombras e céu" }
-            NavItem { page: 7; glyph: "☂"; label: "Clima" }
         }
 
         Text {
-            x: 20; y: 372
+            x: 20; y: 338
             text: "Editor"
             color: root.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Column {
-            x: 12; y: 386
+            x: 12; y: 352
             spacing: 4
-            NavItem { page: 8; glyph: "▤"; label: "Interface" }
-            NavItem { page: 9; glyph: "⌨"; label: "Atalhos" }
-            NavItem { page: 10; glyph: "▰"; label: "Projeto" }
+            NavItem { page: 7; glyph: "▤"; label: "Interface" }
+            NavItem { page: 8; glyph: "⌨"; label: "Atalhos" }
+            NavItem { page: 9; glyph: "▰"; label: "Projeto" }
         }
 
         Rectangle {
@@ -2152,191 +2149,6 @@ Rectangle {
                 }
             }
             }
-        }
-
-        // Clima — chuva/wetness (FWeather). Veio da janela
-        // Time of Day: clima é estado de cena/render, não de relógio.
-        Flickable {
-            id: weatherPage
-            visible: root.selectedPage === 7
-            anchors.fill: parent
-            anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: weatherCol.height + 40
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: weatherPageHover.hovered }
-            HoverHandler { id: weatherPageHover }
-
-            Column {
-                id: weatherCol
-                x: 24
-                width: weatherPage.width - 48
-                spacing: 16
-
-            Card {
-                width: parent.width
-                height: 310
-                title: "Chuva"
-
-                Text {
-                    x: 20; y: 55
-                    text: "Intensidade e cortina"
-                    color: root.textPrimary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: "knob mestre do wetness deferred + streaks na frente da câmera"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Chuva"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.rainAmount
-                    valueText: Math.round(renderModel.rainAmount * 100) + "%"
-                    onCommitted: (v) => renderModel.SetRainAmount(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Cortina de gotas"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.curtainAmount
-                    valueText: Math.round(renderModel.curtainAmount * 100) + "%"
-                    onCommitted: (v) => renderModel.SetCurtainAmount(v)
-                }
-
-                Text {
-                    x: 20; y: 216
-                    text: "Oclusão da chuva"
-                    color: root.textNormal
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
-                }
-                Text {
-                    x: 190; y: 216
-                    text: "só molha o que vê o céu — interior seco"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 210
-                    checked: renderModel.rainOcclusion
-                    onToggled: renderModel.SetRainOcclusion(!checked)
-                }
-
-                Text {
-                    x: 20; y: 246
-                    text: "Gotas por partícula"
-                    color: root.textNormal
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
-                }
-                Text {
-                    x: 190; y: 246
-                    text: "quads GPU no near-field; off = só cortina"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 240
-                    checked: renderModel.rainParticles
-                    onToggled: renderModel.SetRainParticles(!checked)
-                }
-
-                Text {
-                    x: 20; y: 276
-                    text: "Chuva dirige o céu"
-                    color: root.textNormal
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
-                }
-                Text {
-                    x: 190; y: 276
-                    text: "nublado, key light e fog seguem a chuva"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 270
-                    checked: renderModel.weatherDriveSky
-                    onToggled: renderModel.SetWeatherDriveSky(!checked)
-                }
-            }
-
-            Card {
-                width: parent.width
-                height: 322
-                title: "Molhado e poças"
-
-                Text {
-                    x: 20; y: 55
-                    text: "Resposta do chão à chuva"
-                    color: root.textPrimary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: "acúmulo em ~5 s de chuva, seca em ~30 s depois que para"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Poças"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.puddleAmount
-                    valueText: Math.round(renderModel.puddleAmount * 100) + "%"
-                    onCommitted: (v) => renderModel.SetPuddleAmount(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Tamanho das poças"
-                    from: 2; to: 32; step: 1
-                    value: renderModel.puddleScale
-                    valueText: Math.round(renderModel.puddleScale) + " m"
-                    onCommitted: (v) => renderModel.SetPuddleScale(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 212
-                    width: parent.width - 40
-                    label: "Ondulação das gotas"
-                    from: 0; to: 2; step: 0.01
-                    value: renderModel.rippleStrength
-                    valueText: renderModel.rippleStrength.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetRippleStrength(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 264
-                    width: parent.width - 40
-                    label: "Escurecimento molhado"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.wetDarkening
-                    valueText: Math.round(renderModel.wetDarkening * 100) + "%"
-                    onCommitted: (v) => renderModel.SetWetDarkening(v)
-                }
-            }
-            } // Column weatherCol
         }
 
         // ---- Pagina 1: Iluminacao global ----------------------------------------------------
@@ -3935,8 +3747,9 @@ Rectangle {
         }
 
         Item {
-            visible: root.selectedPage !== 0 && root.selectedPage !== 1 && root.selectedPage !== 4 && root.selectedPage !== 6 &&
-                     root.selectedPage !== 7 && root.selectedPage !== 8
+            visible: root.selectedPage !== 0 && root.selectedPage !== 1
+                     && root.selectedPage !== 4 && root.selectedPage !== 6
+                     && root.selectedPage !== 7
             anchors.fill: parent
             Rectangle {
                 anchors.centerIn: parent

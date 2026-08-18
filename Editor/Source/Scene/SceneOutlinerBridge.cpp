@@ -20,6 +20,7 @@ namespace SmileEditor {
         struct FEnvDef { int Id; const char* Name; const char* Icon; };
         constexpr FEnvDef kEnvDefs[] = {
             { SceneOutlinerBridge::EnvSol,     "Sol & Atmosfera",     "sun"      },
+            { SceneOutlinerBridge::EnvClima,   "Clima",               "cloud-rain" },
             { SceneOutlinerBridge::EnvNuvens,  "Nuvens Volumetricas", "cloud"    },
             { SceneOutlinerBridge::EnvOceano,  "Oceano FFT",          "waves"    },
             { SceneOutlinerBridge::EnvTerreno, "Terreno",             "mountain" },
@@ -141,7 +142,7 @@ namespace SmileEditor {
                 R.SceneIdx = E.Id;
                 // Olho: o estado vem por binding direto no QML (viewportModel.cloudsEnabled /
                 // oceanVisible / terrainVisible), REnabled aqui e so fallback.
-                R.HasEye   = (E.Id != EnvSol);
+                R.HasEye   = E.Id == EnvNuvens || E.Id == EnvOceano || E.Id == EnvTerreno;
                 R.Enabled  = (E.Id == EnvNuvens)  ? Renderer->Settings().GetUseClouds()
                            : (E.Id == EnvOceano)  ? Renderer->Settings().GetUseWater()
                            : (E.Id == EnvTerreno) ? Renderer->Settings().GetUseTerrain() : true;
@@ -503,7 +504,8 @@ namespace SmileEditor {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
         const FRow& R = Rows[_Row];
         if (R.Kind == KEnv) {
-            if (R.SceneIdx != EnvNuvens || SelectedEnv == R.SceneIdx) return;
+            if ((R.SceneIdx != EnvNuvens && R.SceneIdx != EnvClima) ||
+                SelectedEnv == R.SceneIdx) return;
             SelectedEnv = R.SceneIdx;
             Renderer->ClearSelection();
             Renderer->ClearLightSelection();
@@ -744,7 +746,8 @@ namespace SmileEditor {
         const int Cur = selectedRowIndex();
         int I = Cur < 0 ? (Dir > 0 ? 0 : (int)Rows.size() - 1) : Cur + Dir;
         for (; I >= 0 && I < Rows.size(); I += Dir) {
-            if ((Rows[I].Kind == KEnv && Rows[I].SceneIdx == EnvNuvens) ||
+            if ((Rows[I].Kind == KEnv &&
+                 (Rows[I].SceneIdx == EnvNuvens || Rows[I].SceneIdx == EnvClima)) ||
                 Rows[I].Kind == KLight || Rows[I].Kind == KMesh) {
                 selectRow(I);
                 emit ScrollToRequested(I);

@@ -9,6 +9,7 @@
 #include "SmileEditor/UI/StatusBridge.h"
 #include "SmileEditor/Scene/TimeOfDayBridge.h"
 #include "SmileEditor/Scene/CloudsBridge.h"
+#include "SmileEditor/Scene/WeatherBridge.h"
 #include "SmileEditor/Rendering/RenderSettingsBridge.h"
 #include "SmileEditor/Scene/LightsBridge.h"
 #include "SmileEditor/Scene/SceneOutlinerBridge.h"
@@ -97,6 +98,7 @@ namespace SmileEditor {
         Menus      = new MenuBridge(this);
         TodBridge  = new TimeOfDayBridge(this);
         CloudsBr   = new CloudsBridge(this);
+        WeatherBr  = new WeatherBridge(this);
         LightsBr   = new LightsBridge(this);
         OutlinerBr = new SceneOutlinerBridge(this);
         SceneDoc   = new SceneDocument(this);
@@ -129,6 +131,8 @@ namespace SmileEditor {
         connect(LightsBr, &LightsBridge::LightsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Rebuild);
         connect(CloudsBr, &CloudsBridge::SettingsChanged,
+                OutlinerBr, &SceneOutlinerBridge::Refresh);
+        connect(WeatherBr, &WeatherBridge::SettingsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Refresh);
 
         connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
@@ -681,7 +685,8 @@ namespace SmileEditor {
             { { QStringLiteral("outlinerModel"), OutlinerBr },
               { QStringLiteral("sceneDoc"),       SceneDoc },
               { QStringLiteral("lightsModel"),   LightsBr },
-              { QStringLiteral("cloudsModel"),   CloudsBr } },
+              { QStringLiteral("cloudsModel"),   CloudsBr },
+              { QStringLiteral("weatherModel"),  WeatherBr } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
         LightsDock->setWidget(OutlinerPanel);
@@ -716,6 +721,8 @@ namespace SmileEditor {
             CloudsBr->SetViewport(Viewport);
             CloudsBr->SetRenderer(Viewport->GetRenderer());
         }
+
+        if (WeatherBr) WeatherBr->SetRenderer(Viewport->GetRenderer());
 
         if (CameraBookmarksBr) CameraBookmarksBr->SetRenderer(Viewport->GetRenderer());
         if (CaptureBr) CaptureBr->SetRenderer(Viewport->GetRenderer());

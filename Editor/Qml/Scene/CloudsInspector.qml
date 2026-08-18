@@ -67,49 +67,6 @@ C.Card {
         }
     ]
 
-    component SectionHeader: Item {
-        id: section
-        property string label
-        property string summary
-        property bool expanded: false
-        signal toggled()
-        width: parent.width
-        height: 31
-
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: parent.top
-            height: 1; color: C.Theme.divider
-        }
-        UI.LucideIcon {
-            x: 0; y: 10
-            name: "chevron-right"; size: 11
-            rotation: section.expanded ? 90 : 0
-            color: C.Theme.textSecondary
-            Behavior on rotation { NumberAnimation { duration: 100 } }
-        }
-        Text {
-            x: 18; y: 8
-            text: section.label
-            color: C.Theme.textPrimary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-            font.weight: Font.DemiBold
-        }
-        Text {
-            anchors.right: parent.right; y: 9
-            width: parent.width * 0.48
-            horizontalAlignment: Text.AlignRight
-            text: section.summary
-            color: C.Theme.textMuted
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 8
-            elide: Text.ElideLeft
-        }
-        HoverHandler { cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: section.toggled() }
-    }
-
     component ActionButton: Rectangle {
         id: button
         property string label
@@ -245,7 +202,7 @@ C.Card {
         onMoved: value => { root.markCustom(); root.model.SetDensity(value) }
     }
 
-    SectionHeader {
+    C.InspectorSectionHeader {
         label: "Forma e detalhe"
         summary: root.shapeExpanded ? "" : "erosão · tipo · picos"
         expanded: root.shapeExpanded
@@ -284,7 +241,7 @@ C.Card {
         }
     }
 
-    SectionHeader {
+    C.InspectorSectionHeader {
         label: "Camada e movimento"
         summary: root.layerExpanded ? "" : root.model.bottomKm.toFixed(1) + "–"
                  + Number(root.model.bottomKm + root.model.thicknessKm).toFixed(1) + " km"
@@ -326,7 +283,7 @@ C.Card {
         }
     }
 
-    SectionHeader {
+    C.InspectorSectionHeader {
         label: "Luz e atmosfera"
         summary: root.lightingExpanded ? "" : "fase · powder · sombras"
         expanded: root.lightingExpanded
@@ -375,7 +332,7 @@ C.Card {
         }
     }
 
-    SectionHeader {
+    C.InspectorSectionHeader {
         label: "Distribuição"
         summary: root.distributionExpanded ? ""
                  : root.model.weatherAuthored ? "weather map" : "seed " + root.model.weatherSeed

@@ -474,8 +474,6 @@ namespace Smile {
         bool GetRainOcclusion() const;
         void SetRainCurtainAmount(f32 V);
         f32  GetRainCurtainAmount() const;
-        void SetRainParticles(bool V);
-        bool GetRainParticles() const;
 
         // === Notificacoes de edicao =====================================================
         // Versao COALESCIDA: use estas nos setters do editor. Arrastar um slider dispara o

@@ -620,8 +620,7 @@ namespace Smile {
             Batch.Flush(CommandList);
         }
 
-        if (Weather.Raining() && RainWetness.IsInitialized() &&
-            (Weather.GetCurtainAmount() > 0.001f || Weather.GetRainParticles())) {
+        if (Weather.Raining() && RainWetness.IsInitialized()) {
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -633,9 +632,8 @@ namespace Smile {
             if (Weather.GetCurtainAmount() > 0.001f)
                 RainWetness.ExecuteCurtain(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
                                            RenderWidth(), RenderHeight());
-            if (Weather.GetRainParticles())
-                RainWetness.ExecuteParticles(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
-                                             RenderWidth(), RenderHeight());
+            RainWetness.ExecuteParticles(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
+                                         RenderWidth(), RenderHeight());
             Backend->DirectProfiler.End(CommandList); // Chuva — cortina/gotas
 
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -1582,7 +1580,9 @@ namespace Smile {
 
         if (Weather.Active() && RainWetness.IsInitialized()) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "Chuva — wetness");
-            if (Weather.GetRainOcclusion()) {
+            // As particulas sempre usam este mapa para colisao. O knob de oclusao decide
+            // apenas se ele tambem mantem interiores secos no passe de wetness.
+            if (Weather.Raining() || Weather.GetRainOcclusion()) {
                 std::vector<FRainWetness::FOccluderItem> RainOccluders;
                 RainOccluders.reserve(AllItems.size());
                 for (const FDrawItem& A : AllItems)

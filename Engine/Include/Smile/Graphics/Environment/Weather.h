@@ -14,10 +14,8 @@ namespace Smile {
     // Ver Docs/KNOBS-AUDIT.md. Agora a escrita passa pelo FRenderSettings, que e o unico lugar
     // onde a politica de invalidacao mora.
     //
-    // Fases futuras (mesmo plano do CSM/nuvens): F2 occlusion map top-down (interior seco),
-    // F3 cortina de gotas (cones estilo Cry), F4 splashes + mist + acoplamento nuvens/ceu,
-    // F5 particulas GPU near-field como opcao de qualidade sobre o MESMO estado — a decisao
-    // "chove aqui?" (occlusion) e compartilhada por qualquer visual de gota.
+    // O sistema compartilha a mesma decisao de oclusao entre wetness, cortina e particulas;
+    // as particulas cobrem o near-field e a cortina completa o medio/longo alcance.
     class FWeather {
     public:
         f32  GetRainAmount() const     { return RainAmount; }
@@ -34,8 +32,6 @@ namespace Smile {
         void SetRainOcclusion(bool V)  { RainOcclusion = V; }
         f32  GetCurtainAmount() const  { return CurtainAmount; }
         void SetCurtainAmount(f32 V)   { CurtainAmount = V; }
-        bool GetRainParticles() const  { return RainParticles; }
-        void SetRainParticles(bool V)  { RainParticles = V; }
         bool GetDriveSky() const       { return DriveSky; }
         void SetDriveSky(bool V)       { DriveSky = V; }
 
@@ -61,11 +57,6 @@ namespace Smile {
         // F3: cortina de gotas (streaks na frente da camera). Escala a densidade/opacidade
         // dos streaks por cima do RainAmount; 0 = so wetness, sem gota visivel no ar.
         f32 CurtainAmount = 1.0f;
-
-        // F5: gotas por particula no near-field (opcao de qualidade). ON = quads procedurais
-        // com colisao pelo occlusion map substituem os 2 cilindros proximos da cortina (que
-        // segue cobrindo o medio/longe). OFF = so a cortina (barato, estilo Cry pura).
-        bool RainParticles = true;
 
         // F4: chuva dirige o ceu — cobertura de nuvem sobe pra um piso nublado, key light
         // (sol/lua) e ambient escurecem, height fog engrossa (mist). Os knobs do usuario

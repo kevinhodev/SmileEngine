@@ -43,17 +43,6 @@ namespace SmileEditor {
         Q_PROPERTY(double oceanFFTDisplacement READ GetOceanFFTDisplacement NOTIFY OceanSettingsChanged)
         Q_PROPERTY(double oceanFFTChoppy READ GetOceanFFTChoppy NOTIFY OceanSettingsChanged)
 
-        // --- Clima (FWeather) ----------------------------------------------------------
-        Q_PROPERTY(double rainAmount READ GetRainAmount NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(double puddleAmount READ GetPuddleAmount NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(double puddleScale READ GetPuddleScale NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(double rippleStrength READ GetRippleStrength NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(double wetDarkening READ GetWetDarkening NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(double curtainAmount READ GetCurtainAmount NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(bool rainOcclusion READ IsRainOcclusion NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(bool rainParticles READ AreRainParticles NOTIFY WeatherSettingsChanged)
-        Q_PROPERTY(bool weatherDriveSky READ IsWeatherDriveSky NOTIFY WeatherSettingsChanged)
-
         // --- Sun shafts e fog volumetrico -----------------------------------------------
         Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY SunShaftsSettingsChanged)
         Q_PROPERTY(double sunShaftsIntensity READ GetSunShaftsIntensity NOTIFY SunShaftsSettingsChanged)
@@ -211,26 +200,6 @@ namespace SmileEditor {
         Q_INVOKABLE void SetOceanWavesAmount(double value);
         Q_INVOKABLE void SetOceanFFTDisplacement(double value);
         Q_INVOKABLE void SetOceanFFTChoppy(double value);
-
-        double GetRainAmount() const;
-        double GetPuddleAmount() const;
-        double GetPuddleScale() const;
-        double GetRippleStrength() const;
-        double GetWetDarkening() const;
-        double GetCurtainAmount() const;
-        bool   IsRainOcclusion() const;
-        bool   AreRainParticles() const;
-        bool   IsWeatherDriveSky() const;
-
-        Q_INVOKABLE void SetRainAmount(double value);
-        Q_INVOKABLE void SetPuddleAmount(double value);
-        Q_INVOKABLE void SetPuddleScale(double value);
-        Q_INVOKABLE void SetRippleStrength(double value);
-        Q_INVOKABLE void SetWetDarkening(double value);
-        Q_INVOKABLE void SetCurtainAmount(double value);
-        Q_INVOKABLE void SetRainOcclusion(bool enabled);
-        Q_INVOKABLE void SetRainParticles(bool enabled);
-        Q_INVOKABLE void SetWeatherDriveSky(bool enabled);
 
         bool              AreSunShaftsEnabled() const;
         double            GetSunShaftsIntensity() const;
@@ -415,7 +384,6 @@ namespace SmileEditor {
     signals:
         void AvailableChanged();
         void OceanSettingsChanged();
-        void WeatherSettingsChanged();
         void SunShaftsSettingsChanged();
         void VolFogSettingsChanged();
         void ShadowSettingsChanged();

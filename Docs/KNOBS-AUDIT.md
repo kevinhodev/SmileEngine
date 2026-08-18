@@ -96,7 +96,7 @@ obrigatória**, e ela tem que descer a cadeia inteira: quem acumula *sobre* o re
 | **SunShafts** | 6 | B | ✅ `VolTemporal` |
 | **Fog** — `HeightFogSkyContribution` | 1 | A | n/a |
 | **AO** — `HalfRes` | 1 | A | n/a (as duas cadeias ficam alocadas) |
-| **Weather** — `CurtainAmount`, `RainParticles` | 2 | A | n/a |
+| **Weather** — `CurtainAmount` | 1 | A | n/a |
 
 ## Divergências encontradas
 

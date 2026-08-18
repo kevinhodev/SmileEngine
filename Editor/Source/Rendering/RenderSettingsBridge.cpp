@@ -25,7 +25,6 @@ namespace SmileEditor {
         // Uma emissao por dominio: o QML reavalia os cards com os valores reais do motor, que
         // podem divergir dos defaults compilados na bridge.
         emit OceanSettingsChanged();
-        emit WeatherSettingsChanged();
         emit SunShaftsSettingsChanged();
         emit VolFogSettingsChanged();
         emit ShadowSettingsChanged();
@@ -140,95 +139,6 @@ namespace SmileEditor {
         Renderer->Settings().SetWaterFFTChoppyScale(static_cast<Smile::f32>(Value));
         emit OceanSettingsChanged();
     }
-    // === Clima (FWeather; defaults espelham o struct p/ antes do renderer existir) =====
-
-    double RenderSettingsBridge::GetRainAmount() const {
-        return Renderer ? Renderer->Settings().GetRainAmount() : 0.0;
-    }
-    void RenderSettingsBridge::SetRainAmount(double _Value) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainAmount(
-            static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0)));
-        emit WeatherSettingsChanged();
-    }
-
-    double RenderSettingsBridge::GetPuddleAmount() const {
-        return Renderer ? Renderer->Settings().GetRainPuddleAmount() : 0.65;
-    }
-    void RenderSettingsBridge::SetPuddleAmount(double _Value) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainPuddleAmount(
-            static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0)));
-        emit WeatherSettingsChanged();
-    }
-
-    double RenderSettingsBridge::GetPuddleScale() const {
-        return Renderer ? Renderer->Settings().GetRainPuddleScale() : 8.0;
-    }
-    void RenderSettingsBridge::SetPuddleScale(double _Value) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainPuddleScale(
-            static_cast<Smile::f32>(std::clamp(_Value, 1.0, 64.0)));
-        emit WeatherSettingsChanged();
-    }
-
-    double RenderSettingsBridge::GetRippleStrength() const {
-        return Renderer ? Renderer->Settings().GetRainRippleStrength() : 1.0;
-    }
-    void RenderSettingsBridge::SetRippleStrength(double _Value) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainRippleStrength(
-            static_cast<Smile::f32>(std::clamp(_Value, 0.0, 2.0)));
-        emit WeatherSettingsChanged();
-    }
-
-    double RenderSettingsBridge::GetWetDarkening() const {
-        return Renderer ? Renderer->Settings().GetRainWetDarkening() : 0.85;
-    }
-    void RenderSettingsBridge::SetWetDarkening(double _Value) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainWetDarkening(
-            static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0)));
-        emit WeatherSettingsChanged();
-    }
-
-    double RenderSettingsBridge::GetCurtainAmount() const {
-        return Renderer ? Renderer->Settings().GetRainCurtainAmount() : 1.0;
-    }
-    void RenderSettingsBridge::SetCurtainAmount(double _Value) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainCurtainAmount(
-            static_cast<Smile::f32>(std::clamp(_Value, 0.0, 1.0)));
-        emit WeatherSettingsChanged();
-    }
-
-    bool RenderSettingsBridge::IsRainOcclusion() const {
-        return Renderer ? Renderer->Settings().GetRainOcclusion() : true;
-    }
-    void RenderSettingsBridge::SetRainOcclusion(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainOcclusion(_Enabled);
-        emit WeatherSettingsChanged();
-    }
-
-    bool RenderSettingsBridge::AreRainParticles() const {
-        return Renderer ? Renderer->Settings().GetRainParticles() : true;
-    }
-    void RenderSettingsBridge::SetRainParticles(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainParticles(_Enabled);
-        emit WeatherSettingsChanged();
-    }
-
-    bool RenderSettingsBridge::IsWeatherDriveSky() const {
-        return Renderer ? Renderer->Settings().GetRainDriveSky() : true;
-    }
-    void RenderSettingsBridge::SetWeatherDriveSky(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->Settings().SetRainDriveSky(_Enabled);
-        emit WeatherSettingsChanged();
-    }
-
     // === Sun shafts e fog volumetrico ===================================================
 
     bool RenderSettingsBridge::AreSunShaftsEnabled() const {

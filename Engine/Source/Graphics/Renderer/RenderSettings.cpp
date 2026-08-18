@@ -1128,8 +1128,6 @@ namespace Smile {
     bool FRenderSettings::GetRainOcclusion() const { return R.Weather.GetRainOcclusion(); }
     void FRenderSettings::SetRainCurtainAmount(f32 _V) { R.Weather.SetCurtainAmount(_V); }
     f32  FRenderSettings::GetRainCurtainAmount() const { return R.Weather.GetCurtainAmount(); }
-    void FRenderSettings::SetRainParticles(bool _V) { R.Weather.SetRainParticles(_V); }
-    bool FRenderSettings::GetRainParticles() const  { return R.Weather.GetRainParticles(); }
 
     // === Notificacoes de edicao =========================================================
 

@@ -95,6 +95,7 @@ smile_editor_domain(Scene
     SceneDocument
     SceneOutlinerBridge
     TimeOfDayBridge
+    WeatherBridge
 )
 
 smile_editor_domain(Rendering
@@ -136,6 +137,7 @@ smile_editor_assets("UI\\QML\\Scene"
 
 smile_editor_assets("UI\\QML\\Scene\\Inspectors"
     Qml/Scene/CloudsInspector.qml
+    Qml/Scene/WeatherInspector.qml
 )
 
 smile_editor_assets("UI\\QML\\Rendering"
@@ -158,6 +160,7 @@ smile_editor_assets("UI\\QML\\Shared"
     Qml/components/BipolarSliderRow.qml
     Qml/components/Chip.qml
     Qml/components/ColorRow.qml
+    Qml/components/InspectorSectionHeader.qml
     Qml/components/PairedScrubRow.qml
     Qml/components/PrimarySliderRow.qml
     Qml/components/ScrubField.qml

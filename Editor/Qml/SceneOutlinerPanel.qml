@@ -10,12 +10,14 @@ import "Scene" as Scene
 //  - `lightsModel` (LightsBridge): acoes e propriedades de luz (add/duplicar/remover/toggle,
 //    cor HSV, sliders, sombras, posicao) — mesmo contrato do painel antigo.
 //  - `cloudsModel` (CloudsBridge): estado e propriedades autorais das nuvens.
+//  - `weatherModel` (WeatherBridge): chuva, wetness e integracao meteorologica da cena.
 // Estilo do TimeOfDayPanel (dark, cards, accent azul).
 Rectangle {
     id: root
     required property var outlinerModel
     required property var lightsModel
     required property var cloudsModel
+    required property var weatherModel
     // Camada autorada (.smap). As pontes chegam por setInitialProperties, entao TEM de estar
     // declarada aqui: passar a propriedade so do lado C++ deixa `sceneDoc` undefined e o
     // sceneDoc.save() vira ReferenceError — que aborta o handler em silencio.
@@ -69,6 +71,7 @@ Rectangle {
     readonly property bool hasLightSelection: lightsModel.selectedIndex >= 0
     readonly property bool hasMeshSelection: outlinerModel.meshSelected
     readonly property bool hasCloudSelection: outlinerModel.selectedEnvironment === 1
+    readonly property bool hasWeatherSelection: outlinerModel.selectedEnvironment === 4
 
     function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
 
@@ -712,8 +715,8 @@ Rectangle {
 
                 HoverHandler {
                     id: rowHover
-                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1
-                                 ? Qt.ArrowCursor : Qt.PointingHandCursor
+                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1 && rowItem.sceneIdx !== 4
+                                  ? Qt.ArrowCursor : Qt.PointingHandCursor
                 }
                 TapHandler {
                     // os handlers dos botoes (olho/duplicar/lixeira) NAO tomam grab exclusivo,
@@ -722,8 +725,9 @@ Rectangle {
                         if (ep.position.x >= rightActions.x) return
                         root.forceActiveFocus() // atalhos de teclado voltam pro painel
                         if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
-                        else if (rowItem.isEnv && rowItem.sceneIdx === 1)
-                                                        outlinerModel.selectRow(rowItem.index)
+                        else if (rowItem.isEnv &&
+                                 (rowItem.sceneIdx === 1 || rowItem.sceneIdx === 4))
+                                                         outlinerModel.selectRow(rowItem.index)
                         else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
                         else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
                     }
@@ -792,11 +796,18 @@ Rectangle {
                 model: root.cloudsModel
             }
 
+            Scene.WeatherInspector {
+                width: parent.width
+                visible: root.hasWeatherSelection
+                model: root.weatherModel
+            }
+
             // ---- Luz selecionada (mesmo contrato do painel antigo) ----
             Card {
                 title: lightsModel.lightType === 1 ? "Propriedades — Spot" : "Propriedades — Point"
                 iconName: lightsModel.lightType === 1 ? "cone" : "lightbulb"
-                visible: !root.hasCloudSelection && root.hasLightSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection
+                         && root.hasLightSelection
                 headerItem: [
                     Toggle {
                         checked: lightsModel.lightEnabled
@@ -1130,7 +1141,8 @@ Rectangle {
             Card {
                 title: "Propriedades — Mesh"
                 iconName: "box"
-                visible: !root.hasCloudSelection && !root.hasLightSelection && root.hasMeshSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection
+                         && !root.hasLightSelection && root.hasMeshSelection
 
                 Text {
                     width: parent.width
@@ -1213,7 +1225,8 @@ Rectangle {
             Card {
                 title: "Propriedades"
                 iconName: "info"
-                visible: !root.hasCloudSelection && !root.hasLightSelection && !root.hasMeshSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection
+                         && !root.hasLightSelection && !root.hasMeshSelection
 
                 Text {
                     width: parent.width

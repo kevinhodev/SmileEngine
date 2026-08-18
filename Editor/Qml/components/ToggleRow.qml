@@ -10,25 +10,34 @@ Item {
     signal toggled()
     width: parent.width
     height: 26
+
     Text {
-        y: 3
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.right: hintText.left
+        anchors.rightMargin: 8
         text: toggleRow.label
         color: toggleRow.interactive ? Theme.textNormal : Theme.textMuted
-        font.family: Theme.fontFamily
-        font.pixelSize: 11
-    }
-    Text {
-        anchors.right: parent.right
-        anchors.rightMargin: 46
-        y: 4
-        text: toggleRow.hint
-        color: Theme.textMuted
+        elide: Text.ElideRight
         font.family: Theme.fontFamily
         font.pixelSize: 10
     }
-    Toggle {
+
+    Text {
+        id: hintText
         anchors.right: parent.right
-        y: 1
+        anchors.rightMargin: toggleControl.width + 10
+        anchors.verticalCenter: parent.verticalCenter
+        text: toggleRow.hint
+        color: Theme.textMuted
+        font.family: Theme.fontFamily
+        font.pixelSize: 9
+    }
+
+    Toggle {
+        id: toggleControl
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
         checked: toggleRow.checked
         interactive: toggleRow.interactive
         onToggled: toggleRow.toggled()
