@@ -6,7 +6,7 @@ import "components" as C
 // A imagem e uma composicao offscreen produzida pelo renderer; o viewport principal nao muda.
 Rectangle {
     id: root
-    required property var viewportModel
+    required property var debugModel
     required property var debugWindow
 
     color: "#10110f"
@@ -27,15 +27,15 @@ Rectangle {
     readonly property color green: C.Theme.green
 
     property string filterText: ""
-    readonly property int selectedCount: viewportModel.debugSelection.length
+    readonly property int selectedCount: debugModel.debugSelection.length
     readonly property int gridColumns: selectedCount === 0 ? 1
-        : (viewportModel.debugColumns > 0
-           ? viewportModel.debugColumns
+        : (debugModel.debugColumns > 0
+           ? debugModel.debugColumns
            : Math.ceil(Math.sqrt(selectedCount)))
     readonly property int gridRows: Math.max(1, Math.ceil(selectedCount / gridColumns))
     readonly property bool hasSelectedDDGI: {
-        const selection = viewportModel.debugSelection
-        const names = viewportModel.debugTargetNames
+        const selection = debugModel.debugSelection
+        const names = debugModel.debugTargetNames
         for (let i = 0; i < selection.length; ++i) {
             const index = Number(selection[i])
             if (index >= 0 && index < names.length &&
@@ -46,14 +46,14 @@ Rectangle {
     }
 
     function isSelected(idx) {
-        const selection = viewportModel.debugSelection
+        const selection = debugModel.debugSelection
         for (let i = 0; i < selection.length; ++i)
             if (selection[i] === idx) return true
         return false
     }
 
     function slotOf(idx) {
-        const selection = viewportModel.debugSelection
+        const selection = debugModel.debugSelection
         for (let i = 0; i < selection.length; ++i)
             if (selection[i] === idx) return i + 1
         return 0
@@ -256,7 +256,7 @@ Rectangle {
                 spacing: 3
 
                 Repeater {
-                    model: viewportModel.debugTargetNames
+                    model: debugModel.debugTargetNames
                     delegate: Rectangle {
                         id: targetDelegate
                         required property string modelData
@@ -306,14 +306,14 @@ Rectangle {
 
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: viewportModel.ToggleDebugSelection(targetDelegate.index)
+                            onTapped: debugModel.ToggleDebugSelection(targetDelegate.index)
                         }
                     }
                 }
 
                 Text {
                     width: listColumn.width
-                    visible: viewportModel.debugTargetNames.length === 0
+                    visible: debugModel.debugTargetNames.length === 0
                     topPadding: 24
                     horizontalAlignment: Text.AlignHCenter
                     text: "Nenhum target publicado.\nCarregue uma cena."
@@ -348,7 +348,7 @@ Rectangle {
             Text {
                 y: 14
                 text: "Timer de RT"
-                color: viewportModel.rtShaderTimerAvailable ? root.textNormal : root.textMuted
+                color: debugModel.rtShaderTimerAvailable ? root.textNormal : root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
@@ -360,9 +360,9 @@ Rectangle {
                 width: 46
                 height: 22
                 radius: 5
-                enabled: viewportModel.rtShaderTimerAvailable
+                enabled: debugModel.rtShaderTimerAvailable
                 opacity: enabled ? 1.0 : 0.42
-                readonly property bool on: viewportModel.rtShaderTimerEnabled
+                readonly property bool on: debugModel.rtShaderTimerEnabled
                 color: on ? root.blueBg : (timerHover.hovered ? "#23241d" : "transparent")
                 border.color: on ? root.blueBorder : root.borderColor
                 Text {
@@ -374,7 +374,7 @@ Rectangle {
                 }
                 HoverHandler { id: timerHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                    onTapped: if (timerToggle.enabled) viewportModel.ToggleRtShaderTimer()
+                    onTapped: if (timerToggle.enabled) debugModel.ToggleRtShaderTimer()
                 }
             }
 
@@ -384,7 +384,7 @@ Rectangle {
             Text {
                 y: 42
                 text: "BVH"
-                color: viewportModel.bvhDebugAvailable ? root.textNormal : root.textMuted
+                color: debugModel.bvhDebugAvailable ? root.textNormal : root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
@@ -405,9 +405,9 @@ Rectangle {
                         width: 34
                         height: 22
                         radius: 5
-                        enabled: viewportModel.bvhDebugAvailable && viewportModel.bvhDebugEnabled
+                        enabled: debugModel.bvhDebugAvailable && debugModel.bvhDebugEnabled
                         opacity: enabled ? 1.0 : 0.42
-                        readonly property bool on: viewportModel.bvhDebugMode === modelData.value
+                        readonly property bool on: debugModel.bvhDebugMode === modelData.value
                         color: on ? root.blueBg : (modeHover.hovered ? "#23241d" : "transparent")
                         border.color: on ? root.blueBorder : root.borderColor
                         Text {
@@ -422,7 +422,7 @@ Rectangle {
                         ToolTip.delay: 400
                         HoverHandler { id: modeHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: if (parent.enabled) viewportModel.SetBvhDebugMode(modelData.value)
+                            onTapped: if (parent.enabled) debugModel.SetBvhDebugMode(modelData.value)
                         }
                     }
                 }
@@ -432,9 +432,9 @@ Rectangle {
                     width: 46
                     height: 22
                     radius: 5
-                    enabled: viewportModel.bvhDebugAvailable
+                    enabled: debugModel.bvhDebugAvailable
                     opacity: enabled ? 1.0 : 0.42
-                    readonly property bool on: viewportModel.bvhDebugEnabled
+                    readonly property bool on: debugModel.bvhDebugEnabled
                     color: on ? root.blueBg : (bvhHover.hovered ? "#23241d" : "transparent")
                     border.color: on ? root.blueBorder : root.borderColor
                     Text {
@@ -446,7 +446,7 @@ Rectangle {
                     }
                     HoverHandler { id: bvhHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
-                        onTapped: if (bvhToggle.enabled) viewportModel.ToggleBvhDebug()
+                        onTapped: if (bvhToggle.enabled) debugModel.ToggleBvhDebug()
                     }
                 }
             }
@@ -475,7 +475,7 @@ Rectangle {
                         id: columnDelegate
                         required property var modelData
                         readonly property bool current:
-                            viewportModel.debugColumns === columnDelegate.modelData.value
+                            debugModel.debugColumns === columnDelegate.modelData.value
                         width: modelData.label === "Auto" ? 38 : 24
                         height: 22
                         radius: 5
@@ -491,7 +491,7 @@ Rectangle {
                         }
                         HoverHandler { id: columnHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: viewportModel.SetDebugColumns(
+                            onTapped: debugModel.SetDebugColumns(
                                 columnDelegate.modelData.value)
                         }
                     }
@@ -509,7 +509,7 @@ Rectangle {
             Text {
                 anchors.right: parent.right
                 y: 107
-                text: viewportModel.debugExposure.toFixed(2).replace(".", ",") + "×"
+                text: debugModel.debugExposure.toFixed(2).replace(".", ",") + "×"
                 color: root.blue
                 font.family: C.Theme.fontMono
                 font.pixelSize: 11
@@ -523,8 +523,8 @@ Rectangle {
                 height: 20
                 from: 0.05
                 to: 8.0
-                value: viewportModel.debugExposure
-                onMoved: viewportModel.SetDebugExposure(value)
+                value: debugModel.debugExposure
+                onMoved: debugModel.SetDebugExposure(value)
             }
 
             Rectangle {
@@ -547,7 +547,7 @@ Rectangle {
                 }
                 HoverHandler { id: clearButtonHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                    onTapped: if (clearButton.enabled) viewportModel.ClearDebugSelection()
+                    onTapped: if (clearButton.enabled) debugModel.ClearDebugSelection()
                 }
             }
 
@@ -586,7 +586,7 @@ Rectangle {
             anchors.leftMargin: 18
             anchors.top: parent.top
             anchors.topMargin: 14
-            visible: !viewportModel.debugProbeInspecting
+            visible: !debugModel.debugProbeInspecting
             text: root.selectedCount === 0 ? "PREVIEW" :
                   "PREVIEW  •  " + root.gridColumns + " × " + root.gridRows
             color: root.textMuted
@@ -602,16 +602,16 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 18
             anchors.top: parent.top
-            height: viewportModel.debugProbeContributors.length > 0 ? 248
-                  : viewportModel.debugProbePointSummary !== "" ? 112 : 88
-            visible: viewportModel.debugProbeInspecting
+            height: debugModel.debugProbeContributors.length > 0 ? 248
+                  : debugModel.debugProbePointSummary !== "" ? 112 : 88
+            visible: debugModel.debugProbeInspecting
 
             Text {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.topMargin: 9
-                text: "PROBE #" + viewportModel.debugProbeIndex + "  •  " +
-                      viewportModel.debugProbeCoord
+                text: "PROBE #" + debugModel.debugProbeIndex + "  •  " +
+                      debugModel.debugProbeCoord
                 color: root.textPrimary
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 12
@@ -622,7 +622,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.topMargin: 29
-                text: viewportModel.debugProbeWorld + "  •  " + viewportModel.debugProbeGrid
+                text: debugModel.debugProbeWorld + "  •  " + debugModel.debugProbeGrid
                 color: root.textMuted
                 font.family: C.Theme.fontMono
                 font.pixelSize: 9
@@ -634,10 +634,10 @@ Rectangle {
                 anchors.rightMargin: 8
                 anchors.top: parent.top
                 anchors.topMargin: 48
-                text: viewportModel.debugProbeDirection === ""
+                text: debugModel.debugProbeDirection === ""
                       ? "passe o mouse sobre um oct-map para ler a direção"
-                      : viewportModel.debugProbeDirection
-                color: viewportModel.debugProbeDirection === "" ? root.textMuted : root.blue
+                      : debugModel.debugProbeDirection
+                color: debugModel.debugProbeDirection === "" ? root.textMuted : root.blue
                 font.family: C.Theme.fontMono
                 font.pixelSize: 9
             }
@@ -648,11 +648,11 @@ Rectangle {
                 anchors.rightMargin: 8
                 anchors.top: parent.top
                 anchors.topMargin: 64
-                visible: viewportModel.debugProbeDirection !== ""
-                text: viewportModel.debugProbeSample === ""
+                visible: debugModel.debugProbeDirection !== ""
+                text: debugModel.debugProbeSample === ""
                       ? "lendo valores do texel..."
-                      : viewportModel.debugProbeSample
-                color: viewportModel.debugProbeSample === "" ? root.textMuted : root.green
+                      : debugModel.debugProbeSample
+                color: debugModel.debugProbeSample === "" ? root.textMuted : root.green
                 font.family: C.Theme.fontMono
                 font.pixelSize: 9
             }
@@ -663,12 +663,12 @@ Rectangle {
                 anchors.top: parent.top
                 anchors.topMargin: 9
                 spacing: 4
-                ProbeButton { label: "X−"; onTapped: viewportModel.StepDebugProbe(-1, 0, 0) }
-                ProbeButton { label: "X+"; onTapped: viewportModel.StepDebugProbe( 1, 0, 0) }
-                ProbeButton { label: "Y−"; onTapped: viewportModel.StepDebugProbe(0, -1, 0) }
-                ProbeButton { label: "Y+"; onTapped: viewportModel.StepDebugProbe(0,  1, 0) }
-                ProbeButton { label: "Z−"; onTapped: viewportModel.StepDebugProbe(0, 0, -1) }
-                ProbeButton { label: "Z+"; onTapped: viewportModel.StepDebugProbe(0, 0,  1) }
+                ProbeButton { label: "X−"; onTapped: debugModel.StepDebugProbe(-1, 0, 0) }
+                ProbeButton { label: "X+"; onTapped: debugModel.StepDebugProbe( 1, 0, 0) }
+                ProbeButton { label: "Y−"; onTapped: debugModel.StepDebugProbe(0, -1, 0) }
+                ProbeButton { label: "Y+"; onTapped: debugModel.StepDebugProbe(0,  1, 0) }
+                ProbeButton { label: "Z−"; onTapped: debugModel.StepDebugProbe(0, 0, -1) }
+                ProbeButton { label: "Z+"; onTapped: debugModel.StepDebugProbe(0, 0,  1) }
             }
 
             Rectangle {
@@ -689,7 +689,7 @@ Rectangle {
                     font.pixelSize: 9
                 }
                 HoverHandler { id: backHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: viewportModel.ClearDebugProbeInspection() }
+                TapHandler { onTapped: debugModel.ClearDebugProbeInspection() }
             }
 
             Rectangle {
@@ -700,19 +700,19 @@ Rectangle {
                 width: 132
                 height: 25
                 radius: 5
-                color: viewportModel.debugProbePointPickArmed
+                color: debugModel.debugProbePointPickArmed
                        ? "#302a18"
                        : pointDiagnosticHover.hovered ? root.blueBg : "#181a15"
-                border.color: viewportModel.debugProbePointPickArmed
+                border.color: debugModel.debugProbePointPickArmed
                               ? "#8f762d"
                               : pointDiagnosticHover.hovered
                                 ? root.blueBorder : root.borderColor
                 Text {
                     anchors.centerIn: parent
-                    text: viewportModel.debugProbePointPickArmed
+                    text: debugModel.debugProbePointPickArmed
                           ? "Cancelar captura"
                           : "Diagnosticar ponto"
-                    color: viewportModel.debugProbePointPickArmed
+                    color: debugModel.debugProbePointPickArmed
                            ? "#e7c65c"
                            : pointDiagnosticHover.hovered
                              ? root.blue : root.textSecondary
@@ -724,7 +724,7 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                 }
                 TapHandler {
-                    onTapped: viewportModel.ArmDebugProbePointPick()
+                    onTapped: debugModel.ArmDebugProbePointPick()
                 }
             }
 
@@ -733,10 +733,10 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.topMargin: 91
-                visible: viewportModel.debugProbePointSummary !== ""
-                text: viewportModel.debugProbePointSummary
+                visible: debugModel.debugProbePointSummary !== ""
+                text: debugModel.debugProbePointSummary
                 elide: Text.ElideRight
-                color: viewportModel.debugProbePointPickArmed
+                color: debugModel.debugProbePointPickArmed
                        ? "#e7c65c" : root.textSecondary
                 font.family: C.Theme.fontMono
                 font.pixelSize: 10
@@ -751,10 +751,10 @@ Rectangle {
                 columns: 4
                 columnSpacing: 6
                 rowSpacing: 6
-                visible: viewportModel.debugProbeContributors.length > 0
+                visible: debugModel.debugProbeContributors.length > 0
 
                 Repeater {
-                    model: viewportModel.debugProbeContributors
+                    model: debugModel.debugProbeContributors
 
                     delegate: Rectangle {
                         required property var modelData
@@ -765,7 +765,7 @@ Rectangle {
                         readonly property bool contributorDominant:
                             Boolean(modelData.dominant)
                         readonly property bool contributorSelected:
-                            viewportModel.debugProbeIndex ===
+                            debugModel.debugProbeIndex ===
                             Number(modelData.probeIndex)
                         width: (contributorsGrid.width -
                                 contributorsGrid.columnSpacing * 3) / 4
@@ -844,7 +844,7 @@ Rectangle {
                         }
                         TapHandler {
                             enabled: parent.contributorActive
-                            onTapped: viewportModel.SelectDebugProbeContributor(
+                            onTapped: debugModel.SelectDebugProbeContributor(
                                 Number(parent.modelData.probeIndex))
                         }
                     }
@@ -859,7 +859,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 18
             anchors.top: parent.top
-            anchors.topMargin: viewportModel.debugProbeInspecting
+            anchors.topMargin: debugModel.debugProbeInspecting
                                ? probeInspectorHeader.height + 4 : 42
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 18
@@ -877,26 +877,26 @@ Rectangle {
                 Image {
                     id: previewImage
                     anchors.fill: parent
-                    visible: root.selectedCount > 0 && viewportModel.debugPreviewReady
+                    visible: root.selectedCount > 0 && debugModel.debugPreviewReady
                     source: visible
-                        ? "image://debugtargetpreview/frame_" + viewportModel.debugPreviewSeq
+                        ? "image://debugtargetpreview/frame_" + debugModel.debugPreviewSeq
                         : ""
                     cache: false
                     asynchronous: false
                     fillMode: Image.Stretch
-                    smooth: !viewportModel.debugProbeInspecting
+                    smooth: !debugModel.debugProbeInspecting
                 }
 
                 Repeater {
-                    model: viewportModel.debugSelection
+                    model: debugModel.debugSelection
                     delegate: Item {
                         id: previewTile
                         required property var modelData
                         required property int index
                         readonly property int targetIndex: Number(modelData)
                         readonly property string targetName:
-                            targetIndex >= 0 && targetIndex < viewportModel.debugTargetNames.length
-                            ? viewportModel.debugTargetNames[targetIndex] : ""
+                            targetIndex >= 0 && targetIndex < debugModel.debugTargetNames.length
+                            ? debugModel.debugTargetNames[targetIndex] : ""
                         readonly property bool ddgiTarget:
                             targetName.toLowerCase().indexOf("ddgi") === 0
                         readonly property bool distanceTarget:
@@ -943,8 +943,8 @@ Rectangle {
                                 anchors.rightMargin: 7
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: previewTile.targetIndex >= 0 &&
-                                      previewTile.targetIndex < viewportModel.debugTargetNames.length
-                                      ? viewportModel.debugTargetNames[previewTile.targetIndex]
+                                      previewTile.targetIndex < debugModel.debugTargetNames.length
+                                      ? debugModel.debugTargetNames[previewTile.targetIndex]
                                       : ""
                                 elide: Text.ElideRight
                                 color: root.textPrimary
@@ -963,7 +963,7 @@ Rectangle {
                             height: previewTile.distanceTarget ? 28 : 19
                             radius: 4
                             color: "#c6080907"
-                            visible: viewportModel.debugProbeInspecting && previewTile.ddgiTarget
+                            visible: debugModel.debugProbeInspecting && previewTile.ddgiTarget
 
                             Text {
                                 anchors.centerIn: parent
@@ -979,7 +979,7 @@ Rectangle {
                                 anchors.leftMargin: 8
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: previewTile.distanceTarget
-                                text: viewportModel.debugProbeDistanceRange
+                                text: debugModel.debugProbeDistanceRange
                                 color: root.textSecondary
                                 font.family: C.Theme.fontMono
                                 font.pixelSize: 8
@@ -1006,32 +1006,32 @@ Rectangle {
 
                         MouseArea {
                             anchors.fill: parent
-                            hoverEnabled: viewportModel.debugProbeInspecting
-                            cursorShape: !viewportModel.debugProbeInspecting &&
+                            hoverEnabled: debugModel.debugProbeInspecting
+                            cursorShape: !debugModel.debugProbeInspecting &&
                                          previewTile.ddgiTarget
                                          ? Qt.PointingHandCursor : Qt.ArrowCursor
                             onClicked: (mouse) => {
-                                if (!viewportModel.debugProbeInspecting &&
+                                if (!debugModel.debugProbeInspecting &&
                                     previewTile.ddgiTarget) {
-                                    viewportModel.InspectDDGIProbe(
+                                    debugModel.InspectDDGIProbe(
                                         previewTile.targetIndex,
                                         mouse.x / width, mouse.y / height,
                                         width / Math.max(height, 1))
                                 }
                             }
                             onPositionChanged: (mouse) => {
-                                if (!viewportModel.debugProbeInspecting ||
+                                if (!debugModel.debugProbeInspecting ||
                                     !previewTile.ddgiTarget) return
                                 const side = Math.min(width, height)
                                 const ox = (width - side) * 0.5
                                 const oy = (height - side) * 0.5
-                                viewportModel.UpdateDebugProbeDirection(
+                                debugModel.UpdateDebugProbeDirection(
                                     (mouse.x - ox) / side,
                                     (mouse.y - oy) / side)
                             }
                             onExited: {
-                                if (viewportModel.debugProbeInspecting)
-                                    viewportModel.UpdateDebugProbeDirection(-1, -1)
+                                if (debugModel.debugProbeInspecting)
+                                    debugModel.UpdateDebugProbeDirection(-1, -1)
                             }
                         }
                     }
@@ -1041,7 +1041,7 @@ Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 10
-                    visible: !viewportModel.debugProbeInspecting &&
+                    visible: !debugModel.debugProbeInspecting &&
                              root.selectedCount > 0 && root.hasSelectedDDGI &&
                              previewImage.visible
                     height: 24
@@ -1088,7 +1088,7 @@ Rectangle {
 
             Text {
                 anchors.centerIn: parent
-                visible: root.selectedCount > 0 && !viewportModel.debugPreviewReady
+                visible: root.selectedCount > 0 && !debugModel.debugPreviewReady
                 text: "Preparando preview..."
                 color: root.textMuted
                 font.family: C.Theme.fontFamily

@@ -2,13 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Toolbar do viewport e dropdown de view modes. Cada instancia recebe explicitamente o
-// ViewportWidget que controla; os atalhos globais sao roteados pelo MainWindow para a ativa.
+// Cada instância recebe a viewport ativa e os modelos de render/debug compostos pelo MainWindow.
 Rectangle {
     id: root
 
     required property var viewportModel
     required property var renderModel
+    required property var debugModel
 
     color: "#131410"
     implicitWidth: 900
@@ -502,7 +502,7 @@ Rectangle {
         C.ToolbarButton {
             id: viewModeButton
             iconName: "lit"
-            label: root.compact ? "" : root.viewportModel.viewModeLabel
+            label: root.compact ? "" : root.debugModel.viewModeLabel
             dropDown: true
             active: true
             onTapped: {
@@ -596,22 +596,19 @@ Rectangle {
             ModeRow {
                 x: 8; y: 30; width: 264; height: 26
                 label: "Lit"; shortcutText: "Alt+1"
-                selected: root.viewportModel.viewMode === 0 && root.viewportModel.debugTargetIndex < 0
+                selected: root.viewportModel.viewMode === 0 && root.debugModel.debugTargetIndex < 0
                 onTapped: { root.viewportModel.SelectLit(); viewModesPopup.close() }
             }
             ModeRow {
                 x: 8; y: 60; width: 264; height: 28
                 label: "Heatmap de reflexos"; shortcutText: "Alt+5"
-                selected: root.viewportModel.viewMode === 3 && root.viewportModel.debugTargetIndex < 0
+                selected: root.viewportModel.viewMode === 3 && root.debugModel.debugTargetIndex < 0
                 onTapped: { root.viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
             }
-            // Visualizador generico: lista TODOS os alvos publicados em DebugTargets, incluindo
-            // os campos do G-buffer. A lista vem do bridge (debugTargetNames), entao passe novo
-            // que se registre aparece aqui sozinho.
             ModeRow {
                 x: 8; y: 90; width: 264; height: 28
                 label: "Render targets"; hasSubmenu: true
-                selected: root.viewportModel.debugTargetIndex >= 0
+                selected: root.debugModel.debugTargetIndex >= 0
                 onTapped: {
                     if (debugTargetPopup.opened) debugTargetPopup.close()
                     else debugTargetPopup.open()
@@ -740,7 +737,7 @@ Rectangle {
         y: root.height + 56
         width: 232
         // Cresce com a lista (+1 pela linha "Desligado"), com teto p/ nao estourar a tela.
-        height: Math.min(12 + (root.viewportModel.debugTargetNames.length + 1) * 28, 460)
+        height: Math.min(12 + (root.debugModel.debugTargetNames.length + 1) * 28, 460)
         padding: 6
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
@@ -760,7 +757,7 @@ Rectangle {
                     RadioMark {
                         anchors.left: parent.left; anchors.leftMargin: 7
                         anchors.verticalCenter: parent.verticalCenter
-                        checked: root.viewportModel.debugTargetIndex < 0
+                        checked: root.debugModel.debugTargetIndex < 0
                     }
                     Text {
                         anchors.left: parent.left; anchors.leftMargin: 27
@@ -773,14 +770,14 @@ Rectangle {
                     HoverHandler { id: offHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
                         onTapped: {
-                            root.viewportModel.SelectDebugTarget(-1)
+                            root.debugModel.SelectDebugTarget(-1)
                             debugTargetPopup.close()
                             viewModesPopup.close()
                         }
                     }
                 }
                 Repeater {
-                    model: root.viewportModel.debugTargetNames
+                    model: root.debugModel.debugTargetNames
                     delegate: Rectangle {
                         required property string modelData
                         required property int index
@@ -789,7 +786,7 @@ Rectangle {
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: root.viewportModel.debugTargetIndex === index
+                            checked: root.debugModel.debugTargetIndex === index
                         }
                         Text {
                             anchors.left: parent.left; anchors.leftMargin: 27
@@ -804,7 +801,7 @@ Rectangle {
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
                             onTapped: {
-                                root.viewportModel.SelectDebugTarget(index)
+                                root.debugModel.SelectDebugTarget(index)
                                 debugTargetPopup.close()
                                 viewModesPopup.close()
                             }

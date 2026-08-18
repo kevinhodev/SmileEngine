@@ -18,6 +18,7 @@
 #include "SmileEditor/Rendering/RenderSettingsController.h"
 #include "SmileEditor/Scene/MaterialsBridge.h"
 #include "SmileEditor/Profiling/StatsBridge.h"
+#include "SmileEditor/Debugging/DebugTargetsBridge.h"
 #include "SmileEditor/UI/WindowBridge.h"
 #include "SmileEditor/Viewport/ViewportWidget.h"
 #include "SmileEditor/Application/DarkTheme.h"
@@ -109,6 +110,7 @@ namespace SmileEditor {
         });
         RenderBr   = new RenderSettingsBridge(this);
         StatsBr    = new StatsBridge(this);
+        DebugTargetsBr = new DebugTargetsBridge(this);
 
         // Mudanças externas invalidam os mesmos bindings usados pela UI.
         connect(RenderSettingsCtrl, &RenderSettingsController::GISettingsChanged,
@@ -259,6 +261,7 @@ namespace SmileEditor {
                 if (auto* TargetViewport = qobject_cast<ViewportWidget*>(TargetObject)) {
                     ActiveViewport = TargetViewport;
                     if (StatsBr) StatsBr->SetViewport(TargetViewport);
+                    if (DebugTargetsBr) DebugTargetsBr->SetViewport(TargetViewport);
                 }
             }
         }
@@ -276,7 +279,7 @@ namespace SmileEditor {
             const bool Shown = _Event->type() == QEvent::Show;
             if (Menus) Menus->SetDebugTargetsVisible(Shown);
             // Ocultar pausa o readback, mas preserva a seleção.
-            if (Viewport) Viewport->SetDebugPreviewEnabled(Shown);
+            if (DebugTargetsBr) DebugTargetsBr->SetPreviewEnabled(Shown);
         }
         if (MaterialsDlg && _Obj == MaterialsDlg &&
             (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
@@ -463,7 +466,7 @@ namespace SmileEditor {
                     if (CameraBookmarksBr) CameraBookmarksBr->OnSceneLoaded(Path, Additive);
                     if (CaptureBr)   CaptureBr->OnSceneLoaded(Path, Additive);
                     if (McpBr)       McpBr->OnSceneLoaded(Path, Additive);
-                    if (Viewport)    Viewport->NotifyDebugTargetsChanged();
+                    if (DebugTargetsBr) DebugTargetsBr->NotifyResourcesChanged();
                     if (StatusBr) {
                         StatusBr->ShowMessage(
                             Additive ? tr("Cena adicionada") : tr("Cena carregada"), 3000);
@@ -589,6 +592,7 @@ namespace SmileEditor {
         if (!ActiveViewport) {
             ActiveViewport = _Viewport;
             if (StatsBr) StatsBr->SetViewport(_Viewport);
+            if (DebugTargetsBr) DebugTargetsBr->SetViewport(_Viewport);
         }
     }
 
@@ -612,6 +616,9 @@ namespace SmileEditor {
         ToolbarProperties.insert(
             QStringLiteral("renderModel"),
             QVariant::fromValue(static_cast<QObject*>(RenderBr)));
+        ToolbarProperties.insert(
+            QStringLiteral("debugModel"),
+            QVariant::fromValue(static_cast<QObject*>(DebugTargetsBr)));
 
         QQuickWidget* Toolbar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ViewportToolbar.qml"),
@@ -925,11 +932,11 @@ namespace SmileEditor {
             auto* DebugWindowBridge = new WindowBridge(Dialog, Dialog);
             QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
                 QStringLiteral("DebugTargetsWindow.qml"),
-                { { QStringLiteral("viewportModel"), Viewport },
+                { { QStringLiteral("debugModel"), DebugTargetsBr },
                   { QStringLiteral("debugWindow"), DebugWindowBridge } },
                 Dialog,
                 { { QStringLiteral("debugtargetpreview"),
-                    new DebugTargetPreviewImageProvider(Viewport) } });
+                    new DebugTargetPreviewImageProvider(DebugTargetsBr) } });
             Panel->setObjectName(QStringLiteral("DebugTargetsWindowPanel"));
 
             auto* DialogLayout = new QVBoxLayout(Dialog);

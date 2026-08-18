@@ -281,7 +281,7 @@ namespace SmileEditor {
                     // Recriar o RT das nuvens remapeia a lista de alvos de debug (o registro e
                     // por nome): o visualizador precisa reler. Fica no viewport, que e o dono
                     // dessa lista.
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }
@@ -936,7 +936,7 @@ namespace SmileEditor {
         } // lock solto antes dos sinais (o QML relê no ato e pega o mesmo lock)
 
         emit GISettingsChanged();
-        if (SourceDebugDropped && Viewport) Viewport->NotifyDebugTargetsChanged();
+        if (SourceDebugDropped && Viewport) Viewport->NotifyRendererResourcesChanged();
     }
 
     void RenderSettingsBridge::ToggleReGIR() {
@@ -1138,7 +1138,7 @@ namespace SmileEditor {
         } // lock solto antes dos sinais
 
         emit GISettingsChanged();
-        if (SourceDebugDropped && Viewport) Viewport->NotifyDebugTargetsChanged();
+        if (SourceDebugDropped && Viewport) Viewport->NotifyRendererResourcesChanged();
     }
     void RenderSettingsBridge::SetIndirectFallback(int _V) {
         if (!Renderer) return;
@@ -1324,7 +1324,7 @@ namespace SmileEditor {
         //
         // Fora do escopo do lock de propósito: o QML relê as propriedades no ato e tenta pegar o
         // mesmo lock do renderer. Emitir com ele na mão é convite a deadlock.
-        if (Changed && Viewport) Viewport->NotifyDebugTargetsChanged();
+        if (Changed && Viewport) Viewport->NotifyRendererResourcesChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {
         if (!Renderer) return;
@@ -1692,7 +1692,7 @@ namespace SmileEditor {
             [this](bool _Success, const QString&) {
                 if (_Success) {
                     emit RenderSettingsChanged();
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }
@@ -1710,7 +1710,7 @@ namespace SmileEditor {
             [this](bool _Success, const QString&) {
                 if (_Success) {
                     emit RenderSettingsChanged();
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }
@@ -1727,7 +1727,7 @@ namespace SmileEditor {
             [this](bool _Success, const QString&) {
                 if (_Success) {
                     emit RenderSettingsChanged();
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }
@@ -1743,7 +1743,7 @@ namespace SmileEditor {
             [this](bool _Success, const QString&) {
                 if (_Success) {
                     emit RenderSettingsChanged();
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }
@@ -1759,7 +1759,7 @@ namespace SmileEditor {
             [this](bool _Success, const QString&) {
                 if (_Success) {
                     emit RenderSettingsChanged();
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }
@@ -1811,7 +1811,7 @@ namespace SmileEditor {
             [this](bool _Success, const QString&) {
                 if (_Success) {
                     emit RenderSettingsChanged();
-                    if (Viewport) Viewport->NotifyDebugTargetsChanged();
+                    if (Viewport) Viewport->NotifyRendererResourcesChanged();
                 }
             });
     }

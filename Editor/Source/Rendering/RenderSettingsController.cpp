@@ -138,7 +138,7 @@ namespace SmileEditor {
 
         // SetDenoiser/SetUpscaler podem reconstruir a lista de alvos. A lista do viewport e
         // cacheada e deve ser relida depois que o lock foi solto.
-        if (Viewport) Viewport->NotifyDebugTargetsChanged();
+        if (Viewport) Viewport->NotifyRendererResourcesChanged();
         emit GISettingsChanged();
         emit RenderSettingsChanged();
         emit StatsChanged();

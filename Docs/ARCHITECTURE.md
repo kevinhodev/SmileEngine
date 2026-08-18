@@ -341,7 +341,8 @@ O loop é dirigido pelo Editor, mas executado fora da GUI. O `QTimer` do `Viewpo
 prepara input/câmera e solicita um frame; `RenderThread` executa `Renderer::RenderFrame()` e
 `PresentFrame()` na sua thread dedicada (o `Present` é separado para o dono soltar o lock
 compartilhado antes de entrar no DXGI). A conclusão volta por callback enfileirado para a
-thread Qt, que consome readbacks, publica telemetria e emite `FrameReady`.
+thread Qt, que resolve picking/FPS e emite `FrameReady`; bridges observadores consomem seus
+próprios readbacks enquanto o snapshot do frame ainda está protegido.
 
 ### 5.1 Resolução: render-res × display-res
 
@@ -732,8 +733,9 @@ Editor/
 │   ├── Rendering/       configurações, controle e captura
 │   ├── Integration/     protocolos externos, como SmileMCP
 │   ├── Viewport/        HWND, render thread, input e gizmos
-│   └── Profiling/       modelos de diagnóstico e desempenho
-├── Source/              espelha os mesmos sete domínios
+│   ├── Profiling/       modelos de desempenho e uso de recursos
+│   └── Debugging/       render targets, previews e inspeção de probes
+├── Source/              espelha os mesmos oito domínios
 ├── Qml/
 │   ├── components/      controles e tema compartilhados
 │   └── icons/           ícones vetoriais
@@ -787,11 +789,16 @@ um domínio, quando uma entrada é duplicada ou quando o manifesto aponta para u
   acontecem na thread de renderização.
 - **Bridges QML** (`Q_OBJECT` + `Q_PROPERTY`/`Q_INVOKABLE`), uma por domínio:
   `MaterialsBridge`, `LightsBridge`, `SceneOutlinerBridge`, `TimeOfDayBridge`,
-  `RenderSettingsBridge`, `StatsBridge`, `MenuBridge`, `StatusBridge`, `LogBridge`,
-  `WindowBridge`. O `StatsBridge` observa o viewport ativo; o Mini Profiler não faz parte do
+  `RenderSettingsBridge`, `StatsBridge`, `DebugTargetsBridge`, `MenuBridge`, `StatusBridge`,
+  `LogBridge`, `WindowBridge`. `StatsBridge` e `DebugTargetsBridge` observam o viewport ativo;
+  Mini Profiler, preview de render targets e inspeção de probes não fazem parte do
   `ViewportWidget`.
+- **Diagnóstico de render:** `DebugTargetsBridge` possui o estado da sessão, consome os readbacks
+  de preview/probes em `FrameReady` e fornece o image provider usado pelo QML. Quando o point-pick
+  está armado, um `eventFilter` intercepta apenas aquele clique antes do picking normal; a viewport
+  não conhece o bridge.
 - **Direção das dependências do Editor:** `Application` compõe os demais domínios;
-  `UI` hospeda QML sem conhecer rendering; `Scene`, `Rendering` e `Profiling` consomem o
+  `UI` hospeda QML sem conhecer rendering; `Scene`, `Rendering`, `Profiling` e `Debugging` consomem o
   `RendererHandle`; `Integration` usa controladores tipados em vez de dirigir janelas; `Viewport`
   possui a superfície e a thread de renderização. Bridges de domínio não devem depender de
   `MainWindow`.
@@ -934,10 +941,10 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 - **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
   caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
   política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
-- **`ViewportWidget` ainda concentra responsabilidades do editor:** telemetria e apresentação do
-  Mini Profiler já pertencem ao `StatsBridge`, mas o tipo ainda reúne host do HWND, input,
-  visualizador de alvos e fila de jobs do renderer. Os knobs já saíram para `RenderSettingsBridge`,
-  e configuração/snapshot externos passam por `RenderSettingsController`.
+- **`ViewportWidget` ainda concentra a fila de jobs do renderer:** telemetria pertence ao
+  `StatsBridge`, e render targets/probes ao `DebugTargetsBridge`. O tipo ficou restrito ao host do
+  HWND, render loop, input/gizmos e coordenação dos jobs. Os knobs pertencem ao
+  `RenderSettingsBridge`, e configuração/snapshot externos passam por `RenderSettingsController`.
 - **Acoplamento de compilação:** 59 dos 73 headers públicos de `Graphics/` puxam
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` ainda puxa cerca de 64 headers e é incluído por 10 TUs.
 - ~~**Inversão `SceneLoader -> Renderer`.**~~ **Resolvido:** `SceneLoader.cpp` produz

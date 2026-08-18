@@ -116,6 +116,10 @@ smile_editor_domain(Profiling
     StatsBridge
 )
 
+smile_editor_domain(Debugging
+    DebugTargetsBridge
+)
+
 smile_editor_assets("UI\\QML\\Shell"
     Qml/ConsolePanel.qml
     Qml/EditorMenuBar.qml
@@ -130,9 +134,12 @@ smile_editor_assets("UI\\QML\\Scene"
 )
 
 smile_editor_assets("UI\\QML\\Rendering"
-    Qml/DebugTargetsWindow.qml
     Qml/SettingsWindow.qml
     Qml/ViewportToolbar.qml
+)
+
+smile_editor_assets("UI\\QML\\Debugging"
+    Qml/DebugTargetsWindow.qml
 )
 
 smile_editor_assets("UI\\QML\\Profiling"

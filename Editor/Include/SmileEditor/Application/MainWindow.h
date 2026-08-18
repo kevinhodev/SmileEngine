@@ -32,6 +32,7 @@ namespace SmileEditor {
     class MaterialsBridge;
     class RenderSettingsBridge;
     class StatsBridge;
+    class DebugTargetsBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -100,6 +101,7 @@ namespace SmileEditor {
         McpBridge*            McpBr      = nullptr;
         RenderSettingsBridge* RenderBr   = nullptr;
         StatsBridge*          StatsBr    = nullptr;
+        DebugTargetsBridge*   DebugTargetsBr = nullptr;
         QPointer<QDialog>     MaterialsDlg;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;
