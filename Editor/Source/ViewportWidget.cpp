@@ -575,6 +575,26 @@ namespace SmileEditor {
         GizmoCtrl.SetMode(Next);
         if (GizmoCtrl.GetMode() != Next) return;
         emit GizmoModeChanged();
+        // A RESTRICAO de espaco depende do modo (Escalar trava em Local), e o botao de espaco nao
+        // ouve o sinal de modo — sem isto ele so se atualizaria no proximo evento de espaco.
+        emit GizmoSpaceChanged();
+    }
+
+    void ViewportWidget::SetGizmoSpace(int _Space) {
+        if (_Space < 0 || _Space > static_cast<int>(GizmoController::ESpace::Local)) return;
+        const auto Next = static_cast<GizmoController::ESpace>(_Space);
+        if (GizmoCtrl.GetSpace() == Next) return;
+        // O SetSpace ignora a troca no meio de um arraste (a base ja esta congelada), entao o
+        // sinal so sai quando ela de fato aconteceu — mesmo contrato do SetGizmoMode.
+        GizmoCtrl.SetSpace(Next);
+        if (GizmoCtrl.GetSpace() != Next) return;
+        emit GizmoSpaceChanged();
+    }
+
+    void ViewportWidget::ToggleGizmoSpace() {
+        SetGizmoSpace(GizmoCtrl.GetSpace() == GizmoController::ESpace::World
+                          ? static_cast<int>(GizmoController::ESpace::Local)
+                          : static_cast<int>(GizmoController::ESpace::World));
     }
 
     void ViewportWidget::SelectLit() {
@@ -1436,7 +1456,13 @@ namespace SmileEditor {
         FlushPendingGizmoInput(*RendererAccess);
         // Gizmo (editor-side): submete as setas ao DebugDraw da Engine ANTES do RenderFrame, que
         // as desenha e limpa. Geometria world-space -> projetada com a VP do frame (sem lag).
+        // A restricao de espaco tambem muda com a SELECAO (luz nao tem base local), e selecao
+        // muda por picking assincrono, sem sinal que o botao pudesse ouvir. O Submit e onde ela
+        // e resolvida por frame, entao le antes e depois e avisa so quando de fato virou —
+        // barato, e sem transformar o botao num binding que repinta todo frame.
+        const int RestrictionBefore = GetGizmoSpaceRestriction();
         GizmoCtrl.Submit(*RendererAccess);
+        if (GetGizmoSpaceRestriction() != RestrictionBefore) emit GizmoSpaceChanged();
         if (RendererThread.RequestFrame()) {
             if (!RendererOwnsSurface) {
                 RendererOwnsSurface = true;
@@ -1726,6 +1752,17 @@ namespace SmileEditor {
             }
             if (_Event->key() == Qt::Key_D && (_Event->modifiers() & Qt::ControlModifier)) {
                 emit DuplicateSelectionRequested();
+                _Event->accept();
+                return;
+            }
+            // Ctrl+` alterna Global/Local, igual a UE (CycleTransformGizmoCoordSystem, chord
+            // Control+Tilde em EditorViewportCommands.cpp). Aqui e uma ALTERNANCIA e nao um ciclo
+            // porque so existem dois espacos; quando houver um terceiro (a Cry tem Parent e View),
+            // vira ciclo. Com modificador, entao nao concorre com digitacao — mas mora no
+            // keyPressEvent junto com Q/W/E/R para o dono da tecla continuar sendo o viewport.
+            if (_Event->key() == Qt::Key_QuoteLeft &&
+                (_Event->modifiers() & Qt::ControlModifier)) {
+                ToggleGizmoSpace();
                 _Event->accept();
                 return;
             }

@@ -176,8 +176,14 @@ namespace SmileEditor {
 
     void GizmoController::AxisBasis(Smile::Renderer& R, bool IsLight, int Idx,
                                     Vec3 Out[3]) const {
+        // Congelada no press: ver o comentario do DragAxes. Vale para os tres modos.
+        if (Dragging) { for (int i = 0; i < 3; ++i) Out[i] = DragAxes[i]; return; }
+
         Out[0] = Vec3::UnitX(); Out[1] = Vec3::UnitY(); Out[2] = Vec3::UnitZ();
-        if (Mode != EMode::Scale || IsLight || Idx < 0) return;
+        // SpaceFor com o IsLight RECEBIDO, e nao o EffectiveSpace() que le o cache: um evento de
+        // mouse pode chegar com uma selecao mais nova do que a do ultimo Submit. A regra em si
+        // (luz e escala) mora la, num lugar so.
+        if (SpaceFor(IsLight) == ESpace::World || Idx < 0) return;
         const auto& List = R.GetScene().Renderables();
         if (Idx >= static_cast<int>(List.size())) return;
         // Linha i da matriz de rotacao (convencao linha) = imagem do eixo local i em mundo.
@@ -428,10 +434,17 @@ namespace SmileEditor {
         // Visualizacao das luzes independe do modo e de haver selecao (markers sempre visiveis):
         // no modo Selecionar eles sao o unico alvo clicavel de uma luz.
         SubmitLightShapes(_Renderer);
-        if (Mode == EMode::Select) return;
 
         Vec3 Pivot; int Idx; bool IsLight;
-        if (!GetPivot(_Renderer, Pivot, Idx, IsLight)) return;
+        const bool HasSelection = GetPivot(_Renderer, Pivot, Idx, IsLight);
+        // Cache para as consultas SEM argumento (o botao de espaco da toolbar). Atualizado ANTES
+        // do early-return do modo Selecionar: o botao continua na tela ali, e mostrar a restricao
+        // certa nao depende de haver handle desenhado. Sem selecao nao ha restricao — o botao
+        // volta a mostrar a escolha do usuario.
+        SelectionIsLight = HasSelection && IsLight;
+
+        if (Mode == EMode::Select) return;
+        if (!HasSelection) return;
         // Congelar o pivo durante o arraste vale para ROTACIONAR e ESCALAR, e so para eles: os
         // dois giram/crescem EM VOLTA de um ponto que tem de ficar parado, e a AABB de mundo
         // deles muda de forma no meio do gesto (a caixa de um objeto girado nao e a imagem da
@@ -523,6 +536,9 @@ namespace SmileEditor {
         DragIdx        = Idx;
         DragIsLight    = IsLight;
         DragStartPivot = Pivot;
+        // Congela a base ANTES de qualquer coisa mexer no objeto — dali em diante desenho e
+        // matematica leem a mesma, inclusive no espaco Local, onde o objeto gira sob o gizmo.
+        for (int i = 0; i < 3; ++i) DragAxes[i] = Axes[i];
         DragAxisWorld  = AxisFromEnum(Axes, Axis).NormalizedSafe(Vec3::UnitY());
         DragAngle      = 0.0f;
 

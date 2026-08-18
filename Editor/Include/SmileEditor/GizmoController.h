@@ -42,6 +42,62 @@ namespace SmileEditor {
         // e limpo junto — ele aponta pra um handle do modo ANTERIOR, e sem isso o novo nasceria
         // com um eixo aceso que o cursor nao esta tocando.
         void  SetMode(EMode M) { if (!Dragging) { Mode = M; Hovered = EAxis::None; } }
+
+        // Base dos eixos do gizmo. Uma escolha SO, global, como em UE e Flax — a Cry guarda uma
+        // por modo de edicao (m_coordSystemForEditMode em LevelEditorSharedState), o que e melhor
+        // de usar mas pede um botao que muda de rotulo quando a ferramenta troca; fica para o dia
+        // em que houver um terceiro espaco (a Cry tem Parent, View e UserDefined alem destes).
+        enum class ESpace : Smile::u32 { World = 0, Local };
+
+        // Por que o espaco escolhido esta sendo ignorado. A UI le isto para DIZER o motivo em vez
+        // de o botao parecer quebrado — e para nao ter de reconstruir a regra por conta propria.
+        enum class ESpaceRestriction : Smile::u32 { None = 0, ScaleIsLocal, LightHasNoLocal };
+
+        // A REGRA, num lugar so. Todo mundo que precisa saber em que base o gizmo opera passa por
+        // aqui — o desenho, o hit-test, o botao da toolbar e o atalho. Ter isto duplicado foi o
+        // que produziu os dois defeitos desta rodada: a luz caia em mundo por um `if` solto no
+        // AxisBasis enquanto o botao seguia mostrando "Local", e o Ctrl+` escrevia no espaco
+        // durante o modo Escalar enquanto o botao aparecia travado.
+        //
+        //  - LUZ nao tem base local utilizavel: a pontual e isotropica e o spot so tem uma
+        //    DIRECAO — falta o roll, entao qualquer base montada dela teria um eixo escolhido a
+        //    esmo e o gizmo giraria sozinho quando a direcao passasse perto do polo. Vem primeiro
+        //    porque e a restricao mais forte: nao e uma escolha de conveniencia, e ausencia de
+        //    base.
+        //  - ESCALA e sempre local mesmo com Global escolhido: escalar num eixo de mundo um
+        //    objeto rotacionado produz CISALHAMENTO, que um TRS nao representa. UE e Flax fazem
+        //    igual (FEditorModeTools::GetCoordSystem forca COORD_Local em WM_Scale; o
+        //    UpdateMatrices da Flax so zera a orientacao em `World && mode != Scale`).
+        ESpace SpaceFor(bool IsLight) const {
+            if (IsLight)              return ESpace::World;
+            if (Mode == EMode::Scale) return ESpace::Local;
+            return Space;
+        }
+        ESpaceRestriction RestrictionFor(bool IsLight) const {
+            if (IsLight)              return ESpaceRestriction::LightHasNoLocal;
+            if (Mode == EMode::Scale) return ESpaceRestriction::ScaleIsLocal;
+            return ESpaceRestriction::None;
+        }
+
+        // BRUTO: o que o usuario escolheu. E o que o botao mostra quando nada esta restringindo.
+        // A separacao bruto/efetivo e a mesma do bGetRawValue da UE, e existe para o botao NAO
+        // MENTIR — mas so metade dela: o outro lado e o SetSpace recusar quando ha restricao,
+        // senao o atalho muda um estado que a UI mostra como travado e a mudanca aparece depois,
+        // sozinha, quando o usuario sai do modo.
+        ESpace GetSpace() const { return Space; }
+        void   SetSpace(ESpace S) {
+            // Guarda AQUI e nao no atalho: botao e teclado tem de obedecer a mesma regra por
+            // construcao. Duplicar a condicao no chamador e exatamente o que deixou os dois
+            // divergirem.
+            if (Dragging || IsSpaceForced()) return;
+            Space   = S;
+            Hovered = EAxis::None; // os eixos giram; o que estava sob o cursor deixa de estar
+        }
+
+        // Versoes sem argumento para a UI, sobre a selecao ATUAL (ver SelectionIsLight).
+        ESpace            EffectiveSpace() const { return SpaceFor(SelectionIsLight); }
+        ESpaceRestriction Restriction()    const { return RestrictionFor(SelectionIsLight); }
+        bool              IsSpaceForced()  const { return Restriction() != ESpaceRestriction::None; }
         EMode GetMode() const { return Mode; }
 
         // Chamado a cada frame APOS UpdateCamera e ANTES de RenderFrame: submete os handles do
@@ -133,6 +189,12 @@ namespace SmileEditor {
 
         bool        Enabled = true;
         EMode       Mode    = EMode::Translate;
+        ESpace      Space   = ESpace::World;  // escolha BRUTA; ver EffectiveSpace
+        // A selecao atual e uma LUZ? Cache atualizado pelo Submit (que ja resolve a selecao por
+        // frame) para as consultas SEM argumento da UI poderem responder sem o Renderer. Os
+        // caminhos que JA tem o IsLight em maos passam ele pelo SpaceFor: sao os de evento de
+        // mouse, que podem rodar com uma selecao mais nova que o ultimo frame.
+        bool        SelectionIsLight = false;
         EAxis       Hovered = EAxis::None;
         EAxis       Active  = EAxis::None;
         bool        Dragging = false;
@@ -141,6 +203,11 @@ namespace SmileEditor {
         Smile::Vec3 DragStartPos{};          // posicao no inicio do arraste
         Smile::Vec3 DragStartPivot{};        // pivo FIXO durante o arraste (linha do eixo)
         Smile::Vec3 DragAxisWorld{};         // eixo pego, em mundo (local ja resolvido)
+        // Base CONGELADA no press, pelo mesmo motivo do DragStartPivot: no espaco Local o objeto
+        // gira durante o gesto, e recomputar a base por frame faria os aneis rodarem junto com
+        // ele enquanto a matematica do arraste segue no eixo pego. Congelar vale para os tres
+        // modos — nos outros dois a base nem muda, entao nao custa nada e evita um caso especial.
+        Smile::Vec3 DragAxes[3]{};
         float       DragStartT = 0.0f;       // offset inicial ao longo do eixo (mover/escalar)
 
         // --- Rotacionar. O angulo e recomputado do ESTADO INICIAL a cada evento (nunca somado

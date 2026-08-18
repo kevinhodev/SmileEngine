@@ -36,6 +36,13 @@ namespace SmileEditor {
         // ViewportToolbar e os atalhos Q/W/E/R apontam para o MESMO estado — o gizmo vive no
         // widget, entao a toolbar le daqui em vez de manter uma copia que sai de sincronia.
         Q_PROPERTY(int gizmoMode READ GetGizmoMode NOTIFY GizmoModeChanged)
+        // Espaco BRUTO (GizmoController::ESpace) — o que o usuario escolheu. Pode estar sendo
+        // ignorado: gizmoSpaceEffective diz o que VALE agora e gizmoSpaceRestriction diz por que
+        // (0 nada, 1 escala e sempre local, 2 luz nao tem base local). A UI mostra o efetivo e
+        // explica o motivo, em vez de o botao afirmar uma coisa e o gizmo fazer outra.
+        Q_PROPERTY(int gizmoSpace READ GetGizmoSpace NOTIFY GizmoSpaceChanged)
+        Q_PROPERTY(int gizmoSpaceEffective READ GetGizmoSpaceEffective NOTIFY GizmoSpaceChanged)
+        Q_PROPERTY(int gizmoSpaceRestriction READ GetGizmoSpaceRestriction NOTIFY GizmoSpaceChanged)
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
         Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewStateChanged)
@@ -119,6 +126,15 @@ namespace SmileEditor {
         int               GetGizmoMode() const {
             return static_cast<int>(GizmoCtrl.GetMode());
         }
+        int               GetGizmoSpace() const {
+            return static_cast<int>(GizmoCtrl.GetSpace());
+        }
+        int               GetGizmoSpaceEffective() const {
+            return static_cast<int>(GizmoCtrl.EffectiveSpace());
+        }
+        int               GetGizmoSpaceRestriction() const {
+            return static_cast<int>(GizmoCtrl.Restriction());
+        }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
         bool              IsRtShaderTimerAvailable() const;
@@ -169,6 +185,9 @@ namespace SmileEditor {
 
         // 0 Selecionar / 1 Mover / 2 Rotacionar / 3 Escalar (GizmoController::EMode).
         Q_INVOKABLE void SetGizmoMode(int mode);
+        // 0 Global / 1 Local. Alterna entre os dois sem o chamador saber os numeros.
+        Q_INVOKABLE void SetGizmoSpace(int space);
+        Q_INVOKABLE void ToggleGizmoSpace();
 
         Q_INVOKABLE void SelectLit();
         Q_INVOKABLE void SelectReflectionHeatmap();
@@ -236,6 +255,7 @@ namespace SmileEditor {
         void DuplicateSelectionRequested();
         void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
         void GizmoModeChanged(); // ferramenta de transformacao (toolbar e Q/W/E/R)
+        void GizmoSpaceChanged(); // espaco Global/Local (toolbar e Ctrl+`)
         // Um gesto do gizmo terminou tendo MESMO alterado o transform de um renderavel. Existe
         // porque o GizmoController escreve direto na FScene, sem passar por nenhuma ponte Qt —
         // sem este aviso a camada autorada (.smap) nunca ficava suja, e uma sessao inteira de

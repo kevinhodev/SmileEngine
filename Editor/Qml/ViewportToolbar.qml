@@ -302,12 +302,28 @@ Rectangle {
             }
         }
 
+        // Alternância de dois estados, não dropdown: só existem Global e Local, e um menu de dois
+        // itens custa dois cliques pelo que um resolve. Vira dropdown no dia em que houver um
+        // terceiro espaço (a Cry tem Parent, View e UserDefined).
+        //
+        // O botão mostra o espaço EFETIVO, não o escolhido, e quando os dois divergem ele aparece
+        // travado com o motivo no tooltip. As duas restrições vêm do C++ (gizmoSpaceRestriction)
+        // em vez de serem deduzidas aqui: deduzir é o que fazia a luz operar em mundo enquanto o
+        // botão dizia "Local".
         C.ToolbarButton {
+            // 0 = nenhuma · 1 = escala é sempre local · 2 = luz não tem base local
+            readonly property int restriction: root.viewportModel.gizmoSpaceRestriction
+            readonly property bool isLocal: root.viewportModel.gizmoSpaceEffective === 1
             visible: !root.narrow
-            iconName: "world"
-            label: root.compact ? "" : "Global"
-            dropDown: true
-            tip: "Espaço de transformação: Global"
+            iconName: isLocal ? "local" : "world"
+            label: root.compact ? "" : (isLocal ? "Local" : "Global")
+            enabledVisual: restriction === 0
+            tip: restriction === 1 ? "Escala é sempre no espaço local do objeto"
+               : restriction === 2 ? "Luz não tem espaço local: só tem direção, sem roll"
+               : (isLocal ? "Espaço de transformação: Local (eixos do objeto)"
+                          : "Espaço de transformação: Global (eixos do mundo)")
+            tipShortcut: restriction === 0 ? "Ctrl+`" : ""
+            onTapped: root.viewportModel.ToggleGizmoSpace()
         }
 
         Rectangle {
