@@ -32,6 +32,10 @@ namespace SmileEditor {
     class ViewportWidget : public QWidget {
         Q_OBJECT
         Q_PROPERTY(int viewMode READ GetViewMode NOTIFY ViewStateChanged)
+        // Ferramenta de transformacao ativa (GizmoController::EMode). Os 4 botoes da
+        // ViewportToolbar e os atalhos Q/W/E/R apontam para o MESMO estado — o gizmo vive no
+        // widget, entao a toolbar le daqui em vez de manter uma copia que sai de sincronia.
+        Q_PROPERTY(int gizmoMode READ GetGizmoMode NOTIFY GizmoModeChanged)
         // Visualizador de render targets: lista publicada por DebugTargets (nomes) + selecao.
         Q_PROPERTY(QStringList debugTargetNames READ GetDebugTargetNames NOTIFY DebugTargetsChanged)
         Q_PROPERTY(int debugTargetIndex READ GetDebugTargetIndex NOTIFY ViewStateChanged)
@@ -112,6 +116,9 @@ namespace SmileEditor {
             SceneCommitCallback Completion);
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
+        int               GetGizmoMode() const {
+            return static_cast<int>(GizmoCtrl.GetMode());
+        }
         QStringList       GetDebugTargetNames() const;
         int               GetDebugTargetIndex() const;
         bool              IsRtShaderTimerAvailable() const;
@@ -159,6 +166,9 @@ namespace SmileEditor {
         double            GetGpuFrameMs() const;
         QVariantList      GetGpuTimings() const;
         QVariantList      GetShadowCascades() const;
+
+        // 0 Selecionar / 1 Mover / 2 Rotacionar / 3 Escalar (GizmoController::EMode).
+        Q_INVOKABLE void SetGizmoMode(int mode);
 
         Q_INVOKABLE void SelectLit();
         Q_INVOKABLE void SelectReflectionHeatmap();
@@ -225,6 +235,13 @@ namespace SmileEditor {
         void DeleteSelectionRequested();
         void DuplicateSelectionRequested();
         void ViewStateChanged(); // modo Lit/heatmap e alvo fullscreen da toolbar
+        void GizmoModeChanged(); // ferramenta de transformacao (toolbar e Q/W/E/R)
+        // Um gesto do gizmo terminou tendo MESMO alterado o transform de um renderavel. Existe
+        // porque o GizmoController escreve direto na FScene, sem passar por nenhuma ponte Qt —
+        // sem este aviso a camada autorada (.smap) nunca ficava suja, e uma sessao inteira de
+        // arrastar objeto podia ser descartada em silencio no fechamento. Luz nao emite: aquelas
+        // moram no <cena>.lights.json, e o LightsBridge::Refresh ja as marca.
+        void SceneEdited();
         void DebugSettingsChanged(); // grade, exposicao e sessao de inspecao de probes
         void SettingsRequested();
         // A lista de alvos so muda quando o Renderer recria os targets (boot/resize/troca de
@@ -282,7 +299,7 @@ namespace SmileEditor {
 
         RenderThread   RendererThread;
         RendererHandle Renderer;
-        GizmoController GizmoCtrl; // logica do gizmo de translacao (editor-side)
+        GizmoController GizmoCtrl; // gizmo de transformacao: mover/rotacionar/escalar (editor-side)
         QTimer*       RedrawTimer       = nullptr;
         QTimer*       InitializationDebounce = nullptr;
         QTimer*       ResizeDebounce    = nullptr;
