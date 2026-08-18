@@ -43,8 +43,7 @@ namespace Smile {
         ObjectCB       = Upload.Resource;
         MappedObjectCB = Upload.Mapped;
 
-        // Buffers de bounds/visibilidade do occlusion culling acompanham a capacidade
-        // (a fila ja foi flushada acima; recriar aqui e seguro).
+        // ObjectCB e HiZ compartilham a mesma capacidade de objetos.
         HiZ.SetupObjects(Backend->Device.Native(), Backend->SRVHeap, MaxObjects);
     }
 
@@ -54,26 +53,15 @@ namespace Smile {
 
     bool Renderer::CommitCookedScene(std::shared_ptr<FSceneImportResult> _Imported, bool _Additive) {
         if (!_Imported) return false;
-        // Trocar (ou somar) cena no meio de um aquecimento troca geometria, luzes e todos os
-        // historicos sem reiniciar o N nem o indice de amostragem — e, numa troca da cena
-        // principal, o manifesto ainda sairia com o nome da cena ANTERIOR. Cancelar aqui, no
-        // commit, cobre tambem a carga por linha de comando e a aditiva.
+        // A captura nao pode atravessar uma mudanca de geometria ou de historicos.
         CaptureState->Session.Cancel("uma cena foi carregada durante o aquecimento");
         const Clock::time_point t0 = Clock::now();
-        // Zera aqui e nao no Prepare: o Prepare so decodifica em CPU, quem cria recurso e o
-        // commit. A janela do contador tem que casar com a fase que o log ao lado mede.
+        // As estatisticas cobrem apenas a fase GPU deste commit.
         GpuResources::ResetCreationStats();
 
-        // Captura os descritores REAIS do LOAD, do mesmo jeito que o RecreateInternalTargets
-        // faz com os do resize. Os dois conjuntos sao populacoes DIFERENTES e a distincao
-        // decide a frente de alocacao: o resize sao ~79 recursos GRANDES (o commit de pagina
-        // domina, e so um pool que RETEM memoria ajuda), o load sao ~471 recursos pequenos (o
-        // overhead por heap domina, que e o que sub-alocar remove). Medir um e concluir sobre
-        // o outro seria repetir o erro que ja custou tres conclusoes nesta frente.
+        // Loads e resizes usam capturas separadas porque possuem perfis de alocacao distintos.
 #if SMILE_DIAGNOSTICS
         const char* CaptureOverride = std::getenv("SMILE_CAPTURE_DESCS_LOAD");
-        // Variavel propria e nao a do resize: com a mesma, um dump sobrescreveria o outro e
-        // sobraria um arquivo so, sem dizer de qual janela veio.
         GpuResources::FDescCaptureSession DescCapture(
             CaptureOverride ? CaptureOverride : "smile-load-descs.txt");
 #endif
@@ -87,16 +75,9 @@ namespace Smile {
         const auto& rnds = Imported.Renderables;
         const auto& entries = Imported.MeshEntries;
 
-        // Em carga aditiva preservamos meshes/materiais/texturas ja carregados; so
-        // limpamos a cena anterior no modo de substituicao (padrao).
+        // A carga aditiva preserva os recursos e objetos existentes.
         if (!_Additive) {
-            // Os frames em voo (kFramesInFlight) ainda referenciam o que vem abaixo: os
-            // ID3D12Resource das texturas (FTexture::Release faz Reset() no recurso), os ranges do
-            // SRV heap SHADER-VISIBLE (FMaterial::Release devolve a tabela, e a cena nova realoca o
-            // mesmo range e sobrescreve os descritores) e os slots do pool de CBV (o memcpy do
-            // Finalize cai no endereco que o root CBV do frame anterior aponta). Sem drenar a fila
-            // antes, isso e use-after-free — e o editor chama LoadCookedScene direto do handler de
-            // menu, com o timer de render ativo. Mesmo motivo do Flush em RecreateObjectCB.
+            // Frames em voo ainda podem referenciar recursos, descritores e CBVs da cena anterior.
             Backend->DirectQueue.Flush();
 
             SceneState->Scene.Clear();
@@ -106,13 +87,7 @@ namespace Smile {
             ImportedTextures.clear();
         }
 
-        // Cada fase abaixo guarda um snapshot e loga o DELTA. Sem isso o contador so dava o
-        // total do commit, e comparar esse total contra o tempo de uma fase leva a conclusao
-        // errada — foi o que aconteceu na primeira leitura desta instrumentacao.
-        //
-        // PhaseSum acumula os deltas para a linha "nao atribuido" no fim fechar a conta: as
-        // fases somavam 487 dos 492 recursos, e os cinco que faltavam (paginas de CB de
-        // material, ObjectCB/HiZ) nao apareciam em lugar nenhum.
+        // PhaseSum permite separar cada fase e fechar o total nao atribuido ao final.
         GpuResources::FCreationStats PhaseSum{};
         const Clock::time_point TextureUploadStart = Clock::now();
         const auto TexCreationBase = GpuResources::CreationStats();
@@ -137,11 +112,7 @@ namespace Smile {
             return (it != texByPath.end()) ? it->second : nullptr;
         };
 
-        // FNV-1a 64 sobre os bytes crus do registro cozido = identidade estavel do material
-        // (ver FMaterial::Id). Hashear o struct inteiro e seguro aqui: SSceneMaterial nao tem
-        // padding (1664B de char arrays, divisivel por 4, seguidos so de f32/u32 = 1724B) e o
-        // Cooker o preenche a partir de `SSceneMaterial out{}` com SetStr fazendo memset antes
-        // do strncpy — ou seja, todo byte e deterministico, inclusive o resto dos char arrays.
+        // SSceneMaterial nao possui padding e o Cooker inicializa todos os bytes; o hash e estavel.
         auto MaterialContentId = [](const SSceneMaterial& _Sm) -> u64 {
             const auto* Bytes = reinterpret_cast<const u8*>(&_Sm);
             u64 H = 1469598103934665603ull;               // offset basis
@@ -192,14 +163,11 @@ namespace Smile {
             mat->Constants.HasMetalnessMap         = metalT ? 1u : 0u;
             mat->Constants.HasRoughnessMap         = roughT ? 1u : 0u;
 
-            // O fator multiplica o mapa no shader (Metallic = Factor * map.r); precisa ser 1 quando
-            // existe mapa (packed Specular OU Metalness/Roughness separados) p/ nao zerar o produto.
-            // Sem mapa, usa o fator cozido do material (ex.: vidro rough=0 reflexivo, lampada ~0.4).
+            // Mapas usam fator neutro; sem mapa prevalece o fator cozido.
             mat->Constants.SpecularPacking    = specT ? 1u : 0u;
             mat->Constants.MetallicFactor     = (specT || metalT) ? 1.0f : sm.MetallicFactor;
             mat->Constants.RoughnessFactor    = (specT || roughT) ? 1.0f : sm.RoughnessFactor;
 
-            // Translucido (alpha-blend no passe forward); o alpha vem de BaseColorFactor.w (× textura).
             mat->Blend = (sm.Blend != 0u);
 
             mat->Constants.AOStrength         = 0.0f;
@@ -210,8 +178,7 @@ namespace Smile {
             mat->Constants.AlphaCutoff        = sm.AlphaCutoff;
             mat->TwoSided                     = (sm.TwoSided != 0);
 
-            // Folhagem agora vem de um flag PROPRIO (decidido por keyword de vegetacao no cooker),
-            // desacoplado de masked/two-sided — um cutout (corrente/grade) e masked mas DefaultLit.
+            // Masked/two-sided nao implica folhagem; o Cooker fornece o modelo explicitamente.
             const bool isFoliage = (sm.Foliage != 0u);
             mat->Constants.ShadingModel   = isFoliage ? 1u : 0u;
             mat->Constants.SubsurfaceColor = { 1.0f, 1.0f, 1.0f, isFoliage ? 0.6f : 0.0f };
@@ -224,9 +191,7 @@ namespace Smile {
         auto matOf = [&](u32 mi) -> FMaterial* {
             return (mi != kNoMaterial && mi < sh.MaterialCount) ? matPtrs[mi] : nullptr;
         };
-        // Nome do renderable p/ o Scene Outliner. A v7 guarda o nome do NO; antes dela o cooker
-        // bakeava o transform no vertice e nao gravava nome nenhum, e o melhor disponivel era o
-        // do material — que e por que a arvore mostrava nome de material repetido.
+        // Assets sem nome usam material e indice como fallbacks estaveis no Outliner.
         auto nameOf = [&](const SSceneRenderable& r, u32 mi, u32 fallbackIdx) -> std::string {
             if (r.Name[0] != '\0') return std::string(r.Name, strnlen(r.Name, kCookedMaxName));
             if (mi != kNoMaterial && mi < sh.MaterialCount && mats[mi].Name[0] != '\0') {
@@ -247,18 +212,16 @@ namespace Smile {
             out.Name     = nameOf(r, r.MaterialIndex, i);
             out.Mesh     = meshPtrs[r.MeshIndex];
             out.Material = matOf(r.MaterialIndex);
-            // v7: o transform sai do cozido em vez de ser identidade com a geometria em mundo.
             out.Transform.Position      = Vec3{ r.Position[0], r.Position[1], r.Position[2] };
             out.Transform.RotationEuler = Vec3{ r.RotationEuler[0], r.RotationEuler[1],
                                                 r.RotationEuler[2] };
             out.Transform.Scale         = Vec3{ r.Scale[0], r.Scale[1], r.Scale[2] };
-            // A AABB do cozido e LOCAL na v7; culling, HiZ, sombras locais e chuva leem MUNDO.
+            // O arquivo armazena AABB local; os consumidores usam bounds de mundo.
             const SMeshEntry& e = entries[r.MeshIndex];
             out.LocalAABBMin = Vec3{ e.AABBMin[0], e.AABBMin[1], e.AABBMin[2] };
             out.LocalAABBMax = Vec3{ e.AABBMax[0], e.AABBMax[1], e.AABBMax[2] };
             out.RefreshWorldBounds();
-            // Origem no asset: e por aqui que o .smap volta a achar este objeto na proxima
-            // execucao (o indice na lista viva muda a cada remocao).
+            // CookedIndex preserva a identidade do asset quando a lista viva muda.
             out.CookedIndex = static_cast<i32>(i);
             SceneState->Scene.AddRenderable(out);
         }
@@ -266,26 +229,19 @@ namespace Smile {
         const double msMeshUpload = MsSince(tMeshUploadStart);
         GpuResources::AccumulatePhase(PhaseSum, "commit/meshes", MeshCreationBase);
 
-        // Todos os uploads (texturas + meshes) foram submetidos SEM bloquear na fila COPY;
-        // espera aqui, uma unica vez, antes do primeiro consumo (BLAS/DDGI/frame leem VB e SRV).
+        // BLAS, DDGI e o frame so podem consumir os uploads apos esta sincronizacao unica.
         const Clock::time_point tSyncStart = Clock::now();
         Backend->UploadQueue.WaitIdle();
         const double msSync = MsSince(tSyncStart);
 
         const Clock::time_point ObjectSetupStart = Clock::now();
-        // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
-        // onde os renderaveis do interior se somam aos do exterior ja presentes).
         if (static_cast<u32>(SceneState->Scene.Renderables().size()) > MaxObjects) {
-            // Com folga (SceneCapacityFor): o MaxObjects dimensiona o ObjectCB E a tabela de
-            // bounds do HiZ (SetupObjects logo acima), e as duas precisam da mesma folga das
-            // outras tres estruturas por cena para que criar objeto no editor nao estoure.
+            // A folga permite criar objetos sem redimensionar ObjectCB e HiZ imediatamente.
             MaxObjects = SceneCapacityFor(static_cast<u32>(SceneState->Scene.Renderables().size()));
             RecreateObjectCB();
         }
 
-        // Em carga aditiva mantemos a camera onde o usuario deixou; so reposicionamos
-        // na entrada de uma cena nova (substituicao) — e ai e corte de camera (Camera.SetPose
-        // direto nao passa pelo SetCameraPose, entao o aviso sai aqui).
+        // Uma substituicao reposiciona a camera e invalida historicos temporais.
         if (!_Additive) {
             SceneState->Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
             Settings().NotifyCameraCut();
@@ -296,8 +252,7 @@ namespace Smile {
                  std::to_string(sh.MaterialCount) + " materiais, " +
                  std::to_string(sh.RenderableCount) + " renderaveis, " +
                  std::to_string(uploaded) + " texturas DDS");
-        // AABB de uniao sobre TODA a cena (exterior + interior em carga aditiva), para
-        // o volume de GI cobrir tudo que esta carregado.
+        // O volume de GI cobre tambem objetos preservados por uma carga aditiva.
         Vec3 sceneMin{  1e30f,  1e30f,  1e30f };
         Vec3 sceneMax{ -1e30f, -1e30f, -1e30f };
         for (const FRenderable& r : SceneState->Scene.Renderables()) {
@@ -309,10 +264,7 @@ namespace Smile {
             sceneMax.Z = std::max(sceneMax.Z, r.AABBMax.Z);
         }
 
-        // Terreno (F1): sidecar <cena>.terrain.json ao lado da cena — JSON PLANO, so
-        // chaves de primeiro nivel ("heightmap" relativo a pasta da cena, "size",
-        // "unitsPerTexel", "heightScale", "originX/Y/Z"). Sem sidecar em carga de
-        // substituicao, descarrega o terreno anterior.
+        // O sidecar <cena>.terrain.json usa chaves planas e caminhos relativos a cena.
         const Clock::time_point TerrainStart = Clock::now();
         const auto TerrainCreationBase = GpuResources::CreationStats();
         {
@@ -350,9 +302,7 @@ namespace Smile {
                     td.HeightScale   = FindNum("heightScale", 100.0f);
                     td.Origin        = { FindNum("originX", 0.0f), FindNum("originY", 0.0f),
                                          FindNum("originZ", 0.0f) };
-                    // F2: camadas de material ("tex0".."tex3" albedo, "nrm0".."nrm3" normal,
-                    // "tile0".."tile3" metros por tile, "rough0".."rough3") + regras dos
-                    // pesos procedurais. Paths relativos a pasta da cena.
+                    // As quatro camadas usam sufixos numericos para textura, normal, tile e roughness.
                     for (u32 l = 0; l < FTerrainDesc::kLayers; ++l) {
                         const std::string suf = std::to_string(l);
                         const std::string alb = FindStr(("tex" + suf).c_str());
@@ -373,24 +323,16 @@ namespace Smile {
                     td.BlendContrast  = FindNum("blendContrast",  td.BlendContrast);
                     td.MacroAmount    = FindNum("macroAmount",    td.MacroAmount);
                     if (Terrain.Load(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, td)) {
-                        // F3: proxy do terreno na TLAS — renderable RaytracingOnly (fora do
-                        // raster/CSM/picking; o terreno real rasteriza pelo FTerrain). Entra
-                        // ANTES do BuildRaytracingScene logo abaixo, e DEPOIS da uniao de
-                        // AABB da cena (o volume de GI nao estica pro terreno de proposito).
-                        // Material = cor media do vale (e o que o bounce do GI enxerga).
+                        // O proxy participa apenas da TLAS; FTerrain continua responsavel pelo raster.
                         FMesh Proxy;
                         if (Terrain.BuildProxyMesh(Proxy)) {
                             std::vector<FMesh> ProxyList;
                             ProxyList.push_back(std::move(Proxy));
                             std::vector<FGpuMesh*> ProxyMesh =
                                 SceneState->Scene.AddMeshesBatch(Backend->Device.Native(), Backend->UploadQueue, ProxyList);
-                            Backend->UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
+                            Backend->UploadQueue.WaitIdle(); // O BLAS consome este VB logo abaixo.
 
-                            // Albedo do proxy: textura bakeada com o blend de 4 camadas quando o
-                            // terreno tem camadas (ver FTerrain::BakeProxyAlbedo); sem elas, o
-                            // raster tambem desenha cor chapada e o fator constante basta.
-                            // A textura entra no ImportedTextures, que e liberado junto com o
-                            // ImportedMaterials — o mesmo lifetime do material que aponta p/ ela.
+                            // A textura e o material do proxy compartilham o lifetime da cena importada.
                             FTexture* proxyAlbedo = nullptr;
                             FTextureCPUData proxyAlbedoCPU;
                             if (Terrain.TakeProxyAlbedoCPU(proxyAlbedoCPU)) {
@@ -412,11 +354,10 @@ namespace Smile {
                             mat->Height            = &TexDefaultWhite;
                             mat->Metalness         = &TexDefaultWhite;
                             mat->Roughness         = &TexDefaultWhite;
-                            // Com a textura bakeada o fator vira NEUTRO: o hit shading faz
-                            // albedo = BaseColor * textura, e a cor ja esta na textura.
+                            // A textura bakeada exige fator neutro no hit shading.
                             mat->Constants.BaseColorFactor = proxyAlbedo
                                 ? Vec4{ 1.0f, 1.0f, 1.0f, 1.0f }
-                                : Vec4{ 0.26f, 0.32f, 0.19f, 1.0f }; // cor media do vale
+                                : Vec4{ 0.26f, 0.32f, 0.19f, 1.0f };
                             mat->Constants.MetallicFactor  = 0.0f;
                             mat->Constants.RoughnessFactor = 0.95f;
                             mat->Finalize(Backend->Device.Native(), Backend->SRVHeap);
@@ -427,10 +368,7 @@ namespace Smile {
                             proxy.Mesh           = ProxyMesh.empty() ? nullptr : ProxyMesh[0];
                             proxy.Material       = mat.get();
                             proxy.RaytracingOnly = true;
-                            // A malha do proxy ja e world-space com transform identidade, entao
-                            // local e mundo coincidem. Preencher as duas mantem a invariante
-                            // "mundo = local pelo Transform" valida tambem aqui — sem isso um
-                            // RefreshWorldBounds futuro trocaria a caixa pelo default de +-1e9.
+                            // Com transform identidade, os bounds locais e de mundo devem coincidir.
                             Terrain.GetBounds(proxy.LocalAABBMin, proxy.LocalAABBMax);
                             proxy.AABBMin = proxy.LocalAABBMin;
                             proxy.AABBMax = proxy.LocalAABBMax;
@@ -450,9 +388,7 @@ namespace Smile {
         const double msTerrain = MsSince(TerrainStart);
         GpuResources::AccumulatePhase(PhaseSum, "commit/terreno", TerrainCreationBase);
 
-        // O volume de GI NAO inclui o terreno de proposito: um terreno de km esticaria o
-        // grid de probes do DDGI. Fora do volume o shading cai no fallback de ambiente;
-        // terreno no GI de verdade vem na F3 (BLAS proxy na TLAS).
+        // Incluir terrenos extensos diluiria o grid DDGI; fora dele vale o fallback de ambiente.
         const Clock::time_point RaytracingStart = Clock::now();
         const auto RtCreationBase = GpuResources::CreationStats();
         BuildRaytracingScene();
@@ -465,8 +401,7 @@ namespace Smile {
         const double msGI = MsSince(GIStart);
         GpuResources::AccumulatePhase(PhaseSum, "commit/setupGI", GiCreationBase);
 
-        // Luzes puntuais: a carga nao-aditiva limpou a cena (Scene.Clear); o EDITOR repovoa
-        // pelo <cena>.lights.json (LightsBridge::OnSceneLoaded) e invalida a selecao de luz.
+        // O Editor repovoa as luzes da cena substituida pelo sidecar .lights.json.
         if (!_Additive) ClearLightSelection();
 
         const double CommitMs = MsSince(t0);
@@ -485,10 +420,8 @@ namespace Smile {
                 std::to_string(sh.MaterialCount) + " materiais, " +
                 std::to_string(sh.RenderableCount) + " renderaveis, " +
                 std::to_string(uploaded) + " texturas");
-        // Depois do commit: texturas, meshes, BLAS/TLAS e o setup de GI ja existem, entao este e
-        // o primeiro ponto em que o breakdown descreve a cena inteira.
+        // Neste ponto o breakdown inclui texturas, meshes, ray tracing e GI.
         VramTracker::LogBreakdown(Backend->Device.QueryVideoMemory().LocalUsage);
-        // O par do breakdown: aquele diz QUANTO esta alocado, este diz quanto CUSTOU alocar.
         GpuResources::LogCreationUnattributed("commit/nao-atribuido", PhaseSum);
         GpuResources::LogCreationStats("load da cena");
 #if SMILE_DIAGNOSTICS

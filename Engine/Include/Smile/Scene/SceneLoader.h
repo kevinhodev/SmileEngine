@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace Smile {
-    // Resultado CPU do loader. Nao possui device, descriptors ou recursos GPU.
+    // Dados CPU prontos para o Renderer criar os recursos GPU da cena.
     struct FSceneImportResult {
         std::filesystem::path BasePath;
         std::filesystem::path ScenePath;
