@@ -1,4 +1,5 @@
 #include "SmileEditor/LightsBridge.h"
+#include "SmileEditor/JsonSidecar.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
@@ -547,12 +548,7 @@ namespace SmileEditor {
         Root[QStringLiteral("version")] = 1;
         Root[QStringLiteral("lights")]  = Arr;
 
-        QFile File(JsonPath);
-        if (!File.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            Smile::LogError("Luzes: falha ao salvar " + JsonPath.toStdString());
-            return false;
-        }
-        File.write(QJsonDocument(Root).toJson(QJsonDocument::Indented));
+        if (!WriteJsonSidecar(JsonPath, Root, "Luzes")) return false;
         Smile::LogInfo("Luzes: " + std::to_string(Arr.size()) + " salvas em " +
                        QFileInfo(JsonPath).fileName().toStdString());
         if (DirtyFlag) { DirtyFlag = false; emit DirtyChanged(); }
@@ -568,26 +564,39 @@ namespace SmileEditor {
         if (Sel != CachedSelected) {
             CachedSelected = Sel;
             const auto L = SelOf(Renderer);
-            if (L) {
-                CachedPos[0] = L->Position.X;
-                CachedPos[1] = L->Position.Y;
-                CachedPos[2] = L->Position.Z;
-            }
+            if (L) CacheSelectedPose(*L);
             emit SelectionChanged();
             emit LightChanged();
             return;
         }
 
-        // Gizmo arrastando a luz: reflete a posicao no painel e marca dirty.
+        // Gizmo arrastando a luz: reflete no painel e marca dirty. DIRECAO junto com a posicao —
+        // o gizmo de rotacao aponta o cone do spot, e vigiar so a posicao deixava o painel
+        // mostrando o azimute/elevacao velhos e, pior, o sidecar de luzes NAO ficava sujo: a
+        // rotacao se perdia sem aviso ao fechar o editor.
         const auto L = SelOf(Renderer);
-        if (L && (std::abs(L->Position.X - CachedPos[0]) > 1e-5 ||
-                  std::abs(L->Position.Y - CachedPos[1]) > 1e-5 ||
-                  std::abs(L->Position.Z - CachedPos[2]) > 1e-5)) {
-            CachedPos[0] = L->Position.X;
-            CachedPos[1] = L->Position.Y;
-            CachedPos[2] = L->Position.Z;
+        if (L && !PoseMatchesCache(*L)) {
+            CacheSelectedPose(*L);
             if (!DirtyFlag) { DirtyFlag = true; emit DirtyChanged(); }
             emit LightChanged();
         }
+    }
+
+    void LightsBridge::CacheSelectedPose(const Smile::FLight& _L) {
+        CachedPos[0] = _L.Position.X;
+        CachedPos[1] = _L.Position.Y;
+        CachedPos[2] = _L.Position.Z;
+        CachedDir[0] = _L.Direction.X;
+        CachedDir[1] = _L.Direction.Y;
+        CachedDir[2] = _L.Direction.Z;
+    }
+
+    bool LightsBridge::PoseMatchesCache(const Smile::FLight& _L) const {
+        return std::abs(_L.Position.X - CachedPos[0]) <= 1e-5 &&
+               std::abs(_L.Position.Y - CachedPos[1]) <= 1e-5 &&
+               std::abs(_L.Position.Z - CachedPos[2]) <= 1e-5 &&
+               std::abs(_L.Direction.X - CachedDir[0]) <= 1e-5 &&
+               std::abs(_L.Direction.Y - CachedDir[1]) <= 1e-5 &&
+               std::abs(_L.Direction.Z - CachedDir[2]) <= 1e-5;
     }
 }

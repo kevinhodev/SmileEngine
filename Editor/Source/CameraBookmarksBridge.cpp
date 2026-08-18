@@ -1,4 +1,5 @@
 #include "SmileEditor/CameraBookmarksBridge.h"
+#include "SmileEditor/JsonSidecar.h"
 
 #include "Smile/Graphics/Renderer.h"
 
@@ -7,7 +8,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSaveFile>
 
 #include <cmath>
 
@@ -307,22 +307,9 @@ namespace SmileEditor {
         Root[QStringLiteral("version")] = kSchemaVersion;
         Root[QStringLiteral("slots")]   = Arr;
 
-        // QSaveFile e nao QFile|Truncate: aquele apaga o conteudo ANTES de escrever, entao um
-        // crash, disco cheio ou short write no meio destroi o unico sidecar — e ele e a referencia
-        // que torna as capturas de sessoes diferentes comparaveis. O QSaveFile escreve num
-        // temporario e troca no commit(), entao ou o arquivo antigo continua inteiro, ou o novo
-        // esta completo. Nunca um meio-termo.
-        QSaveFile F(JsonPath);
-        if (!F.open(QIODevice::WriteOnly)) return false;
-        // Indentado: o sidecar entra no repositorio e vai ser lido em diff. Compacto economizaria
-        // bytes que nao faltam e tornaria ilegivel a unica coisa que se quer ver num diff destes,
-        // que e QUAL pose mudou.
-        const QByteArray Payload = QJsonDocument(Root).toJson(QJsonDocument::Indented);
-        const qint64 Written = F.write(Payload);
-        // Short write conta como falha: sem esta checagem o commit() publicaria um JSON truncado,
-        // que na proxima abertura viraria Corrupt — com o original ja perdido.
-        if (Written != Payload.size()) { F.cancelWriting(); return false; }
-        if (!F.commit()) return false;
+        // Escrita atomica compartilhada (ver JsonSidecar.h). Esta era a UNICA das cinco copias
+        // que estava correta; virou a funcao para que a sexta nasca certa por construcao.
+        if (!WriteJsonSidecar(JsonPath, Root, "Bookmarks")) return false;
         State = ESidecarState::Ok;
         return true;
     }

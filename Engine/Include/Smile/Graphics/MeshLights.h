@@ -136,6 +136,29 @@ namespace Smile {
         // Marcar sujo quando transform, material emissivo ou o conjunto de renderables mudar.
         void MarkDirty() { Dirty = true; }
 
+        // Reescreve SO as linhas de transform das tasks a partir da cena viva e marca sujo. O
+        // transform vai BAKEADO na task (Row0/1/2, ver FMeshLightTaskGPU) porque a extracao leva
+        // o vertice para mundo por conta propria — entao mover, girar ou escalar uma malha
+        // emissiva sem isto deixaria a luz saindo do lugar antigo, e depois de uma escala com a
+        // AREA e o FLUXO antigos (o alias table pondera por area).
+        //
+        // Patch no lugar em vez de SetupForScene inteiro: aquele refaz survey, buffers e
+        // descritores.
+        //
+        //   Applied    — alguma linha mudou, foi reescrita, e a extracao vai rodar.
+        //   Unchanged  — nenhuma malha emissiva se mexeu. A TransformsVersion e GLOBAL, entao
+        //                mover um objeto qualquer chega aqui; sem este caso o pool fecharia e a
+        //                alias table seria refeita a cada gesto, sem nada ter mudado.
+        //   Busy       — ha extracao em voo lendo o buffer de tasks (que e UPLOAD). O chamador
+        //                tem de MANTER a versao pendente e tentar de novo no proximo frame.
+        //   SetChanged — o CONJUNTO de malhas emissivas mudou (visibilidade, material). O patch
+        //                nao se aplica e nada foi escrito. O chamador TEM de reconstruir (ver
+        //                Renderer::RebuildMeshLights): nao ha ninguem mais para fazer isso — o
+        //                olho do Scene Outliner alterna Visible e bumpa TransformsVersion sem
+        //                passar por SetupForScene nenhum.
+        enum class ETransformRefresh : u8 { Applied, Unchanged, Busy, SetChanged };
+        ETransformRefresh RefreshTransforms(const FScene& Scene);
+
         bool IsReady()          const { return Ready; }
         // O buffer que o Pass A e o Pass B AMOSTRAM. E sempre a copia compacta em VRAM: quando a
         // compactacao esta desligada ela recebe os mesmos N triangulos do original, entao o
@@ -293,7 +316,12 @@ namespace Smile {
         u32 NumTasks     = 0;
         u32 NumTriangles = 0;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> TaskBuffer;   // upload; escrito uma vez por cena
+        Microsoft::WRL::ComPtr<ID3D12Resource> TaskBuffer;   // upload; reescrito pelo RefreshTransforms
+        u8*                                    MappedTasks = nullptr; // idem (upload = mapa persistente)
+        // Copia AUTORITATIVA das tasks em memoria normal. O mapeado acima e write-combined:
+        // otimo para escrever em sequencia, pessimo para ler. Guardar aqui deixa o
+        // RefreshTransforms conferir o particionamento sem tocar no buffer da GPU.
+        std::vector<FMeshLightTaskGPU>         CpuTasks;
         Microsoft::WRL::ComPtr<ID3D12Resource> LightBuffer;  // default; saida da extracao
         Microsoft::WRL::ComPtr<ID3D12Resource> ReadbackBuffer; // le o fluxo de volta p/ a CPU
         Microsoft::WRL::ComPtr<ID3D12Resource> AliasBuffer;    // upload; tabela de Vose

@@ -133,6 +133,11 @@ namespace SmileEditor {
         void InvalidateLightRegion(const Smile::FLight& L,
                                    const Smile::Vec3& OldMin, const Smile::Vec3& OldMax);
         bool LoadLights();          // le o JsonPath e ADICIONA na cena
+        // Pose = posicao + direcao. Um par so, porque quem escreve e quem compara tem de cobrir
+        // exatamente os mesmos campos: vigiar menos do que se guarda faz o Refresh perder a
+        // mudanca; guardar menos do que se vigia faz ele disparar todo frame.
+        void CacheSelectedPose(const Smile::FLight& L);
+        bool PoseMatchesCache(const Smile::FLight& L) const;
 
         RendererHandle Renderer;
         QString JsonPath;           // <cena>.lights.json da cena principal (nao-aditiva)
@@ -144,5 +149,6 @@ namespace SmileEditor {
         // Estado espelhado p/ o Refresh detectar mudanca externa (clique/gizmo do viewport).
         int    CachedSelected = -1;
         double CachedPos[3] = { 0.0, 0.0, 0.0 };
+        double CachedDir[3] = { 0.0, 0.0, 0.0 };
     };
 }

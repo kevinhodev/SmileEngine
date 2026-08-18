@@ -1,4 +1,5 @@
 #include "SmileEditor/SceneDocument.h"
+#include "SmileEditor/JsonSidecar.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
@@ -148,7 +149,31 @@ namespace SmileEditor {
             const auto It = ByCooked.constFind(O.value(QStringLiteral("from")).toInt(-1));
             if (It == ByCooked.constEnd()) continue;
             const Smile::u64 SourceId = Scene.Renderables()[(size_t)It.value()].Id;
-            Smile::FRenderable* Copy = Scene.DuplicateRenderable(SourceId);
+            // WRAPPER do Renderer, e nao o Scene.DuplicateRenderable CRU: o do FScene deixa a
+            // lista consistente e o RENDERER desatualizado — o proprio Scene.h avisa disso, e
+            // diz que o caminho suportado com a cena carregada e este. Um .smap com "spawned" e
+            // sem "deleted" nascia com InstanceGeo, capacidades, picking e os demais caches
+            // indexados por indice sem saber do objeto novo; e a TLAS, reconstruida pelo bump do
+            // fim, passava a apontar para uma entrada de InstanceGeo NUNCA preenchida. Uma
+            // remocao no mesmo mapa mascarava tudo, porque ela sim fecha o ciclo.
+            //
+            // ⚠️ CUSTO, medido em leitura de codigo e NAO otimizado: cada chamada faz o ciclo
+            // INTEIRO — dreno das duas filas, RefreshInstanceGeo (varre a cena), RebuildMeshLights
+            // (novo survey + realocacao de buffers e descritores) e invalidacao de historico. Com
+            // M copias sobre N objetos isso tende a O(M*N), mais M realocacoes de mesh lights. A
+            // folga do SceneCapacityFor evita SO o caminho pesado (BLAS + SetupGIForScene); ela
+            // NAO evita nada do resto — uma versao anterior deste comentario afirmava que evitava,
+            // e estava errada.
+            //
+            // Aceito como divida porque "spawned" vem de Ctrl+D manual no editor e hoje sao
+            // poucos por mapa. A correcao estrutural, quando doer, e mutacao em LOTE com UMA
+            // reconciliacao no fim: o OnSceneStructureChanged e privado, entao seria um
+            // Renderer::DuplicateRenderables(span<u64>) ou um guarda RAII de batch.
+            const Smile::u64 NewId = Access->DuplicateRenderable(SourceId);
+            if (NewId == 0) continue;
+            // Busca por Id e DEPOIS do wrapper: o re-setup pode realocar a lista, entao um
+            // ponteiro obtido antes dele nao sobreviveria.
+            Smile::FRenderable* Copy = Scene.FindRenderable(NewId);
             if (!Copy) continue;
             Copy->Name = O.value(QStringLiteral("name")).toString(
                              QString::fromStdString(Copy->Name)).toStdString();
@@ -180,6 +205,21 @@ namespace SmileEditor {
             for (Smile::u64 Id : ToRemove)
                 if (Access->RemoveRenderable(Id)) ++Removed;
         }
+
+        // Os overrides (passo 1) escrevem Visible e Transform DIRETO no FRenderable, sem passar
+        // por nenhum caminho do Renderer — ao contrario de criar e apagar, que vao pelo
+        // DuplicateRenderable/RemoveRenderable e ja disparam a reconstrucao por conta deles. Sem
+        // este bump, um .smap que so MOVE ou so ESCONDE era aplicado na FScene e ignorado por
+        // todo o resto: a TLAS e as mesh lights ficavam no estado COZIDO, e o objeto aparecia no
+        // lugar novo no raster enquanto o ray tracing continuava vendo o antigo. Spawn ou delete
+        // no mesmo mapa mascaravam o defeito, porque a reconstrucao deles arrastava o resto.
+        //
+        // Incondicional: isto roda uma vez por carga de cena, e o preco de um rebuild leve de
+        // TLAS a mais nao paga o risco de a condicao esquecer um caso.
+        Scene.BumpTransformsVersion();
+        // Objeto movido ou oculto muda o que o mapa estatico de sombra contem — mesma razao pela
+        // qual o olho do Scene Outliner bumpa os dois.
+        Scene.BumpStaticCastersVersion();
 
         Smile::LogInfo("Mapa aplicado: " + std::to_string(Moved) + " movidos, " +
                        std::to_string(Hidden) + " ocultos, " + std::to_string(Spawned) +
@@ -270,13 +310,7 @@ namespace SmileEditor {
         Root[QStringLiteral("spawned")]   = Spawned;
         Root[QStringLiteral("deleted")]   = Deleted;
 
-        QFile File(MapPath);
-        if (!File.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-            Smile::LogError("Mapa: nao foi possivel gravar " + MapPath.toStdString());
-            return false;
-        }
-        File.write(QJsonDocument(Root).toJson(QJsonDocument::Indented));
-        File.close();
+        if (!WriteJsonSidecar(MapPath, Root, "Mapa")) return false;
 
         Smile::LogInfo("Mapa salvo: " + std::to_string(Overrides.size()) + " overrides, " +
                        std::to_string(Spawned.size()) + " criados, " +

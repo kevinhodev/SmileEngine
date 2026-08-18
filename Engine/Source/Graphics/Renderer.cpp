@@ -568,24 +568,42 @@ namespace Smile {
             // extrairia radiancia com o transform da instancia errada; numa copia de malha
             // emissiva, a copia simplesmente nao iluminaria. E ordens de grandeza mais barato
             // que o caminho caro — varre a cena em CPU e realoca buffers pequenos, sem tocar
-            // nos ~200 MB de pool de BLAS.
-            MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
-                                     RaytracingScene.InstanceGeoSRV());
-            // O SetupForScene acima soltou os buffers do pool/alias e alocou outros. As tabelas de
-            // trace do ReSTIR DI carregam uma COPIA daqueles descritores e nao acompanham a troca:
-            // sem este refresh o DI le recurso liberado e a tela estoura em branco na primeira vez
-            // que ele roda depois de uma duplicacao. Este caminho e o unico que reconstroi o
-            // FMeshLights sem passar pelo SetupReflectionsForScene, que e onde as tabelas nascem.
-            // As filas ja foram drenadas acima, entao sobrescrever descritor aqui e seguro.
-            ReSTIRDI.RefreshMeshLightDescriptors(Device.Native(), SRVHeap,
-                                                 MeshLights.LightSRVSlot(),
-                                                 MeshLights.AliasSRVSlot());
+            // nos ~200 MB de pool de BLAS. O dreno que ele repete e no-op com as filas ja
+            // paradas, e vale o preco de a receita viver num lugar so.
+            RebuildMeshLights();
             // A TLAS nao precisa de pedido explicito: a FScene ja bumpou TransformsVersion na
             // mutacao, e o rebuild por frame do RenderFrame reage a isso sozinho — a lista nova
             // cabe na capacidade, que e o que o NeedsResize acabou de garantir.
         }
 
         Settings().NotifySceneStructureChanged();
+    }
+
+    void Renderer::RebuildMeshLights() {
+        // RECEITA UNICA de reconstrucao das mesh lights. Existia duplicada — o caminho barato do
+        // RefreshSceneObjects fazia isto inline — e foi justamente a duplicacao que permitiu ao
+        // caminho de VISIBILIDADE nascer sem ela.
+        //
+        // As DUAS filas: o SetupForScene libera os buffers do pool/alias e aloca outros, e o
+        // snapshot e lido tanto pela direta quanto pela COMPUTE (tabela de trace do DDGI).
+        // Reescrever com trace em voo corrompe o que ele esta lendo — sem device removal, so
+        // material trocado em alguns raios de um frame, que e a forma mais cara de descobrir.
+        CommandQueue.Flush();
+        ComputeQueue.WaitIdle();
+        MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
+                                 RaytracingScene.InstanceGeoSRV());
+        // As tasks nasceram com o transform de AGORA; sem sincronizar o contador, o proximo frame
+        // veria "versao diferente" e refaria de graca o que acabou de ser feito.
+        MeshLightTransformsVersion = Scene.TransformsVersion();
+        // O rebuild remonta as tasks a partir da cena viva, entao qualquer pedido pendente de
+        // material ja esta atendido por construcao.
+        MeshLightEmissiveDirty = false;
+        // As tabelas de trace do ReSTIR DI carregam uma COPIA daqueles descritores e nao
+        // acompanham a troca: sem este refresh o DI le recurso liberado e a tela estoura em
+        // branco na primeira vez que ele roda. Seguro aqui porque as filas ja foram drenadas.
+        ReSTIRDI.RefreshMeshLightDescriptors(Device.Native(), SRVHeap,
+                                             MeshLights.LightSRVSlot(),
+                                             MeshLights.AliasSRVSlot());
     }
 
     void Renderer::SetupGIForScene(const Vec3& _AABBMin, const Vec3& _AABBMax) {
@@ -634,6 +652,9 @@ namespace Smile {
         // monta as tasks; a extracao em si so dispara no Record, e so quando sujo.
         MeshLights.SetupForScene(Device.Native(), SRVHeap, Scene,
                                  RaytracingScene.InstanceGeoSRV());
+        // As tasks acabaram de nascer com o transform de AGORA; sem sincronizar o contador, o
+        // primeiro frame veria "versao diferente" e refaria de graca o que acabou de ser feito.
+        MeshLightTransformsVersion = Scene.TransformsVersion();
 
         SetupReflectionsForScene();
 
@@ -5306,6 +5327,18 @@ namespace Smile {
         if (MaterialRTStateDirty) {
             MaterialRTStateDirty = false;
             Settings().NotifyMaterialRTStateChanged();
+            // Emissivo E material: cor, intensidade e RTEmissiveScale entram por aqui. O
+            // NotifyMaterialRTStateChanged reescreve o InstanceGeo (de onde a extracao LE a
+            // radiancia) mas nao toca nas mesh lights, entao sem isto o buffer de triangulos e a
+            // alias table continuavam com o fluxo antigo — e cruzar a intensidade ZERO mudava o
+            // CONJUNTO de tasks (ver IsEmissiveForRT) sem ninguem remontar a lista.
+            //
+            // Aproximacao deliberada: marca em QUALQUER edicao de material, nao so nas
+            // emissivas. Separar exigiria rastrear campo a campo, e o caso comum ja paga um
+            // dreno das duas filas ali em cima — ao lado disso, um dispatch de extracao a mais
+            // e ruido. O bloco de reconciliacao abaixo ainda decide o que fazer: nada se nem o
+            // conjunto nem a radiancia justificarem trabalho.
+            MeshLightEmissiveDirty = true;
         }
         // Idem para energia de luz no indireto. Fica DEPOIS e em if separado de proposito: se os
         // dois cairem no mesmo frame, o de material ja invalidou tudo e este vira no-op barato —
@@ -5331,6 +5364,57 @@ namespace Smile {
         // dominio muda de tamanho, entao o mesmo indice de reservoir passa a apontar para outro
         // triangulo.
         if (MeshLights.ConsumeDomainPublish()) Settings().NotifyMeshDomainChanged();
+
+        // Malha emissiva que se move, que aparece/some, ou cujo material muda leva a luz junto. A
+        // task guarda o transform BAKEADO e o particionamento por instancia (ver
+        // FMeshLightTaskGPU), e o buffer de triangulos guarda a radiancia JA EXTRAIDA — entao sem
+        // isto a emissao continua saindo do lugar antigo, com area e fluxo antigos depois de uma
+        // escala, e com a cor antiga depois de uma edicao de material.
+        //
+        // Dois gatilhos, um caminho: a TransformsVersion (o MESMO contador que a TLAS consome,
+        // logo pega gizmo, olho do Scene Outliner, .smap, MCP e undo futuro sem que nenhum
+        // precise saber que mesh lights existem) e o pedido vindo de material.
+        //
+        // AQUI, junto das coalescencias acima e ANTES do BeginFrame, porque o ramo SetChanged
+        // drena as filas e realoca buffers — o que nao pode acontecer com um command list aberto.
+        //
+        // Segurado enquanto um arraste esta em curso: cada reconstrucao derruba a alias table
+        // (AliasReady = false) e so a refaz depois do readback, entao faze-la a cada frame do
+        // gesto deixaria as mesh lights apagadas do inicio ao fim dele. Ao soltar, a versao ainda
+        // difere da aplicada e a reconciliacao entra no frame seguinte.
+        if (MeshLights.IsReady() && DraggingRenderableId == 0 &&
+            (MeshLightEmissiveDirty ||
+             Scene.TransformsVersion() != MeshLightTransformsVersion)) {
+            switch (MeshLights.RefreshTransforms(Scene)) {
+            case FMeshLights::ETransformRefresh::Busy:
+                // Extracao em voo lendo o buffer de tasks. NEM a versao NEM o pedido emissivo
+                // sao consumidos — consumi-los faria o pedido sumir em silencio, e a malha
+                // ficaria com o lugar (ou a cor) antigos ate alguem mexer nela de novo.
+                break;
+            case FMeshLights::ETransformRefresh::SetChanged:
+                // O CONJUNTO de malhas emissivas mudou sem passar pelo RefreshSceneObjects. Dois
+                // casos reais: o olho do Scene Outliner, que alterna Visible e bumpa
+                // TransformsVersion sem reconstruir nada, e uma intensidade emissiva cruzando
+                // ZERO, que faz a malha entrar ou sair do IsEmissiveForRT. Nao existe ninguem
+                // depois de nos para consertar. O RebuildMeshLights ja sincroniza a versao.
+                RebuildMeshLights();
+                break;
+            case FMeshLights::ETransformRefresh::Applied:
+                MeshLightTransformsVersion = Scene.TransformsVersion();
+                MeshLightEmissiveDirty     = false; // o Applied ja marcou sujo: a extracao roda
+                break;
+            case FMeshLights::ETransformRefresh::Unchanged:
+                MeshLightTransformsVersion = Scene.TransformsVersion();
+                // Ninguem se MOVEU, mas a radiancia pode ter mudado. A extracao le a cor do
+                // InstanceGeo (ja reescrito pelo NotifyMaterialRTStateChanged acima), entao um
+                // MarkDirty basta: refaz fluxo por triangulo e alias table sem realocar nada.
+                if (MeshLightEmissiveDirty) {
+                    MeshLights.MarkDirty();
+                    MeshLightEmissiveDirty = false;
+                }
+                break;
+            }
+        }
 
         // Captura deterministica: abre a sessao (preset + reset) ou desfaz o preset da anterior.
         // AQUI, junto das coalescencias acima e antes do BeginFrame, pelo mesmo motivo delas —

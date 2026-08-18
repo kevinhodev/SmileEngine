@@ -40,6 +40,7 @@ set(EDITOR_SOURCES
     Source/SmileLogo.cpp
     Source/LucideIcon.cpp
     Source/GizmoController.cpp
+    Source/JsonSidecar.cpp
     Source/LogBridge.cpp
     Source/QmlHost.cpp
     Source/WindowBridge.cpp

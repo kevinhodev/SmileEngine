@@ -243,6 +243,8 @@ namespace Smile {
         FreeSlot(CompactLightsSRV, 1);
         FreeSlot(ExtractTable, 2);
         TaskBuffer.Reset();
+        MappedTasks = nullptr;
+        CpuTasks.clear();
         LightBuffer.Reset();
         ReadbackBuffer.Reset();
         if (AliasBuffer && MappedAlias) { AliasBuffer->Unmap(0, nullptr); MappedAlias = nullptr; }
@@ -282,8 +284,8 @@ namespace Smile {
 
         // Uma task por malha emissiva, em ordem crescente de LightOffset e sem buracos — a busca
         // binaria do shader depende dessas duas propriedades.
-        std::vector<FMeshLightTaskGPU> Tasks;
-        Tasks.reserve(SceneStats.EmissiveMeshes);
+        CpuTasks.clear();
+        CpuTasks.reserve(SceneStats.EmissiveMeshes);
         u32 Offset = 0;
         const std::vector<FRenderable>& List = _Scene.Renderables();
         for (u32 i = 0; i < static_cast<u32>(List.size()); ++i) {
@@ -302,9 +304,9 @@ namespace Smile {
             T.Row1 = { M.M[1][0], M.M[1][1], M.M[1][2], M.M[1][3] };
             T.Row2 = { M.M[2][0], M.M[2][1], M.M[2][2], M.M[2][3] };
             Offset += T.TriangleCount;
-            Tasks.push_back(T);
+            CpuTasks.push_back(T);
         }
-        NumTasks     = static_cast<u32>(Tasks.size());
+        NumTasks     = static_cast<u32>(CpuTasks.size());
         NumTriangles = Offset;
 
         // Aloca no minimo 1 elemento mesmo sem geometria emissiva. Custa 96 bytes e elimina um caso
@@ -319,10 +321,11 @@ namespace Smile {
         // vem mapeado de forma persistente, que e o normal para upload heap.
         const GpuResources::FUploadBuffer TaskUpload = GpuResources::CreateUploadBuffer(
             _Device, sizeof(FMeshLightTaskGPU) * TaskElems, 1, false);
-        TaskBuffer = TaskUpload.Resource;
+        TaskBuffer  = TaskUpload.Resource;
+        MappedTasks = TaskUpload.Mapped;
         std::memset(TaskUpload.Mapped, 0, sizeof(FMeshLightTaskGPU) * TaskElems);
         if (NumTasks > 0)
-            std::memcpy(TaskUpload.Mapped, Tasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
+            std::memcpy(TaskUpload.Mapped, CpuTasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
 
         LightBuffer = GpuResources::CreateBuffer(
             _Device, sizeof(FTriangleLightGPU) * LightElems,
@@ -418,6 +421,70 @@ namespace Smile {
 
         Ready = true;
         Dirty = NumTriangles > 0;
+    }
+
+    FMeshLights::ETransformRefresh FMeshLights::RefreshTransforms(const FScene& _Scene) {
+        // NumTasks == 0 NAO sai cedo: cena sem malha emissiva alguma precisa continuar
+        // caminhando, senao a primeira que ficasse visivel nunca seria detectada (o walk abaixo
+        // devolve SetChanged no primeiro emissivo que aparece alem do fim da lista).
+        if (!Ready || !MappedTasks) return ETransformRefresh::Unchanged;
+
+        // O buffer de tasks e UPLOAD e a extracao le direto dele. Enquanto houver dispatch que
+        // possa estar em voo, escrever aqui seria corrida com a GPU. Dirty = a extracao ainda vai
+        // ser gravada; ReadbackPending = ja foi, e o contador de kFramesInFlight+1 (o mesmo que o
+        // Record usa) ainda nao provou que ela terminou. Com os dois em falso ninguem le o buffer.
+        if (Dirty || ReadbackPending) return ETransformRefresh::Busy;
+
+        // MESMO filtro e MESMA ordem do SetupForScene. Se divergir, o LightOffset de cada task
+        // deixa de casar com o buffer de triangulos e a busca binaria do shader passa a resolver
+        // o triangulo errado.
+        //
+        // Confere e escreve na COPIA DE CPU, comitando por cima do mapeado so no fim. Dois
+        // motivos: o mapeado e write-combined e le-lo custa ordens de grandeza mais que memoria
+        // normal, e escrever durante a caminhada deixaria o buffer meio remendado se a
+        // divergencia aparecesse no meio dela.
+        if (CpuTasks.size() != NumTasks) return ETransformRefresh::SetChanged;
+        const std::vector<FRenderable>& List = _Scene.Renderables();
+        u32  Slot    = 0;
+        bool Changed = false;
+        for (u32 i = 0; i < static_cast<u32>(List.size()); ++i) {
+            const FRenderable& R = List[i];
+            if (!R.Mesh || !R.Mesh->IsValid() || !R.Visible || !R.Material) continue;
+            if (!IsEmissiveForRT(*R.Material)) continue;
+            if (Slot >= NumTasks || CpuTasks[Slot].InstanceIndex != i)
+                return ETransformRefresh::SetChanged;
+
+            // So as 3 linhas mudam: InstanceIndex, TriangleCount e LightOffset descrevem o
+            // PARTICIONAMENTO, e ele e justamente o que acabou de ser conferido como intacto.
+            const Mat44 M = R.Transform.Matrix().GetTransposed();
+            const Vec4 Row0{ M.M[0][0], M.M[0][1], M.M[0][2], M.M[0][3] };
+            const Vec4 Row1{ M.M[1][0], M.M[1][1], M.M[1][2], M.M[1][3] };
+            const Vec4 Row2{ M.M[2][0], M.M[2][1], M.M[2][2], M.M[2][3] };
+
+            // Comparacao EXATA, e nao por epsilon: a pergunta aqui e "alguem mexeu?", nao "as
+            // matrizes se parecem?". A TransformsVersion e GLOBAL, entao mover um objeto nao
+            // emissivo tambem chega ate aqui — e a malha emissiva parada recomputa a matriz das
+            // MESMAS entradas pelo MESMO caminho, produzindo bit a bit o mesmo resultado. Sem
+            // isto, arrastar qualquer objeto da cena fecharia o pool e refaria extracao + alias
+            // table sem nada ter mudado, apagando as mesh lights por alguns frames a cada gesto.
+            FMeshLightTaskGPU& T = CpuTasks[Slot];
+            if (T.Row0.X != Row0.X || T.Row0.Y != Row0.Y || T.Row0.Z != Row0.Z || T.Row0.W != Row0.W ||
+                T.Row1.X != Row1.X || T.Row1.Y != Row1.Y || T.Row1.Z != Row1.Z || T.Row1.W != Row1.W ||
+                T.Row2.X != Row2.X || T.Row2.Y != Row2.Y || T.Row2.Z != Row2.Z || T.Row2.W != Row2.W) {
+                T.Row0 = Row0; T.Row1 = Row1; T.Row2 = Row2;
+                Changed = true;
+            }
+            ++Slot;
+        }
+        if (Slot != NumTasks) return ETransformRefresh::SetChanged;
+        if (!Changed) return ETransformRefresh::Unchanged;
+
+        std::memcpy(MappedTasks, CpuTasks.data(), sizeof(FMeshLightTaskGPU) * NumTasks);
+        // A contagem de triangulos nao mudou (mesmo conjunto de malhas), entao o CB continua
+        // valido: so o dado geometrico foi reescrito. Sujo re-dispara a extracao, que refaz
+        // area e fluxo por triangulo e, por consequencia, a alias table.
+        Dirty = true;
+        return ETransformRefresh::Applied;
     }
 
     // Vose: monta a tabela em O(N). Divide as entradas entre as que ficaram ABAIXO e ACIMA da
