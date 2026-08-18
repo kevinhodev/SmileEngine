@@ -96,8 +96,10 @@ smile_graphics_domain(Renderer
     Renderer
     RendererCapture
     RendererFrame
+    RendererFrameState
     RendererPasses
     RendererScene
+    RendererSceneState
     RenderPass
     RenderSettings
     SceneTargets

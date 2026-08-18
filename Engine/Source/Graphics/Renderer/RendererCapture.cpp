@@ -1,4 +1,6 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererFrameState.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
@@ -176,7 +178,7 @@ namespace Smile {
         S.UpscalerQuality = UpscalerQuality;
         S.UseTAA          = UseTAA;
         S.RenderScale     = RenderScale;
-        S.ElapsedTime     = ElapsedTime;
+        S.ElapsedTime     = FrameState->ElapsedTime;
         S.Wetness         = Weather.GetWetness();
         S.TimeOfDayHours  = TimeOfDay.TimeHours;
         S.SunDir[0] = SunDir.X; S.SunDir[1] = SunDir.Y; S.SunDir[2] = SunDir.Z;
@@ -205,7 +207,7 @@ namespace Smile {
 
     // Restaure o mundo sempre; restaure knobs apenas quando o preset os alterou.
     void Renderer::RestoreCaptureState(const FCaptureSettings& _S) {
-        ElapsedTime      = _S.ElapsedTime;
+        FrameState->ElapsedTime      = _S.ElapsedTime;
         TimeOfDay.TimeHours = _S.TimeOfDayHours;
         SetSunDirection(Vec3{ _S.SunDir[0], _S.SunDir[1], _S.SunDir[2] });
         Weather.SetWetness(_S.Wetness);
@@ -270,7 +272,7 @@ namespace Smile {
         Capture.StashSettings(Stash, Applied);
 
         // Fase temporal canonica torna animacoes reproduziveis entre capturas.
-        ElapsedTime = kCaptureElapsedSeconds;
+        FrameState->ElapsedTime = kCaptureElapsedSeconds;
         Weather.SetWetness(SettledWetness());
 
         // Hora do dia e estado autorado e so e fixada quando o pedido a declara.
@@ -461,13 +463,13 @@ namespace Smile {
         }
 
         // Antes do ++ dos contadores: e o indice com que ESTE frame amostrou.
-        S.TemporalSampleIndex = TemporalSampleIndex;
-        S.FrameIndex          = FrameIndex;
+        S.TemporalSampleIndex = FrameState->TemporalSampleIndex;
+        S.FrameIndex          = FrameState->FrameIndex;
 
-        const Vec3 Pos = Camera.GetPosition();
+        const Vec3 Pos = SceneState->Camera.GetPosition();
         S.CameraPos[0] = Pos.X; S.CameraPos[1] = Pos.Y; S.CameraPos[2] = Pos.Z;
-        S.PitchDeg = Camera.GetPitch() * ToDeg;
-        S.YawDeg   = Camera.GetYaw()   * ToDeg;
+        S.PitchDeg = SceneState->Camera.GetPitch() * ToDeg;
+        S.YawDeg   = SceneState->Camera.GetYaw()   * ToDeg;
         S.FovYDeg  = kFovYDegrees;
 
         S.SunDir[0] = SunDir.X; S.SunDir[1] = SunDir.Y; S.SunDir[2] = SunDir.Z;

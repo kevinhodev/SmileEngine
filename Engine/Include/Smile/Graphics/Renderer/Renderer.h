@@ -6,12 +6,10 @@
 #include <string_view>
 #include <vector>
 #include <memory>
-#include <unordered_map>
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
 #include "Smile/Graphics/Backend/D3D12/PipelineState.h"
-#include "Smile/Graphics/Scene/Camera.h"
 #include "Smile/Graphics/Resources/Texture.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Scene/GBuffer.h"
@@ -66,12 +64,14 @@
 #include "Smile/Graphics/Water/OceanFFT.h"
 #include "Smile/Graphics/Water/Water.h"
 #include "Smile/Graphics/Scene/Terrain.h"
-#include "Smile/Scene/Scene.h"
 
 namespace Smile {
     struct CameraInput;
     struct FPreparedCookedScene;
+    class FScene;
     class FRenderBackend;
+    struct FRendererSceneState;
+    struct FRendererFrameState;
     using FPreparedCookedScenePtr = std::shared_ptr<FPreparedCookedScene>;
 
     // Fachada de configuracao. Fica incompleta aqui para evitar dependencia circular.
@@ -224,7 +224,7 @@ namespace Smile {
 
         void SetMaterial(FMaterial* Material);
 
-        FScene& GetScene() { return Scene; }
+        FScene& GetScene();
 
         // Materiais importados da(s) cena(s) cozida(s) — o Editor de Materiais edita
         // Constants direto (CBV upload mapeado) e chama UpdateConstants() p/ aplicar.
@@ -258,15 +258,15 @@ namespace Smile {
         // Telemetria de culling (os toggles moraram p/ o FRenderSettings).
         u32  GetOccludedCount() const    { return LastOccludedCount; }
         u32  GetVisibleCount() const     { return LastVisibleCount; }
-        u32  GetDrawCount() const        { return static_cast<u32>(Scene.Renderables().size()); }
+        u32  GetDrawCount() const;
 
         // Telemetria do CSM por cascata (contagem + frequencia de atualizacao). Const, so
         // leitura: e a base de medida da separacao static/dynamic dos casters.
         const FSunShadows& GetSunShadows() const { return SunShadows; }
 
         // Durante o arraste, o objeto e tratado como caster dinamico. Zero = nenhum.
-        void SetDraggingRenderable(u64 Id) { DraggingRenderableId = Id; }
-        u64  GetDraggingRenderable() const { return DraggingRenderableId; }
+        void SetDraggingRenderable(u64 Id);
+        u64  GetDraggingRenderable() const;
 
 
         bool IsInitialized() const { return Initialized; }
@@ -276,7 +276,7 @@ namespace Smile {
         u32  RenderHeight() const;
         u32  OutputWidth() const;
         u32  OutputHeight() const;
-        u32  GetFrameIndex() const { return FrameIndex; }
+        u32  GetFrameIndex() const;
 
         // Picking: o ID pass roda em res interna -> escala a coord do mouse (nativa) por RenderScale.
         void RequestPick(u32 X, u32 Y) {
@@ -298,7 +298,7 @@ namespace Smile {
         void NotifyGIRegionChanged(const Vec3& Min, const Vec3& Max, EGIRegionChange Change);
 
         // Drena as filas e recria o volume DDGI com os bounds atuais da cena.
-        void RebuildGIVolume() { SetupGIForScene(SceneBoundsMin, SceneBoundsMax); }
+        void RebuildGIVolume();
 
         // Selecao exclusiva de luz. Indice em Scene.Lights(); -1 = nenhuma.
         void SetSelectedLight(int Index);
@@ -423,17 +423,14 @@ namespace Smile {
         // Telemetria da agua (janela de stats). Os knobs moraram p/ o FRenderSettings.
         const FWaterRenderer& GetWater() const { return Water; }
 
-        Vec3 GetCameraPos() const { return Camera.GetPosition(); }
-        f32  GetPitch()     const { return Camera.GetPitch(); }
-        f32  GetYaw()       const { return Camera.GetYaw(); }
+        Vec3 GetCameraPos() const;
+        f32  GetPitch() const;
+        f32  GetYaw() const;
         // Fonte unica do FOV vertical da viewport.
         static constexpr f32 kFovYDegrees = 60.0f;
         f32  GetFovY() const { return kFovYDegrees * ToRad; }
         // Eixo direito da camera em mundo (coluna da view row-vector).
-        Vec3 GetCameraRight() const {
-            const Mat44 V = Camera.GetViewMatrix();
-            return Vec3{ V.M[0][0], V.M[1][0], V.M[2][0] };
-        }
+        Vec3 GetCameraRight() const;
         // Foco de camera do editor (duplo-clique no Scene Outliner): teleporta mantendo
         // a orientacao atual. Definido no .cpp porque avisa o corte de camera, e o
         // FRenderSettings so e completo no RenderSettings.h.
@@ -463,6 +460,10 @@ namespace Smile {
     private:
         // Construido primeiro e destruido por ultimo; todos os recursos GPU dependem dele.
         std::unique_ptr<FRenderBackend> Backend;
+        // Estado CPU da cena; mantido incompleto aqui para nao arrastar Scene e Camera.
+        std::unique_ptr<FRendererSceneState> SceneState;
+        // Historicos e relogios CPU que conectam frames consecutivos.
+        std::unique_ptr<FRendererFrameState> FrameState;
 
         // Knobs consumidos pelo FRenderSettings (corpos no Renderer.cpp). Ficam privados p/ que
         // exista UM caminho publico: o editor passa pela fachada, que carrega a invalidacao.
@@ -625,8 +626,6 @@ namespace Smile {
 
         FMaterialPreview MaterialPreview; // preview offscreen do Editor de Materiais
 
-        FCamera Camera;
-
         FTexture TexDefaultWhite;
         FTexture TexDefaultNormal;
         FTexture TexDefaultBlack;
@@ -634,8 +633,6 @@ namespace Smile {
 
         FMaterial  DefaultMaterial;
         FMaterial* ActiveMaterial = nullptr;
-
-        FScene Scene;
 
         static constexpr u32     kInvalidSlot = 0xFFFFFFFFu;
 
@@ -705,10 +702,6 @@ namespace Smile {
         // reflexoes). Velocidade em UV = curUV(sem jitter) - prevUV.
         // Perfil unico de epsilons de raio, empurrado p/ ReSTIR/Reflexoes/DDGI todo frame.
         FRayEpsilonProfile       RayEps;
-        // Transform por-objeto do frame anterior, indexado pelo indice da cena (Scene.Renderables()).
-        // Estatico -> PrevModel == Model -> motion vector reduz ao termo de camera.
-        std::vector<Mat44>       PrevModels;
-
         ComPtr<ID3D12Resource>   ConstantBuffer;
         u8*                      MappedFrameBase = nullptr;
 
@@ -717,10 +710,6 @@ namespace Smile {
         static constexpr u32     kMaxLights = 256;
         ComPtr<ID3D12Resource>   LightBuffer;
         u8*                      MappedLightBase = nullptr;
-        // Posicao anterior por identidade estavel. Alimenta o shadow motion vector; separar por
-        // Id evita que frustum culling/reordenacao da lista transforme uma luz em outra.
-        std::unordered_map<u64, Vec3> PreviousDirectLightPositions;
-
         // F5: lista compacta pro mundo indireto (sem cull/sombra), um slice por frame em voo,
         // com um SRV de staging por slice — copiado por frame pras tabelas de trace do
         // DDGI/reflexoes/ReSTIR (SetPunctualLightsSRV de cada um).
@@ -746,20 +735,7 @@ namespace Smile {
 
         FObjectPicker            ObjectPicker;
         FSelectionOutline        SelectionOutline;
-        // Selecao UNICA da cena (mesh ou luz — nunca as duas). O Index dentro dela e o cache
-        // que o loop de draw compara por frame; o Id e o que sobrevive a lista mudar e o que o
-        // OnSceneStructureChanged usa para reancorar.
-        FSceneObjectRef          Selection;
-        // AABB de uniao da cena carregada, como o SceneLoader calculou. Guardado porque um
-        // re-setup de GI fora do load (objeto criado estourando alguma capacidade) precisa do
-        // mesmo volume — recalcular ali daria um grid de DDGI diferente do que a cena vinha
-        // usando, e todo o indireto se deslocaria por causa de uma copia de objeto.
-        Vec3                     SceneBoundsMin{ 0.0f, 0.0f, 0.0f };
-        Vec3                     SceneBoundsMax{ 0.0f, 0.0f, 0.0f };
-
         FDebugDraw               DebugDraw;
-        Mat44                    LastViewProj{}; 
-
         FTemporalAA              TemporalAA;
         bool                     UseTAA           = true;
         f32                      TAAHistoryBlend  = 0.9f;
@@ -769,9 +745,6 @@ namespace Smile {
         f32                      TAAAntiFlicker   = 0.6f;
         f32                      TAAStationaryMargin = 4.0f; // margem do AABB do history parado (ref Flax); 0 desliga
         u32                      TAADebugMode     = 0;
-        Mat44                    PrevViewProj{};
-        Vec3                     PrevCameraPosition{ 0.0f, 0.0f, 0.0f };
-        bool                     TAARanLastFrame = false;
 
         // === Upscaler (None/FSR/DLSS) — substitui o TAA custom quando != None ===
         // FSR (ffx-api) e DLSS (Streamline) implementam IUpscaler; ambos viram stub se o SDK nao for
@@ -819,7 +792,6 @@ namespace Smile {
         FRainWetness    RainWetness; // F1: wetness deferred no G-buffer (pos-geometry pass)
 
         FSunShadows     SunShadows;
-        u64             DraggingRenderableId = 0; // ver SetDraggingRenderable
         bool            UseSunShadows = true;
 
         FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame
@@ -827,15 +799,6 @@ namespace Smile {
         FRaytracingScene RaytracingScene;
         // Recursos neutros quando nao existe volume DDGI.
         FGIFallbackResources GIFallback;
-        u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
-        // Versao separada: mesh lights aguardam o fim do arraste; a TLAS nao.
-        u64              MeshLightTransformsVersion = 0;
-        bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
-        bool             MaterialRTStateDirty  = false;
-        // Persiste enquanto uma extracao de mesh lights estiver em voo.
-        bool             MeshLightEmissiveDirty = false; // pedido de refresh coalescido p/ o proximo frame
-        bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
-        bool             SceneContentDirty     = false; // idem (ver MarkSceneContentDirty)
         FDDGI            DDGI;
         FReGIR           ReGIR;
         // Terminador esparso dos raios secundarios; nao substitui o atlas DDGI.
@@ -864,8 +827,6 @@ namespace Smile {
         // Os cinco efetivos num valor so, para o detector de borda comparar por frame.
         FEffectiveIndirectPolicy EffectiveIndirectPolicy() const;
         // Primeiro valor inicializa o detector; somente transicoes posteriores geram borda.
-        FEffectiveIndirectPolicy PrevIndirectPolicy;
-        bool                     HasPrevIndirectPolicy = false;
         bool             GIDebug     = false;
         bool             GIChebyshev = true;  
         bool             GISkipInactiveProbes = true;
@@ -880,18 +841,11 @@ namespace Smile {
         FDlssRRGuides    RRGuides;            // buffers de material que o RR consome (albedo/normal/hitDist)
         FBackgroundVelocity BgVelocity;       // motion vector do ceu/nuvens/fog (velocity ZERO do G-buffer)
         FTemporalMotionVectors TemporalMotion; // vetor dual + historico de superficies (RT Gems II cap. 25)
-        Mat44            PrevVPNoTrans{};      // frame anterior: ViewNoTrans * ProjUnjittered (reproj do ceu)
         bool             RRResetPending = true;// descarta o historico do RR (troca de modo/scene/resize)
         // Borda de log do "RR pulado por debug na cena" (ver RRPoisoned no RenderFrame): sem isto o
         // aviso sairia todo frame enquanto o visualizador estivesse ligado.
         bool             RRSkipLogged   = false;
         EDenoiser        Denoiser = EDenoiser::None; // {None, NRD, DLSS_RR}; default = sem denoise
-        Mat44            NrdPrevView{};        // prev view/proj NAO-jitteradas p/ a reprojecao do NRD
-        Mat44            NrdPrevProj{};
-        Vec2             PrevJitterUv{ 0.0f, 0.0f }; // jitter do frame anterior em UV (y ja invertido
-                                                     // p/ uv y-down) — reprojecao do ReSTIR GI
-        Vec2             PrevJitterPx{ 0.0f, 0.0f }; // idem em pixels — cameraJitterPrev do NRD
-
         FReflections     Reflections;
         bool             UseReflections = true;
 
@@ -947,15 +901,9 @@ namespace Smile {
         bool UseAtmosphereAmbient  = true;
         f32  AtmoAmbientIntensity  = 1.0f;
 
-        f32  ElapsedTime   = 0.0f;
-        f32  LastDeltaTime = 0.0f;
         // Relogio canonico de captura: independente do tempo de parede.
         static constexpr f32 kCaptureDeltaSeconds = 1.0f / 60.0f;
         static constexpr f32 kCaptureElapsedSeconds = 0.0f;
-        // FrameIndex e monotonico; TemporalSampleIndex pode reiniciar para capturas repetiveis.
-        u32  FrameIndex    = 0;
-        // Semente comum de jitter e RNGs temporais; avanca ao fim do frame.
-        u32  TemporalSampleIndex = 0;
 
         bool Initialized = false;
 

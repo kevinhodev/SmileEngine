@@ -1,4 +1,6 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererFrameState.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
@@ -23,6 +25,33 @@
 #include <type_traits>
 
 namespace Smile {
+    FScene& Renderer::GetScene() { return SceneState->Scene; }
+
+    u32 Renderer::GetDrawCount() const {
+        return static_cast<u32>(SceneState->Scene.Renderables().size());
+    }
+
+    void Renderer::SetDraggingRenderable(u64 _Id) {
+        SceneState->DraggingRenderableId = _Id;
+    }
+
+    u64 Renderer::GetDraggingRenderable() const {
+        return SceneState->DraggingRenderableId;
+    }
+
+    void Renderer::RebuildGIVolume() {
+        SetupGIForScene(SceneState->BoundsMin, SceneState->BoundsMax);
+    }
+
+    Vec3 Renderer::GetCameraPos() const { return SceneState->Camera.GetPosition(); }
+    f32 Renderer::GetPitch() const { return SceneState->Camera.GetPitch(); }
+    f32 Renderer::GetYaw() const { return SceneState->Camera.GetYaw(); }
+
+    Vec3 Renderer::GetCameraRight() const {
+        const Mat44 View = SceneState->Camera.GetViewMatrix();
+        return Vec3{ View.M[0][0], View.M[1][0], View.M[2][0] };
+    }
+
     bool Renderer::LoadTerrain(const FTerrainDesc& _Desc) {
         return Terrain.Load(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Desc);
     }
@@ -40,8 +69,9 @@ namespace Smile {
         if (!Backend->Device.RaytracingSupported()) return;
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
-        RaytracingScene.Build(Backend->Device, Backend->DirectQueue, Backend->SRVHeap, Scene);
-        TlasTransformsVersion = Scene.TransformsVersion();
+        RaytracingScene.Build(Backend->Device, Backend->DirectQueue, Backend->SRVHeap,
+                              SceneState->Scene);
+        SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
     }
 
     void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg) {
@@ -50,69 +80,72 @@ namespace Smile {
             LogWarning("Camera travada: ha uma captura deterministica em andamento");
             return;
         }
-        Camera.SetPose(_Pos, _PitchDeg, _YawDeg);
+        SceneState->Camera.SetPose(_Pos, _PitchDeg, _YawDeg);
         // Nao existe vetor de movimento valido entre poses descontínuas.
         Settings().NotifyCameraCut();
     }
 
     void Renderer::SetSelectedObject(int _Index) {
-        if (_Index < 0 || _Index >= static_cast<int>(Scene.Renderables().size())) {
+        if (_Index < 0 || _Index >= static_cast<int>(SceneState->Scene.Renderables().size())) {
             ClearSelection();
             return;
         }
-        Selection = { Scene.IdAt(static_cast<u32>(_Index)), ESceneObject::Renderable,
-                      static_cast<u32>(_Index) };
+        SceneState->Selection = {
+            SceneState->Scene.IdAt(static_cast<u32>(_Index)),
+            ESceneObject::Renderable,
+            static_cast<u32>(_Index)
+        };
     }
 
     int Renderer::GetSelectedObject() const {
-        return Selection.IsRenderable() ? static_cast<int>(Selection.Index) : -1;
+        return SceneState->Selection.IsRenderable() ? static_cast<int>(SceneState->Selection.Index) : -1;
     }
 
     u64 Renderer::GetSelectedObjectId() const {
-        return Selection.IsRenderable() ? Selection.Id : 0ull;
+        return SceneState->Selection.IsRenderable() ? SceneState->Selection.Id : 0ull;
     }
 
     // Escopadas por tipo: limpar "a selecao de mesh" quando ha uma LUZ selecionada e no-op, nao
     // limpa a luz. Preserva o significado que os call sites do editor ja tinham quando os dois
     // campos eram separados.
     void Renderer::ClearSelection() {
-        if (Selection.IsRenderable()) Selection = {};
+        if (SceneState->Selection.IsRenderable()) SceneState->Selection = {};
     }
 
     void Renderer::ClearLightSelection() {
-        if (Selection.IsLight()) Selection = {};
+        if (SceneState->Selection.IsLight()) SceneState->Selection = {};
     }
 
     void Renderer::SetSelectedLight(int _Index) {
-        if (_Index < 0 || _Index >= static_cast<int>(Scene.Lights().size())) {
+        if (_Index < 0 || _Index >= static_cast<int>(SceneState->Scene.Lights().size())) {
             ClearLightSelection();
             return;
         }
         // A luz pode nao ter identidade ainda: o editor faz push_back direto e quem atribui e o
         // RenderFrame, no proximo frame. Selecionar e um bom momento para adiantar — sem isso a
         // selecao ficaria com Id 0, ou seja, invalida, ate um frame passar.
-        FLight& L = Scene.Lights()[static_cast<size_t>(_Index)];
-        if (L.Id == 0) L.Id = Scene.AllocObjectId();
-        Selection = { L.Id, ESceneObject::Light, static_cast<u32>(_Index) };
+        FLight& L = SceneState->Scene.Lights()[static_cast<size_t>(_Index)];
+        if (L.Id == 0) L.Id = SceneState->Scene.AllocObjectId();
+        SceneState->Selection = { L.Id, ESceneObject::Light, static_cast<u32>(_Index) };
     }
 
     int Renderer::GetSelectedLight() const {
-        return Selection.IsLight() ? static_cast<int>(Selection.Index) : -1;
+        return SceneState->Selection.IsLight() ? static_cast<int>(SceneState->Selection.Index) : -1;
     }
 
     bool Renderer::RemoveRenderable(u64 _Id) {
         // AABB capturada ANTES da remocao: depois dela o objeto nao existe mais e nao ha de onde
         // tirar a regiao que o GI precisa reavaliar.
-        const FRenderable* Doomed = Scene.FindRenderable(_Id);
+        const FRenderable* Doomed = SceneState->Scene.FindRenderable(_Id);
         if (!Doomed) return false;
         const Vec3 Min = Doomed->AABBMin, Max = Doomed->AABBMax;
-        if (!Scene.RemoveRenderable(_Id)) return false;
+        if (!SceneState->Scene.RemoveRenderable(_Id)) return false;
         OnSceneStructureChanged(&Min, &Max);
         return true;
     }
 
     u64 Renderer::DuplicateRenderable(u64 _Id) {
-        const FRenderable* Added = Scene.DuplicateRenderable(_Id);
+        const FRenderable* Added = SceneState->Scene.DuplicateRenderable(_Id);
         if (!Added) return 0;
         // Le ANTES do re-setup, que pode realocar a lista.
         const u64  NewId = Added->Id;
@@ -127,7 +160,7 @@ namespace Smile {
     }
 
     void Renderer::OnSceneStructureChanged(const Vec3* _ChangedMin, const Vec3* _ChangedMax) {
-        const u32 Count = static_cast<u32>(Scene.Renderables().size());
+        const u32 Count = static_cast<u32>(SceneState->Scene.Renderables().size());
 
         // Regiao que o GI precisa reavaliar. Invalidacao ESPACIAL, no lugar de derrubar o atlas
         // inteiro: o dominio SceneStructure nao carrega mais DDGIAtlas justamente por isto.
@@ -137,9 +170,9 @@ namespace Smile {
 
         // Picks em voo carregam indices e nao sobrevivem a uma mudanca estrutural.
         ObjectPicker.CancelPending();
-        Selection = Scene.FindObject(Selection.Id);
-        // PrevModels e indexado pela ordem da cena, que acabou de mudar.
-        PrevModels.clear();
+        SceneState->Selection = SceneState->Scene.FindObject(SceneState->Selection.Id);
+        // PreviousModels e indexado pela ordem da cena, que acabou de mudar.
+        SceneState->PreviousModels.clear();
 
         // Estruturas de GPU compartilham a folga de SceneCapacityFor; ao excede-la, todo o setup
         // de cena precisa ser refeito porque TLAS, InstanceGeo e SRVs possuem capacidade fixa.
@@ -159,12 +192,12 @@ namespace Smile {
             }
             HiZ.SetupObjects(Backend->Device.Native(), Backend->SRVHeap, MaxObjects);
             BuildRaytracingScene();
-            SetupGIForScene(SceneBoundsMin, SceneBoundsMax);
+            SetupGIForScene(SceneState->BoundsMin, SceneState->BoundsMax);
         } else {
             // InstanceGeo nao e versionado por frame e pode estar sendo lido nas duas filas.
             Backend->DirectQueue.Flush();
             Backend->ComputeQueue.WaitIdle();
-            RaytracingScene.RefreshInstanceGeo(Scene);
+            RaytracingScene.RefreshInstanceGeo(SceneState->Scene);
             // As tasks de MeshLights guardam InstanceIndex e precisam ser reconstruidas.
             RebuildMeshLights();
         }
@@ -176,10 +209,10 @@ namespace Smile {
         // SetupForScene substitui buffers lidos pelas filas direta e compute.
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
-        MeshLights.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, Scene,
+        MeshLights.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene,
                                  RaytracingScene.InstanceGeoSRV());
-        MeshLightTransformsVersion = Scene.TransformsVersion();
-        MeshLightEmissiveDirty = false;
+        SceneState->MeshLightTransformsVersion = SceneState->Scene.TransformsVersion();
+        SceneState->MeshLightEmissiveDirty = false;
         // ReSTIR DI copia estes descriptors e precisa acompanhar a troca dos buffers.
         ReSTIRDI.RefreshMeshLightDescriptors(Backend->Device.Native(), Backend->SRVHeap,
                                              MeshLights.LightSRVSlot(),
@@ -187,13 +220,13 @@ namespace Smile {
     }
 
     void Renderer::SetupGIForScene(const Vec3& _AABBMin, const Vec3& _AABBMax) {
-        SceneBoundsMin = _AABBMin;
-        SceneBoundsMax = _AABBMax;
+        SceneState->BoundsMin = _AABBMin;
+        SceneState->BoundsMax = _AABBMax;
 
         // Uma probe selecionada pertence ao volume anterior; nunca deixa o marcador apontar
         // para o mesmo indice numerico de uma grade recem-criada.
         SetDebugProbeIndex(-1);
-        PreviousDirectLightPositions.clear();
+        FrameState->PreviousDirectLightPositions.clear();
 
         if (!Backend->Device.RaytracingSupported() || !RaytracingScene.IsBuilt()) return;
         if (!Atmosphere.IsInitialized()) return;
@@ -203,19 +236,20 @@ namespace Smile {
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
 
-        DDGI.SetupForScene(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap, Scene, _AABBMin, _AABBMax,
+        DDGI.SetupForScene(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap,
+                           SceneState->Scene, _AABBMin, _AABBMax,
                            RaytracingScene.TlasSRVSlot(), Atmosphere.SkyViewSRV(),
                            RaytracingScene.InstanceGeoSRV());
-        TemporalMotion.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, Scene,
+        TemporalMotion.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene,
                                      RaytracingScene.TlasSRVSlot(),
                                      RaytracingScene.InstanceGeoSRV());
         ReGIR.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, _AABBMin, _AABBMax, GILightSRVSlot);
         // O cache usa hash de mundo e nao depende dos limites da cena.
         RadianceCache.SetupForScene(Backend->Device.Native(), Backend->SRVHeap);
         // A extracao usa InstanceGeo, portanto roda depois da construcao da cena de RT.
-        MeshLights.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, Scene,
+        MeshLights.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene,
                                  RaytracingScene.InstanceGeoSRV());
-        MeshLightTransformsVersion = Scene.TransformsVersion();
+        SceneState->MeshLightTransformsVersion = SceneState->Scene.TransformsVersion();
 
         SetupReflectionsForScene();
 
@@ -289,13 +323,13 @@ namespace Smile {
     }
 
     void Renderer::BuildDefaultScene() {
-        FGpuMesh* Sphere = Scene.AddMesh(Backend->Device.Native(), FMesh::CreateSphere());
+        FGpuMesh* Sphere = SceneState->Scene.AddMesh(Backend->Device.Native(), FMesh::CreateSphere());
 
         FRenderable Renderable;
         Renderable.Name     = "Sphere";
         Renderable.Mesh     = Sphere;
         Renderable.Material = nullptr;
-        Scene.AddRenderable(Renderable);
+        SceneState->Scene.AddRenderable(Renderable);
     }
 
     void Renderer::CreateConstantBuffer() {
@@ -499,12 +533,12 @@ namespace Smile {
         // Durante a captura, fase de animacao e camera congelam; processos de convergencia usam
         // um delta fixo para manter o aquecimento reproduzivel.
         if (Capture.Busy()) {
-            LastDeltaTime = kCaptureDeltaSeconds;
+            FrameState->LastDeltaTime = kCaptureDeltaSeconds;
             return;
         }
-        Camera.Update(_Input, _DeltaTime);
-        ElapsedTime  += _DeltaTime;
-        LastDeltaTime = _DeltaTime;
+        SceneState->Camera.Update(_Input, _DeltaTime);
+        FrameState->ElapsedTime  += _DeltaTime;
+        FrameState->LastDeltaTime = _DeltaTime;
     }
 
     void Renderer::SetSunDirection(const Vec3& _Direction) {
@@ -550,7 +584,7 @@ namespace Smile {
         const FGpuMesh* SceneMesh = nullptr;
         Mat44 SceneModel = Mat44::Identity();
         if (_Params.Primitive == FMaterialPreview::PrimSceneMesh) {
-            const auto& Rnds = Scene.Renderables();
+            const auto& Rnds = SceneState->Scene.Renderables();
             const FRenderable* Pick = nullptr;
             const int Sel = GetSelectedObject();
             if (Sel >= 0 && Sel < (int)Rnds.size() &&
@@ -594,7 +628,7 @@ namespace Smile {
     }
 
     bool Renderer::WorldToScreen(const Vec3& _W, f32& _Sx, f32& _Sy) const {
-        const Mat44& M = LastViewProj;
+        const Mat44& M = FrameState->LastViewProj;
         const f32 cx = _W.X*M.M[0][0] + _W.Y*M.M[1][0] + _W.Z*M.M[2][0] + M.M[3][0];
         const f32 cy = _W.X*M.M[0][1] + _W.Y*M.M[1][1] + _W.Z*M.M[2][1] + M.M[3][1];
         const f32 cw = _W.X*M.M[0][3] + _W.Y*M.M[1][3] + _W.Z*M.M[2][3] + M.M[3][3];
@@ -610,14 +644,14 @@ namespace Smile {
         if (Wd == 0 || Ht == 0) return false;
         const f32 ndcx = ((static_cast<f32>(_X) + 0.5f) / Wd) * 2.0f - 1.0f;
         const f32 ndcy = 1.0f - ((static_cast<f32>(_Y) + 0.5f) / Ht) * 2.0f;
-        const Mat44 Inv = LastViewProj.Inverse();
+        const Mat44 Inv = FrameState->LastViewProj.Inverse();
         const f32 v[4] = { ndcx, ndcy, 0.5f, 1.0f };
         f32 w[4];
         for (int j = 0; j < 4; ++j)
             w[j] = v[0]*Inv.M[0][j] + v[1]*Inv.M[1][j] + v[2]*Inv.M[2][j] + v[3]*Inv.M[3][j];
         if (std::fabs(w[3]) < 1e-9f) return false;
         const Vec3 WorldPt{ w[0]/w[3], w[1]/w[3], w[2]/w[3] };
-        _O = Camera.GetPosition();
+        _O = SceneState->Camera.GetPosition();
         _D = (WorldPt - _O).NormalizedSafe(Vec3::UnitZ());
         return true;
     }

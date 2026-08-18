@@ -1,5 +1,7 @@
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererFrameState.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 
 namespace Smile {
@@ -19,7 +21,7 @@ namespace Smile {
         if (HasTarget(_Targets, T::NrdIndirect))      R.Nrd.InvalidateHistory();
         if (HasTarget(_Targets, T::NrdDirect))        R.NrdDirect.InvalidateHistory();
         if (HasTarget(_Targets, T::RayReconstruct))   R.RRResetPending = true;
-        if (HasTarget(_Targets, T::TemporalAA))       R.TAARanLastFrame = false;
+        if (HasTarget(_Targets, T::TemporalAA))       R.FrameState->TAARanLastFrame = false;
         if (HasTarget(_Targets, T::ProbeDiagnostic))  R.RepeatDebugProbePoint();
     }
 
@@ -1126,9 +1128,17 @@ namespace Smile {
 
     // === Notificacoes de edicao =========================================================
 
-    void FRenderSettings::MarkMaterialRTStateDirty()  { R.MaterialRTStateDirty  = true; }
-    void FRenderSettings::MarkIndirectLightingDirty() { R.IndirectLightingDirty = true; }
-    void FRenderSettings::MarkSceneContentDirty()     { R.SceneContentDirty     = true; }
+    void FRenderSettings::MarkMaterialRTStateDirty() {
+        R.SceneState->MaterialRTStateDirty = true;
+    }
+
+    void FRenderSettings::MarkIndirectLightingDirty() {
+        R.SceneState->IndirectLightingDirty = true;
+    }
+
+    void FRenderSettings::MarkSceneContentDirty() {
+        R.SceneState->SceneContentDirty = true;
+    }
 
     // O par do Renderer::NotifyGIRegionChanged: aquele cuida do atlas do DDGI por REGIAO, este
     // cuida de todo o resto que acumulou sobre a luz/geometria antiga. Separados porque so o
@@ -1152,7 +1162,7 @@ namespace Smile {
     // cancelaria a sessao no ato de comeca-la.
     void FRenderSettings::NotifyDeterministicCapture() {
         Invalidate(Dom::DeterministicCapture);
-        R.TemporalSampleIndex = 0;
+        R.FrameState->TemporalSampleIndex = 0;
     }
 
     void FRenderSettings::NotifyMaterialRTStateChanged() {
@@ -1166,8 +1176,8 @@ namespace Smile {
         // buraco pelo mesmo motivo.
         R.Backend->DirectQueue.Flush();
         R.Backend->ComputeQueue.WaitIdle();
-        R.RaytracingScene.RefreshInstanceGeo(R.Scene);
-        R.TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
+        R.RaytracingScene.RefreshInstanceGeo(R.SceneState->Scene);
+        R.SceneState->TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
         // E os historicos acumulados sobre a aparencia antiga.
         Invalidate(Dom::MaterialRTState);
     }

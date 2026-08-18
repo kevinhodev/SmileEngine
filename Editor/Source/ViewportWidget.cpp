@@ -1,6 +1,7 @@
 #include "SmileEditor/ViewportWidget.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Scene/Scene.h"
 #include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Core/Logger.h"

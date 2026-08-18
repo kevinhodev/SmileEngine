@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
@@ -346,7 +347,7 @@ namespace Smile {
             // menu, com o timer de render ativo. Mesmo motivo do Flush em RecreateObjectCB.
             Backend->DirectQueue.Flush();
 
-            Scene.Clear();
+            SceneState->Scene.Clear();
             for (auto& m : ImportedMaterials) m->Release(Backend->SRVHeap);
             ImportedMaterials.clear();
             for (auto& t : ImportedTextures) t->Release(Backend->SRVHeap);
@@ -485,7 +486,7 @@ namespace Smile {
 
         const Clock::time_point tMeshUploadStart = Clock::now();
         const auto MeshCreationBase = GpuResources::CreationStats();
-        std::vector<FGpuMesh*> meshPtrs = Scene.AddMeshesBatch(
+        std::vector<FGpuMesh*> meshPtrs = SceneState->Scene.AddMeshesBatch(
             Backend->Device.Native(), Backend->UploadQueue, Prepared.Meshes);
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
             const SSceneRenderable& r = rnds[i];
@@ -507,7 +508,7 @@ namespace Smile {
             // Origem no asset: e por aqui que o .smap volta a achar este objeto na proxima
             // execucao (o indice na lista viva muda a cada remocao).
             out.CookedIndex = static_cast<i32>(i);
-            Scene.AddRenderable(out);
+            SceneState->Scene.AddRenderable(out);
         }
 
         const double msMeshUpload = MsSince(tMeshUploadStart);
@@ -522,11 +523,11 @@ namespace Smile {
         const Clock::time_point ObjectSetupStart = Clock::now();
         // Dimensiona o ObjectCB pelo total de renderaveis da cena (cobre carga aditiva,
         // onde os renderaveis do interior se somam aos do exterior ja presentes).
-        if (static_cast<u32>(Scene.Renderables().size()) > MaxObjects) {
+        if (static_cast<u32>(SceneState->Scene.Renderables().size()) > MaxObjects) {
             // Com folga (SceneCapacityFor): o MaxObjects dimensiona o ObjectCB E a tabela de
             // bounds do HiZ (SetupObjects logo acima), e as duas precisam da mesma folga das
             // outras tres estruturas por cena para que criar objeto no editor nao estoure.
-            MaxObjects = SceneCapacityFor(static_cast<u32>(Scene.Renderables().size()));
+            MaxObjects = SceneCapacityFor(static_cast<u32>(SceneState->Scene.Renderables().size()));
             RecreateObjectCB();
         }
 
@@ -534,7 +535,7 @@ namespace Smile {
         // na entrada de uma cena nova (substituicao) — e ai e corte de camera (Camera.SetPose
         // direto nao passa pelo SetCameraPose, entao o aviso sai aqui).
         if (!_Additive) {
-            Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
+            SceneState->Camera.SetPose(Vec3{ -14.476486f, 3.932823f, 0.278743f }, -9.05f, 78.75f);
             Settings().NotifyCameraCut();
         }
         const double msObjectSetup = MsSince(ObjectSetupStart);
@@ -547,7 +548,7 @@ namespace Smile {
         // o volume de GI cobrir tudo que esta carregado.
         Vec3 sceneMin{  1e30f,  1e30f,  1e30f };
         Vec3 sceneMax{ -1e30f, -1e30f, -1e30f };
-        for (const FRenderable& r : Scene.Renderables()) {
+        for (const FRenderable& r : SceneState->Scene.Renderables()) {
             sceneMin.X = std::min(sceneMin.X, r.AABBMin.X);
             sceneMin.Y = std::min(sceneMin.Y, r.AABBMin.Y);
             sceneMin.Z = std::min(sceneMin.Z, r.AABBMin.Z);
@@ -630,7 +631,7 @@ namespace Smile {
                             std::vector<FMesh> ProxyList;
                             ProxyList.push_back(std::move(Proxy));
                             std::vector<FGpuMesh*> ProxyMesh =
-                                Scene.AddMeshesBatch(Backend->Device.Native(), Backend->UploadQueue, ProxyList);
+                                SceneState->Scene.AddMeshesBatch(Backend->Device.Native(), Backend->UploadQueue, ProxyList);
                             Backend->UploadQueue.WaitIdle(); // BLAS le o VB logo abaixo
 
                             // Albedo do proxy: textura bakeada com o blend de 4 camadas quando o
@@ -682,7 +683,7 @@ namespace Smile {
                             proxy.AABBMin = proxy.LocalAABBMin;
                             proxy.AABBMax = proxy.LocalAABBMax;
                             if (proxy.Mesh) {
-                                Scene.AddRenderable(proxy);
+                                SceneState->Scene.AddRenderable(proxy);
                                 ImportedMaterials.push_back(std::move(mat));
                             }
                         }

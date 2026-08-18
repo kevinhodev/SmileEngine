@@ -1,4 +1,6 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererFrameState.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
@@ -55,19 +57,19 @@ namespace Smile {
         const FEffectiveIndirectPolicy P = EffectiveIndirectPolicy();
 
         // A primeira observacao inicializa o snapshot e nao representa uma transicao.
-        if (HasPrevIndirectPolicy) {
+        if (FrameState->HasPrevIndirectPolicy) {
             // As tres bordas sao independentes e podem invalidar dominios no mesmo frame.
-            const bool Terminator = P.TerminatorDiffers(PrevIndirectPolicy);
-            const bool Route      = P.SurfaceRouteDiffers(PrevIndirectPolicy);
-            const bool Volumetric = P.VolumetricDiffers(PrevIndirectPolicy);
+            const bool Terminator = P.TerminatorDiffers(FrameState->PrevIndirectPolicy);
+            const bool Route      = P.SurfaceRouteDiffers(FrameState->PrevIndirectPolicy);
+            const bool Volumetric = P.VolumetricDiffers(FrameState->PrevIndirectPolicy);
             if (Terminator || Route || Volumetric)
                 Settings().NotifyIndirectPolicyChanged(Terminator, Route, Volumetric);
         }
         // Um alvo de debug nao pode sobreviver ao produtor efetivo que o preenchia.
         Settings().DropGISourceDebugIfOrphaned();
 
-        PrevIndirectPolicy    = P;
-        HasPrevIndirectPolicy = true;
+        FrameState->PrevIndirectPolicy    = P;
+        FrameState->HasPrevIndirectPolicy = true;
         return P;
     }
 
@@ -121,14 +123,14 @@ namespace Smile {
 
     // Camera e matrizes do frame. Hoistado do meio do RenderFrame: o segundo grupo (as
     // variantes sem translacao) morava ~280 linhas abaixo do primeiro, mas depende so do
-    // mesmo View/Projection. O PrevVPNoTrans que ele le so e reescrito no FIM do frame,
+    // mesmo View/Projection. O VP sem translacao anterior so e reescrito no FIM do frame,
     // entao juntar os dois aqui e equivalente (verificado).
     FFrameView Renderer::ResolveFrameView(const FFrameModes& _Modes, IUpscaler* _ActiveUp) {
         FFrameView V;
         V.Aspect = Backend->SwapChain.GetWidth() > 0 && Backend->SwapChain.GetHeight() > 0
                    ? static_cast<f32>(Backend->SwapChain.GetWidth()) / static_cast<f32>(Backend->SwapChain.GetHeight())
                    : 1.0f;
-        V.View  = Camera.GetViewMatrix();
+        V.View  = SceneState->Camera.GetViewMatrix();
         V.NearZ = 0.1f;
         V.FarZ  = UseWater ? 20000.0f : 4000.0f;
         V.FovY  = GetFovY();
@@ -138,11 +140,12 @@ namespace Smile {
 
         V.Projection = V.ProjUnjittered;
         if (_Modes.UpscaleActive) {
-            _ActiveUp->GetJitter(TemporalSampleIndex, V.JitterPxX, V.JitterPxY); // FSR: sequencia do SDK; DLSS: Halton
+            // FSR usa a sequencia do SDK; DLSS usa Halton.
+            _ActiveUp->GetJitter(FrameState->TemporalSampleIndex, V.JitterPxX, V.JitterPxY);
             V.ProjJitterYSign = -1.0f;
         } else if (_Modes.TAAActive) {
             const u32 kJitterPhases = 8;
-            const u32 Idx = (TemporalSampleIndex % kJitterPhases) + 1;
+            const u32 Idx = (FrameState->TemporalSampleIndex % kJitterPhases) + 1;
             V.JitterPxX = Halton(Idx, 2) - 0.5f;
             V.JitterPxY = Halton(Idx, 3) - 0.5f;
         }
@@ -156,7 +159,7 @@ namespace Smile {
 
         V.ViewProjection     = V.View * V.Projection;
         V.ViewProjUnjittered = V.View * V.ProjUnjittered;
-        V.CameraPosition     = Camera.GetPosition();
+        V.CameraPosition     = SceneState->Camera.GetPosition();
 
         V.ViewNoTrans = V.View;
         V.ViewNoTrans.M[3][0] = 0.0f;
@@ -165,7 +168,7 @@ namespace Smile {
         V.VPNoTrans    = V.ViewNoTrans * V.Projection;
         V.InvVPNoTrans = V.VPNoTrans.Inverse();
         V.VPNoTransUnjit    = V.ViewNoTrans * V.ProjUnjittered;
-        V.SkyClipToPrevClip = V.VPNoTransUnjit.Inverse() * PrevVPNoTrans;
+        V.SkyClipToPrevClip = V.VPNoTransUnjit.Inverse() * FrameState->PrevViewProjNoTranslation;
         V.InvViewProjFull  = V.ViewProjection.Inverse();
         V.InvViewProjUnjit = V.ViewProjUnjittered.Inverse();
 
@@ -261,7 +264,7 @@ namespace Smile {
             TimeOfDay.TimeHours = CaptureSunHours;
             SunDir              = CaptureSunDir;
         } else if (TimeOfDay.Enabled) {
-            TimeOfDay.Tick(LastDeltaTime);
+            TimeOfDay.Tick(FrameState->LastDeltaTime);
             SetSunDirection(TimeOfDay.SunDirection());
         }
         {
@@ -269,7 +272,7 @@ namespace Smile {
             const f32 Tau    = (Target > Weather.GetWetness()) ? 5.0f : 30.0f;
             Weather.SetWetness(Weather.GetWetness() +
                                (Target - Weather.GetWetness()) *
-                               (1.0f - std::exp(-std::max(LastDeltaTime, 0.0f) / Tau)));
+                               (1.0f - std::exp(-std::max(FrameState->LastDeltaTime, 0.0f) / Tau)));
             if (Target <= 0.001f && Weather.GetWetness() < 0.005f) Weather.SetWetness(0.0f);
         }
     }
@@ -280,7 +283,7 @@ namespace Smile {
                                                   u32 _FrameSlot, FrameConstants* _CB) {
         // NOTA DE ORDEM (a unica reordenacao desta extracao): estas tres escritas corriam ANTES
         // do TickWorldClock. Descer para ca e inerte — o relogio so escreve SunDir e a molhadura,
-        // e nenhum dos insumos abaixo (posicao da camera, HDRI, tempo decorrido, FrameIndex) e
+        // e nenhum dos insumos abaixo (posicao da camera, HDRI, tempo decorrido, indice do frame) e
         // tocado por ele. Em troca, TODA a publicacao no constant buffer passa a viver num lugar.
         _CB->CameraPosition = { _Vw.CameraPosition.X, _Vw.CameraPosition.Y, _Vw.CameraPosition.Z, 1.0f };
 
@@ -293,8 +296,8 @@ namespace Smile {
         // FrameIndex porque, se algum dia alguem ler, "quantos frames desde o boot" e a leitura
         // que o nome sugere; quem precisar de semente tem o TemporalSampleIndex, que e passado
         // explicitamente a cada passe. Campo sem consumidor: candidato a limpeza em outro commit.
-        _CB->Time           = { ElapsedTime, LastDeltaTime,
-                                static_cast<f32>(FrameIndex),
+        _CB->Time           = { FrameState->ElapsedTime, FrameState->LastDeltaTime,
+                                static_cast<f32>(FrameState->FrameIndex),
                                 AODebug ? 1.0f : 0.0f };
 
         _CB->SunDirection   = { _Lt.SunN.X, _Lt.SunN.Y, _Lt.SunN.Z, SunIntensity };
@@ -323,7 +326,7 @@ namespace Smile {
         }
 
         Atmosphere.SetNightParams(_Lt.MoonN, _Lt.CosMoonRadius, _Lt.MoonDiskBright,
-                                  TimeOfDay.StarIntensity, _Lt.NightFactor, ElapsedTime);
+                                  TimeOfDay.StarIntensity, _Lt.NightFactor, FrameState->ElapsedTime);
         Atmosphere.SetMoonSkyLight(_Lt.MoonSkyScale, _Lt.MoonOn ? _Lt.MoonIllum : 0.0f);
 
         {
@@ -334,7 +337,7 @@ namespace Smile {
             // TOD usa hora sideral local (dia sideral ~23h56m); no modo manual, preserva a
             // rotacao artistica lenta que existia antes.
             const f32 Angle = TimeOfDay.Enabled ? TimeOfDay.StarRotationAngleRad()
-                                                : (ElapsedTime * 0.004f);
+                                                : (FrameState->ElapsedTime * 0.004f);
             Atmosphere.SetStarRotation(Pole, Angle);
         }
 
@@ -505,7 +508,7 @@ namespace Smile {
             FVolumetricFogPass::FFrameParams VF{};
             VF.InvViewProjUnjit = _Vw.InvViewProjUnjit;
             VF.ViewProjUnjit    = _Vw.ViewProjUnjittered;
-            VF.FrameIndex       = TemporalSampleIndex;
+            VF.FrameIndex       = FrameState->TemporalSampleIndex;
             VF.CameraPos        = _Vw.CameraPosition;
             VF.CameraForward    = CamForwardW;
             VF.DirToSun         = _Lt.KeyDir;
@@ -579,7 +582,7 @@ namespace Smile {
         VolumetricClouds.UpdatePerFrame(_FrameSlot, _Vw.InvVPNoTrans, _Vw.InvViewProjFull,
                                         _Vw.ViewProjUnjittered, _Vw.CameraPosition, kKmPerWorldUnit,
                                         CloudGroundRadius, _Lt.KeyDir, _Lt.KeyCloudCol,
-                                        _Amb.Sky, _Amb.Ground, ElapsedTime, TemporalSampleIndex,
+                                        _Amb.Sky, _Amb.Ground, FrameState->ElapsedTime, FrameState->TemporalSampleIndex,
                                         SunIntensity);
         VolumetricClouds.SetCoverage(CloudCovBase);
 
@@ -613,7 +616,7 @@ namespace Smile {
                                      _Lt.KeyColor.Z * _Lt.KeyInt };
             const f32 ShaftNoiseFrame =
                 (_Modes.TAAActive || _Modes.UpscaleActive || SunShafts.GetVolTemporal())
-                    ? static_cast<f32>(TemporalSampleIndex % 64u) : 0.0f;
+                    ? static_cast<f32>(FrameState->TemporalSampleIndex % 64u) : 0.0f;
             const Vec3 ShaftMediumAlbedo = _Modes.VolFogActive
                 ? VolumetricFog.GetAlbedo() : Vec3{ 1.0f, 1.0f, 1.0f };
             const f32 ShaftExtinctionScale = _Modes.VolFogActive
@@ -643,15 +646,15 @@ namespace Smile {
         // (ver ResolveFrameView) — mesma entrada, mesma chamada. Era um inverse 4x4 por frame
         // recalculado a toa.
         Water.UpdatePerFrame(_FrameSlot, _Vw.ViewProjection, _Vw.Projection, _Vw.InvViewProjFull,
-                             _Vw.ViewProjUnjittered, PrevViewProj, _Vw.CameraPosition, _Lt.KeyDir,
-                             _Lt.KeyInt, _Lt.KeyColor, _Amb.Sky, ElapsedTime,
+                             _Vw.ViewProjUnjittered, FrameState->PrevViewProj, _Vw.CameraPosition, _Lt.KeyDir,
+                             _Lt.KeyInt, _Lt.KeyColor, _Amb.Sky, FrameState->ElapsedTime,
                              WaterAtmoRefl || HDREnv.HasHDRLoaded(), WaterReflIntensity,
                              RenderWidth(), RenderHeight(), _Vw.NearZ, _Vw.FarZ,
                              _Modes.WaterSceneCopiesReady, UseAtmosphereSky,
                              _Modes.DedicatedWaterReflections);
         for (u32 c = 0; c < kOceanCascades; ++c) {
             if (!Ocean[c].IsInitialized()) continue;
-            Ocean[c].SetTime(ElapsedTime);
+            Ocean[c].SetTime(FrameState->ElapsedTime);
             Ocean[c].SetWindDirection(Water.GetWindDirection());
             Ocean[c].SetWindSpeed(Water.GetWindSpeed());
             Ocean[c].SetSpectrumFetch(Water.GetSpectrumFetch());
@@ -712,18 +715,18 @@ namespace Smile {
         if (!Initialized) return;
 
         // Dirty flags da UI sao coalescidas por dominio antes de abrir o command list.
-        if (MaterialRTStateDirty) {
-            MaterialRTStateDirty = false;
+        if (SceneState->MaterialRTStateDirty) {
+            SceneState->MaterialRTStateDirty = false;
             Settings().NotifyMaterialRTStateChanged();
             // Qualquer edicao pode alterar radiancia ou participacao de uma mesh emissiva.
-            MeshLightEmissiveDirty = true;
+            SceneState->MeshLightEmissiveDirty = true;
         }
-        if (IndirectLightingDirty) {
-            IndirectLightingDirty = false;
+        if (SceneState->IndirectLightingDirty) {
+            SceneState->IndirectLightingDirty = false;
             Settings().NotifyIndirectLightingChanged();
         }
-        if (SceneContentDirty) {
-            SceneContentDirty = false;
+        if (SceneState->SceneContentDirty) {
+            SceneState->SceneContentDirty = false;
             Settings().NotifySceneContentChanged();
         }
 
@@ -732,10 +735,10 @@ namespace Smile {
 
         // Tasks guardam transform e radiancia extraidos. Reconcilie antes do BeginFrame e espere
         // o fim do arraste para nao invalidar a alias table a cada tick.
-        if (MeshLights.IsReady() && DraggingRenderableId == 0 &&
-            (MeshLightEmissiveDirty ||
-             Scene.TransformsVersion() != MeshLightTransformsVersion)) {
-            switch (MeshLights.RefreshTransforms(Scene)) {
+        if (MeshLights.IsReady() && SceneState->DraggingRenderableId == 0 &&
+            (SceneState->MeshLightEmissiveDirty ||
+             SceneState->Scene.TransformsVersion() != SceneState->MeshLightTransformsVersion)) {
+            switch (MeshLights.RefreshTransforms(SceneState->Scene)) {
             case FMeshLights::ETransformRefresh::Busy:
                 // Preserve o pedido enquanto a extracao ainda le as tasks.
                 break;
@@ -744,17 +747,17 @@ namespace Smile {
                 RebuildMeshLights();
                 break;
             case FMeshLights::ETransformRefresh::Applied:
-                MeshLightTransformsVersion = Scene.TransformsVersion();
-                MeshLightEmissiveDirty     = false; // o Applied ja marcou sujo: a extracao roda
+                SceneState->MeshLightTransformsVersion = SceneState->Scene.TransformsVersion();
+                SceneState->MeshLightEmissiveDirty     = false; // o Applied ja marcou sujo: a extracao roda
                 break;
             case FMeshLights::ETransformRefresh::Unchanged:
-                MeshLightTransformsVersion = Scene.TransformsVersion();
+                SceneState->MeshLightTransformsVersion = SceneState->Scene.TransformsVersion();
                 // Ninguem se MOVEU, mas a radiancia pode ter mudado. A extracao le a cor do
                 // InstanceGeo (ja reescrito pelo NotifyMaterialRTStateChanged acima), entao um
                 // MarkDirty basta: refaz fluxo por triangulo e alias table sem realocar nada.
-                if (MeshLightEmissiveDirty) {
+                if (SceneState->MeshLightEmissiveDirty) {
                     MeshLights.MarkDirty();
-                    MeshLightEmissiveDirty = false;
+                    SceneState->MeshLightEmissiveDirty = false;
                 }
                 break;
             }
@@ -778,7 +781,7 @@ namespace Smile {
         const FEffectiveIndirectPolicy Policy = ResolveIndirectPolicy();
         const FFrameModes Modes = ResolveFrameModes(Policy);
         const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
-        LastViewProj = Vw.ViewProjUnjittered;
+        FrameState->LastViewProj = Vw.ViewProjUnjittered;
 
         const u32 FrameSlot = Backend->DirectQueue.FrameIndex();
         // BeginFrame acabou de esperar a fence deste slot, portanto o readback gravado na
@@ -907,7 +910,7 @@ namespace Smile {
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
             DDGIDebugPass.Render(FrameSlot, CommandList, Backend->SRVHeap, DDGI, Vw.ViewProjection, Vw.CameraPosition,
-                                 TemporalSampleIndex);
+                                 FrameState->TemporalSampleIndex);
             DDGIDebugDrew = true;
         }
 
@@ -924,13 +927,14 @@ namespace Smile {
 
         const FPostInput PostSrc = RecordResolve(Ctx, ActiveUp, RRPoisoned);
 
-        PrevViewProj  = Vw.ViewProjUnjittered;
-        PrevCameraPosition = Vw.CameraPosition;
-        PrevVPNoTrans = Vw.VPNoTransUnjit;   // frame anterior p/ a reprojecao do background (velocity do ceu)
-        NrdPrevProj   = Vw.ProjUnjittered;
-        NrdPrevView   = Vw.View;
-        PrevJitterUv  = Vw.JitterUv;
-        PrevJitterPx = Vw.JitterPx;
+        FrameState->PrevViewProj  = Vw.ViewProjUnjittered;
+        FrameState->PrevCameraPosition = Vw.CameraPosition;
+        // Reprojecao do background, sem translacao da camera.
+        FrameState->PrevViewProjNoTranslation = Vw.VPNoTransUnjit;
+        FrameState->NrdPrevProj   = Vw.ProjUnjittered;
+        FrameState->NrdPrevView   = Vw.View;
+        FrameState->PrevJitterUv  = Vw.JitterUv;
+        FrameState->PrevJitterPx = Vw.JitterPx;
 
         RecordPost(Ctx, PostSrc);
 
@@ -951,8 +955,8 @@ namespace Smile {
         FinishFrameCapture(Modes, Policy, FrameSlot);
 
         // Avance no fim para que jitter e todos os passes usem a mesma semente durante o frame.
-        // O reset deterministico altera apenas TemporalSampleIndex.
-        ++FrameIndex;
-        ++TemporalSampleIndex;
+        // O reset deterministico altera apenas o indice de amostra temporal.
+        ++FrameState->FrameIndex;
+        ++FrameState->TemporalSampleIndex;
     }
 }

@@ -1,4 +1,6 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererFrameState.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
@@ -120,10 +122,10 @@ namespace Smile {
         {
             FGPULightGI* Dst = reinterpret_cast<FGPULightGI*>(
                 MappedGILightBase + static_cast<size_t>(FrameSlot) * kMaxLights * sizeof(FGPULightGI));
-            for (FLight& L : Scene.Lights()) {
+            for (FLight& L : SceneState->Scene.Lights()) {
                 // O caminho direto atribui a identidade mais adiante, mas o ReGIR e construido
                 // antes dele. Atribuir aqui garante que o historico nunca use indice como ID.
-                if (L.Id == 0) L.Id = Scene.AllocObjectId();
+                if (L.Id == 0) L.Id = SceneState->Scene.AllocObjectId();
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 // Peso de RT: com 0 a luz sai da lista do indireto por completo (nao so escurece —
                 // some do hit, economizando o shadow ray dela). E o caso da luz que so existia p/
@@ -162,12 +164,13 @@ namespace Smile {
         // material no editor) sem a cena se mexer, entao a versao de transforms sozinha nao
         // pediria rebuild.
         if (RaytracingScene.IsBuilt() &&
-            (Scene.TransformsVersion() != TlasTransformsVersion || TlasFlagsDirty)) {
+            (SceneState->Scene.TransformsVersion() != SceneState->TlasTransformsVersion ||
+             SceneState->TlasFlagsDirty)) {
             Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> TlasCL;
             if (SUCCEEDED(CommandList->QueryInterface(IID_PPV_ARGS(&TlasCL))) &&
-                RaytracingScene.RecordTlasRebuild(TlasCL.Get(), Scene, FrameSlot)) {
-                TlasTransformsVersion = Scene.TransformsVersion();
-                TlasFlagsDirty        = false;
+                RaytracingScene.RecordTlasRebuild(TlasCL.Get(), SceneState->Scene, FrameSlot)) {
+                SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
+                SceneState->TlasFlagsDirty        = false;
             }
         }
 
@@ -191,7 +194,7 @@ namespace Smile {
         GILightCountThisFrame = GILightCount;
         if (ReGIROn) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "ReGIR (build)");
-            ReGIR.UpdatePerFrame(FrameSlot, TemporalSampleIndex, GILightCount, GILightSetSignature);
+            ReGIR.UpdatePerFrame(FrameSlot, FrameState->TemporalSampleIndex, GILightCount, GILightSetSignature);
             ReGIR.RecordBuild(CommandList, Backend->SRVHeap);
         }
         const FReGIRShaderParams ReGIRCB = ReGIR.ShaderParams(ReGIROn);
@@ -229,8 +232,8 @@ namespace Smile {
         DDGI.SetSkyIntensity(Lt.RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
 
         if (Modes.ReliableMotionActive) {
-            TemporalMotion.UpdatePerFrame(FrameSlot, Scene, Vw.InvViewProjFull,
-                                          Vw.ViewProjUnjittered, PrevViewProj,
+            TemporalMotion.UpdatePerFrame(FrameSlot, SceneState->Scene, Vw.InvViewProjFull,
+                                          Vw.ViewProjUnjittered, FrameState->PrevViewProj,
                                           Vw.CameraPosition);
         } else {
             // O historico de superficie nao e atualizado enquanto nenhum consumidor existe;
@@ -241,7 +244,8 @@ namespace Smile {
         GIComputeFence = 0;
         if (Policy.VolumeLive) {
             DDGI.SetPunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap, GILightSRVSlot[FrameSlot], FrameSlot);
-            DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor, TemporalSampleIndex, GILightCount);
+            DDGI.UpdatePerFrame(FrameSlot, Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
+                                FrameState->TemporalSampleIndex, GILightCount);
             if (UseAsyncCompute && DDGI.CanRunAsync()) {
                 DDGI.TransitionForUpdate(CommandList);
                 const u64 S1 = Backend->DirectQueue.SubmitSegmentAndContinue();
@@ -277,10 +281,11 @@ namespace Smile {
             const bool WaterUsesAtmosphere = UseAtmosphereSky && Atmosphere.IsInitialized();
             const f32 WaterEnvironmentIntensity =
                 WaterUsesAtmosphere ? ReflSkyIntensity : IBLIntensity;
-            Reflections.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection, PrevViewProj,
-                                       Vw.CameraPosition, PrevCameraPosition,
+            Reflections.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
+                                       FrameState->PrevViewProj, Vw.CameraPosition,
+                                       FrameState->PrevCameraPosition,
                                        RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt,
-                                       Lt.KeyColor, TemporalSampleIndex, ReflSkyIntensity, Vw.View,
+                                       Lt.KeyColor, FrameState->TemporalSampleIndex, ReflSkyIntensity, Vw.View,
                                        WaterUsesAtmosphere, WaterEnvironmentIntensity, GILightCount,
                                        TemporalMotion.InstanceCount(), Modes.MotionHistoryValidThisFrame);
         }
@@ -295,8 +300,8 @@ namespace Smile {
                                       ? TemporalMotion.SurfaceSRV(1u - FrameSlot) : 0xFFFFFFFFu;
             ReSTIRGI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
                                     RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
-                                    TemporalSampleIndex, Lt.RainSkyDim, Vw.View,
-                                    PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
+                                    FrameState->TemporalSampleIndex, Lt.RainSkyDim, Vw.View,
+                                    FrameState->PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
         }
 
         // Cache e ReSTIR GI compartilham a mascara de sombra para produzir a mesma radiancia.
@@ -307,7 +312,7 @@ namespace Smile {
                 FrameSlot, Vw.InvViewProjFull, Vw.CameraPosition,
                 Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
                 ReSTIRGI.GetFoliageShadows() ? kRTMaskShadowFull : kRTMaskShadowFast,
-                TemporalSampleIndex, Lt.RainSkyDim, DDGI.MaxRayDistance(), GILightCount,
+                FrameState->TemporalSampleIndex, Lt.RainSkyDim, DDGI.MaxRayDistance(), GILightCount,
                 ReSTIRGI.GetBackfacePolicy());
         }
     }
@@ -337,8 +342,9 @@ namespace Smile {
 
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "TAA");
-                TemporalAA.Execute(CommandList, Backend->SRVHeap, FrameSlot, Vw.InvViewProjUnjit, PrevViewProj,
-                                   TAAHistoryBlend, TAARanLastFrame, TAAVarianceGamma, TAASharpness,
+                TemporalAA.Execute(CommandList, Backend->SRVHeap, FrameSlot, Vw.InvViewProjUnjit,
+                                   FrameState->PrevViewProj, TAAHistoryBlend,
+                                   FrameState->TAARanLastFrame, TAAVarianceGamma, TAASharpness,
                                    TAAMotionBlend, TAAAntiFlicker, TAAStationaryMargin, Vw.CameraPosition,
                                    Vw.NearZ, Vw.FarZ, TAADebugMode);
             }
@@ -349,7 +355,7 @@ namespace Smile {
 
             PostInput    = TemporalAA.DisplayOutputResource();
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
-            TAARanLastFrame = true;
+            FrameState->TAARanLastFrame = true;
         } else if (Modes.UpscaleActive && !RRPoisoned) {
             // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
             // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
@@ -395,15 +401,16 @@ namespace Smile {
             UpParams.FarZ         = Vw.FarZ;
             UpParams.FovYRadians  = Vw.FovY;
             UpParams.AspectRatio  = Vw.Aspect;
-            UpParams.DeltaTimeSec = LastDeltaTime;
+            UpParams.DeltaTimeSec = FrameState->LastDeltaTime;
             UpParams.Quality      = UpscalerQuality;
             // Reset one-shot: descarta o historico temporal em troca de modo/denoiser/scene/resize (senao o
             // RR/DLSS reusa acumulacao velha => ghosting). Limpo logo apos o Dispatch.
             UpParams.Reset        = RRResetPending;
             // Matrizes p/ o DLSS (o FSR ignora): projecao unjittered + reprojecao (clip atual -> anterior).
-            // PrevViewProj ainda guarda o frame anterior aqui (so e atualizado logo abaixo).
+            // O VP anterior ainda nao foi atualizado neste ponto do frame.
             UpParams.ViewToClip     = Vw.ProjUnjittered;
-            UpParams.ClipToPrevClip = Vw.ViewProjUnjittered.Inverse() * PrevViewProj;
+            UpParams.ClipToPrevClip =
+                Vw.ViewProjUnjittered.Inverse() * FrameState->PrevViewProj;
             {
                 const Mat44 InvView = Vw.View.Inverse();   // view->world: linhas = base da camera em mundo
                 UpParams.CamRight = { InvView.M[0][0], InvView.M[0][1], InvView.M[0][2] };
@@ -448,7 +455,7 @@ namespace Smile {
 
             PostInput    = ActiveUp->OutputResource();
             PostInputSRV = ActiveUp->OutputSRVSlot();
-            TAARanLastFrame = false;
+            FrameState->TAARanLastFrame = false;
             RRSkipLogged    = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
         } else {
             // Eval pulado por debug na cena: arma o reset p/ o proximo eval real nao reprojetar de
@@ -462,7 +469,7 @@ namespace Smile {
                     RRSkipLogged = true;
                 }
             }
-            TAARanLastFrame = false;
+            FrameState->TAARanLastFrame = false;
         }
         return { PostInput, PostInputSRV };
     }
@@ -682,8 +689,9 @@ namespace Smile {
                 }
                 {
                     FGpuScope Scope(Backend->DirectProfiler, CommandList, "RELAX indireto");
-                    Nrd.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
-                                 Vw.JitterPx, PrevJitterPx, TemporalSampleIndex);
+                    Nrd.SetFrame(Vw.ProjUnjittered, FrameState->NrdPrevProj, Vw.View,
+                                 FrameState->NrdPrevView, Vw.JitterPx,
+                                 FrameState->PrevJitterPx, FrameState->TemporalSampleIndex);
                     Nrd.Denoise(CommandList);
                 }
                 {
@@ -732,9 +740,10 @@ namespace Smile {
                 {
                     FGpuScope Scope(Backend->DirectProfiler, CommandList, "ReSTIR DI");
                     ReSTIRDI.SetRayEpsilons(RayEps);
-                    ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View, PrevViewProj,
+                    ReSTIRDI.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.View,
+                                            FrameState->PrevViewProj,
                                             Vw.CameraPosition,
-                                            RenderWidth(), RenderHeight(), TemporalSampleIndex,
+                                            RenderWidth(), RenderHeight(), FrameState->TemporalSampleIndex,
                                             FrameLightCount, kRTMaskShadowFull,
                                             /*EnableTemporalPermutation=*/Modes.RRMode,
                                             TemporalMotion.InstanceCount(),
@@ -752,8 +761,10 @@ namespace Smile {
                     }
                     {
                         FGpuScope ChildScope(Backend->DirectProfiler, CommandList, "RELAX direto");
-                        NrdDirect.SetFrame(Vw.ProjUnjittered, NrdPrevProj, Vw.View, NrdPrevView,
-                                           Vw.JitterPx, PrevJitterPx, TemporalSampleIndex);
+                        NrdDirect.SetFrame(Vw.ProjUnjittered, FrameState->NrdPrevProj, Vw.View,
+                                           FrameState->NrdPrevView, Vw.JitterPx,
+                                           FrameState->PrevJitterPx,
+                                           FrameState->TemporalSampleIndex);
                         NrdDirect.Denoise(CommandList);
                     }
                     {
@@ -1216,10 +1227,10 @@ namespace Smile {
 
         {
             const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
-                ? static_cast<f32>(TemporalSampleIndex % 64u) : 0.0f;
+                ? static_cast<f32>(FrameState->TemporalSampleIndex % 64u) : 0.0f;
             SunShadows.UpdatePerFrame(FrameSlot, UseSunShadows, Vw.View, Vw.CameraPosition,
                                       Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame,
-                                      Scene.StaticCastersVersion());
+                                      SceneState->Scene.StaticCastersVersion());
             if (UseSunShadows) {
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
                 Casters.reserve(AllItems.size());
@@ -1228,7 +1239,8 @@ namespace Smile {
                     if (A.Mat && A.Mat->Blend) continue;
                     // Durante o arraste, trate o objeto como dinamico para preservar o cache CSM.
                     const bool Dyn = A.R->Mobility == EMobility::Dynamic ||
-                                     (DraggingRenderableId != 0 && A.R->Id == DraggingRenderableId);
+                                     (SceneState->DraggingRenderableId != 0 &&
+                                      A.R->Id == SceneState->DraggingRenderableId);
                     Casters.push_back({ A.R->Mesh, A.Mat,
                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                         A.R->AABBMin, A.R->AABBMax, Dyn });
@@ -1408,7 +1420,7 @@ namespace Smile {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "HZB");
                 HiZ.RecordBuild(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot);
                 HiZ.RecordTest(CommandList, Backend->SRVHeap, FrameSlot,
-                               static_cast<u32>(Scene.Renderables().size()),
+                               static_cast<u32>(SceneState->Scene.Renderables().size()),
                                Vw.ViewProjUnjittered);
             }
             Batch.Transition(Targets.DepthBuffer.Get(),
@@ -1427,7 +1439,7 @@ namespace Smile {
                 const f32 M22 = Vw.Projection.M[2][2];
                 const f32 M32 = Vw.Projection.M[3][2];
                 AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, Vw.View,
-                                  RenderWidth(), RenderHeight(), TemporalSampleIndex);
+                                  RenderWidth(), RenderHeight(), FrameState->TemporalSampleIndex);
 
                 FBarrierBatch Batch;
                 Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -1582,7 +1594,7 @@ namespace Smile {
             const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
                                        Lt.KeyColor.Z * Lt.KeyInt };
             RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
-                                       Vw.CameraPosition, ElapsedTime, Weather, Lt.KeyDir,
+                                       Vw.CameraPosition, FrameState->ElapsedTime, Weather, Lt.KeyDir,
                                        KeyColorInt, Amb.Sky);
             RainWetness.Execute(CommandList, Backend->SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
@@ -1645,17 +1657,17 @@ namespace Smile {
                 return Energy * R2 / (ToCam.LengthSq() + R2);
             };
 
-            auto& SceneLights = Scene.Lights();
+            auto& SceneLights = SceneState->Scene.Lights();
             for (u32 li = 0; li < static_cast<u32>(SceneLights.size()); ++li) {
                 FLight& L = SceneLights[li];
                 // Identidade estavel na primeira vez que vemos a luz. O editor faz push_back
                 // direto em Lights(), entao a atribuicao mora aqui e nao no AddLight.
-                if (L.Id == 0) L.Id = Scene.AllocObjectId();
+                if (L.Id == 0) L.Id = SceneState->Scene.AllocObjectId();
                 Vec3 PreviousLightPos = L.Position;
-                if (const auto It = PreviousDirectLightPositions.find(L.Id);
-                    It != PreviousDirectLightPositions.end())
+                if (const auto It = FrameState->PreviousDirectLightPositions.find(L.Id);
+                    It != FrameState->PreviousDirectLightPositions.end())
                     PreviousLightPos = It->second;
-                PreviousDirectLightPositions[L.Id] = L.Position;
+                FrameState->PreviousDirectLightPositions[L.Id] = L.Position;
                 if (!L.Enabled || L.Intensity <= 0.0f || L.AttenuationRadius <= 0.0f) continue;
                 if (NumLights >= kMaxLights) break;
 
@@ -1743,7 +1755,7 @@ namespace Smile {
             for (u32 s = 0; s < NumShadowed; ++s)
                 SpotIds[s] = SceneLights[ShadowCands[s].LightIdx].Id;
             LocalShadows.AcquireSpotSlots(SpotIds, NumShadowed, SpotSlot);
-            LocalShadows.UpdateSpotFades(SpotIds, NumShadowed, LastDeltaTime);
+            LocalShadows.UpdateSpotFades(SpotIds, NumShadowed, FrameState->LastDeltaTime);
 
             for (u32 s = 0; s < NumShadowed; ++s) {
                 const u32 Slice = SpotSlot[s];
@@ -1790,7 +1802,7 @@ namespace Smile {
             for (u32 c = 0; c < NumCubes; ++c)
                 CubeIds[c] = SceneLights[CubeCands[c].LightIdx].Id;
             LocalShadows.AcquireCubeSlots(CubeIds, NumCubes, CubeSlot);
-            LocalShadows.UpdateCubeFades(CubeIds, NumCubes, LastDeltaTime);
+            LocalShadows.UpdateCubeFades(CubeIds, NumCubes, FrameState->LastDeltaTime);
 
             for (u32 c = 0; c < NumCubes; ++c) {
                 const u32 Cube = CubeSlot[c];
@@ -1852,7 +1864,7 @@ namespace Smile {
     void Renderer::BuildDrawLists(FPassContext& _Ctx) {
         const FFrameView& Vw     = *_Ctx.View;
         const u32 FrameSlot      = _Ctx.FrameSlot;
-        // Era um `Camera.GetPosition()` proprio; e a MESMA chamada que produziu o
+        // Antes havia uma leitura propria da camera; e a MESMA que produziu o
         // Vw.CameraPosition no ResolveFrameView, e nada move a camera dentro do frame.
         const Vec3& CamPos       = _Ctx.View->CameraPosition;
 
@@ -1867,10 +1879,10 @@ namespace Smile {
         // por renderavel da cena.
         const int       SelectedRenderable = GetSelectedObject();
         {
-            const std::vector<FRenderable>& RList = Scene.Renderables();
+            const std::vector<FRenderable>& RList = SceneState->Scene.Renderables();
             AllItems.reserve(RList.size());
-            const size_t PrevCount = PrevModels.size();
-            PrevModels.resize(RList.size(), Mat44::Identity());
+            const size_t PrevCount = SceneState->PreviousModels.size();
+            SceneState->PreviousModels.resize(RList.size(), Mat44::Identity());
             const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
@@ -1881,19 +1893,19 @@ namespace Smile {
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
                 const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
                 const Mat44 Model = R.Transform.Matrix();
-                const Mat44 PrevModel = (si < PrevCount) ? PrevModels[si] : Model;
+                const Mat44 PrevModel = (si < PrevCount) ? SceneState->PreviousModels[si] : Model;
                 ObjectConstants OC;
                 OC.MVP            = Model * Vw.ViewProjection;
                 OC.ModelMatrix    = Model;
                 OC.CurMVPNoJitter = Model * Vw.ViewProjUnjittered;
-                OC.PrevMVP        = PrevModel * PrevViewProj;
+                OC.PrevMVP        = PrevModel * FrameState->PrevViewProj;
                 std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                             &OC, sizeof(ObjectConstants));
                 if (static_cast<int>(si) == SelectedRenderable) {
                     SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
-                PrevModels[si] = Model;
+                SceneState->PreviousModels[si] = Model;
             }
         }
         // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a
@@ -1903,7 +1915,7 @@ namespace Smile {
         // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
         // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
         const u32* OcclusionVis = UseOcclusionCulling
-            ? HiZ.ResolveResults(FrameSlot, static_cast<u32>(Scene.Renderables().size()))
+            ? HiZ.ResolveResults(FrameSlot, static_cast<u32>(SceneState->Scene.Renderables().size()))
             : nullptr;
         u32 OccludedCount = 0;
 
@@ -1931,7 +1943,8 @@ namespace Smile {
         LastOccludedCount = OccludedCount;
 
         if (UseTerrain && Terrain.IsLoaded())
-            Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered, PrevViewProj,
+            Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered,
+                                   FrameState->PrevViewProj,
                                    Vw.CameraPosition, Vw.FovY, Vw.MipBias);
     }
 }

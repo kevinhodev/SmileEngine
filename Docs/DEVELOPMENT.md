@@ -85,7 +85,8 @@ a um parágrafo que promete uma invariante sem verificá-la.
 - A implementação de `Renderer` é dividida por responsabilidade: lifecycle em `Renderer.cpp`,
   cena em `RendererScene.cpp`, captura/diagnóstico em `RendererCapture.cpp`, frame em
   `RendererFrame.cpp` e gravação de passes em `RendererPasses.cpp`. O mapa de ownership e fluxo
-  está em [`RENDERER.md`](RENDERER.md).
+  está em [`RENDERER.md`](RENDERER.md). Estado CPU persistente de cena pertence a
+  `RendererSceneState.h`; histórico e relógios entre frames pertencem a `RendererFrameState.h`.
 - Escolha primeiro um dos domínios existentes: `Renderer`, `Backend`, `Resources`, `Scene`, `Lighting`,
   `GI`, `RayTracing`, `Environment`, `PostProcess`, `Water`, `Editor` ou `Debug`. Crie outro apenas
   quando houver responsabilidade própria e mais de um componente relacionado.

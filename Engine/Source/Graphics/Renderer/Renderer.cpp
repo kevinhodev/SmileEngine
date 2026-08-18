@@ -1,4 +1,6 @@
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RendererFrameState.h"
+#include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
@@ -38,7 +40,13 @@ namespace Smile {
 
     Renderer::Renderer()
         : Backend(std::make_unique<FRenderBackend>()),
+          SceneState(std::make_unique<FRendererSceneState>()),
+          FrameState(std::make_unique<FRendererFrameState>()),
           SettingsImpl(std::make_unique<FRenderSettings>(*this)) {}
+
+    u32 Renderer::GetFrameIndex() const {
+        return FrameState->FrameIndex;
+    }
 
     FRenderSettings&       Renderer::Settings()       { return *SettingsImpl; }
     const FRenderSettings& Renderer::Settings() const { return *SettingsImpl; }
@@ -490,7 +498,7 @@ namespace Smile {
 
         TemporalAA.Resize(Backend->Device.Native(), Backend->SRVHeap, RW, RH);
         TemporalAA.SetupInputs(Backend->Device.Native(), Backend->SRVHeap, Targets.HDRColorBuffer.Get(), Targets.DepthBuffer.Get(), Targets.VelocityBuffer.Get());
-        TAARanLastFrame = false;
+        FrameState->TAARanLastFrame = false;
 
         Fsr.Initialize(Backend->Device.Native(), Backend->SRVHeap, RW, RH, SW, SH);
         Dlss.Initialize(Backend->Device.Native(), Backend->SRVHeap, RW, RH, SW, SH);
