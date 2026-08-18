@@ -34,6 +34,7 @@ Desktop.ini
 .DS_Store
 
 /Assets/Scenes/
+/Editor/Design/
 /.codex_deps
 /.claude
 # Material local de referencia (PDFs, extracoes) — nao versionado.

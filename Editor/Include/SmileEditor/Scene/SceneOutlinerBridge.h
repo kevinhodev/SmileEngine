@@ -16,9 +16,8 @@ namespace SmileEditor {
     //
     // Le a cena via RendererHandle (acesso serializado com a thread de renderizacao). As ACOES
     // de luz (add/remover/duplicar/toggle/propriedades) continuam no LightsBridge — o QML
-    // chama lightsModel; o MainWindow conecta LightsChanged -> Rebuild daqui. Nuvens ligam no
-    // ViewportWidget (viewportModel.cloudsEnabled); o oceano nao tinha toggle no editor, entao
-    // ele mora aqui (oceanVisible -> Renderer::SetUseWater).
+    // chama lightsModel; o MainWindow conecta LightsChanged -> Rebuild daqui. Ambiente tem
+    // bridges proprias para edicao; este modelo conserva apenas hierarquia e selecao.
     //
     // Agrupamento de meshes: MainWindow avisa OnSceneLoaded apos cada LoadCookedScene; cada
     // carga vira uma "pasta" com o range [begin, end) em Scene.Renderables(). Renderables
@@ -33,6 +32,7 @@ namespace SmileEditor {
         Q_PROPERTY(int filter READ Filter WRITE SetFilter NOTIFY FiltersChanged)
         Q_PROPERTY(bool oceanVisible READ OceanVisible WRITE SetOceanVisible NOTIFY EnvChanged)
         Q_PROPERTY(bool terrainVisible READ TerrainVisible WRITE SetTerrainVisible NOTIFY EnvChanged)
+        Q_PROPERTY(int selectedEnvironment READ SelectedEnvironment NOTIFY SelectionChanged)
         Q_PROPERTY(bool meshSelected READ MeshSelected NOTIFY SelectionChanged)
         Q_PROPERTY(QString meshName READ MeshName NOTIFY SelectionChanged)
         // Propriedades da mesh SELECIONADA (card do painel; defaults vazios sem selecao).
@@ -98,6 +98,7 @@ namespace SmileEditor {
         void    SetOceanVisible(bool V);
         bool    TerrainVisible() const;
         void    SetTerrainVisible(bool V);
+        int     SelectedEnvironment() const { return SelectedEnv; }
         bool    MeshSelected() const;
         QString MeshName() const;
         QString MeshMaterial() const;
@@ -111,7 +112,7 @@ namespace SmileEditor {
         bool    Dirty() const { return VisDirty; }
 
         Q_INVOKABLE void toggleExpand(int row);
-        Q_INVOKABLE void selectRow(int row);    // luz/mesh: seleciona no renderer (exclusivo)
+        Q_INVOKABLE void selectRow(int row);    // ambiente/luz/mesh: selecao exclusiva
         // Olho de mesh/pasta: flip de FRenderable::Visible + bump da TransformsVersion
         // (o rebuild leve da TLAS re-coleta as instancias pulando !Visible -> o GI/reflexos
         // respeitam o toggle no frame seguinte). Pasta = range inteiro do asset.
@@ -120,7 +121,7 @@ namespace SmileEditor {
         // (mesh = AABB, luz = posicao + raio da fonte). Estilo tecla F da UE.
         Q_INVOKABLE void focusRow(int row);
         Q_INVOKABLE int  selectedRowIndex() const; // linha selecionada na lista flat (-1 = fora)
-        // Setas cima/baixo: move a selecao pra proxima linha selecionavel (luz/mesh).
+        // Setas cima/baixo: move a selecao pra proxima linha selecionavel.
         Q_INVOKABLE void selectStep(int delta);
         // Salva o estado de visibilidade (meshes ocultas por asset + terreno) no
         // <cena>.visibility.json — chamado pelo botao salvar junto do saveLights.
@@ -196,6 +197,7 @@ namespace SmileEditor {
         // Espelhos p/ o Refresh detectar mudanca externa (picking, settings, load).
         int  CachedSelMesh   = -1;
         int  CachedSelLight  = -1;
+        int  SelectedEnv     = -1;
         int  CachedRenderableCount = -1;
         int  CachedLightCount      = -1;
         bool CachedClouds    = true;

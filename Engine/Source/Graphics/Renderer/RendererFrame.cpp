@@ -870,7 +870,7 @@ namespace Smile {
         if (GIComputeFence != 0) {
             // Meça o stall com dois timestamps da fila direta; clocks de filas diferentes nao
             // sao correlacionados. O valor inclui o overhead de segmentacao e nao mede folga.
-            Backend->DirectProfiler.Begin(CommandList, "Espera do DDGI (async)");
+            Backend->DirectProfiler.Begin(CommandList, "Espera do DDGI");
             Backend->DirectQueue.SubmitSegmentAndContinue();
             Backend->DirectQueue.GpuWait(Backend->ComputeQueue.NativeFence(), GIComputeFence);
             Backend->DirectProfiler.End(CommandList); // ja no segmento de DEPOIS do wait

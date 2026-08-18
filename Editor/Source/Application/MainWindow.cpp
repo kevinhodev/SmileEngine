@@ -8,6 +8,7 @@
 #include "SmileEditor/Application/SmileLogoImageProvider.h"
 #include "SmileEditor/UI/StatusBridge.h"
 #include "SmileEditor/Scene/TimeOfDayBridge.h"
+#include "SmileEditor/Scene/CloudsBridge.h"
 #include "SmileEditor/Rendering/RenderSettingsBridge.h"
 #include "SmileEditor/Scene/LightsBridge.h"
 #include "SmileEditor/Scene/SceneOutlinerBridge.h"
@@ -95,6 +96,7 @@ namespace SmileEditor {
         WindowBr   = new WindowBridge(this);
         Menus      = new MenuBridge(this);
         TodBridge  = new TimeOfDayBridge(this);
+        CloudsBr   = new CloudsBridge(this);
         LightsBr   = new LightsBridge(this);
         OutlinerBr = new SceneOutlinerBridge(this);
         SceneDoc   = new SceneDocument(this);
@@ -126,6 +128,8 @@ namespace SmileEditor {
 
         connect(LightsBr, &LightsBridge::LightsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Rebuild);
+        connect(CloudsBr, &CloudsBridge::SettingsChanged,
+                OutlinerBr, &SceneOutlinerBridge::Refresh);
 
         connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
                 SceneDoc, &SceneDocument::markDirty);
@@ -674,11 +678,10 @@ namespace SmileEditor {
 
         QQuickWidget* OutlinerPanel = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("SceneOutlinerPanel.qml"),
-            { { QStringLiteral("outlinerModel"),  OutlinerBr },
-              { QStringLiteral("sceneDoc"),        SceneDoc },
-              { QStringLiteral("lightsModel"),    LightsBr },
-              { QStringLiteral("renderModel"),    RenderBr },
-              { QStringLiteral("viewportModel"),  Viewport } },
+            { { QStringLiteral("outlinerModel"), OutlinerBr },
+              { QStringLiteral("sceneDoc"),       SceneDoc },
+              { QStringLiteral("lightsModel"),   LightsBr },
+              { QStringLiteral("cloudsModel"),   CloudsBr } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
         LightsDock->setWidget(OutlinerPanel);
@@ -707,6 +710,11 @@ namespace SmileEditor {
         if (RenderBr) {
             RenderBr->SetRenderer(Viewport->GetRenderer());
             RenderBr->SetViewport(Viewport);
+        }
+
+        if (CloudsBr) {
+            CloudsBr->SetViewport(Viewport);
+            CloudsBr->SetRenderer(Viewport->GetRenderer());
         }
 
         if (CameraBookmarksBr) CameraBookmarksBr->SetRenderer(Viewport->GetRenderer());

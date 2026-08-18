@@ -25,7 +25,7 @@ namespace SmileEditor {
     //
     // Leitura e escrita sincronas passam pelo RendererHandle, que serializa com a thread de
     // render — mesmo padrao do TimeOfDayBridge. Os poucos knobs que precisam recriar recursos
-    // (render scale, half-res das nuvens, troca de upscaler/denoiser) vao por job assincrono na
+    // (render scale e troca de upscaler/denoiser) vao por job assincrono na
     // fila do ViewportWidget, que os serializa com os frames; e por isso que a bridge conhece o
     // viewport.
     class RenderSettingsBridge : public QObject {
@@ -53,28 +53,6 @@ namespace SmileEditor {
         Q_PROPERTY(bool rainOcclusion READ IsRainOcclusion NOTIFY WeatherSettingsChanged)
         Q_PROPERTY(bool rainParticles READ AreRainParticles NOTIFY WeatherSettingsChanged)
         Q_PROPERTY(bool weatherDriveSky READ IsWeatherDriveSky NOTIFY WeatherSettingsChanged)
-
-        // --- Nuvens volumetricas -------------------------------------------------------
-        Q_PROPERTY(bool cloudsEnabled READ AreCloudsEnabled NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(bool cloudsHalfRes READ AreCloudsHalfRes NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(bool cloudsTemporal READ AreCloudsTemporal NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudCoverage READ GetCloudCoverage NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudDensity READ GetCloudDensity NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudWindSpeed READ GetCloudWindSpeed NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudErosion READ GetCloudErosion NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudPhaseG READ GetCloudPhaseG NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudPowder READ GetCloudPowder NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudAmbient READ GetCloudAmbient NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudTypeBias READ GetCloudTypeBias NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudPeakVariation READ GetCloudPeakVariation NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(int cloudWeatherSeed READ GetCloudWeatherSeed NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(int cloudWeatherCells READ GetCloudWeatherCells NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(bool cloudWeatherAuthored READ IsCloudWeatherAuthored NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(bool cloudShadows READ AreCloudShadowsEnabled NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudShadowStrength READ GetCloudShadowStrength NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudBottomKm READ GetCloudBottomKm NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(double cloudThicknessKm READ GetCloudThicknessKm NOTIFY CloudSettingsChanged)
-        Q_PROPERTY(int cloudMarchSteps READ GetCloudMarchSteps NOTIFY CloudSettingsChanged)
 
         // --- Sun shafts e fog volumetrico -----------------------------------------------
         Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY SunShaftsSettingsChanged)
@@ -253,44 +231,6 @@ namespace SmileEditor {
         Q_INVOKABLE void SetRainOcclusion(bool enabled);
         Q_INVOKABLE void SetRainParticles(bool enabled);
         Q_INVOKABLE void SetWeatherDriveSky(bool enabled);
-
-        bool              AreCloudsEnabled() const;
-        bool              AreCloudsHalfRes() const;
-        bool              AreCloudsTemporal() const;
-        double            GetCloudCoverage() const;
-        double            GetCloudDensity() const;
-        double            GetCloudWindSpeed() const;
-        double            GetCloudErosion() const;
-        double            GetCloudPhaseG() const;
-        double            GetCloudPowder() const;
-        double            GetCloudAmbient() const;
-        double            GetCloudTypeBias() const;
-        double            GetCloudPeakVariation() const;
-        int               GetCloudWeatherSeed() const;
-        int               GetCloudWeatherCells() const;
-        bool              IsCloudWeatherAuthored() const;
-        bool              AreCloudShadowsEnabled() const;
-        double            GetCloudShadowStrength() const;
-        double            GetCloudBottomKm() const;
-        double            GetCloudThicknessKm() const;
-        int               GetCloudMarchSteps() const;
-
-        Q_INVOKABLE void SetCloudsEnabled(bool enabled);
-        Q_INVOKABLE void SetCloudsHalfRes(bool halfRes);
-        Q_INVOKABLE void SetCloudsTemporal(bool enabled);
-        Q_INVOKABLE void SetCloudCoverage(double value);
-        Q_INVOKABLE void SetCloudDensity(double value);
-        Q_INVOKABLE void SetCloudWindSpeed(double value);
-        Q_INVOKABLE void SetCloudErosion(double value);
-        Q_INVOKABLE void SetCloudPhaseG(double value);
-        Q_INVOKABLE void SetCloudPowder(double value);
-        Q_INVOKABLE void SetCloudAmbient(double value);
-        Q_INVOKABLE void SetCloudTypeBias(double value);
-        Q_INVOKABLE void SetCloudPeakVariation(double value);
-        Q_INVOKABLE void SetCloudWeatherSeed(int seed);
-        Q_INVOKABLE void SetCloudWeatherCells(int mult);
-        Q_INVOKABLE void LoadCloudWeatherTexture();  // abre QFileDialog
-        Q_INVOKABLE void ClearCloudWeatherTexture();
 
         bool              AreSunShaftsEnabled() const;
         double            GetSunShaftsIntensity() const;
@@ -472,16 +412,10 @@ namespace SmileEditor {
         Q_INVOKABLE void SetVolFogTemporal(bool enabled);
         Q_INVOKABLE void SetVolFogLights(double value);
         Q_INVOKABLE void SetVolFogConsDepth(bool enabled);
-        Q_INVOKABLE void SetCloudShadowsEnabled(bool enabled);
-        Q_INVOKABLE void SetCloudShadowStrength(double value);
-        Q_INVOKABLE void SetCloudAltitude(double bottomKm, double thicknessKm);
-        Q_INVOKABLE void SetCloudMarchSteps(int steps);
-
     signals:
         void AvailableChanged();
         void OceanSettingsChanged();
         void WeatherSettingsChanged();
-        void CloudSettingsChanged();
         void SunShaftsSettingsChanged();
         void VolFogSettingsChanged();
         void ShadowSettingsChanged();

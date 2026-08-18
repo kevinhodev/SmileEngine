@@ -105,6 +105,7 @@ namespace SmileEditor {
 
     bool SceneOutlinerBridge::RowSelected(const FRow& _Row) const {
         if (!Renderer) return false;
+        if (_Row.Kind == KEnv)   return SelectedEnv == _Row.SceneIdx;
         if (_Row.Kind == KLight) return Renderer->GetSelectedLight() == _Row.SceneIdx;
         if (_Row.Kind == KMesh)  return Renderer->GetSelectedObject() == _Row.SceneIdx;
         return false;
@@ -313,8 +314,9 @@ namespace SmileEditor {
 
     int SceneOutlinerBridge::SelectedCount() const {
         if (!Renderer) return 0;
-        return (Renderer->GetSelectedObject() >= 0 ? 1 : 0) +
-               (Renderer->GetSelectedLight()  >= 0 ? 1 : 0);
+        return SelectedEnv >= 0 ? 1
+            : (Renderer->GetSelectedObject() >= 0 ? 1 : 0) +
+              (Renderer->GetSelectedLight()  >= 0 ? 1 : 0);
     }
 
     int SceneOutlinerBridge::HiddenCount() const {
@@ -500,12 +502,19 @@ namespace SmileEditor {
     void SceneOutlinerBridge::selectRow(int _Row) {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
         const FRow& R = Rows[_Row];
-        if (R.Kind == KLight) {
+        if (R.Kind == KEnv) {
+            if (R.SceneIdx != EnvNuvens || SelectedEnv == R.SceneIdx) return;
+            SelectedEnv = R.SceneIdx;
+            Renderer->ClearSelection();
+            Renderer->ClearLightSelection();
+        } else if (R.Kind == KLight) {
             if (Renderer->GetSelectedLight() == R.SceneIdx) return;
+            SelectedEnv = -1;
             Renderer->SetSelectedLight(R.SceneIdx);
             Renderer->ClearSelection(); // selecao de luz e de mesh sao exclusivas
         } else if (R.Kind == KMesh) {
             if (Renderer->GetSelectedObject() == R.SceneIdx) return;
+            SelectedEnv = -1;
             Renderer->SetSelectedObject(R.SceneIdx);
             Renderer->ClearLightSelection();
         } else {
@@ -735,7 +744,8 @@ namespace SmileEditor {
         const int Cur = selectedRowIndex();
         int I = Cur < 0 ? (Dir > 0 ? 0 : (int)Rows.size() - 1) : Cur + Dir;
         for (; I >= 0 && I < Rows.size(); I += Dir) {
-            if (Rows[I].Kind == KLight || Rows[I].Kind == KMesh) {
+            if ((Rows[I].Kind == KEnv && Rows[I].SceneIdx == EnvNuvens) ||
+                Rows[I].Kind == KLight || Rows[I].Kind == KMesh) {
                 selectRow(I);
                 emit ScrollToRequested(I);
                 return;
@@ -861,6 +871,7 @@ namespace SmileEditor {
         const int SelMesh  = Renderer->GetSelectedObject();
         const int SelLight = Renderer->GetSelectedLight();
         if (SelMesh != CachedSelMesh || SelLight != CachedSelLight) {
+            if (SelMesh >= 0 || SelLight >= 0) SelectedEnv = -1;
             CachedSelMesh  = SelMesh;
             CachedSelLight = SelLight;
             if (!Rows.isEmpty())

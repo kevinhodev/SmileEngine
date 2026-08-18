@@ -184,7 +184,7 @@ namespace Smile {
         u32  TemporalSRVTable[2] = { kInvalidSlot, kInvalidSlot }; // [raw, hist[i]] contiguos
         u32  HistIndex        = 0;     // indice do historico que sera ESCRITO neste frame
         u32  CompositeSRVSlot = kInvalidSlot; // fonte do composite (raw ou historico atual)
-        bool UseTemporal   = true;
+        bool UseTemporal   = false;
         bool HistoryValid  = false;
         bool HasPrevVP     = false;
         Mat44 StoredVPWorld = Mat44::Identity();

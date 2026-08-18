@@ -50,8 +50,8 @@ Rectangle {
     function pageTitle() {
         const titles = [
             "Renderização", "Iluminação global", "Path tracer", "Reflexos e denoise",
-            "Água — FFT", "Pós-processo", "Sombras e céu", "Nuvens volumétricas",
-            "Clima", "Interface", "Atalhos", "Projeto"
+            "Água — FFT", "Pós-processo", "Sombras e céu", "Clima", "Interface",
+            "Atalhos", "Projeto"
         ]
         return titles[selectedPage]
     }
@@ -66,8 +66,6 @@ Rectangle {
         if (selectedPage === 6)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         if (selectedPage === 7)
-            return "Raymarch de nuvens na atmosfera: cobertura, forma, iluminação e custo"
-        if (selectedPage === 8)
             return "Chuva: wetness deferred, poças, cortina de gotas e acoplamento com o céu"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
     }
@@ -623,8 +621,7 @@ Rectangle {
             NavItem { page: 4; glyph: "≋"; label: "Água — FFT" }
             NavItem { page: 5; glyph: "☷"; label: "Pós-processo" }
             NavItem { page: 6; glyph: "☾"; label: "Sombras e céu" }
-            NavItem { page: 7; glyph: "☁"; label: "Nuvens volumétricas" }
-            NavItem { page: 8; glyph: "☂"; label: "Clima" }
+            NavItem { page: 7; glyph: "☂"; label: "Clima" }
         }
 
         Text {
@@ -637,9 +634,9 @@ Rectangle {
         Column {
             x: 12; y: 386
             spacing: 4
-            NavItem { page: 9; glyph: "▤"; label: "Interface" }
-            NavItem { page: 10; glyph: "⌨"; label: "Atalhos" }
-            NavItem { page: 11; glyph: "▰"; label: "Projeto" }
+            NavItem { page: 8; glyph: "▤"; label: "Interface" }
+            NavItem { page: 9; glyph: "⌨"; label: "Atalhos" }
+            NavItem { page: 10; glyph: "▰"; label: "Projeto" }
         }
 
         Rectangle {
@@ -730,7 +727,7 @@ Rectangle {
             }
         }
 
-        // Duas colunas empilhadas por Column (mesmo padrao da pagina de Sombras/Nuvens, adaptado
+        // Duas colunas empilhadas por Column (mesmo padrao dos paineis graficos, adaptado
         // p/ 2 colunas): nenhum card sabe seu proprio y, entao mudar/ocultar conteudo reflui tudo
         // sozinho. O contentHeight segue a coluna mais alta, entao o scroll sempre alcanca o fim.
         Flickable {
@@ -1710,7 +1707,7 @@ Rectangle {
             ScrollBar.vertical: ThinScrollBar { revealed: shadowsPageHover.hovered }
             HoverHandler { id: shadowsPageHover }
 
-            // coluna única (padrão da página de nuvens): contentHeight segue a Column
+            // Coluna unica: contentHeight segue a Column.
             // e o scroll sempre alcança o último card
             Column {
                 id: shadowsCol
@@ -2157,309 +2154,11 @@ Rectangle {
             }
         }
 
-        Flickable {
-            id: cloudsPage
-            visible: root.selectedPage === 7
-            anchors.fill: parent
-            anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: cloudsCol.height + 40
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: cloudsPageHover.hovered }
-            HoverHandler { id: cloudsPageHover }
-
-            Column {
-                id: cloudsCol
-                x: 24
-                width: cloudsPage.width - 48
-                spacing: 16
-
-            Card {
-                width: parent.width
-                height: 330
-                title: "Camada de nuvens"
-
-                Text {
-                    x: 20; y: 55
-                    text: "Nuvens volumétricas"
-                    color: root.textPrimary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: "raymarch acoplado à atmosfera"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 54
-                    checked: renderModel.cloudsEnabled
-                    onToggled: renderModel.SetCloudsEnabled(!checked)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Cobertura"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.cloudCoverage
-                    valueText: Math.round(renderModel.cloudCoverage * 100) + " %"
-                    onCommitted: (v) => renderModel.SetCloudCoverage(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Densidade (extinção /km)"
-                    from: 0.1; to: 10.0; step: 0.1
-                    value: renderModel.cloudDensity
-                    valueText: renderModel.cloudDensity.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetCloudDensity(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 212
-                    width: parent.width - 40
-                    label: "Altitude da base"
-                    from: 0.5; to: 8.0; step: 0.1
-                    value: renderModel.cloudBottomKm
-                    valueText: renderModel.cloudBottomKm.toFixed(1).replace(".", ",") + " km"
-                    onCommitted: (v) => renderModel.SetCloudAltitude(v, renderModel.cloudThicknessKm)
-                }
-                ShadowSlider {
-                    x: 20; y: 264
-                    width: parent.width - 40
-                    label: "Espessura da camada"
-                    from: 0.5; to: 8.0; step: 0.1
-                    value: renderModel.cloudThicknessKm
-                    valueText: renderModel.cloudThicknessKm.toFixed(1).replace(".", ",") + " km"
-                    onCommitted: (v) => renderModel.SetCloudAltitude(renderModel.cloudBottomKm, v)
-                }
-            }
-
-            Card {
-                width: parent.width
-                height: 336
-                title: "Distribuição — weather map"
-
-                ShadowSlider {
-                    x: 20; y: 56
-                    width: parent.width - 40
-                    label: "Células do padrão (re-bakea na hora)"
-                    from: 1; to: 8; step: 1
-                    value: renderModel.cloudWeatherCells
-                    valueText: renderModel.cloudWeatherCells + "×"
-                    onCommitted: (v) => renderModel.SetCloudWeatherCells(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Semente"
-                    from: 0; to: 9999; step: 1
-                    value: renderModel.cloudWeatherSeed
-                    valueText: renderModel.cloudWeatherSeed + ""
-                    onCommitted: (v) => renderModel.SetCloudWeatherSeed(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Viés de tipo (stratus ↔ cumulonimbus)"
-                    from: -0.5; to: 0.5; step: 0.01
-                    value: renderModel.cloudTypeBias
-                    valueText: (renderModel.cloudTypeBias >= 0 ? "+" : "") +
-                               renderModel.cloudTypeBias.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetCloudTypeBias(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 212
-                    width: parent.width - 40
-                    label: "Variação de topo (peak height, canal B)"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.cloudPeakVariation
-                    valueText: Math.round(renderModel.cloudPeakVariation * 100) + " %"
-                    onCommitted: (v) => renderModel.SetCloudPeakVariation(v)
-                }
-
-                Row {
-                    x: 20; y: 268
-                    spacing: 10
-                    ActionButton {
-                        label: "Semente aleatória"
-                        onTapped: renderModel.SetCloudWeatherSeed(Math.floor(Math.random() * 10000))
-                    }
-                    ActionButton {
-                        label: "Carregar textura…"
-                        onTapped: renderModel.LoadCloudWeatherTexture()
-                    }
-                    ActionButton {
-                        label: "Voltar ao procedural"
-                        visible: renderModel.cloudWeatherAuthored
-                        onTapped: renderModel.ClearCloudWeatherTexture()
-                    }
-                }
-                Text {
-                    x: 20; y: 306
-                    text: renderModel.cloudWeatherAuthored
-                          ? "fonte: textura autorada — R = cobertura · G = tipo · B = altura de topo"
-                          : "fonte: procedural (seed " + renderModel.cloudWeatherSeed + ")"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 10
-                }
-            }
-
-            Card {
-                width: parent.width
-                height: 418
-                title: "Forma e iluminação"
-
-                Text {
-                    x: 20; y: 316
-                    text: "Sombra das nuvens no chão"
-                    color: root.textPrimary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 335
-                    text: "shadow map 512² projetado da camada"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 315
-                    checked: renderModel.cloudShadows
-                    onToggled: renderModel.SetCloudShadowsEnabled(!checked)
-                }
-                ShadowSlider {
-                    x: 20; y: 362
-                    width: parent.width - 40
-                    label: "Intensidade da sombra"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.cloudShadowStrength
-                    valueText: Math.round(renderModel.cloudShadowStrength * 100) + " %"
-                    onCommitted: (v) => renderModel.SetCloudShadowStrength(v)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 56
-                    width: parent.width - 40
-                    label: "Erosão de detalhe"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.cloudErosion
-                    valueText: Math.round(renderModel.cloudErosion * 100) + " %"
-                    onCommitted: (v) => renderModel.SetCloudErosion(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 108
-                    width: parent.width - 40
-                    label: "Vento"
-                    from: 0; to: 0.05; step: 0.001
-                    value: renderModel.cloudWindSpeed
-                    valueText: Math.round(renderModel.cloudWindSpeed * 1000) + " m/s"
-                    onCommitted: (v) => renderModel.SetCloudWindSpeed(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 160
-                    width: parent.width - 40
-                    label: "Anisotropia da fase (g)"
-                    from: 0; to: 0.95; step: 0.01
-                    value: renderModel.cloudPhaseG
-                    valueText: renderModel.cloudPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetCloudPhaseG(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 212
-                    width: parent.width - 40
-                    label: "Powder (auto-sombra de borda)"
-                    from: 0; to: 1; step: 0.01
-                    value: renderModel.cloudPowder
-                    valueText: Math.round(renderModel.cloudPowder * 100) + " %"
-                    onCommitted: (v) => renderModel.SetCloudPowder(v)
-                }
-                ShadowSlider {
-                    x: 20; y: 264
-                    width: parent.width - 40
-                    label: "Ambiente do céu"
-                    from: 0; to: 3.0; step: 0.05
-                    value: renderModel.cloudAmbient
-                    valueText: "×" + renderModel.cloudAmbient.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetCloudAmbient(v)
-                }
-            }
-
-            Card {
-                width: parent.width
-                height: 216
-                title: "Desempenho"
-
-                Text {
-                    x: 20; y: 55
-                    text: "Meia resolução"
-                    color: root.textPrimary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 74
-                    text: "raymarch em ½ res + upsample bilinear"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 54
-                    checked: renderModel.cloudsHalfRes
-                    onToggled: renderModel.SetCloudsHalfRes(!checked)
-                }
-
-                Text {
-                    x: 20; y: 97
-                    text: "Reprojeção temporal"
-                    color: root.textPrimary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 20; y: 116
-                    text: "acumula frames; integra o ruído do jitter"
-                    color: root.textMuted
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
-                }
-                Toggle {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    y: 96
-                    checked: renderModel.cloudsTemporal
-                    onToggled: renderModel.SetCloudsTemporal(!checked)
-                }
-
-                ShadowSlider {
-                    x: 20; y: 150
-                    width: parent.width - 40
-                    label: "Passos do raymarch"
-                    from: 32; to: 256; step: 8
-                    value: renderModel.cloudMarchSteps
-                    valueText: renderModel.cloudMarchSteps + ""
-                    onCommitted: (v) => renderModel.SetCloudMarchSteps(v)
-                }
-            }
-            } // Column cloudsCol
-        }
-
-        // Página 8: Clima — chuva/wetness (FWeather via viewportModel). Veio da janela
+        // Clima — chuva/wetness (FWeather). Veio da janela
         // Time of Day: clima é estado de cena/render, não de relógio.
         Flickable {
             id: weatherPage
-            visible: root.selectedPage === 8
+            visible: root.selectedPage === 7
             anchors.fill: parent
             anchors.topMargin: 84
             contentWidth: width

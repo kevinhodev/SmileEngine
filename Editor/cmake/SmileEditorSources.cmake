@@ -88,6 +88,7 @@ smile_editor_domain(UI
 
 smile_editor_domain(Scene
     CameraBookmarksBridge
+    CloudsBridge
     JsonSidecar
     LightsBridge
     MaterialsBridge
@@ -133,6 +134,10 @@ smile_editor_assets("UI\\QML\\Scene"
     Qml/TimeOfDayWindow.qml
 )
 
+smile_editor_assets("UI\\QML\\Scene\\Inspectors"
+    Qml/Scene/CloudsInspector.qml
+)
+
 smile_editor_assets("UI\\QML\\Rendering"
     Qml/SettingsWindow.qml
     Qml/ViewportToolbar.qml
@@ -150,9 +155,15 @@ smile_editor_assets("UI\\QML\\Shared"
     Qml/LucideIcon.qml
     Qml/ThinScrollBar.qml
     Qml/components/Card.qml
+    Qml/components/BipolarSliderRow.qml
     Qml/components/Chip.qml
     Qml/components/ColorRow.qml
+    Qml/components/PairedScrubRow.qml
+    Qml/components/PrimarySliderRow.qml
+    Qml/components/ScrubField.qml
+    Qml/components/ScrubRow.qml
     Qml/components/SliderRow.qml
+    Qml/components/StepperRow.qml
     Qml/components/Theme.qml
     Qml/components/Toggle.qml
     Qml/components/ToggleRow.qml
@@ -168,9 +179,6 @@ file(GLOB editor_qml_icons CONFIGURE_DEPENDS
 )
 smile_editor_assets("UI\\QML\\Icons" ${editor_qml_icons})
 
-file(GLOB editor_design_files CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Design/*"
-)
 file(GLOB editor_font_files CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Fonts/*"
 )
@@ -180,7 +188,6 @@ file(GLOB editor_resource_files CONFIGURE_DEPENDS
 file(GLOB editor_style_files CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Styles/*"
 )
-smile_editor_assets("Design" ${editor_design_files})
 smile_editor_assets("Resources\\Fonts" ${editor_font_files})
 smile_editor_assets("Resources" ${editor_resource_files})
 smile_editor_assets("UI\\Styles" ${editor_style_files})
@@ -197,7 +204,6 @@ file(GLOB_RECURSE discovered_editor_files CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.qml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Qml/qmldir"
     "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.svg"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Design/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/Fonts/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/Resources/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/Styles/*"

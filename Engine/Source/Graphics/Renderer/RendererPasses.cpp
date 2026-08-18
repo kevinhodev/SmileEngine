@@ -256,7 +256,7 @@ namespace Smile {
                 ID3D12DescriptorHeap* CHeaps[] = { Backend->SRVHeap.Native() };
                 CCL->SetDescriptorHeaps(_countof(CHeaps), CHeaps);
                 {
-                    FGpuScope Scope(Backend->ComputeProfiler, CCL, "DDGI (async)");
+                    FGpuScope Scope(Backend->ComputeProfiler, CCL, "DDGI");
                     DDGI.RecordUpdate(CCL, Backend->SRVHeap);
                 }
                 Backend->ComputeProfiler.Resolve(CCL);

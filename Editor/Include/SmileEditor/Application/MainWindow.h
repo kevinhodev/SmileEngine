@@ -22,6 +22,7 @@ namespace SmileEditor {
     class MenuBridge;
     class StatusBridge;
     class TimeOfDayBridge;
+    class CloudsBridge;
     class LightsBridge;
     class SceneOutlinerBridge;
     class SceneDocument;
@@ -87,6 +88,7 @@ namespace SmileEditor {
         MenuBridge*           Menus       = nullptr;
         QDockWidget*          ConsoleDock = nullptr;
         TimeOfDayBridge*      TodBridge   = nullptr;
+        CloudsBridge*         CloudsBr    = nullptr;
         QPointer<QDialog>     TodDlg;
         QPointer<QDialog>     StatsDlg;
         QPointer<QDialog>     DebugTargetsDlg;
