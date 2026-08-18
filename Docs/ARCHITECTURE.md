@@ -328,6 +328,9 @@ Subsistemas que não cabem nesses layouts (como NRD e partes da água) montam a 
 
 ## 5. O frame: render loop e frame graph
 
+O mapa de ownership dos arquivos, snapshots do frame, filas e ciclos de vida está em
+[`RENDERER.md`](RENDERER.md). Esta seção mantém os detalhes do pipeline e dos recursos.
+
 O loop é dirigido pelo Editor, mas executado fora da GUI. O `QTimer` do `ViewportWidget`
 prepara input/câmera e solicita um frame; `RenderThread` executa `Renderer::RenderFrame()` e
 `PresentFrame()` na sua thread dedicada (o `Present` é separado para o dono soltar o lock
@@ -790,7 +793,7 @@ Mapeamento de conceitos de outras engines para onde encaixam na Smile.
 | Conceito (Unreal / Cry / Flax) | Equivalente Smile | Onde tocar |
 |--------------------------------|-------------------|------------|
 | RHI / `FRHICommandList` | `FCommandQueue` + `ID3D12GraphicsCommandList` | `Graphics/RHI/CommandQueue.*` |
-| `FRDGBuilder` / frame graph | **manual** em `Renderer::RenderFrame` (barriers explícitos) | `Graphics/Renderer/Renderer.cpp` |
+| `FRDGBuilder` / frame graph | **manual** em `Renderer::RenderFrame` (barriers explícitos) | `Graphics/Renderer/RendererFrame.cpp` |
 | `UMaterial` / material graph | `FMaterial` + `MaterialConstants` (uber-shader, sem grafo) | `Graphics/Resources/Material.*`, `Shaders/MaterialCB.hlsli`, `Shaders/GBuffer.ps.hlsl` |
 | Lumen (difuso) | `FDDGI` + `FReSTIRGI` | `Graphics/GI/DDGI.*`, `Graphics/GI/ReSTIRGI.*` |
 | Lumen Reflections | `FReflections` | `Graphics/GI/Reflections.*` |
@@ -873,11 +876,13 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 
 ### Estrutural
 
-- **`Renderer` ainda é um God object, mas não uma função monolítica.** `Renderer.cpp` tem ~5.700
-  linhas e `Renderer.h` ~1.260; `RenderFrame()` caiu para ~370 linhas após `FFrameModes`,
+- **`Renderer` ainda é um God object, mas não uma TU monolítica.** As ~5.800 linhas de implementação
+  estão separadas entre lifecycle (`Renderer.cpp`), cena (`RendererScene.cpp`), captura/diagnóstico
+  (`RendererCapture.cpp`), frame (`RendererFrame.cpp`) e gravação (`RendererPasses.cpp`).
+  `Renderer.h` ainda tem ~1.260 linhas; `RenderFrame()` caiu para ~370 após `FFrameModes`,
   `FFrameView`, `FFrameLighting`, `FFrameAmbient` e as fases `Record*` tornarem o fluxo explícito.
-  A dívida agora é ownership/superfície de API e concentração numa única TU. O próximo corte pode
-  separar as implementações de frame, cena e captura sem mudar a classe pública.
+  A dívida agora é ownership/superfície de API; `RendererPasses.cpp` ainda é a maior unidade e deve
+  diminuir à medida que cada pass assumir mais do próprio comportamento.
 - ~~**Grafo de invalidação escrito à mão nos setters**~~ — **resolvido:** domínios são máscaras
   nomeadas em `HistoryDomain.h`; passes temporais declaram seus alvos e o registro faz o dispatch.
   Permanecem adaptadores explícitos para NRD, RR/TAA e diagnóstico, além de duas invalidações diretas

@@ -93,6 +93,10 @@ smile_graphics_domain(Renderer
     HistoryDomain
     PassContext
     Renderer
+    RendererCapture
+    RendererFrame
+    RendererPasses
+    RendererScene
     RenderPass
     RenderSettings
     SceneTargets

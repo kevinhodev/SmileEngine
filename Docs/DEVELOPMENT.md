@@ -82,6 +82,10 @@ a um parágrafo que promete uma invariante sem verificá-la.
 - Um include sempre carrega o domínio: `#include "Smile/Graphics/RHI/D3D12Device.h"`.
 - No Visual Studio, a separação `Include`/`Source` é removida dos filtros: `.h` e `.cpp` aparecem
   juntos em `Graphics/<Domínio>`.
+- A implementação de `Renderer` é dividida por responsabilidade: lifecycle em `Renderer.cpp`,
+  cena em `RendererScene.cpp`, captura/diagnóstico em `RendererCapture.cpp`, frame em
+  `RendererFrame.cpp` e gravação de passes em `RendererPasses.cpp`. O mapa de ownership e fluxo
+  está em [`RENDERER.md`](RENDERER.md).
 - Escolha primeiro um dos domínios existentes: `Renderer`, `RHI`, `Resources`, `Scene`, `Lighting`,
   `GI`, `RayTracing`, `Environment`, `PostProcess`, `Water`, `Editor` ou `Debug`. Crie outro apenas
   quando houver responsabilidade própria e mais de um componente relacionado.
@@ -98,8 +102,8 @@ validadas no editor, idealmente com captura antes/depois usando o protocolo de `
 
 ## Próximas frentes arquiteturais
 
-1. Dividir a implementação de `Renderer` em unidades por responsabilidade (`Frame`, `Scene`,
-   `Capture`/diagnóstico), preservando a API enquanto reduz o custo cognitivo da TU de 5 mil linhas.
+1. Reduzir a superfície e o ownership de `Renderer.h`, movendo estado para os subsistemas donos sem
+   voltar a concentrar a implementação em uma única TU.
 2. Remover a dependência `SceneLoader -> Renderer` com um resultado de importação independente.
 3. Extrair telemetria, apresentação de debug targets e fila de jobs de `ViewportWidget`.
 4. Aumentar a cobertura CPU de `Math`, `CookedFormat`, culling e mutações de cena.
