@@ -92,6 +92,7 @@ smile_editor_domain(Scene
     JsonSidecar
     LightsBridge
     MaterialsBridge
+    OceanBridge
     SceneDocument
     SceneOutlinerBridge
     TimeOfDayBridge
@@ -137,6 +138,7 @@ smile_editor_assets("UI\\QML\\Scene"
 
 smile_editor_assets("UI\\QML\\Scene\\Inspectors"
     Qml/Scene/CloudsInspector.qml
+    Qml/Scene/OceanInspector.qml
     Qml/Scene/WeatherInspector.qml
 )
 

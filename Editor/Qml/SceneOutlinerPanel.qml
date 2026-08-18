@@ -11,6 +11,7 @@ import "Scene" as Scene
 //    cor HSV, sliders, sombras, posicao) — mesmo contrato do painel antigo.
 //  - `cloudsModel` (CloudsBridge): estado e propriedades autorais das nuvens.
 //  - `weatherModel` (WeatherBridge): chuva, wetness e integracao meteorologica da cena.
+//  - `oceanModel` (OceanBridge): espectro, vento e geometria FFT do oceano.
 // Estilo do TimeOfDayPanel (dark, cards, accent azul).
 Rectangle {
     id: root
@@ -18,6 +19,7 @@ Rectangle {
     required property var lightsModel
     required property var cloudsModel
     required property var weatherModel
+    required property var oceanModel
     // Camada autorada (.smap). As pontes chegam por setInitialProperties, entao TEM de estar
     // declarada aqui: passar a propriedade so do lado C++ deixa `sceneDoc` undefined e o
     // sceneDoc.save() vira ReferenceError — que aborta o handler em silencio.
@@ -72,6 +74,7 @@ Rectangle {
     readonly property bool hasMeshSelection: outlinerModel.meshSelected
     readonly property bool hasCloudSelection: outlinerModel.selectedEnvironment === 1
     readonly property bool hasWeatherSelection: outlinerModel.selectedEnvironment === 4
+    readonly property bool hasOceanSelection: outlinerModel.selectedEnvironment === 2
 
     function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
 
@@ -715,7 +718,8 @@ Rectangle {
 
                 HoverHandler {
                     id: rowHover
-                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1 && rowItem.sceneIdx !== 4
+                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1
+                                 && rowItem.sceneIdx !== 2 && rowItem.sceneIdx !== 4
                                   ? Qt.ArrowCursor : Qt.PointingHandCursor
                 }
                 TapHandler {
@@ -726,7 +730,8 @@ Rectangle {
                         root.forceActiveFocus() // atalhos de teclado voltam pro painel
                         if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
                         else if (rowItem.isEnv &&
-                                 (rowItem.sceneIdx === 1 || rowItem.sceneIdx === 4))
+                                 (rowItem.sceneIdx === 1 || rowItem.sceneIdx === 2
+                                  || rowItem.sceneIdx === 4))
                                                          outlinerModel.selectRow(rowItem.index)
                         else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
                         else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
@@ -802,11 +807,17 @@ Rectangle {
                 model: root.weatherModel
             }
 
+            Scene.OceanInspector {
+                width: parent.width
+                visible: root.hasOceanSelection
+                model: root.oceanModel
+            }
+
             // ---- Luz selecionada (mesmo contrato do painel antigo) ----
             Card {
                 title: lightsModel.lightType === 1 ? "Propriedades — Spot" : "Propriedades — Point"
                 iconName: lightsModel.lightType === 1 ? "cone" : "lightbulb"
-                visible: !root.hasCloudSelection && !root.hasWeatherSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection && !root.hasOceanSelection
                          && root.hasLightSelection
                 headerItem: [
                     Toggle {
@@ -1141,7 +1152,7 @@ Rectangle {
             Card {
                 title: "Propriedades — Mesh"
                 iconName: "box"
-                visible: !root.hasCloudSelection && !root.hasWeatherSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection && !root.hasOceanSelection
                          && !root.hasLightSelection && root.hasMeshSelection
 
                 Text {
@@ -1225,7 +1236,7 @@ Rectangle {
             Card {
                 title: "Propriedades"
                 iconName: "info"
-                visible: !root.hasCloudSelection && !root.hasWeatherSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection && !root.hasOceanSelection
                          && !root.hasLightSelection && !root.hasMeshSelection
 
                 Text {

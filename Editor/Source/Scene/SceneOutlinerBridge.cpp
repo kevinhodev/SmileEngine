@@ -504,7 +504,8 @@ namespace SmileEditor {
         if (!Renderer || _Row < 0 || _Row >= Rows.size()) return;
         const FRow& R = Rows[_Row];
         if (R.Kind == KEnv) {
-            if ((R.SceneIdx != EnvNuvens && R.SceneIdx != EnvClima) ||
+            if ((R.SceneIdx != EnvNuvens && R.SceneIdx != EnvClima &&
+                 R.SceneIdx != EnvOceano) ||
                 SelectedEnv == R.SceneIdx) return;
             SelectedEnv = R.SceneIdx;
             Renderer->ClearSelection();
@@ -747,7 +748,8 @@ namespace SmileEditor {
         int I = Cur < 0 ? (Dir > 0 ? 0 : (int)Rows.size() - 1) : Cur + Dir;
         for (; I >= 0 && I < Rows.size(); I += Dir) {
             if ((Rows[I].Kind == KEnv &&
-                 (Rows[I].SceneIdx == EnvNuvens || Rows[I].SceneIdx == EnvClima)) ||
+                 (Rows[I].SceneIdx == EnvNuvens || Rows[I].SceneIdx == EnvClima ||
+                  Rows[I].SceneIdx == EnvOceano)) ||
                 Rows[I].Kind == KLight || Rows[I].Kind == KMesh) {
                 selectRow(I);
                 emit ScrollToRequested(I);

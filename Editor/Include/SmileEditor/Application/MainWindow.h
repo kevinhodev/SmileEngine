@@ -24,6 +24,7 @@ namespace SmileEditor {
     class TimeOfDayBridge;
     class CloudsBridge;
     class WeatherBridge;
+    class OceanBridge;
     class LightsBridge;
     class SceneOutlinerBridge;
     class SceneDocument;
@@ -91,6 +92,7 @@ namespace SmileEditor {
         TimeOfDayBridge*      TodBridge   = nullptr;
         CloudsBridge*         CloudsBr    = nullptr;
         WeatherBridge*        WeatherBr   = nullptr;
+        OceanBridge*          OceanBr     = nullptr;
         QPointer<QDialog>     TodDlg;
         QPointer<QDialog>     StatsDlg;
         QPointer<QDialog>     DebugTargetsDlg;

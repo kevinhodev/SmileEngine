@@ -10,6 +10,7 @@
 #include "SmileEditor/Scene/TimeOfDayBridge.h"
 #include "SmileEditor/Scene/CloudsBridge.h"
 #include "SmileEditor/Scene/WeatherBridge.h"
+#include "SmileEditor/Scene/OceanBridge.h"
 #include "SmileEditor/Rendering/RenderSettingsBridge.h"
 #include "SmileEditor/Scene/LightsBridge.h"
 #include "SmileEditor/Scene/SceneOutlinerBridge.h"
@@ -99,6 +100,7 @@ namespace SmileEditor {
         TodBridge  = new TimeOfDayBridge(this);
         CloudsBr   = new CloudsBridge(this);
         WeatherBr  = new WeatherBridge(this);
+        OceanBr    = new OceanBridge(this);
         LightsBr   = new LightsBridge(this);
         OutlinerBr = new SceneOutlinerBridge(this);
         SceneDoc   = new SceneDocument(this);
@@ -134,6 +136,8 @@ namespace SmileEditor {
                 OutlinerBr, &SceneOutlinerBridge::Refresh);
         connect(WeatherBr, &WeatherBridge::SettingsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Refresh);
+        connect(OceanBr, &OceanBridge::SettingsChanged,
+                OutlinerBr, &SceneOutlinerBridge::Refresh);
 
         connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
                 SceneDoc, &SceneDocument::markDirty);
@@ -163,11 +167,9 @@ namespace SmileEditor {
 
         connect(StatsBr, &StatsBridge::Updated,                  this, &MainWindow::UpdateStats);
         connect(Viewport, &ViewportWidget::RendererInitialized, this, &MainWindow::OnRendererReady);
-        // Oceano pode ser alterado pelo Outliner ou pelas configurações.
+        // O olho da arvore e o inspector compartilham o mesmo estado do oceano.
         connect(OutlinerBr, &SceneOutlinerBridge::EnvChanged,
-                RenderBr, &RenderSettingsBridge::OceanSettingsChanged);
-        connect(RenderBr, &RenderSettingsBridge::OceanSettingsChanged,
-                OutlinerBr, &SceneOutlinerBridge::Refresh);
+                OceanBr, &OceanBridge::SettingsChanged);
         connect(Viewport, &ViewportWidget::InitProgress, this,
                 [this](const QString& _Label, const QString& _Detail, qreal _Fraction) {
             // Reserva o trecho final da barra para a cena de boot.
@@ -686,7 +688,8 @@ namespace SmileEditor {
               { QStringLiteral("sceneDoc"),       SceneDoc },
               { QStringLiteral("lightsModel"),   LightsBr },
               { QStringLiteral("cloudsModel"),   CloudsBr },
-              { QStringLiteral("weatherModel"),  WeatherBr } },
+              { QStringLiteral("weatherModel"),  WeatherBr },
+              { QStringLiteral("oceanModel"),    OceanBr } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
         LightsDock->setWidget(OutlinerPanel);
@@ -723,6 +726,7 @@ namespace SmileEditor {
         }
 
         if (WeatherBr) WeatherBr->SetRenderer(Viewport->GetRenderer());
+        if (OceanBr) OceanBr->SetRenderer(Viewport->GetRenderer());
 
         if (CameraBookmarksBr) CameraBookmarksBr->SetRenderer(Viewport->GetRenderer());
         if (CaptureBr) CaptureBr->SetRenderer(Viewport->GetRenderer());

@@ -50,8 +50,7 @@ Rectangle {
     function pageTitle() {
         const titles = [
             "Renderização", "Iluminação global", "Path tracer", "Reflexos e denoise",
-            "Água — FFT", "Pós-processo", "Sombras e céu", "Interface", "Atalhos",
-            "Projeto"
+            "Pós-processo", "Sombras e céu", "Interface", "Atalhos", "Projeto"
         ]
         return titles[selectedPage]
     }
@@ -61,9 +60,7 @@ Rectangle {
             return "Upscaling, Anti-Aliasing e Resolução Interna do Viewport"
         if (selectedPage === 1)
             return "Estimador de iluminação indireta, volume DDGI e ferramentas avançadas de validação"
-        if (selectedPage === 4)
-            return "Espectro físico, ganho das ondas e deslocamento geométrico do oceano FFT"
-        if (selectedPage === 6)
+        if (selectedPage === 5)
             return "Sombras do sol (CSM), sun shafts e volumetric fog: cascatas, cache, bias e debug"
         return "Esta categoria será conectada aos controles do engine em uma próxima etapa"
     }
@@ -616,24 +613,23 @@ Rectangle {
             NavItem { page: 1; glyph: "☼"; label: "Iluminação global" }
             NavItem { page: 2; glyph: "⌁"; label: "Path tracer"; beta: true }
             NavItem { page: 3; glyph: "◇"; label: "Reflexos e denoise" }
-            NavItem { page: 4; glyph: "≋"; label: "Água — FFT" }
-            NavItem { page: 5; glyph: "☷"; label: "Pós-processo" }
-            NavItem { page: 6; glyph: "☾"; label: "Sombras e céu" }
+            NavItem { page: 4; glyph: "☷"; label: "Pós-processo" }
+            NavItem { page: 5; glyph: "☾"; label: "Sombras e céu" }
         }
 
         Text {
-            x: 20; y: 338
+            x: 20; y: 304
             text: "Editor"
             color: root.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 11
         }
         Column {
-            x: 12; y: 352
+            x: 12; y: 318
             spacing: 4
-            NavItem { page: 7; glyph: "▤"; label: "Interface" }
-            NavItem { page: 8; glyph: "⌨"; label: "Atalhos" }
-            NavItem { page: 9; glyph: "▰"; label: "Projeto" }
+            NavItem { page: 6; glyph: "▤"; label: "Interface" }
+            NavItem { page: 7; glyph: "⌨"; label: "Atalhos" }
+            NavItem { page: 8; glyph: "▰"; label: "Projeto" }
         }
 
         Rectangle {
@@ -1561,141 +1557,8 @@ Rectangle {
         }
 
         Flickable {
-            id: oceanPage
-            visible: root.selectedPage === 4
-            anchors.fill: parent
-            anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: oceanCol.height + 40
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: oceanPageHover.hovered }
-            HoverHandler { id: oceanPageHover }
-
-            Column {
-                id: oceanCol
-                x: 24
-                width: oceanPage.width - 48
-                spacing: 16
-
-                Card {
-                    width: parent.width
-                    height: 112
-                    title: "Oceano FFT"
-
-                    Text {
-                        x: 20; y: 55
-                        text: "Renderizar superfície do oceano"
-                        color: root.textPrimary
-                        font.family: C.Theme.fontFamily
-                        font.pixelSize: 13
-                    }
-                    Text {
-                        x: 20; y: 76
-                        text: "mantém o toggle do ambiente e todos os parâmetros configurados"
-                        color: root.textMuted
-                        font.family: C.Theme.fontFamily
-                        font.pixelSize: 11
-                    }
-                    Toggle {
-                        anchors.right: parent.right
-                        anchors.rightMargin: 20
-                        y: 54
-                        checked: renderModel.oceanEnabled
-                        onToggled: renderModel.SetOceanEnabled(!checked)
-                    }
-                }
-
-                Card {
-                    width: parent.width
-                    height: 390
-                    title: "Espectro físico"
-
-                    ShadowSlider {
-                        x: 20; y: 55
-                        width: parent.width - 40
-                        label: "Direção do vento"
-                        from: 0; to: 360; step: 1
-                        value: renderModel.oceanWindDirectionDegrees
-                        valueText: Math.round(renderModel.oceanWindDirectionDegrees) + "°"
-                        onReleased: (v) => renderModel.SetOceanWindDirectionDegrees(v)
-                    }
-                    ShadowSlider {
-                        x: 20; y: 107
-                        width: parent.width - 40
-                        label: "Velocidade do vento"
-                        from: 0.1; to: 40; step: 0.1
-                        value: renderModel.oceanWindSpeed
-                        valueText: renderModel.oceanWindSpeed.toFixed(1).replace(".", ",") + " m/s"
-                        onReleased: (v) => renderModel.SetOceanWindSpeed(v)
-                    }
-                    ShadowSlider {
-                        x: 20; y: 159
-                        width: parent.width - 40
-                        label: "Fetch"
-                        from: 1; to: 1000; step: 1
-                        value: renderModel.oceanFetchKm
-                        valueText: Math.round(renderModel.oceanFetchKm) + " km"
-                        onReleased: (v) => renderModel.SetOceanFetchKm(v)
-                    }
-                    ShadowSlider {
-                        x: 20; y: 211
-                        width: parent.width - 40
-                        label: "Profundidade"
-                        from: 1; to: 5000; step: 1
-                        value: renderModel.oceanDepthM
-                        valueText: Math.round(renderModel.oceanDepthM) + " m"
-                        onReleased: (v) => renderModel.SetOceanDepthM(v)
-                    }
-                    ShadowSlider {
-                        x: 20; y: 263
-                        width: parent.width - 40
-                        label: "Swell"
-                        from: 0; to: 1; step: 0.01
-                        value: renderModel.oceanSwell
-                        valueText: renderModel.oceanSwell.toFixed(2).replace(".", ",")
-                        onReleased: (v) => renderModel.SetOceanSwell(v)
-                    }
-                    ShadowSlider {
-                        x: 20; y: 315
-                        width: parent.width - 40
-                        label: "Ganho das ondas (linear)"
-                        from: 0; to: 4; step: 0.05
-                        value: renderModel.oceanWavesAmount
-                        valueText: "×" + renderModel.oceanWavesAmount.toFixed(2).replace(".", ",")
-                        onReleased: (v) => renderModel.SetOceanWavesAmount(v)
-                    }
-                }
-
-                Card {
-                    width: parent.width
-                    height: 166
-                    title: "Deslocamento FFT"
-
-                    ShadowSlider {
-                        x: 20; y: 55
-                        width: parent.width - 40
-                        label: "Amplitude do deslocamento"
-                        from: 0; to: 4; step: 0.05
-                        value: renderModel.oceanFFTDisplacement
-                        valueText: "×" + renderModel.oceanFFTDisplacement.toFixed(2).replace(".", ",")
-                        onCommitted: (v) => renderModel.SetOceanFFTDisplacement(v)
-                    }
-                    ShadowSlider {
-                        x: 20; y: 107
-                        width: parent.width - 40
-                        label: "Choppy horizontal"
-                        from: 0; to: 4; step: 0.05
-                        value: renderModel.oceanFFTChoppy
-                        valueText: "×" + renderModel.oceanFFTChoppy.toFixed(2).replace(".", ",")
-                        onCommitted: (v) => renderModel.SetOceanFFTChoppy(v)
-                    }
-                }
-            }
-        }
-
-        Flickable {
             id: shadowsPage
-            visible: root.selectedPage === 6
+            visible: root.selectedPage === 5
             anchors.fill: parent
             anchors.topMargin: 84
             contentWidth: width
@@ -3748,8 +3611,7 @@ Rectangle {
 
         Item {
             visible: root.selectedPage !== 0 && root.selectedPage !== 1
-                     && root.selectedPage !== 4 && root.selectedPage !== 6
-                     && root.selectedPage !== 7
+                     && root.selectedPage !== 5 && root.selectedPage !== 6
             anchors.fill: parent
             Rectangle {
                 anchors.centerIn: parent

@@ -32,17 +32,6 @@ namespace SmileEditor {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
 
-        // --- Oceano / agua -------------------------------------------------------------
-        Q_PROPERTY(bool oceanEnabled READ IsOceanEnabled NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanWindDirectionDegrees READ GetOceanWindDirectionDegrees NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanWindSpeed READ GetOceanWindSpeed NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanFetchKm READ GetOceanFetchKm NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanDepthM READ GetOceanDepthM NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanSwell READ GetOceanSwell NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanWavesAmount READ GetOceanWavesAmount NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanFFTDisplacement READ GetOceanFFTDisplacement NOTIFY OceanSettingsChanged)
-        Q_PROPERTY(double oceanFFTChoppy READ GetOceanFFTChoppy NOTIFY OceanSettingsChanged)
-
         // --- Sun shafts e fog volumetrico -----------------------------------------------
         Q_PROPERTY(bool sunShaftsEnabled READ AreSunShaftsEnabled NOTIFY SunShaftsSettingsChanged)
         Q_PROPERTY(double sunShaftsIntensity READ GetSunShaftsIntensity NOTIFY SunShaftsSettingsChanged)
@@ -180,26 +169,6 @@ namespace SmileEditor {
         void SetViewport(ViewportWidget* V) { Viewport = V; }
 
         bool Available() const { return static_cast<bool>(Renderer); }
-
-        bool   IsOceanEnabled() const;
-        double GetOceanWindDirectionDegrees() const;
-        double GetOceanWindSpeed() const;
-        double GetOceanFetchKm() const;
-        double GetOceanDepthM() const;
-        double GetOceanSwell() const;
-        double GetOceanWavesAmount() const;
-        double GetOceanFFTDisplacement() const;
-        double GetOceanFFTChoppy() const;
-
-        Q_INVOKABLE void SetOceanEnabled(bool enabled);
-        Q_INVOKABLE void SetOceanWindDirectionDegrees(double degrees);
-        Q_INVOKABLE void SetOceanWindSpeed(double metresPerSecond);
-        Q_INVOKABLE void SetOceanFetchKm(double kilometres);
-        Q_INVOKABLE void SetOceanDepthM(double metres);
-        Q_INVOKABLE void SetOceanSwell(double value);
-        Q_INVOKABLE void SetOceanWavesAmount(double value);
-        Q_INVOKABLE void SetOceanFFTDisplacement(double value);
-        Q_INVOKABLE void SetOceanFFTChoppy(double value);
 
         bool              AreSunShaftsEnabled() const;
         double            GetSunShaftsIntensity() const;
@@ -383,7 +352,6 @@ namespace SmileEditor {
         Q_INVOKABLE void SetVolFogConsDepth(bool enabled);
     signals:
         void AvailableChanged();
-        void OceanSettingsChanged();
         void SunShaftsSettingsChanged();
         void VolFogSettingsChanged();
         void ShadowSettingsChanged();

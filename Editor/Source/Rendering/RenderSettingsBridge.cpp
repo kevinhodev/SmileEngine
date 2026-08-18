@@ -12,11 +12,6 @@
 // "antes do renderer existir" e mesmos sinais. Este passo e de ORGANIZACAO — se um valor
 // mudar, e erro de digitacao no move.
 namespace SmileEditor {
-    namespace {
-        constexpr double kRadiansToDegrees = 57.2957795131;
-        constexpr double kDegreesToRadians = 0.01745329252;
-    }
-
     RenderSettingsBridge::RenderSettingsBridge(QObject* _Parent) : QObject(_Parent) {}
 
     void RenderSettingsBridge::SetRenderer(RendererHandle _R) {
@@ -24,7 +19,6 @@ namespace SmileEditor {
         emit AvailableChanged();
         // Uma emissao por dominio: o QML reavalia os cards com os valores reais do motor, que
         // podem divergir dos defaults compilados na bridge.
-        emit OceanSettingsChanged();
         emit SunShaftsSettingsChanged();
         emit VolFogSettingsChanged();
         emit ShadowSettingsChanged();
@@ -33,112 +27,6 @@ namespace SmileEditor {
         emit RendererInitialized();
     }
 
-    // === Oceano / agua ==================================================================
-
-    bool RenderSettingsBridge::IsOceanEnabled() const {
-        return Renderer ? Renderer->Settings().GetUseWater() : false;
-    }
-
-    double RenderSettingsBridge::GetOceanWindDirectionDegrees() const {
-        return Renderer
-            ? static_cast<double>(Renderer->Settings().GetWaterWindDirection()) * kRadiansToDegrees
-            : 1.0 * kRadiansToDegrees;
-    }
-
-    double RenderSettingsBridge::GetOceanWindSpeed() const {
-        return Renderer ? Renderer->Settings().GetWaterWindSpeed() : 4.0;
-    }
-
-    double RenderSettingsBridge::GetOceanFetchKm() const {
-        return Renderer ? Renderer->Settings().GetWaterSpectrumFetch() : 100.0;
-    }
-
-    double RenderSettingsBridge::GetOceanDepthM() const {
-        return Renderer ? Renderer->Settings().GetWaterOceanDepth() : 100.0;
-    }
-
-    double RenderSettingsBridge::GetOceanSwell() const {
-        return Renderer ? Renderer->Settings().GetWaterSwell() : 0.25;
-    }
-
-    double RenderSettingsBridge::GetOceanWavesAmount() const {
-        return Renderer ? Renderer->Settings().GetWaterWavesAmount() : 1.5;
-    }
-
-    double RenderSettingsBridge::GetOceanFFTDisplacement() const {
-        return Renderer ? Renderer->Settings().GetWaterFFTDisplacementScale() : 1.0;
-    }
-
-    double RenderSettingsBridge::GetOceanFFTChoppy() const {
-        return Renderer ? Renderer->Settings().GetWaterFFTChoppyScale() : 1.5;
-    }
-
-    void RenderSettingsBridge::SetOceanEnabled(bool _Enabled) {
-        if (!Renderer) return;
-        Renderer->Settings().SetUseWater(_Enabled);
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanWindDirectionDegrees(double _Degrees) {
-        if (!Renderer) return;
-        const double Degrees = std::isfinite(_Degrees)
-            ? std::clamp(_Degrees, 0.0, 360.0) : 1.0 * kRadiansToDegrees;
-        Renderer->Settings().SetWaterWindDirection(
-            static_cast<Smile::f32>(Degrees * kDegreesToRadians));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanWindSpeed(double _MetresPerSecond) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_MetresPerSecond)
-            ? std::clamp(_MetresPerSecond, 0.1, 40.0) : 4.0;
-        Renderer->Settings().SetWaterWindSpeed(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanFetchKm(double _Kilometres) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_Kilometres)
-            ? std::clamp(_Kilometres, 1.0, 1000.0) : 100.0;
-        Renderer->Settings().SetWaterSpectrumFetch(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanDepthM(double _Metres) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_Metres)
-            ? std::clamp(_Metres, 1.0, 5000.0) : 100.0;
-        Renderer->Settings().SetWaterOceanDepth(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanSwell(double _Value) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 1.0) : 0.25;
-        Renderer->Settings().SetWaterSwell(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanWavesAmount(double _Value) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 4.0) : 1.5;
-        Renderer->Settings().SetWaterWavesAmount(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanFFTDisplacement(double _Value) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 4.0) : 1.0;
-        Renderer->Settings().SetWaterFFTDisplacementScale(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
-
-    void RenderSettingsBridge::SetOceanFFTChoppy(double _Value) {
-        if (!Renderer) return;
-        const double Value = std::isfinite(_Value) ? std::clamp(_Value, 0.0, 4.0) : 1.5;
-        Renderer->Settings().SetWaterFFTChoppyScale(static_cast<Smile::f32>(Value));
-        emit OceanSettingsChanged();
-    }
     // === Sun shafts e fog volumetrico ===================================================
 
     bool RenderSettingsBridge::AreSunShaftsEnabled() const {
