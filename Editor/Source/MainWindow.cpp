@@ -129,8 +129,7 @@ namespace SmileEditor {
         connect(LightsBr, &LightsBridge::LightsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Rebuild);
 
-        // Edicao pelo outliner (esconder/criar/apagar) suja a camada autorada. Move pelo gizmo
-        // ainda nao acende este indicador — mas E salvo, porque o save le a cena viva inteira.
+        // Edicao pelo outliner (esconder/criar/apagar) suja a camada autorada.
         connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
                 SceneDoc, &SceneDocument::markDirty);
 
@@ -327,7 +326,11 @@ namespace SmileEditor {
         const bool LightsDirty    = LightsBr    && LightsBr->Dirty();
         const bool VisDirty       = OutlinerBr  && OutlinerBr->Dirty();
         const bool MaterialsDirty = MaterialsBr && MaterialsBr->Dirty();
-        if (!LightsDirty && !VisDirty && !MaterialsDirty) {
+        // O .smap tem dirty proprio desde que nasceu, mas ninguem o consultava aqui: enquanto o
+        // outliner era o unico a suja-lo, o OutlinerBr->Dirty() cobria por acidente. Com o gizmo
+        // escrevendo transform, existe estado sujo que so este flag conhece.
+        const bool MapDirty       = SceneDoc    && SceneDoc->Dirty();
+        if (!LightsDirty && !VisDirty && !MaterialsDirty && !MapDirty) {
             CloseApproved = true;
             ContinueApprovedClose(_Event);
             return;
@@ -337,6 +340,7 @@ namespace SmileEditor {
         if (LightsDirty)    Pending << tr("luzes");
         if (VisDirty)       Pending << tr("visibilidade");
         if (MaterialsDirty) Pending << tr("materiais");
+        if (MapDirty)       Pending << tr("cena");
 
         const auto Choice = QMessageBox::question(
             this, tr("Alterações não salvas"),
@@ -350,9 +354,33 @@ namespace SmileEditor {
             return;
         }
         if (Choice == QMessageBox::Save) {
-            if (LightsDirty)    LightsBr->saveLights();
-            if (VisDirty)       OutlinerBr->saveVisibility();
-            if (MaterialsDirty) MaterialsBr->saveMaterials();
+            // Os quatro devolvem bool e os quatro eram ignorados: disco cheio, sidecar somente
+            // leitura ou caminho sumido faziam o editor fechar exibindo "Salvar" como se tivesse
+            // salvo. Silencioso e irreversivel — exatamente o que este dialogo existe p/ evitar.
+            // O && curto-circuita: so tenta salvar o que esta sujo.
+            QStringList Failed;
+            if (LightsDirty    && !LightsBr->saveLights())       Failed << tr("luzes");
+            if (VisDirty       && !OutlinerBr->saveVisibility()) Failed << tr("visibilidade");
+            if (MaterialsDirty && !MaterialsBr->saveMaterials()) Failed << tr("materiais");
+            if (MapDirty       && !SceneDoc->save())             Failed << tr("cena");
+
+            if (!Failed.isEmpty()) {
+                // Default CANCELAR, e nao descartar: a saida segura e voltar para o editor com o
+                // trabalho ainda em memoria, onde da p/ liberar o arquivo e tentar de novo.
+                // Descartar continua disponivel para nao prender quem esta com uma falha
+                // permanente (sidecar num diretorio que sumiu, por exemplo).
+                const auto OnFailure = QMessageBox::warning(
+                    this, tr("Falha ao salvar"),
+                    tr("Não foi possível salvar: %1.\n"
+                       "Fechar mesmo assim descarta essas alterações.")
+                        .arg(Failed.join(QStringLiteral(", "))),
+                    QMessageBox::Discard | QMessageBox::Cancel,
+                    QMessageBox::Cancel);
+                if (OnFailure != QMessageBox::Discard) {
+                    _Event->ignore();
+                    return;
+                }
+            }
         }
         CloseApproved = true;
         ContinueApprovedClose(_Event);
@@ -550,6 +578,10 @@ namespace SmileEditor {
         });
         connect(Menus, &MenuBridge::SettingsRequested, this, &MainWindow::ShowSettings);
         connect(Viewport, &ViewportWidget::SettingsRequested, this, &MainWindow::ShowSettings);
+        // Arrastar/girar/escalar um objeto no viewport suja a camada autorada, igual a esconder
+        // ou apagar pelo outliner. Sem isto o gizmo era a UNICA edicao de objeto que nao acendia
+        // o indicador — e a unica que o closeEvent nao tinha como perguntar antes de descartar.
+        connect(Viewport, &ViewportWidget::SceneEdited, SceneDoc, &SceneDocument::markDirty);
 
         // Del / Ctrl+D vindos do viewport (ver os sinais no ViewportWidget.h). Repetem o
         // despacho do SceneOutlinerPanel.qml em vez de generaliza-lo porque as duas selecoes

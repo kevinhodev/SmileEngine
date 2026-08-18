@@ -1,4 +1,5 @@
 #include "SmileEditor/MaterialsBridge.h"
+#include "SmileEditor/JsonSidecar.h"
 
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/RenderSettings.h"
@@ -1436,12 +1437,7 @@ namespace SmileEditor {
         Root[QStringLiteral("version")]   = 2; // v2 = chaveado por id; v1 era por nome
         Root[QStringLiteral("materials")] = Arr;
 
-        QFile File(JsonPath);
-        if (!File.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            Smile::LogError("Materiais: falha ao salvar " + JsonPath.toStdString());
-            return false;
-        }
-        File.write(QJsonDocument(Root).toJson(QJsonDocument::Indented));
+        if (!WriteJsonSidecar(JsonPath, Root, "Materiais")) return false;
         Smile::LogInfo("Materiais: " + std::to_string(Arr.size()) + " override(s) salvos em " +
                        JsonPath.toStdString());
         if (JsonDirty) { JsonDirty = false; emit DirtyChanged(); }

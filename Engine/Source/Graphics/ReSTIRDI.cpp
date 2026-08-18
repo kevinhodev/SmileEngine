@@ -381,6 +381,12 @@ namespace Smile {
         // reservoir do frame atual"). O shader continua tratando Sampling.y como teto ABSOLUTO, e
         // por isso a multiplicacao mora aqui: os dois passes leem o mesmo campo e nao ha como um
         // capar em 20 e o outro em 160. So passou a caber depois do ResB virar UINT (M em 16 bits).
+        //
+        // O teto continua saindo SO do orcamento analitico depois da separacao dos pools, e isso e
+        // escolha e nao esquecimento: num sweep de candidatas de mesh, um teto que acompanhasse
+        // `analiticas + mesh` mudaria de degrau em degrau, e cada ponto da curva seria medido com
+        // um limite de historico diferente — ou seja, duas variaveis se movendo. Fixo, o sweep
+        // isola o que ele existe para isolar.
         CPU.Sampling = { static_cast<f32>(InitialCandidates),
                          MCapRatio * static_cast<f32>(std::max(InitialCandidates, 1u)),
                          static_cast<f32>(SpatialCount), SpatialRadius };
@@ -390,10 +396,21 @@ namespace Smile {
         // exatamente o que ja acontecia numa disoclusao.
         CPU.Reuse = { (Temporal && !NeedsClear && MotionHistoryValid) ? 1.0f : 0.0f,
                       PosRejectScale, NormalReject, MaxAge };
+        // Os gates abaixo repetem, na CPU, exatamente o que o Pass A faz com estes numeros. E
+        // repeticao deliberada: e ela que produz o lado EFETIVO do manifesto sem recompor a
+        // condicao em outro lugar (o mesmo criterio do ReGIR x ReGIRRequested no CollectCaptureState).
+        EffMeshLightCount     = MeshLightsInPool ? MeshLightCount : 0u;
+        EffAnalyticCandidates = (LightCount > 0u) ? std::max(InitialCandidates, 1u) : 0u;
+        EffMeshCandidates     = (EffMeshLightCount > 0u) ? MeshCandidates : 0u;
+
         CPU.TemporalPolicy = { EnableTemporalPermutation ? 1.0f : 0.0f,
                                MotionHistoryValid ? 1.0f : 0.0f,
                                InitialVisibility ? 1.0f : 0.0f,
-                               MeshLightsInPool ? static_cast<f32>(MeshLightCount) : 0.0f };
+                               static_cast<f32>(EffMeshLightCount) };
+        // O orcamento de mesh vai INTEIRO, sem o max(1) que o Sampling.x carrega: zero aqui e uma
+        // configuracao pedida (nenhuma proposta de triangulo), enquanto zero no analitico so
+        // acontece por ausencia de luz e o shader ja trata com o proprio gate de lightCount.
+        CPU.MeshSampling = { static_cast<f32>(MeshCandidates), 0.0f, 0.0f, 0.0f };
         CPU.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,

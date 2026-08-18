@@ -238,8 +238,9 @@ Rectangle {
         }
     }
 
-    // Camada visual apenas. Exceto o seletor Lit, os novos controles serão conectados
-    // progressivamente aos bridges do editor em etapas próprias.
+    // Já ligados ao editor: o seletor Lit e o grupo Selecionar/Mover/Rotacionar/Escalar.
+    // Ainda camada visual (conectados em etapas próprias): desfazer/refazer, Global/Local,
+    // os três snaps, câmera, Mostrar, enquadrar, velocidade, stats, grade e maximizar.
     Row {
         id: leftTools
         anchors.left: parent.left
@@ -273,13 +274,31 @@ Rectangle {
                 color: "#181a15"
                 border.color: "#2d2f28"
             }
+            // Grupo exclusivo: o estado vive no GizmoController (C++), nao aqui — os atalhos
+            // Q/W/E/R chegam pelo ViewportWidget e a marcacao acompanha pelo mesmo binding.
             Row {
                 anchors.fill: parent
                 spacing: 1
-                IconToolButton { width: 26; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q" }
-                IconToolButton { width: 26; iconName: "move"; active: true; tip: "Mover"; tipShortcut: "W" }
-                IconToolButton { width: 26; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E" }
-                IconToolButton { width: 26; iconName: "scale"; tip: "Escalar"; tipShortcut: "R" }
+                IconToolButton {
+                    width: 26; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q"
+                    active: root.viewportModel.gizmoMode === 0
+                    onTapped: root.viewportModel.SetGizmoMode(0)
+                }
+                IconToolButton {
+                    width: 26; iconName: "move"; tip: "Mover"; tipShortcut: "W"
+                    active: root.viewportModel.gizmoMode === 1
+                    onTapped: root.viewportModel.SetGizmoMode(1)
+                }
+                IconToolButton {
+                    width: 26; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E"
+                    active: root.viewportModel.gizmoMode === 2
+                    onTapped: root.viewportModel.SetGizmoMode(2)
+                }
+                IconToolButton {
+                    width: 26; iconName: "scale"; tip: "Escalar"; tipShortcut: "R"
+                    active: root.viewportModel.gizmoMode === 3
+                    onTapped: root.viewportModel.SetGizmoMode(3)
+                }
             }
         }
 

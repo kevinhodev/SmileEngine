@@ -16,7 +16,8 @@ Ferramentas disponiveis:
 - `smile_compile_shaders`: atalho para o alvo `Shaders`.
 - `smile_cook_scene`: recozinha um FBX e valida os cabecalhos `.smesh`/`.sscene` gerados.
 - `smile_editor_status`: consulta PID, executavel, commit, prontidao, cena e captura do editor vivo.
-- `smile_profile_configure`: fixa o regime de render, a hora e opcionalmente a camera do teste.
+- `smile_profile_configure`: fixa o regime de render, a hora (`10:00` por default ou
+  `timeOfDayHours`) e opcionalmente a camera do teste.
 - `smile_profile_gpu`: amostra timestamps brutos e a EMA do Mini Profiler, com percentis e VRAM.
 - `smile_close_editor`: encerra o editor pelo bridge, esperando o shutdown da render thread.
 - `smile_run_editor`: inicia um `SmileEditor.exe`, aceita uma `.sscene` tipada e aguarda o

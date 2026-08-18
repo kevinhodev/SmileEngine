@@ -1,4 +1,5 @@
 #include "SmileEditor/SceneOutlinerBridge.h"
+#include "SmileEditor/JsonSidecar.h"
 #include "Smile/Graphics/Renderer.h"
 #include "Smile/Graphics/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
@@ -836,12 +837,7 @@ namespace SmileEditor {
         Root[QStringLiteral("terrainVisible")] = Renderer->Settings().GetUseTerrain();
         Root[QStringLiteral("assets")]         = AssetsArr;
 
-        QFile File(JsonPath);
-        if (!File.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            Smile::LogError("Outliner: falha ao salvar " + JsonPath.toStdString());
-            return false;
-        }
-        File.write(QJsonDocument(Root).toJson(QJsonDocument::Indented));
+        if (!WriteJsonSidecar(JsonPath, Root, "Outliner")) return false;
         Smile::LogInfo("Outliner: visibilidade salva em " +
                        QFileInfo(JsonPath).fileName().toStdString());
         if (VisDirty) { VisDirty = false; emit DirtyChanged(); }

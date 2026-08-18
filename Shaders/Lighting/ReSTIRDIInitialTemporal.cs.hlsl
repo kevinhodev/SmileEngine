@@ -22,6 +22,10 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 RayEpsA;      // layout compartilhado com o Pass B
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
+    // Nao lido aqui. Declarado porque o cbuffer e posicional: sem ele o MeshSampling cairia no
+    // offset do PrevViewProj e o orcamento de mesh viria de uma linha de matriz.
+    row_major float4x4 PrevViewProj;
+    float4 MeshSampling; // x = candidatas de mesh light; yzw livres
 };
 
 #include "../RayOffset.hlsli"
@@ -109,16 +113,26 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     uint proposalRng = GGX_SeedE(upx, (uint)Params.y, SMILE_RNG_DI_INITIAL);
     uint wrsRng = GGX_SeedE(upx, (uint)Params.y, SMILE_RNG_DI_TEMPORAL);
-    const uint candidateCount = max((uint)Sampling.x, 1u);
+    const uint analyticBudget = max((uint)Sampling.x, 1u);
     const uint triCount   = (uint)TemporalPolicy.w;
     const uint totalCount = lightCount + triCount;
 
     // ORCAMENTO POR POOL, e nao um sorteio uniforme no pool combinado. Com 2 analiticas e 26.498
     // triangulos, uniforme dava ~0,06% de chance de uma das 8 candidatas cair numa analitica: o
-    // poste da rua sumia. Cada pool ganha o mesmo numero de candidatas, que e a estrutura do RTXDI
+    // poste da rua sumia. Cada pool tem o SEU orcamento, que e a estrutura do RTXDI
     // (numLocalLightSamples / numInfiniteLightSamples / numEnvironmentSamples separados).
-    const uint analyticCands = (lightCount > 0u) ? candidateCount : 0u;
-    const uint meshCands     = (triCount   > 0u) ? candidateCount : 0u;
+    //
+    // Os dois vinham do mesmo Sampling.x ate a Fase 0 do plano de mesh lights. Separa-los nao muda
+    // a matematica abaixo — os pesos ja eram escritos em termos de analyticCands/meshCands/
+    // totalCands, entao a mistura continua correta com orcamentos diferentes — e e o que permite
+    // varrer 8/4/2/1 candidatas de mesh sem arrastar as analiticas junto.
+    //
+    // Zero em meshCands e uma configuracao PEDIDA, e por isso nao ha max(1) aqui: o operador pode
+    // querer o pool no reservoir (o temporal ainda carrega um triangulo escolhido antes) sem gastar
+    // proposta nova. O analitico mantem o piso de 1 porque zero la so acontece por ausencia de luz,
+    // e esse caso ja e coberto pelo gate de lightCount.
+    const uint analyticCands = (lightCount > 0u) ? analyticBudget : 0u;
+    const uint meshCands     = (triCount   > 0u) ? (uint)MeshSampling.x : 0u;
     const uint totalCands    = max(analyticCands + meshCands, 1u);
 
     // O fator M/M_pool NAO e opcional. Amostrar de duas fontes e amostrar de uma MISTURA: a pdf

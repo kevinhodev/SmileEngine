@@ -6,7 +6,11 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SmileEditorBridge, type ProfileSnapshot } from "./editor-bridge.js";
+import {
+  SmileEditorBridge,
+  type ProfileOverrides,
+  type ProfileSnapshot,
+} from "./editor-bridge.js";
 import { SmileProject, discoverSmileRoot } from "./smile-project.js";
 
 const VERSION = "0.3.0";
@@ -428,10 +432,55 @@ server.registerTool(
   {
     title: "Configure Smile profiling regime",
     description:
-      "Fixa camera opcional, TOD e os consumidores do hit path; gameplay_rr replica o regime do Mini Profiler com DLSS Ray Reconstruction.",
+      "Fixa camera opcional, TOD e os consumidores do hit path; gameplay_rr replica o regime do Mini Profiler com DLSS Ray Reconstruction. timeOfDayHours permite escolher a hora fixa (10 por default). Os knobs de amostragem do ReSTIR DI sao opcionais e, quando omitidos, preservam o valor corrente.",
     inputSchema: {
       preset: z.enum(["gameplay_rr", "controlled_native"]).default("gameplay_rr"),
       bookmarkSlot: z.number().int().min(-1).max(3).default(-1),
+      timeOfDayHours: z
+        .number()
+        .min(0)
+        .lt(24)
+        .nullish()
+        .describe("Hora fixa do teste em [0, 24); ausente ou null usa o default historico de 10:00."),
+      // Matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Sem `.default()` de proposito: o editor le
+      // ausencia como "preserve o valor corrente", e um default aqui reescreveria a cada chamada
+      // o eixo que nao esta em teste. Aplicados DEPOIS do preset.
+      //
+      // `.nullish()` e nao `.optional()`: o bridge nativo ja trata `null` como ausente, e um script
+      // que monta o objeto dinamicamente produz `null` para "nao setado". Com `.optional()` os dois
+      // caminhos de entrada discordavam — o mesmo payload passava pela pipe e era recusado pelo
+      // schema antes de chegar ao editor. Os nulls sao normalizados para ausencia no handler.
+      diAnalyticCandidates: z
+        .number()
+        .int()
+        .min(1)
+        .max(64)
+        .nullish()
+        .describe("Candidatas iniciais do pool de luzes analiticas."),
+      diMeshCandidates: z
+        .number()
+        .int()
+        .min(0)
+        .max(64)
+        .nullish()
+        .describe(
+          "Candidatas iniciais do pool de triangulos emissivos; 0 = nenhuma proposta nova, o que nao e o mesmo que tirar o pool.",
+        ),
+      meshLightsInPool: z
+        .boolean()
+        .nullish()
+        .describe("A/B do pool de mesh lights: false tira os triangulos das propostas do DI."),
+      diInitialVisibility: z
+        .boolean()
+        .nullish()
+        .describe("A/B do passo 2 do Alg. 5: raio de visibilidade sobre a candidata escolhida."),
+      // Fase 0.5, passo 3: TAMANHO DO DOMINIO, agora que a residencia ja esta fixa em VRAM.
+      meshCompactSupport: z
+        .boolean()
+        .nullish()
+        .describe(
+          "Compacta o pool para o suporte positivo (fluxo > 0). Nao muda a distribuicao — os descartados ja tinham probabilidade zero — e reconstroi a alias table.",
+        ),
     },
     annotations: {
       readOnlyHint: false,
@@ -442,7 +491,18 @@ server.registerTool(
   },
   async (input) => {
     try {
-      return jsonResult(await editorBridge.configureProfile(input.preset, input.bookmarkSlot));
+      // Rest, e nao um objeto enumerado campo a campo: so as chaves que o chamador realmente
+      // mandou existem em `rest`, entao "omitido" chega ao editor como ausencia de chave — que e o
+      // que ele le como "preserve o valor corrente".
+      //
+      // `null` vira ausencia AQUI, na borda: o schema o aceita para nao recusar o payload que a
+      // pipe aceitaria, e a normalizacao acontece uma vez so, no ponto em que o schema mora. Assim
+      // o ProfileOverrides continua com um significado unico — chave presente e valor real.
+      const { preset, bookmarkSlot, ...rest } = input;
+      const overrides = Object.fromEntries(
+        Object.entries(rest).filter(([, value]) => value !== null && value !== undefined),
+      ) as ProfileOverrides;
+      return jsonResult(await editorBridge.configureProfile(preset, bookmarkSlot, overrides));
     } catch (error) {
       return errorResult(error);
     }

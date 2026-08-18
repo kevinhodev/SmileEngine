@@ -686,6 +686,12 @@ namespace Smile {
         void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
+        // Reconstrucao COMPLETA das mesh lights (tasks + buffers + descritores do ReSTIR DI),
+        // com o dreno das duas filas que ela exige. Receita unica: os dois clientes sao o
+        // caminho barato do RefreshSceneObjects e o ramo SetChanged do RenderFrame, e ter isto
+        // inline nos dois foi o que deixou o segundo nascer incompleto. Nao chamar com command
+        // list aberto.
+        void RebuildMeshLights();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
         // Reancora tudo que enderecava a cena por indice depois de a lista mudar de tamanho.
         // A caixa opcional e a AABB de mundo do objeto que nasceu ou morreu: so as sondas do
@@ -1028,8 +1034,16 @@ namespace Smile {
         // existir". Criados uma vez no Initialize; nao dependem de cena nem de resolucao.
         FGIFallbackResources GIFallback;
         u64              TlasTransformsVersion = 0; // versao da cena na ultima (re)build da TLAS
+        // Idem para o transform BAKEADO nas tasks das mesh lights. Contador separado do da TLAS
+        // porque os dois nao andam juntos: a TLAS reconstroi por frame durante um arraste, e o
+        // refresh das mesh lights e segurado ate o gesto acabar (ver o call site).
+        u64              MeshLightTransformsVersion = 0;
         bool             TlasFlagsDirty        = false; // flags de instancia mudaram (edicao de material)
-        bool             MaterialRTStateDirty  = false; // pedido de refresh coalescido p/ o proximo frame
+        bool             MaterialRTStateDirty  = false;
+        // Pedido de reconciliacao das mesh lights por causa de MATERIAL (nao de transform).
+        // Separado do MaterialRTStateDirty porque aquele e consumido no mesmo frame e este pode
+        // ter de esperar: se a extracao estiver em voo, o pedido tem de sobreviver ao frame.
+        bool             MeshLightEmissiveDirty = false; // pedido de refresh coalescido p/ o proximo frame
         bool             IndirectLightingDirty = false; // idem, so invalidacao (ver MarkIndirectLightingDirty)
         bool             SceneContentDirty     = false; // idem (ver MarkSceneContentDirty)
         FDDGI            DDGI;

@@ -8,6 +8,7 @@
 #include "Smile/Graphics/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <cstddef>
 
 namespace Smile {
     class FGpuProfiler;
@@ -26,9 +27,23 @@ namespace Smile {
         Vec4  RayEpsB;
         Mat44 View;          // world -> view; pack do NRD calcula viewZ linear
         Mat44 PrevViewProj;  // shadow motion vector: mundo anterior -> UV anterior
+        // Orcamento do pool de TRIANGULOS, separado do Sampling.x (que ficou sendo o do pool
+        // analitico). Campo novo e nao um canal livre do TemporalPolicy porque nenhum sobrou: o
+        // Pass A usa x/z/w e o Pass B usa y para o shadow motion.
+        //
+        // Cabe sem quebrar o assert: o conteudo declarado soma 336 bytes e o alignas(256) ja
+        // arredondava os 320 anteriores para 512. Ha folga para mais sete float4 antes de a fatia
+        // do CBV precisar dobrar.
+        Vec4  MeshSampling;  // x = candidatas de mesh light; yzw livres
     };
     static_assert(sizeof(ReSTIRDIConstants) == 512,
                   "ReSTIRDIConstants deve ocupar fatias CBV alinhadas a 256 bytes");
+    // O Pass A alcanca o MeshSampling declarando o PrevViewProj que ele nao le — cbuffer e
+    // POSICIONAL, e um campo inserido no meio deslocaria tudo em silencio, sem erro de compilacao
+    // nem validation error: o orcamento de mesh passaria a vir de uma linha de matriz. Este assert
+    // e o que transforma esse erro mudo em erro de build.
+    static_assert(offsetof(ReSTIRDIConstants, MeshSampling) == 320,
+                  "MeshSampling saiu do offset que os shaders de DI declaram");
 
     // ReSTIR DI de superficie primaria, em medida de ANGULO SOLIDO, sobre um pool combinado de
     // luzes analiticas locais E triangulos emissivos (FMeshLights). Pass A gera candidatas com
@@ -84,6 +99,55 @@ namespace Smile {
 
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         void InvalidateHistory() { NeedsClear = true; }
+
+        // --- Knobs da matriz da Fase 0 (MESH-LIGHTS-PLAN.md §5) ------------------------------
+        // Os quatro LIMPAM O HISTORICO ao mudar de valor, pelo mesmo motivo do
+        // SetLightSetSignature: o reservoir carrega M e peso produzidos sob a configuracao
+        // anterior, e reusa-los depois da troca mistura duas configuracoes num A/B que existe
+        // exatamente para separa-las. Sem isto, os primeiros frames de cada degrau do sweep
+        // seriam uma mistura, e a captura em N baixo mediria a mistura.
+        void SetInitialCandidates(u32 V) {
+            V = (V < 1u) ? 1u : V;
+            if (V != InitialCandidates) { InitialCandidates = V; NeedsClear = true; }
+        }
+        // ⚠️ Zero ZERA A CONTRIBUICAO de mesh light, e nao "mantem o pool com reuso temporal".
+        // Este comentario ja afirmou o contrario e estava errado: a propria troca de valor limpa o
+        // historico, entao nao sobra reservoir de triangulo para o temporal carregar — e sem
+        // candidata nova nenhum volta a existir. A contribuicao de mesh fica em zero para sempre.
+        //
+        // Continua PERMITIDO porque e um ponto de diagnostico distinto do pool desligado: com o
+        // pool publicado, `triCount` e nao-zero e os dois passes NAO caem no early-out, entao M=0
+        // mede o custo do passe com o dominio presente e nenhuma proposta. Com o pool desligado o
+        // passe inteiro sai por 0,15 ms. Os dois se distinguem no nome do arquivo (`M0` x `Moff`).
+        //
+        // Para o A/B de conteudo — "o que as mesh lights iluminam" — use o SetMeshLightsInPool.
+        void SetMeshCandidates(u32 V) {
+            if (V != MeshCandidates) { MeshCandidates = V; NeedsClear = true; }
+        }
+        void SetMeshLightsInPool(bool V) {
+            if (V != MeshLightsInPool) { MeshLightsInPool = V; NeedsClear = true; }
+        }
+        void SetInitialVisibility(bool V) {
+            if (V != InitialVisibility) { InitialVisibility = V; NeedsClear = true; }
+        }
+
+        // PEDIDO — o que o operador configurou.
+        u32  GetInitialCandidates() const { return InitialCandidates; }
+        u32  GetMeshCandidates()    const { return MeshCandidates; }
+        bool GetMeshLightsInPool()  const { return MeshLightsInPool; }
+        bool GetInitialVisibility() const { return InitialVisibility; }
+
+        // EFETIVO — o que foi para o cbuffer no ultimo UpdatePerFrame, com os mesmos gates que o
+        // shader aplica. Divergem do pedido sozinhos: sem luz analitica na cena o orcamento
+        // analitico vira zero, e sem alias table pronta o de mesh idem. Publicar so o pedido faria
+        // o manifesto afirmar candidatas que nunca foram sorteadas.
+        u32  EffectiveAnalyticCandidates() const { return EffAnalyticCandidates; }
+        u32  EffectiveMeshCandidates()     const { return EffMeshCandidates; }
+        u32  EffectiveMeshLightCount()     const { return EffMeshLightCount; }
+        // Resolucao INTERNA do DI. Hoje e sempre a de render; vira o par requested/effective da
+        // Fase 3, quando o caminho de meia resolucao entrar.
+        u32  DIRenderWidth()  const { return Width; }
+        u32  DIRenderHeight() const { return Height; }
         void SetLightSetSignature(u64 Signature) {
             if (Signature != LightSetSignature) NeedsClear = true;
             LightSetSignature = Signature;
@@ -156,12 +220,22 @@ namespace Smile {
         u32 Width = 0, Height = 0;
         u32 FrameParity = 0;
         u64 LightSetSignature = 0;
+        // Espelho do que o UpdatePerFrame publicou — a fonte do lado "efetivo" do manifesto.
+        u32 EffAnalyticCandidates = 0;
+        u32 EffMeshCandidates     = 0;
+        u32 EffMeshLightCount     = 0;
         bool NeedsClear = true;
         bool Initialized = false;
         bool Ready = false;
         bool NrdReady = false;
 
+        // Orcamento do pool ANALITICO. Era o orcamento dos DOIS pools; a separacao entrou com a
+        // Fase 0 para o sweep de candidatas de mesh nao arrastar junto as analiticas — se as duas
+        // caem juntas, o degrau mede duas mudancas e nao serve para atribuir custo.
         u32 InitialCandidates = 8;
+        // Orcamento do pool de TRIANGULOS. Mesmo default do analitico: enquanto ninguem mexe, o
+        // shader recebe os dois iguais e o comportamento e bit a bit o de antes da separacao.
+        u32 MeshCandidates = 8;
         // RELATIVO ao M do frame atual, como o paper: o teto efetivo e MCapRatio * candidatas.
         // Era 20 ABSOLUTO, o que dava ~8x menos historico do que o paper pretende (20*8 = 160).
         // O ResB em UINT foi o que destravou isso — no formato antigo M saturava em 63.

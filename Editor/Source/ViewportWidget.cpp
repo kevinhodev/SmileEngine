@@ -565,6 +565,18 @@ namespace SmileEditor {
         Telemetry = std::move(Next);
     }
 
+    void ViewportWidget::SetGizmoMode(int _Mode) {
+        if (_Mode < 0 || _Mode > static_cast<int>(GizmoController::EMode::Scale)) return;
+        const auto Next = static_cast<GizmoController::EMode>(_Mode);
+        if (GizmoCtrl.GetMode() == Next) return;
+        // Nao precisa do Renderer: o modo e estado puro do controlador, e o Submit do proximo
+        // frame ja desenha o handle novo. O SetMode ignora a troca no meio de um arraste, entao
+        // o sinal so sai quando ela de fato aconteceu.
+        GizmoCtrl.SetMode(Next);
+        if (GizmoCtrl.GetMode() != Next) return;
+        emit GizmoModeChanged();
+    }
+
     void ViewportWidget::SelectLit() {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
@@ -1407,11 +1419,17 @@ namespace SmileEditor {
         // Consome apenas o delta submetido. Eventos de mouse que chegarem enquanto a render
         // thread trabalha acumulam para o proximo frame, em vez de serem apagados no callback.
         MouseDelta = Smile::Vec2::Zero();
-        CameraInput.Move  = Smile::Vec3{
-            static_cast<float>(IsHeld(Qt::Key_D) - IsHeld(Qt::Key_A)),   
-            static_cast<float>(IsHeld(Qt::Key_E) - IsHeld(Qt::Key_Q)),   
-            static_cast<float>(IsHeld(Qt::Key_W) - IsHeld(Qt::Key_S)),   
-        };
+        // Voo SO com o botao direito pressionado, como em UE, Cry e Flax. Antes o WASD+Q/E movia
+        // a camera a qualquer momento, o que tornava Q/W/E/R impossiveis como atalhos das
+        // ferramentas de transformacao — e fazia a camera sair voando quando o foco de teclado
+        // caia no viewport (o mousePress chama setFocus) e o usuario digitava qualquer coisa.
+        CameraInput.Move  = MouseLookActive
+            ? Smile::Vec3{
+                  static_cast<float>(IsHeld(Qt::Key_D) - IsHeld(Qt::Key_A)),
+                  static_cast<float>(IsHeld(Qt::Key_E) - IsHeld(Qt::Key_Q)),
+                  static_cast<float>(IsHeld(Qt::Key_W) - IsHeld(Qt::Key_S)),
+              }
+            : Smile::Vec3::Zero();
         CameraInput.Speed = IsHeld(Qt::Key_Shift) ? 4.0f : 1.0f;
 
         RendererAccess->UpdateCamera(CameraInput, DeltaTime);
@@ -1711,6 +1729,31 @@ namespace SmileEditor {
                 _Event->accept();
                 return;
             }
+            // Q/W/E/R = as 4 ferramentas de transformacao. E a convencao da UNREAL; a Cry local
+            // usa 1/2/3 (move/rotate/scale) e 4 (select), e a Flax nao tem atalho de modo (o R
+            // dela e RotateSelection, que gira a selecao por incremento). Escolhida a da Unreal
+            // por ser a que o Kevin usa. Nao viraram QShortcut de aplicacao pelo mesmo motivo do
+            // Delete acima: tecla unica num ApplicationShortcut dispararia tambem dentro da
+            // busca do Scene Outliner, trocando de ferramenta em vez de digitar a letra.
+            //
+            // Nao conflita com o voo da camera porque WASD+Q/E so movem com o BOTAO DIREITO
+            // pressionado (ver OnRenderTimer). Modificador nenhum: Ctrl+R, Alt+W etc. seguem
+            // livres pra outros donos.
+            //
+            // NAO retorna: a tecla cai no HeldKeys logo abaixo de qualquer jeito. Sem isso o
+            // chord na ordem "W e depois botao direito" nascia morto — o W tinha sido consumido
+            // como atalho e nunca entrava no conjunto, entao a camera so andava se o botao
+            // fosse pressionado PRIMEIRO. Registrar sempre e inofensivo porque quem decide se a
+            // tecla move a camera e o gate do MouseLookActive, nao a presenca no conjunto.
+            if (_Event->modifiers() == Qt::NoModifier && !MouseLookActive) {
+                switch (_Event->key()) {
+                    case Qt::Key_Q: SetGizmoMode(0); break;
+                    case Qt::Key_W: SetGizmoMode(1); break;
+                    case Qt::Key_E: SetGizmoMode(2); break;
+                    case Qt::Key_R: SetGizmoMode(3); break;
+                    default: break;
+                }
+            }
         }
         if (!_Event->isAutoRepeat())
             HeldKeys.insert(_Event->key());
@@ -1729,8 +1772,11 @@ namespace SmileEditor {
             GizmoMousePending = false;
         }
         if (GizmoReleasePending) {
-            GizmoCtrl.OnMouseRelease(_Renderer);
+            // Uma vez por GESTO, no fim dele — nao por frame do arraste: quem ouve isto marca a
+            // camada autorada como suja, e isso e um estado booleano, nao um fluxo.
+            const bool Edited = GizmoCtrl.OnMouseRelease(_Renderer);
             GizmoReleasePending = false;
+            if (Edited) emit SceneEdited();
         }
     }
 

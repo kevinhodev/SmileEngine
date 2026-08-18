@@ -15,6 +15,7 @@
 #include <QTimer>
 
 #include <cmath>
+#include <optional>
 
 namespace SmileEditor {
     namespace {
@@ -34,6 +35,46 @@ namespace SmileEditor {
                 Number < static_cast<double>(_Min) || Number > static_cast<double>(_Max))
                 return false;
             _Out = static_cast<int>(Number);
+            return true;
+        }
+
+        // Variantes OPCIONAIS: ausente devolve nullopt, e nao um default. E a diferenca entre
+        // "preserve o que esta la" e "escreva o default" — com a segunda, cada etapa do sweep teria
+        // de repetir todos os knobs, ou reescreveria calada o eixo que nao estava em teste.
+        // `null` explicito conta como ausente, para um cliente poder omitir um campo montando o
+        // objeto dinamicamente.
+        bool ReadOptionalInteger(const QJsonObject& _Object, const char* _Name,
+                                 int _Min, int _Max, std::optional<int>& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (Value.isUndefined() || Value.isNull()) { _Out.reset(); return true; }
+            if (!Value.isDouble()) return false;
+            const double Number = Value.toDouble();
+            if (!std::isfinite(Number) || std::floor(Number) != Number ||
+                Number < static_cast<double>(_Min) || Number > static_cast<double>(_Max))
+                return false;
+            _Out = static_cast<int>(Number);
+            return true;
+        }
+
+        bool ReadOptionalNumberHalfOpen(const QJsonObject& _Object, const char* _Name,
+                                        double _MinInclusive, double _MaxExclusive,
+                                        std::optional<double>& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (Value.isUndefined() || Value.isNull()) { _Out.reset(); return true; }
+            if (!Value.isDouble()) return false;
+            const double Number = Value.toDouble();
+            if (!std::isfinite(Number) || Number < _MinInclusive || Number >= _MaxExclusive)
+                return false;
+            _Out = Number;
+            return true;
+        }
+
+        bool ReadOptionalBool(const QJsonObject& _Object, const char* _Name,
+                              std::optional<bool>& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (Value.isUndefined() || Value.isNull()) { _Out.reset(); return true; }
+            if (!Value.isBool()) return false;
+            _Out = Value.toBool();
             return true;
         }
 
@@ -74,6 +115,13 @@ namespace SmileEditor {
                 { QStringLiteral("renderScale"), _Settings.RenderScale },
                 { QStringLiteral("timeOfDayHours"), _Settings.TimeOfDayHours },
                 { QStringLiteral("timeOfDayRunning"), _Settings.TimeOfDayRunning },
+                // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Vao no readback para o sweep
+                // confirmar o degrau aplicado em vez de assumir que o pedido pegou.
+                { QStringLiteral("diAnalyticCandidates"), _Settings.DIAnalyticCandidates },
+                { QStringLiteral("diMeshCandidates"), _Settings.DIMeshCandidates },
+                { QStringLiteral("meshLightsInPool"), _Settings.DIMeshLightsInPool },
+                { QStringLiteral("diInitialVisibility"), _Settings.DIInitialVisibility },
+                { QStringLiteral("meshCompactSupport"), _Settings.DIMeshCompactSupport },
             };
         }
 
@@ -284,6 +332,44 @@ namespace SmileEditor {
                                 QStringLiteral("bookmarkSlot invalido") } });
             return;
         }
+        // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Todos opcionais: o profile_configure
+        // continua sendo o mesmo comando com o mesmo contrato, e um chamador que nao conheca estes
+        // campos ve o comportamento de antes.
+        //
+        // O teto de 64 nao e limite de qualidade — o sweep vai de 8 para baixo. E guarda contra um
+        // digito a mais num script, que num loop por pixel vira um dispatch de minutos.
+        //
+        // ⚠️ VALIDADO ANTES DO Restore ABAIXO, e a ordem nao e estilo. O Restore MOVE A CAMERA, e
+        // uma falha depois dele devolveria erro deixando a pose trocada: o chamador conclui que
+        // nada aconteceu e a proxima captura com bookmarkSlot -1 sai da camera errada, sem nada no
+        // manifesto denunciando. Numa regua que existe para ser deterministica, todo argumento se
+        // valida antes do primeiro efeito colateral.
+        FProfileOverrides Overrides;
+        if (!ReadOptionalNumberHalfOpen(_Arguments, "timeOfDayHours", 0.0, 24.0,
+                                        Overrides.TimeOfDayHours)) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("timeOfDayHours precisa estar em [0, 24)") } });
+            return;
+        }
+
+        const bool KnobsOk =
+            ReadOptionalInteger(_Arguments, "diAnalyticCandidates", 1, 64,
+                                Overrides.DIAnalyticCandidates) &&
+            // Zero e valido no de mesh: e "nenhuma proposta de triangulo", que nao e o mesmo que
+            // tirar o pool (para isso existe o meshLightsInPool).
+            ReadOptionalInteger(_Arguments, "diMeshCandidates", 0, 64,
+                                Overrides.DIMeshCandidates) &&
+            ReadOptionalBool(_Arguments, "meshLightsInPool", Overrides.DIMeshLightsInPool) &&
+            ReadOptionalBool(_Arguments, "diInitialVisibility", Overrides.DIInitialVisibility) &&
+            ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport);
+        if (!KnobsOk) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("knob de amostragem do DI invalido") } });
+            return;
+        }
+
         if (Slot >= 0 && (!Bookmarks || !Bookmarks->Restore(Slot))) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
@@ -294,7 +380,7 @@ namespace SmileEditor {
         const EProfilePreset ProfilePreset = Preset == QStringLiteral("gameplay_rr")
             ? EProfilePreset::GameplayRR : EProfilePreset::ControlledNative;
         QString Error;
-        const auto Applied = RenderSettings->ApplyProfilePreset(ProfilePreset, Error);
+        const auto Applied = RenderSettings->ApplyProfilePreset(ProfilePreset, Error, Overrides);
         if (!Applied) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"), Error } });

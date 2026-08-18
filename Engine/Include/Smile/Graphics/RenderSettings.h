@@ -221,6 +221,32 @@ namespace Smile {
         bool GetUseReSTIRDI() const;
         bool ReSTIRDIActive() const;
 
+        // Matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Os quatro sao EIXO DE MEDICAO, e nao tuning:
+        // existem para o sweep de candidatas e os A/B do plano rodarem sem build descartavel a
+        // cada degrau — a engine nao tem settings persistidos, entao sem estes acessores a unica
+        // forma de mover os valores seria recompilar.
+        //
+        // Todos invalidam o historico como o SetUseReSTIRDI: o reservoir, o NRD direto e o
+        // resolve acumulam sobre o sinal anterior, e o A/B existe justamente para separar os dois.
+        void SetDIInitialCandidates(u32 V);
+        u32  GetDIInitialCandidates() const;
+        void SetDIMeshCandidates(u32 V);
+        u32  GetDIMeshCandidates() const;
+        void SetDIMeshLightsInPool(bool V);
+        bool GetDIMeshLightsInPool() const;
+        void SetDIInitialVisibility(bool V);
+        bool GetDIInitialVisibility() const;
+
+        // Compactacao do pool para o SUPORTE POSITIVO (fluxo > 0). A/B da Fase 0.5, passo 3:
+        // isola TAMANHO DO DOMINIO agora que a residencia ja esta fixa em VRAM.
+        void SetDIMeshCompactSupport(bool V);
+        bool GetDIMeshCompactSupport() const;
+        // Chamado pelo Renderer quando o dominio de mesh lights e PUBLICADO. O clear mora aqui,
+        // e nao no setter, porque entre o pedido e a tabela nova passam varios frames — e com a
+        // compactacao o dominio muda de tamanho, entao o indice do reservoir muda de significado.
+        void NotifyMeshDomainChanged();
+
+
         // Perfil unico de epsilons de raio. Invalidacao PESADA: os reservoirs guardam Lo/x2
         // medidos com o epsilon velho e o NRD acumula sobre eles.
         const FRayEpsilonProfile& GetRayEpsilons() const;

@@ -200,6 +200,103 @@ namespace Smile {
         // nome e manifesto identicos, que e o mesmo defeito que o produtor do cache tinha.
         bool GIBackfacePolicy = false;
 
+        // ---- MESH LIGHTS E AMOSTRAGEM DO ReSTIR DI (MESH-LIGHTS-PLAN.md, Fase 0) ------------
+        //
+        // O gate de saida da Fase 0 e "ter um manifesto que explique se mesh lights e cada
+        // otimizacao realmente rodaram". Ate aqui o arquivo dizia apenas `restirDI: true`, o que
+        // nao distingue nenhum dos casos que o plano precisa separar: cena sem geometria emissiva,
+        // alias table ainda em readback, pool desligado no A/B, e sweep de candidatas.
+        //
+        // LEVANTADA contra AMOSTRAVEL: a primeira e o que a cena tem, a segunda e o que a
+        // distribuicao consegue propor NESTE frame. Divergem enquanto o readback nao fecha — e um
+        // manifesto com so a primeira afirmaria mesh lights participando de um frame em que o DI
+        // viu pool vazio, que e exatamente o erro que o par regir/regirRequested ja custou uma
+        // rodada de medicao para achar.
+        u32  MeshLightSurveyed  = 0;
+        u32  MeshLightSamplable = 0;
+        bool MeshAliasReady     = false;
+        // Fluxo total e a VALIDADE dele. Zero com `fluxValid: false` e "a tabela esta sendo
+        // reconstruida"; zero com `true` e uma cena em que toda geometria emissiva tem radiancia
+        // nula — dois estados que o mesmo numero descreveria igual.
+        f64  MeshLightTotalFlux = 0.0;
+        bool MeshLightFluxValid = false;
+        // Fluxo total zero derruba a alias table para UNIFORME. Sem este campo o manifesto diria
+        // "por potencia" num frame em que a distribuicao nao era por potencia.
+        bool MeshLightUniformFallback = false;
+        // Os tres motivos de um triangulo extraido nao contribuir, separados porque pedem acoes
+        // opostas: degenerado e defeito de GEOMETRIA, radiancia zero e CONTEUDO (e pode ser o que
+        // o artista quis), fluxo invalido e corrupcao. Derivados na CPU no mesmo laco que ja soma
+        // o fluxo — sem atomico, sem passe extra, sem regime de medicao separado.
+        u32  MeshTriDegenerate = 0, MeshTriZeroFlux = 0, MeshTriNonFinite = 0;
+
+        // Orcamento por pool, PEDIDO e EFETIVO. Os dois porque divergem sozinhos: sem luz
+        // analitica na cena o orcamento analitico efetivo vira zero, e sem alias table pronta o de
+        // mesh idem. O sweep 8/4/2/1 do plano se le nesta linha.
+        u32  DIAnalyticCandidatesRequested = 0, DIAnalyticCandidatesEffective = 0;
+        u32  DIMeshCandidatesRequested     = 0, DIMeshCandidatesEffective     = 0;
+        // Pedido = o toggle do A/B. Efetivo = o toggle E havia triangulo amostravel. A diferenca
+        // entre "desliguei para medir" e "liguei e nao havia o que propor" e o achado, nao o
+        // detalhe.
+        //
+        // ⚠️ `meshLightsInPoolEffective: true` NAO implica contribuicao de mesh light. Com
+        // `diMeshCandidatesEffective: 0` o pool esta publicado mas nenhuma proposta e gerada, e
+        // como a troca de orcamento limpa o historico, nenhum reservoir de triangulo sobrevive: a
+        // contribuicao e zero. Quem responde "houve luz de mesh?" e o par com as candidatas, nunca
+        // o toggle do pool sozinho.
+        bool DIMeshLightsInPoolRequested = false, DIMeshLightsInPoolEffective = false;
+        // Visibilidade inicial (Alg. 5 passo 2): pedido = toggle, efetivo = toggle E o DI rodou.
+        bool DIInitialVisibilityRequested = false, DIInitialVisibilityEffective = false;
+        // Resolucao INTERNA do DI. Hoje sempre igual a de render; vira o par
+        // requested/effective quando a meia resolucao da Fase 3 entrar.
+        u32  DIRenderWidth = 0, DIRenderHeight = 0;
+
+        // Orcamento de memoria por recurso, que o plano pede para comparar contra os buffers RIS
+        // das fases seguintes. O da alias NAO e VRAM — ela vive num heap de upload, e o
+        // VramTracker ignora upload/readback de proposito. O custo existe e por isso e registrado;
+        // so nao e da mesma moeda que o dos triangulos.
+        u64  MeshLightTrianglePayloadBytes = 0;
+        // As DUAS copias da alias, separadas por RESIDENCIA e nao por escolha: a de UPLOAD e o
+        // STAGING onde a CPU escreve a tabela (system memory), a de DEFAULT e a que o Pass A
+        // amostra (VRAM). Os dois custos existem e sao de moedas diferentes; um campo unico os
+        // somaria como se fossem o mesmo.
+        //
+        // O par requested/effective que morava aqui saiu junto com o toggle: sem escolha, o campo
+        // seria uma constante. ⚠️ Capturas de builds ANTERIORES a `681c1f2` podem ter amostrado o
+        // upload heap — ali o discriminador e o campo `build`, nao a etiqueta do nome.
+        u64  MeshLightAliasUploadPayloadBytes = 0, MeshLightAliasDefaultPayloadBytes = 0;
+        // Compactacao para o suporte positivo. Pedido e EFETIVO porque divergem: com fluxo total
+        // zero a compactacao nao se aplica, e o caminho de tabela uniforme sobre TODOS os
+        // triangulos e preservado.
+        bool MeshCompactRequested = false, MeshCompactEffective = false;
+        // ⚠️ ALOCADO contra TAMANHO DO DOMINIO, e sao numeros diferentes de proposito. Os buffers
+        // sao dimensionados pelo PIOR caso (todos os triangulos com fluxo) para o SRV nunca
+        // precisar ser recriado quando o conteudo mudar — recriar exigiria drenar as filas, porque
+        // as tabelas de trace do DI guardam copia do descritor.
+        //
+        // O que a compactacao reduz e o DOMINIO. ⚠️ Nao chamar isto de "bytes tocados": nao ha
+        // instrumento de trafego, e o numero sai igual com o DI desligado, com zero candidatas ou
+        // com a tabela em construcao. E o tamanho do conjunto sobre o qual o sorteio ACONTECERIA —
+        // util porque e ele que se compara contra o tamanho do cache.
+        u64  MeshLightAliasDomainBytes = 0, MeshLightTriangleDomainBytes = 0;
+        // Os OUTROS buffers, que um campo unico de "bytes de triangulo" escondia: sao dois DEFAULT
+        // (a saida da extracao e a copia que o Pass A amostra) mais staging e readback. Na Emerald
+        // isso e 14,6 MB de VRAM em triangulo, e nao 7,3.
+        u64  MeshLightTriangleCompactPayloadBytes = 0;
+        u64  MeshLightTriangleStagingPayloadBytes = 0, MeshLightTriangleReadbackPayloadBytes = 0;
+        // Soma do que ocupa VRAM de fato. Staging, readback e a alias de upload ficam de fora:
+        // moram em system memory, e soma-los aqui inflaria o orcamento com o que nao e VRAM.
+        u64  MeshLightVramBytes = 0;
+        // Fases 1 e 2. Ficam em zero ate os buffers existirem — declarados agora para a serie de
+        // baseline e a serie com RIS terem o MESMO conjunto de chaves, e a comparacao entre elas
+        // nao depender de um campo que aparece no meio do caminho.
+        u64  MeshLightRISBytes = 0, MeshLightRISCompactBytes = 0;
+        // As tres otimizacoes que o plano ainda vai ligar. Todas false por ora, e pelo mesmo
+        // motivo dos bytes acima: o manifesto da baseline tem de afirmar EXPLICITAMENTE que elas
+        // nao rodaram, em vez de omitir e deixar a ausencia ser interpretada depois.
+        bool MeshRISRequested        = false, MeshRISEffective        = false;
+        bool MeshRISCompactRequested = false, MeshRISCompactEffective = false;
+        bool DIHalfResRequested      = false, DIHalfResEffective      = false;
+
         // Ocupacao do hash e acerto de query no instante do disparo — dois dos quatro sinais que
         // a calibracao do N mede, e saem de graca porque os readbacks ja existem.
         // Queries/Hits ficam em zero sem a instrumentacao do cache ligada (ela custa dois
