@@ -1,7 +1,7 @@
 #include "SmileEditor/CameraBookmarksBridge.h"
 #include "SmileEditor/JsonSidecar.h"
 
-#include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
 
 #include <QFile>
 #include <QFileInfo>

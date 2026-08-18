@@ -79,6 +79,7 @@ qt_add_executable(SmileEditor WIN32
     ${EDITOR_QML_FILES}
     ${EDITOR_QML_ASSETS}
 )
+set_target_properties(SmileEditor PROPERTIES FOLDER "Editor")
 
 target_include_directories(SmileEditor
     PRIVATE

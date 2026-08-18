@@ -1,9 +1,9 @@
 #include "SmileEditor/RenderSettingsController.h"
 #include "SmileEditor/ViewportWidget.h"
-#include "Smile/Graphics/D3D12Device.h"
-#include "Smile/Graphics/GpuProfiler.h"
-#include "Smile/Graphics/RenderSettings.h"
-#include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/RHI/D3D12Device.h"
+#include "Smile/Graphics/Debug/GpuProfiler.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
 
 namespace SmileEditor {
     namespace {

@@ -1,6 +1,6 @@
 #include "SmileEditor/RenderThread.h"
-#include "Smile/Graphics/Renderer.h"
-#include "Smile/Graphics/RenderSettings.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Core/Logger.h"
 #include <Windows.h>
 #include <atomic>

@@ -1,5 +1,5 @@
 #include "SmileEditor/CaptureBridge.h"
-#include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
 
 #include <QFileInfo>
 #include <QTimer>

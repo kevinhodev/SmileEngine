@@ -1,6 +1,6 @@
 #include "SmileEditor/TimeOfDayBridge.h"
-#include "Smile/Graphics/Renderer.h"
-#include "Smile/Graphics/RenderSettings.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
 
 #include <algorithm>
 #include <cmath>

@@ -1,7 +1,7 @@
 #include "SmileEditor/GizmoController.h"
-#include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
 // O Renderer.h so declara o FRenderSettings; o MarkSceneContentDirty precisa da definicao.
-#include "Smile/Graphics/RenderSettings.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Scene/Scene.h"
 #include <algorithm>
 #include <cmath>

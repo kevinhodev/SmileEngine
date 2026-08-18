@@ -1,6 +1,6 @@
 #include "Smile/Scene/Scene.h"
-#include "Smile/Graphics/GpuResources.h"
-#include "Smile/Graphics/UploadQueue.h"
+#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/RHI/UploadQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 

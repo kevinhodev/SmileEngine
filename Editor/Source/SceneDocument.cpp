@@ -1,6 +1,6 @@
 #include "SmileEditor/SceneDocument.h"
 #include "SmileEditor/JsonSidecar.h"
-#include "Smile/Graphics/Renderer.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 

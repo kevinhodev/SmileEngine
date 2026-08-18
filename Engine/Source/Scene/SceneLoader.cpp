@@ -1,8 +1,8 @@
-#include "Smile/Graphics/Renderer.h"
-#include "Smile/Graphics/GpuResources.h"
-#include "Smile/Graphics/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
+#include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/RHI/GpuResources.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h" // NotifyCameraCut no reposicionamento da camera
 #include "Smile/Scene/CookedFormat.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstdlib> // getenv: override do caminho da captura de descritores

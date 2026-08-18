@@ -1042,12 +1042,12 @@ Automação da régua:
 
 Arquivos da SmileEngine que formam o ponto de partida:
 
-- `Engine/Include/Smile/Graphics/MeshLights.h`;
-- `Engine/Source/Graphics/MeshLights.cpp`;
-- `Engine/Include/Smile/Graphics/ReSTIRDI.h`;
-- `Engine/Source/Graphics/ReSTIRDI.cpp`;
-- `Engine/Include/Smile/Graphics/ReGIR.h`;
-- `Engine/Source/Graphics/ReGIR.cpp`;
+- `Engine/Include/Smile/Graphics/Lighting/MeshLights.h`;
+- `Engine/Source/Graphics/Lighting/MeshLights.cpp`;
+- `Engine/Include/Smile/Graphics/Lighting/ReSTIRDI.h`;
+- `Engine/Source/Graphics/Lighting/ReSTIRDI.cpp`;
+- `Engine/Include/Smile/Graphics/GI/ReGIR.h`;
+- `Engine/Source/Graphics/GI/ReGIR.cpp`;
 - `Shaders/Lighting/MeshLightExtract.cs.hlsl`;
 - `Shaders/Lighting/MeshLightCommon.hlsli`;
 - `Shaders/Lighting/ReSTIRDIInitialTemporal.cs.hlsl`;

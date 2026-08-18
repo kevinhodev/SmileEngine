@@ -1,7 +1,7 @@
 #include "SmileEditor/RenderSettingsBridge.h"
 #include "SmileEditor/ViewportWidget.h"
-#include "Smile/Graphics/Renderer.h"
-#include "Smile/Graphics/RenderSettings.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
 
 #include <QFileDialog>
 #include <QVariantMap>

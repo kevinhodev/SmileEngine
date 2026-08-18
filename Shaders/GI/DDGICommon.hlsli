@@ -10,7 +10,7 @@
 #endif
 
 // Instance masks da TLAS (RaytracingScene.cpp seta por instancia; espelhado em
-// Smile/Graphics/RTMasks.h). Cada instancia carrega UM bit de categoria, e cada PASSE escolhe
+// Smile/Graphics/RayTracing/RTMasks.h). Cada instancia carrega UM bit de categoria, e cada PASSE escolhe
 // quais categorias enxerga — o modelo do Lumen (RayTracingDefinitions.h), onde o bit OPAQUE e
 // descrito como "used by reflection, shadow, AO and GI tracing passes".
 #define SMILE_RT_MASK_OPAQUE      0x01u
@@ -77,7 +77,7 @@ struct DDGIVertex {
 
 // ================================================================================================
 // RTTriangle — payload PRE-COZIDO por triangulo. Espelho de Smile::FRTTriangle
-// (Engine/Include/Smile/Graphics/RTTriangle.h); o layout e posicional e os dois lados tem de
+// (Engine/Include/Smile/Graphics/RayTracing/RTTriangle.h); o layout e posicional e os dois lados tem de
 // mudar juntos, com bump de kCookedVersion (o payload e persistido no .smesh).
 //
 // POR QUE ELE EXISTE. O caminho de hit fazia PrimitiveIndex -> IB (3 uints) -> 3 vertices de

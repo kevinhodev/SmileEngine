@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include "Smile/Graphics/OceanSpectrum.h"
+#include "Smile/Graphics/Water/OceanSpectrum.h"
 
 namespace {
     using Complex = std::complex<double>;

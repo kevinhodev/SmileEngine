@@ -27,169 +27,20 @@ add_custom_target(SmileVersionStamp
     VERBATIM
 )
 
-set(ENGINE_HEADERS
-    Include/Smile/Core/Types.h
-    Include/Smile/Core/Logger.h
-    Include/Smile/Core/HResultCheck.h
-    Include/Smile/Math/Math.h
-    Include/Smile/Math/MathUtils.h
-    Include/Smile/Math/Vec2.h
-    Include/Smile/Math/Vec3.h
-    Include/Smile/Math/Vec4.h
-    Include/Smile/Math/Mat44.h
-    Include/Smile/Input/CameraInput.h
-    Include/Smile/Graphics/D3D12Device.h
-    Include/Smile/Graphics/CommandQueue.h
-    Include/Smile/Graphics/DescriptorHeap.h
-    Include/Smile/Graphics/Barriers.h
-    Include/Smile/Graphics/GpuResources.h
-    Include/Smile/Graphics/SwapChain.h
-    Include/Smile/Graphics/PipelineState.h
-    Include/Smile/Graphics/Camera.h
-    Include/Smile/Graphics/Mesh.h
-    Include/Smile/Graphics/GpuMesh.h
-    Include/Smile/Scene/Scene.h
-    Include/Smile/Scene/CookedFormat.h
-    Include/Smile/Graphics/TextureSRVHeap.h
-    Include/Smile/Graphics/Texture.h
-    Include/Smile/Graphics/CubeTexture.h
-    Include/Smile/Graphics/VolumeTexture.h
-    Include/Smile/Graphics/Material.h
-    Include/Smile/Graphics/GBuffer.h
-    Include/Smile/Graphics/ComputePipeline.h
-    Include/Smile/Graphics/PipelineUtils.h
-    Include/Smile/Graphics/HDREnvironment.h
-    Include/Smile/Graphics/Atmosphere.h
-    Include/Smile/Graphics/CloudNoise.h
-    Include/Smile/Graphics/VolumetricClouds.h
-    Include/Smile/Graphics/Skybox.h
-    Include/Smile/Graphics/Fog.h
-    Include/Smile/Graphics/Weather.h
-    Include/Smile/Graphics/RainWetness.h
-    Include/Smile/Graphics/SunShadows.h
-    Include/Smile/Graphics/RaytracingScene.h
-    Include/Smile/Graphics/DDGI.h
-    Include/Smile/Graphics/DDGIDebug.h
-    Include/Smile/Graphics/ReSTIRGI.h
-    Include/Smile/Graphics/ReGIR.h
-    Include/Smile/Graphics/ReSTIRDI.h
-    Include/Smile/Graphics/NrdDenoiser.h
-    Include/Smile/Graphics/AmbientOcclusion.h
-    Include/Smile/Graphics/HiZOcclusion.h
-    Include/Smile/Graphics/ShaderUtils.h
-    Include/Smile/Graphics/PostProcess.h
-    Include/Smile/Graphics/Upscaler.h
-    Include/Smile/Graphics/FsrPass.h
-    Include/Smile/Graphics/DlssPass.h
-    Include/Smile/Graphics/DlssRRPass.h
-    Include/Smile/Graphics/DlssRRGuides.h
-    Include/Smile/Graphics/BackgroundVelocity.h
-    Include/Smile/Graphics/TemporalMotionVectors.h
-    Include/Smile/Graphics/DebugTargets.h
-    Include/Smile/Graphics/DebugView.h
-    Include/Smile/Graphics/ShaderTimer.h
-    Include/Smile/Graphics/BvhDebugView.h
-    Include/Smile/Graphics/OceanSpectrum.h
-    Include/Smile/Graphics/OceanFFT.h
-    Include/Smile/Graphics/Water.h
-    Include/Smile/Graphics/VramTracker.h
-    Include/Smile/Graphics/GpuProfiler.h
-    Include/Smile/Graphics/Renderer.h
-    Include/Smile/Graphics/RenderSettings.h
-    Include/Smile/Graphics/SceneTargets.h
-    Include/Smile/Graphics/FrameContext.h
-    Include/Smile/Graphics/FrameCapture.h
-    Include/Smile/Graphics/HistoryDomain.h
-)
+# Manifesto por dominio. Alem de alimentar o target, ele agrupa .h/.cpp juntos no
+# Visual Studio e falha no configure se algum arquivo ficar sem classificacao.
+include(cmake/SmileEngineSources.cmake)
 
 # Header gerado pelo configure_file - listado a parte porque vive em CMAKE_BINARY_DIR
 set(ENGINE_GENERATED_HEADERS
     ${CMAKE_CURRENT_BINARY_DIR}/generated/Smile/Core/VersionInfo.h
 )
 
-set(ENGINE_SOURCES
-    ThirdParty/D3D12MA/D3D12MemAlloc.cpp
-    Source/Core/Logger.cpp
-    Source/Graphics/D3D12Device.cpp
-    Source/Graphics/CommandQueue.cpp
-    Source/Graphics/UploadQueue.cpp
-    Source/Graphics/ComputeQueue.cpp
-    Source/Graphics/DescriptorHeap.cpp
-    Source/Graphics/GpuResources.cpp
-    Source/Graphics/SwapChain.cpp
-    Source/Graphics/PipelineState.cpp
-    Source/Graphics/Camera.cpp
-    Source/Graphics/Mesh.cpp
-    Source/Graphics/GpuMesh.cpp
-    Source/Scene/Scene.cpp
-    Source/Scene/SceneLoader.cpp
-    Source/Graphics/TextureSRVHeap.cpp
-    Source/Graphics/Texture.cpp
-    Source/Graphics/CubeTexture.cpp
-    Source/Graphics/VolumeTexture.cpp
-    Source/Graphics/Material.cpp
-    Source/Graphics/GBuffer.cpp
-    Source/Graphics/Terrain.cpp
-    Source/Graphics/ComputePipeline.cpp
-    Source/Graphics/PipelineUtils.cpp
-    Source/Graphics/HDREnvironment.cpp
-    Source/Graphics/Atmosphere.cpp
-    Source/Graphics/CloudNoise.cpp
-    Source/Graphics/VolumetricClouds.cpp
-    Source/Graphics/Skybox.cpp
-    Source/Graphics/Fog.cpp
-    Source/Graphics/VolumetricFog.cpp
-    Source/Graphics/SunShafts.cpp
-    Source/Graphics/RainWetness.cpp
-    Source/Graphics/SunShadows.cpp
-    Source/Graphics/LocalShadows.cpp
-    Source/Graphics/RaytracingScene.cpp
-    Source/Graphics/GIFallback.cpp
-    Source/Graphics/DDGI.cpp
-    Source/Graphics/DDGIDebug.cpp
-    Source/Graphics/ReSTIRGI.cpp
-    Source/Graphics/ReGIR.cpp
-    Source/Graphics/RadianceCache.cpp
-    Source/Graphics/ReSTIRDI.cpp
-    Source/Graphics/MeshLights.cpp
-    Source/Graphics/NrdDenoiser.cpp
-    Source/Graphics/Reflections.cpp
-    Source/Graphics/AmbientOcclusion.cpp
-    Source/Graphics/HiZOcclusion.cpp
-    Source/Graphics/ShaderUtils.cpp
-    Source/Graphics/PostProcess.cpp
-    Source/Graphics/TemporalAA.cpp
-    Source/Graphics/FsrPass.cpp
-    Source/Graphics/DlssPass.cpp
-    Source/Graphics/DlssRRPass.cpp
-    Source/Graphics/DlssRRGuides.cpp
-    Source/Graphics/BackgroundVelocity.cpp
-    Source/Graphics/TemporalMotionVectors.cpp
-    Source/Graphics/DebugTargets.cpp
-    Source/Graphics/DebugView.cpp
-    Source/Graphics/ShaderTimer.cpp
-    Source/Graphics/BvhDebugView.cpp
-    Source/Graphics/FlickerHeatmap.cpp
-    Source/Graphics/OceanSpectrum.cpp
-    Source/Graphics/OceanFFT.cpp
-    Source/Graphics/Water.cpp
-    Source/Graphics/MaterialPreview.cpp
-    Source/Graphics/Picking.cpp
-    Source/Graphics/SelectionOutline.cpp
-    Source/Graphics/DebugDraw.cpp
-    Source/Graphics/VramTracker.cpp
-    Source/Graphics/GpuProfiler.cpp
-    Source/Graphics/Renderer.cpp
-    Source/Graphics/RenderSettings.cpp
-    Source/Graphics/SceneTargets.cpp
-    Source/Graphics/FrameCapture.cpp
-)
-
 add_library(SmileEngine STATIC
-    ${ENGINE_HEADERS}
+    ${SMILE_ENGINE_FILES}
     ${ENGINE_GENERATED_HEADERS}
-    ${ENGINE_SOURCES}
 )
+source_group("Generated" FILES ${ENGINE_GENERATED_HEADERS})
 
 # O carimbo tem de rodar ANTES de compilar qualquer .cpp que inclua o VersionInfo.h.
 add_dependencies(SmileEngine SmileVersionStamp)
@@ -323,5 +174,5 @@ else()
     target_compile_definitions(SmileEngine PUBLIC SMILE_NVAPI_ENABLED=0)
 endif()
 
-# Organizacao no Visual Studio (filters por pasta)
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${ENGINE_HEADERS} ${ENGINE_SOURCES})
+set_target_properties(SmileEngine PROPERTIES FOLDER "Engine")
+set_target_properties(SmileVersionStamp PROPERTIES FOLDER "Engine/Build")

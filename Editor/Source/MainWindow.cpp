@@ -21,9 +21,9 @@
 #include "SmileEditor/ViewportWidget.h"
 #include "SmileEditor/DarkTheme.h"
 #include "Smile/Core/Logger.h"
-#include "Smile/Graphics/Renderer.h"
-#include "Smile/Graphics/RenderSettings.h"
-#include "Smile/Graphics/D3D12Device.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Graphics/RHI/D3D12Device.h"
 
 #include <QAction>
 #include <QActionGroup>

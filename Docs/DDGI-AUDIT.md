@@ -1088,10 +1088,10 @@ dispatch derivada de `numProbes`, e a decomposição do índice centralizada.
 | update da irradiância + detector | `Shaders/GI/DDGIUpdate.cs.hlsl` |
 | update dos momentos + histerese própria | `Shaders/GI/DDGIUpdateDist.cs.hlsl` |
 | terminador e o gate de medição | `Shaders/GI/HitShading.hlsli` |
-| constantes, janelas derivadas, cbuffer | `Engine/Include/Smile/Graphics/DDGI.h` |
-| reset, invalidação, empacotamento | `Engine/Source/Graphics/DDGI.cpp` |
-| domínios de invalidação | `Engine/Include/Smile/Graphics/HistoryDomain.h` |
-| contrato do gather compartilhado + gate | `Engine/Include/Smile/Graphics/GIHitSampling.h` |
+| constantes, janelas derivadas, cbuffer | `Engine/Include/Smile/Graphics/GI/DDGI.h` |
+| reset, invalidação, empacotamento | `Engine/Source/Graphics/GI/DDGI.cpp` |
+| domínios de invalidação | `Engine/Include/Smile/Graphics/Renderer/HistoryDomain.h` |
+| contrato do gather compartilhado + gate | `Engine/Include/Smile/Graphics/GI/GIHitSampling.h` |
 | eventos do editor | `GizmoController.cpp`, `SceneOutlinerBridge.cpp`, `LightsBridge.cpp` |
 | bracket de stall do wait | `Renderer.cpp`, no `if (GIComputeFence != 0)` |
 | classificação de raios por sonda | `Shaders/GI/DDGIRelocate.cs.hlsl` |

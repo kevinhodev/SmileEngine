@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Smile/Graphics/Material.h"
-#include "Smile/Graphics/MaterialPreview.h"
+#include "Smile/Graphics/Resources/Material.h"
+#include "Smile/Graphics/Editor/MaterialPreview.h"
 #include <QAbstractListModel>
 #include <QColor>
 #include <QHash>

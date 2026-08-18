@@ -258,4 +258,4 @@ add_custom_target(Shaders
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl
-set_target_properties(Shaders PROPERTIES FOLDER "Build")
+set_target_properties(Shaders PROPERTIES FOLDER "Engine/Assets")

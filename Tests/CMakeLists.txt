@@ -1,6 +1,6 @@
 add_executable(SmileOceanMathBaselineTests
     OceanMathBaselineTests.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/OceanSpectrum.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Water/OceanSpectrum.cpp
 )
 
 target_compile_features(SmileOceanMathBaselineTests PRIVATE cxx_std_20)
@@ -11,6 +11,7 @@ set_target_properties(SmileOceanMathBaselineTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
+    FOLDER "Tests"
 )
 
 add_test(
@@ -34,6 +35,7 @@ set_target_properties(SmileTimeOfDayMoonTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
+    FOLDER "Tests"
 )
 
 add_test(
@@ -51,12 +53,12 @@ set_tests_properties(Smile.TimeOfDayMoon PROPERTIES
 add_executable(SmileSceneIdentityTests
     SceneIdentityTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuMesh.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Material.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/TextureSRVHeap.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuResources.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/UploadQueue.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/VramTracker.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/GpuMesh.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/Material.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/RHI/TextureSRVHeap.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/RHI/GpuResources.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/RHI/UploadQueue.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Debug/VramTracker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Logger.cpp
     ${PROJECT_SOURCE_DIR}/Engine/ThirdParty/D3D12MA/D3D12MemAlloc.cpp
 )
@@ -75,6 +77,7 @@ set_target_properties(SmileSceneIdentityTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
+    FOLDER "Tests"
 )
 
 add_test(
@@ -84,4 +87,26 @@ add_test(
 
 set_tests_properties(Smile.SceneIdentity PROPERTIES
     LABELS "scene;identity;editor"
+)
+
+add_executable(SmileRenderPassRegistryTests
+    RenderPassRegistryTests.cpp
+)
+
+target_compile_features(SmileRenderPassRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(SmileRenderPassRegistryTests PRIVATE SmileEngine)
+set_target_properties(SmileRenderPassRegistryTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.RenderPassRegistry
+    COMMAND SmileRenderPassRegistryTests
+)
+
+set_tests_properties(Smile.RenderPassRegistry PROPERTIES
+    LABELS "graphics;architecture;render-pass"
 )

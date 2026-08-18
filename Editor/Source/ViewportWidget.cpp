@@ -1,7 +1,7 @@
 #include "SmileEditor/ViewportWidget.h"
-#include "Smile/Graphics/Renderer.h"
-#include "Smile/Graphics/RenderSettings.h"
-#include "Smile/Graphics/VramTracker.h"
+#include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Input/CameraInput.h"
 #include "Smile/Core/Logger.h"
 #include <QShowEvent>
