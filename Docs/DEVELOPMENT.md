@@ -74,6 +74,8 @@ a um parágrafo que promete uma invariante sem verificá-la.
 - Headers e unidades `.cpp` da engine permanecem explícitos no manifesto
   `Engine/cmake/SmileEngineSources.cmake`. O configure falha se um arquivo ficar sem domínio, for
   listado duas vezes ou deixar de existir.
+- O Editor segue o mesmo contrato em `Editor/cmake/SmileEditorSources.cmake`. O manifesto também
+  organiza QML, estilos, fontes, recursos e referências de design na solução do Visual Studio.
 
 ## Organização de Graphics
 
@@ -92,6 +94,20 @@ a um parágrafo que promete uma invariante sem verificá-la.
   `GI`, `RayTracing`, `Environment`, `PostProcess`, `Water`, `Editor` ou `Debug`. Crie outro apenas
   quando houver responsabilidade própria e mais de um componente relacionado.
 
+## Organização do Editor
+
+- Headers ficam em `Editor/Include/SmileEditor/<Domínio>` e implementações no domínio espelhado em
+  `Editor/Source/<Domínio>`.
+- Os domínios atuais são `Application`, `UI`, `Scene`, `Rendering`, `Integration`, `Viewport` e
+  `Profiling`. `Application` é a raiz de composição; bridges não dependem de `MainWindow`.
+- Includes sempre carregam o domínio, por exemplo
+  `#include "SmileEditor/Profiling/StatsBridge.h"`.
+- No Visual Studio, `.h` e `.cpp` aparecem juntos por componente. A separação física
+  `Include`/`Source` não vira um filtro de navegação.
+- Arquivos QML continuam organizados para runtime em `Qml/components` e `Qml/icons`; o manifesto
+  cria filtros por shell, cena, rendering, profiling e compartilhados sem mudar os caminhos usados
+  pelo hot-reload.
+
 ## Validação mínima
 
 ```powershell
@@ -106,7 +122,8 @@ validadas no editor, idealmente com captura antes/depois usando o protocolo de `
 
 1. Reduzir a superfície e o ownership de `Renderer.h`, movendo estado para os subsistemas donos sem
    voltar a concentrar a implementação em uma única TU.
-2. Extrair telemetria, apresentação de debug targets e fila de jobs de `ViewportWidget`.
+2. Extrair a apresentação de debug targets e a fila de jobs de `ViewportWidget`; telemetria e
+   apresentação do Mini Profiler já pertencem ao `StatsBridge`.
 3. Aumentar a cobertura CPU de `Math`, `CookedFormat`, culling e mutações de cena.
 4. Limpar comentários por subsistema junto de mudanças funcionais, movendo conhecimento durável para
    documentos temáticos e evitando um diff cosmético gigante.

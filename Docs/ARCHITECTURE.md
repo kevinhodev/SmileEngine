@@ -721,6 +721,32 @@ A UI está em **migração incremental para QML** (ilhas `QQuickWidget` dentro d
 o viewport permanece um `HWND` nativo. Os painéis Widgets originais
 (`MaterialEditorPanel`/`EnvironmentPanel`/`SkyCloudPanel`) **não existem mais**.
 
+Headers e implementações do Editor usam os mesmos domínios físicos:
+
+```text
+Editor/
+├── Include/SmileEditor/
+│   ├── Application/     composição, janela principal, tema e integração Win32
+│   ├── UI/              host QML e bridges do shell
+│   ├── Scene/           documento autorado, outliner, materiais, luzes e bookmarks
+│   ├── Rendering/       configurações, controle e captura
+│   ├── Integration/     protocolos externos, como SmileMCP
+│   ├── Viewport/        HWND, render thread, input e gizmos
+│   └── Profiling/       modelos de diagnóstico e desempenho
+├── Source/              espelha os mesmos sete domínios
+├── Qml/
+│   ├── components/      controles e tema compartilhados
+│   └── icons/           ícones vetoriais
+└── cmake/SmileEditorSources.cmake
+                        manifesto e filtros do Visual Studio
+```
+
+No disco, headers públicos e implementações continuam separados. Na solução do Visual Studio,
+o manifesto remove essa divisão mecânica: o `.h` e o `.cpp` de cada componente aparecem juntos
+em `Application`, `Scene`, `Viewport` etc. QML, estilos, fontes, recursos e referências de design
+também aparecem em filtros próprios. O configure falha quando um arquivo C++/QML novo não recebe
+um domínio, quando uma entrada é duplicada ou quando o manifesto aponta para um arquivo ausente.
+
 ```
   ┌─────────────────────────────────────────────┐
   │ main.cpp (QApplication · fontes · tema dark) │
@@ -761,7 +787,14 @@ o viewport permanece um `HWND` nativo. Os painéis Widgets originais
   acontecem na thread de renderização.
 - **Bridges QML** (`Q_OBJECT` + `Q_PROPERTY`/`Q_INVOKABLE`), uma por domínio:
   `MaterialsBridge`, `LightsBridge`, `SceneOutlinerBridge`, `TimeOfDayBridge`,
-  `RenderSettingsBridge`, `MenuBridge`, `StatusBridge`, `LogBridge`, `WindowBridge`.
+  `RenderSettingsBridge`, `StatsBridge`, `MenuBridge`, `StatusBridge`, `LogBridge`,
+  `WindowBridge`. O `StatsBridge` observa o viewport ativo; o Mini Profiler não faz parte do
+  `ViewportWidget`.
+- **Direção das dependências do Editor:** `Application` compõe os demais domínios;
+  `UI` hospeda QML sem conhecer rendering; `Scene`, `Rendering` e `Profiling` consomem o
+  `RendererHandle`; `Integration` usa controladores tipados em vez de dirigir janelas; `Viewport`
+  possui a superfície e a thread de renderização. Bridges de domínio não devem depender de
+  `MainWindow`.
 - **Controle externo de render:** `RenderSettingsController` concentra o acesso sincronizado que
   nao pertence a uma tela. `McpBridge` traduz JSON/named pipe e usa snapshots tipados do
   controlador; depois de uma mutacao externa, os sinais do controlador invalidam os mesmos
@@ -901,10 +934,10 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 - **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
   caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
   política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
-- **`ViewportWidget` ainda concentra responsabilidades do editor:** host do HWND, input,
-  telemetria, visualizador de alvos e fila de jobs do renderer continuam no mesmo tipo. Os knobs
-  ja sairam para `RenderSettingsBridge`, e configuracao/snapshot externos passam por
-  `RenderSettingsController`; a separacao restante e sobretudo de telemetria e apresentacao.
+- **`ViewportWidget` ainda concentra responsabilidades do editor:** telemetria e apresentação do
+  Mini Profiler já pertencem ao `StatsBridge`, mas o tipo ainda reúne host do HWND, input,
+  visualizador de alvos e fila de jobs do renderer. Os knobs já saíram para `RenderSettingsBridge`,
+  e configuração/snapshot externos passam por `RenderSettingsController`.
 - **Acoplamento de compilação:** 59 dos 73 headers públicos de `Graphics/` puxam
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` ainda puxa cerca de 64 headers e é incluído por 10 TUs.
 - ~~**Inversão `SceneLoader -> Renderer`.**~~ **Resolvido:** `SceneLoader.cpp` produz

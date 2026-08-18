@@ -1154,7 +1154,7 @@ Documentar o comportamento atual e criar modos que permitam provar de onde vem c
 
 - `Engine/Include/Smile/Graphics/Renderer/RenderSettings.h`
 - `Engine/Source/Graphics/Renderer/RenderSettings.cpp`
-- `Editor/Source/RenderSettingsBridge.cpp`
+- `Editor/Source/Rendering/RenderSettingsBridge.cpp`
 - `Editor/Qml/SettingsWindow.qml`
 - `Engine/Source/Graphics/Renderer/Renderer.cpp`
 - `Shaders/GI/HitShading.hlsli`
