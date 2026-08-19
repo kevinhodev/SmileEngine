@@ -5,15 +5,15 @@
 //
 //   [0] = ceu   (cos-weighted, hemisferio de cima)   \ modelo antigo de 2 cores chapadas,
 //   [1] = chao  (cos-weighted, hemisferio de baixo)  / mantido como fallback e botao do A/B
-//   [2..4] = SH-L1 (R, G, B), 4 coeficientes por canal, esfera INTEIRA
+//   [2..10] = SH-L2, 9 coeficientes RGB, esfera INTEIRA
 //
 // O resultado herda tudo do LUT: multiscatter, crepusculo, transmitancia e o ceu de luar.
 // Lido de volta na CPU (2 frames de latencia) e escrito no FrameConstants.
 //
-// POR QUE SH-L1: as 2 cores so variam com o Y da normal (o consumidor fazia
+// POR QUE SH-L2: as 2 cores so variam com o Y da normal (o consumidor fazia
 // lerp(chao, ceu, N.y*0.5+0.5)). No poente, a parede virada pro sol e a parede oposta do mesmo
-// predio recebiam ambiente IDENTICO. SH-L1 acrescenta o termo linear — 3 coeficientes por canal
-// — que e exatamente a informacao "de que lado o ceu esta quente".
+// predio recebiam ambiente IDENTICO. L1 acrescenta a direcao dominante; L2 acrescenta a
+// curvatura do campo, necessaria para separar horizonte, zenite e os dois eixos laterais.
 Texture2D<float4>          SkyViewLUT : register(t0);
 RWStructuredBuffer<float4> OutAmbient : register(u0);
 
@@ -27,7 +27,7 @@ RWStructuredBuffer<float4> OutAmbient : register(u0);
 
 groupshared float3 gSky[NUM_EL];
 groupshared float3 gGround[NUM_EL];
-groupshared float3 gSH[NUM_EL][4];
+groupshared float3 gSH[NUM_EL][9];
 
 [numthreads(NUM_EL, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID) {
@@ -52,8 +52,8 @@ void main(uint3 gtid : SV_GroupThreadID) {
 
     float3 sky = float3(0.0f, 0.0f, 0.0f);
     float3 ground = float3(0.0f, 0.0f, 0.0f);
-    float3 sh[4];
-    [unroll] for (int c = 0; c < 4; ++c) sh[c] = float3(0.0f, 0.0f, 0.0f);
+    float3 sh[9];
+    [unroll] for (int c = 0; c < 9; ++c) sh[c] = float3(0.0f, 0.0f, 0.0f);
 
     const float theta = ((float)i + 0.5f) * dTheta;
     const float ct = cos(theta);
@@ -73,11 +73,19 @@ void main(uint3 gtid : SV_GroupThreadID) {
         // Direcao em MUNDO (nao no frame do LUT) — so ela pode alimentar a SH.
         const float3 dir = axisX * (st * cp) + axisY * ct + axisZ * (st * sp);
 
-        // Base SH real, l=0 e l=1.
+        // Base SH real de 3 bandas (l=0, l=1 e l=2). A ordem e a convencional usada por
+        // Unreal/Flax: [1, y, z, x, xy, yz, 3z2-1, xz, x2-y2]. Os sinais da banda l=1
+        // preservam a convencao positiva que a Smile ja usava; projecao e avaliacao compartilham
+        // exatamente a mesma base.
         sh[0] += L * (0.282095f * dOmega);
         sh[1] += L * (0.488603f * dir.y * dOmega);
         sh[2] += L * (0.488603f * dir.z * dOmega);
         sh[3] += L * (0.488603f * dir.x * dOmega);
+        sh[4] += L * (1.092548f * dir.x * dir.y * dOmega);
+        sh[5] += L * (1.092548f * dir.y * dir.z * dOmega);
+        sh[6] += L * (0.315392f * (3.0f * dir.z * dir.z - 1.0f) * dOmega);
+        sh[7] += L * (1.092548f * dir.x * dir.z * dOmega);
+        sh[8] += L * (0.546274f * (dir.x * dir.x - dir.y * dir.y) * dOmega);
 
         // Modelo antigo, cos-weighted por hemisferio (mantido bit a bit).
         const float cosW = abs(ct) * dOmega;
@@ -86,7 +94,7 @@ void main(uint3 gtid : SV_GroupThreadID) {
 
     gSky[i]    = sky;
     gGround[i] = ground;
-    [unroll] for (int c2 = 0; c2 < 4; ++c2) gSH[i][c2] = sh[c2];
+    [unroll] for (int c2 = 0; c2 < 9; ++c2) gSH[i][c2] = sh[c2];
 
     GroupMemoryBarrierWithGroupSync();
 
@@ -95,7 +103,7 @@ void main(uint3 gtid : SV_GroupThreadID) {
         if (i < s) {
             gSky[i]    += gSky[i + s];
             gGround[i] += gGround[i + s];
-            [unroll] for (int c3 = 0; c3 < 4; ++c3) gSH[i][c3] += gSH[i + s][c3];
+            [unroll] for (int c3 = 0; c3 < 9; ++c3) gSH[i][c3] += gSH[i + s][c3];
         }
         GroupMemoryBarrierWithGroupSync();
     }
@@ -104,8 +112,8 @@ void main(uint3 gtid : SV_GroupThreadID) {
 
     OutAmbient[0] = float4(gSky[0]    / PI, 1.0f);
     OutAmbient[1] = float4(gGround[0] / PI, 1.0f);
-    // Empacotado por CANAL: [2] = R, [3] = G, [4] = B, cada um com (c0, c1, c2, c3).
-    OutAmbient[2] = float4(gSH[0][0].r, gSH[0][1].r, gSH[0][2].r, gSH[0][3].r);
-    OutAmbient[3] = float4(gSH[0][0].g, gSH[0][1].g, gSH[0][2].g, gSH[0][3].g);
-    OutAmbient[4] = float4(gSH[0][0].b, gSH[0][1].b, gSH[0][2].b, gSH[0][3].b);
+    // Um float4 por coeficiente: RGB + padding. Esse layout e igual no readback e no cbuffer,
+    // sem remapeamento por canal nem packing que atravesse registradores.
+    [unroll] for (int c4 = 0; c4 < 9; ++c4)
+        OutAmbient[2 + c4] = float4(gSH[0][c4], 0.0f);
 }

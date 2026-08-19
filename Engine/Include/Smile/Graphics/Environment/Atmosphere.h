@@ -120,14 +120,15 @@ namespace Smile {
         u32  SkyReflectionSRV() const { return SkyReflSpec.SRVSlot(); }
 
         // Ambient fisico: CS integra o SkyView LUT cos-weighted (ceu + chao virtual) num buffer
-        // 2x float4 copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
+        // copiado p/ readback — a CPU le com kFramesInFlight de latencia e escreve nos
         // slots SkyAmbientColor/GroundAmbientColor do FrameConstants (consumidores intactos).
         void RecordSkyAmbientIntegration(ID3D12GraphicsCommandList* CommandList);
-        // [0] ceu, [1] chao (modelo de 2 cores), [2..4] SH-L1 por canal (R,G,B).
-        static constexpr u32 kAmbientVec4s = 5;
+        // [0] ceu, [1] chao (modelo de 2 cores), [2..10] SH-L2 por coeficiente (RGB + padding).
+        static constexpr u32 kSkyAmbientSHCoefficients = 9;
+        static constexpr u32 kAmbientVec4s = 2 + kSkyAmbientSHCoefficients;
         bool GetSkyAmbient(u32 FrameSlot, Vec3& OutSky, Vec3& OutGround) const;
-        // SH-L1 do mesmo integral: OutSH[0]=R, [1]=G, [2]=B, cada um (c0,c1,c2,c3).
-        bool GetSkyAmbientSH(u32 FrameSlot, Vec4 OutSH[3]) const;
+        // SH-L2 do mesmo integral: OutSH[i] = coeficiente i em RGB; W e padding.
+        bool GetSkyAmbientSH(u32 FrameSlot, Vec4 OutSH[kSkyAmbientSHCoefficients]) const;
 
         void RenderSky(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
@@ -207,7 +208,7 @@ namespace Smile {
         FComputePipeline    SkyReflPrefilterPSO;
 
         FComputePipeline IntegrateAmbientPSO;
-        Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, 2x float4, UAV
+        Microsoft::WRL::ComPtr<ID3D12Resource> AmbientBuffer;   // DEFAULT, kAmbientVec4s, UAV
         Microsoft::WRL::ComPtr<ID3D12Resource> AmbientReadback; // READBACK ring (kFramesInFlight)
         u8* AmbientMapped   = nullptr;
         u32 AmbientUAVSlot  = 0;

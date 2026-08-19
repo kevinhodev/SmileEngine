@@ -47,6 +47,27 @@ set_tests_properties(Smile.TimeOfDayMoon PROPERTIES
     LABELS "time-of-day;moon;stars;sidereal;math"
 )
 
+add_executable(SmileSkyAmbientSHTests
+    SkyAmbientSHTests.cpp
+)
+
+target_compile_features(SmileSkyAmbientSHTests PRIVATE cxx_std_20)
+set_target_properties(SmileSkyAmbientSHTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.SkyAmbientSH
+    COMMAND SmileSkyAmbientSHTests
+)
+
+set_tests_properties(Smile.SkyAmbientSH PROPERTIES
+    LABELS "atmosphere;sky;sh;math"
+)
+
 # Identidade estavel da FScene. Nao usa GPU, mas linka o Scene.cpp, e ele arrasta os dois
 # caminhos de upload de malha (que o teste nao chama) — dai GpuMesh/UploadQueue/VramTracker/
 # GpuResources e o d3d12.lib apenas para resolver simbolos.

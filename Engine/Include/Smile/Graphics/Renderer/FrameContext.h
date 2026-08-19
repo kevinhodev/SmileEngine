@@ -7,7 +7,7 @@
 namespace Smile {
 
     // Ambiente hemisferico do ceu, ja com o dim de chuva aplicado. Sai do mesmo integral que
-    // publica a SH-L1 no constant buffer.
+    // publica a SH-L2 no constant buffer.
     struct FFrameAmbient {
         Vec3 Sky{};    // hemisferio superior (zenite)
         Vec3 Ground{}; // hemisferio inferior (nadir)

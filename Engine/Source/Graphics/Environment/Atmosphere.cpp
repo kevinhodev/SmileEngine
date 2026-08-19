@@ -112,7 +112,8 @@ namespace Smile {
         SkyReflMipGenPSO.Initialize(_Device, "MipGen.cs_6_0.cso", true);
         SkyReflPrefilterPSO.Initialize(_Device, "SpecularPrefilter.cs_6_0.cso", true);
 
-        // Buffer do ambient (2x float4) + readback ring p/ a CPU ler com latencia segura.
+        // Buffer do ambient (2 cores + 9 coeficientes SH-L2) e readback ring p/ a CPU ler com
+        // latencia segura.
         {
             constexpr u64 kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
 
@@ -791,13 +792,14 @@ namespace Smile {
         return true;
     }
 
-    bool FAtmosphere::GetSkyAmbientSH(u32 _FrameSlot, Vec4 _OutSH[3]) const {
+    bool FAtmosphere::GetSkyAmbientSH(
+        u32 _FrameSlot, Vec4 _OutSH[kSkyAmbientSHCoefficients]) const {
         if (!AmbientMapped || AmbientRecorded < FCommandQueue::kFramesInFlight) return false;
         constexpr size_t kAmbientBytes = kAmbientVec4s * sizeof(f32) * 4;
         const f32* P = reinterpret_cast<const f32*>(AmbientMapped + _FrameSlot * kAmbientBytes);
-        for (u32 c = 0; c < 3; ++c) {
+        for (u32 c = 0; c < kSkyAmbientSHCoefficients; ++c) {
             const f32* V = P + (2 + c) * 4; // [0]/[1] sao as 2 cores; a SH comeca em [2]
-            _OutSH[c] = Vec4{ V[0], V[1], V[2], V[3] };
+            _OutSH[c] = Vec4{ V[0], V[1], V[2], 0.0f };
         }
         return true;
     }

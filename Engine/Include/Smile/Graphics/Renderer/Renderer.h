@@ -124,17 +124,15 @@ namespace Smile {
         Vec4  SunColorRaw;        // rgb = cor base * dim de chuva, w = -
         Vec4  MoonColorRaw;       // rgb = tint da lua * dim de chuva, w = -
 
-        // Ambiente do ceu em SH-L1: um float4 de coeficientes por canal.
-        Vec4  SkyAmbientSHR;
-        Vec4  SkyAmbientSHG;
-        Vec4  SkyAmbientSHB;
+        // Ambiente do ceu em SH-L2: 9 coeficientes, cada um em RGB + padding.
+        Vec4  SkyAmbientSH[FAtmosphere::kSkyAmbientSHCoefficients];
         Vec4  SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas), yzw = -
 
         // Cascatas compartilhadas pelos consumidores de GI. Deve permanecer no fim do cbuffer.
         FDDGICascadeConstants DDGICascades;
     };
     // Protege o layout compartilhado com os shaders.
-    static_assert(offsetof(FrameConstants, DDGICascades) == 496,
+    static_assert(offsetof(FrameConstants, DDGICascades) == 592,
                   "o bloco de cascatas deve permanecer anexado ao fim do FrameConstants");
 
     // Espelha FGPULight em DeferredLighting.ps.hlsl.
@@ -753,7 +751,7 @@ namespace Smile {
         // Sol/lua atenuados por pixel na altitude da SUPERFICIE, em vez de uma cor unica por
         // frame calculada na altitude da camera. Botao do A/B (AtmoLightParams.w).
         bool            UsePerPixelAtmoTransmittance = true;
-        // Ambiente do ceu em SH-L1 (direcional) no lugar das 2 cores chapadas. Botao do A/B.
+        // Ambiente do ceu em SH-L2 (direcional) no lugar das 2 cores chapadas. Botao do A/B.
         bool            UseSkyAmbientSH = true;
 
         FFogPass        Fog;
