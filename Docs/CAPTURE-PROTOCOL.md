@@ -1,7 +1,7 @@
 # Protocolo de captura determinística
 
 > [!NOTE]
-> **Tipo:** protocolo estável · **Calibração registrada:** N = 128  
+> **Tipo:** protocolo estável · **Calibração registrada:** N = 128
 > Para automação por linha de comando e MCP, consulte
 > [Tools/SmileMCP](../Tools/SmileMCP/README.md).
 

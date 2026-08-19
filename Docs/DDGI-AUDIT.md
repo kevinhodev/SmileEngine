@@ -1,7 +1,7 @@
 # Auditoria do DDGI e estado da invalidação
 
 > [!WARNING]
-> **Tipo:** auditoria e contrato · **Revisão de status:** 2026-08-19  
+> **Tipo:** auditoria e contrato · **Revisão de status:** 2026-08-19
 > A fase 6.2b-i foi aprovada. A 6.2b-ii está implementada, mas esta branch ainda não registra
 > a validação completa em runtime; consulte “O que falta” antes de tratar o scrolling como fechado.
 

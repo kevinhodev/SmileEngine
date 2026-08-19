@@ -1,7 +1,7 @@
 # Mesh lights em escala: plano para ReSTIR DI, ReGIR e meia resolução
 
 > [!WARNING]
-> **Tipo:** plano de trabalho · **Última atualização registrada:** 2026-08-17  
+> **Tipo:** plano de trabalho · **Última atualização registrada:** 2026-08-17
 > As fases 0 e 0.5 estão implementadas e medidas. Da Fase 1 em diante, o texto descreve
 > trabalho futuro, salvo indicação explícita em contrário.
 

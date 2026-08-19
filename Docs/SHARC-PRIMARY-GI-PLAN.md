@@ -1,7 +1,7 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
 > [!WARNING]
-> **Tipo:** plano de trabalho ativo · **Última atualização registrada:** 2026-08-15  
+> **Tipo:** plano de trabalho ativo · **Última atualização registrada:** 2026-08-15
 > Fases 0–5 concluídas; Fase 6 possui gates de runtime pendentes e a Fase 7 está em andamento.
 > Leia o bloco de estado abaixo antes das seções históricas. O contrato executável atual está em
 > `Engine/Include/Smile/Graphics/IndirectPolicy.h`.

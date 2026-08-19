@@ -1,7 +1,7 @@
 # Motion vectors temporais confiáveis
 
 > [!NOTE]
-> **Tipo:** nota técnica · **Estado:** implementação atual  
+> **Tipo:** nota técnica · **Estado:** implementação atual
 > Contexto adicional: [arquitetura do frame](ARCHITECTURE.md#5-o-frame-render-loop-e-frame-graph)
 > e [protocolo de captura](CAPTURE-PROTOCOL.md).
 

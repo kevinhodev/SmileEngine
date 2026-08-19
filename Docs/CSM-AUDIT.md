@@ -1,7 +1,7 @@
 # Auditoria e contrato do CSM
 
 > [!NOTE]
-> **Tipo:** auditoria e contrato · **Estado registrado:** 2026-08-04  
+> **Tipo:** auditoria e contrato · **Estado registrado:** 2026-08-04
 > As fases 1–4 descritas neste documento foram aplicadas. Itens restantes continuam na seção
 > “O que falta”; medições e caminhos externos devem ser lidos como referências datadas.
 

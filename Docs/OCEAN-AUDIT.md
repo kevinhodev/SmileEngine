@@ -1,7 +1,7 @@
 # Auditoria e contrato do oceano
 
 > [!NOTE]
-> **Tipo:** auditoria e contrato · **Estado registrado:** 2026-08-03  
+> **Tipo:** auditoria e contrato · **Estado registrado:** 2026-08-03
 > O núcleo espectral e o clipmap foram validados. Funcionalidades de gameplay e compromissos de
 > renderização permanecem explicitamente listados em “Limites conhecidos”.
 

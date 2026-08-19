@@ -1,7 +1,7 @@
 # SmileMCP
 
 > [!NOTE]
-> **Estado:** MVP ativo · **Plataforma:** Windows  
+> **Estado:** MVP ativo · **Plataforma:** Windows
 > As ferramentas de bridge exigem uma build recente do SmileEditor. Para o contrato das capturas,
 > consulte o [protocolo de captura](../../Docs/CAPTURE-PROTOCOL.md).
 

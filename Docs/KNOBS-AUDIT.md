@@ -1,7 +1,7 @@
 # Auditoria e contrato dos knobs de render
 
 > [!NOTE]
-> **Tipo:** auditoria histórica com implementação concluída · **Estado inicial:** 2026-08-05  
+> **Tipo:** auditoria histórica com implementação concluída · **Estado inicial:** 2026-08-05
 > A varredura começou sem alterar código, mas a fila ao fim do documento foi implementada.
 > O estado atual usa `FRenderSettings`, 17 `EHistoryTarget` e máscaras em `HistoryDomain.h`.
 
