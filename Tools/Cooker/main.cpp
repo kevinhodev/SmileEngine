@@ -1,11 +1,18 @@
-// SmileCooker — converte um arquivo FBX (via ufbx) no formato binario proprio da
-// engine (.smesh + .sscene). Roda offline; o runtime nunca le FBX direto.
+// SmileCooker — converte uma cena de entrada no formato binario proprio da engine
+// (.smesh + .sscene). Roda offline; o runtime nunca le FBX nem glTF direto.
 //
-// Uso:  SmileCooker <entrada.fbx> [saida_sem_extensao]
+// Uso:  SmileCooker <entrada.fbx|.gltf|.glb> [saida_sem_extensao] [opcoes]
 //   ex: SmileCooker Assets/Scenes/Bistro/BistroExterior.fbx
 //       -> gera BistroExterior.smesh e BistroExterior.sscene ao lado do .fbx
+//   ex: SmileCooker Assets/Generated/dragao/dragao.glb --fit 2 --ground --center
 //
-// Pipeline (espelha Cry RC / Unreal Interchange, versao enxuta):
+// Dois caminhos de entrada, um unico artefato de saida:
+//   FBX (ufbx, neste arquivo) — cena autorada, com toda a heuristica de material do Bistro.
+//   glTF/GLB (GltfImport.cpp) — malha avulsa, tipicamente saida de um gerador 3D por IA.
+// O que vem depois da leitura (weld, layout do blob, payload de RT, TRS do renderavel) e
+// comum aos dois e mora no CookedWriter.h.
+//
+// Pipeline do FBX (espelha Cry RC / Unreal Interchange, versao enxuta):
 //   1. ufbx carrega o FBX, normalizado p/ RH Y-up + metros (MODIFY_GEOMETRY).
 //   2. Por no com mesh, por parte-de-material: triangula em espaco LOCAL, converte RH->LH
 //      (nega Z + inverte winding), funde vertices (weld). O transform do no NAO entra no
@@ -14,8 +21,8 @@
 //   3. Resolve as texturas pela convencao Bistro (nome_Sufixo.dds) + fallback ufbx.
 //   4. Escreve .smesh (geometria) e .sscene (materiais + renderaveis).
 
-#include "Smile/Scene/CookedFormat.h"
-#include "Smile/Graphics/Mesh.h" // Smile::Vertex (stride 32)
+#include "CookedWriter.h"
+#include "GltfImport.h"
 
 #include "ufbx.h"
 
@@ -29,10 +36,10 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cmath>
 
-namespace fs = std::filesystem;
-using Smile::Vertex;
+using namespace SmileCook; // fs, Vertex, FSubMesh, FCookedScene, SetStr, DecomposeToEngineTRS
 
 // --- RH(Y-up) -> LH(Y-up): inverter winding (par com a negacao de Z nas posicoes).
 // Se a cena sair "inside-out" (culling invertido), trocar p/ false e rebuildar.
@@ -41,100 +48,21 @@ using Smile::Vertex;
 static constexpr bool kReverseWinding = true;
 
 // ----------------------------------------------------------------------------
-// v7: geometry_to_world (ufbx, column-vector, RH) -> TRS do FTransform da engine
-// (S * Rx*Ry*Rz * T, row-vector, LH, radianos).
+// v7: geometry_to_world (ufbx, column-vector, RH) -> TRS do FTransform da engine (S * Rx*Ry*Rz * T,
+// row-vector, LH, radianos). A conta em si mora no CookedWriter.h — aqui so a adaptacao do
+// ufbx_matrix, cujas colunas ja estao no layout que o FColumnMatrix espera.
 //
-// O flip RH->LH das posicoes (nega Z) conjuga a matriz: p_engine = F*G*F * p_local_engine com
-// F = diag(1,1,-1). Em row-vector isso vira M[i][j] = sign(i)*sign(j) * G.cols[i][j].
-//
-// A extracao de Euler sai da propria convencao do Mat44 (R = Rx*Ry*Rz):
-//   R02 = sy | R12 = sx*cy | R22 = cx*cy | R00 = cy*cz | R01 = cy*sz
-//
-// Medido em Bistro/Emerald/Sponza antes de escrever isto: o pior erro de reconstrucao da 3x3 e
-// 7e-12, e nenhuma delas tem shear ou determinante negativo — TRS reproduz a cena. Gimbal lock
-// (cy ~ 0) e tratado; ali o par (x,z) e ambiguo mas a MATRIZ resultante continua correta, que e
-// o que importa para renderizar.
-struct NodeTRS { float Pos[3]; float Rot[3]; float Scale[3]; };
-
-static NodeTRS DecomposeToEngineTRS(const ufbx_matrix& G) {
-    double M[3][3];
-    for (int i = 0; i < 3; ++i) {
-        const double si = (i == 2) ? -1.0 : 1.0;
-        const ufbx_vec3 c = G.cols[i];
-        const double v[3] = { c.x, c.y, c.z };
-        for (int j = 0; j < 3; ++j) {
-            const double sj = (j == 2) ? -1.0 : 1.0;
-            M[i][j] = si * sj * v[j];
-        }
+// Medido em Bistro/Emerald/Sponza: o pior erro de reconstrucao da 3x3 e 7e-12, e nenhuma delas
+// tem shear ou determinante negativo — TRS reproduz a cena.
+static FNodeTRS DecomposeNodeTRS(const ufbx_matrix& G) {
+    FColumnMatrix C;
+    for (int i = 0; i < 4; ++i) {
+        C.Cols[i][0] = G.cols[i].x;
+        C.Cols[i][1] = G.cols[i].y;
+        C.Cols[i][2] = G.cols[i].z;
     }
-
-    double sc[3], R[3][3];
-    for (int i = 0; i < 3; ++i) {
-        sc[i] = std::sqrt(M[i][0]*M[i][0] + M[i][1]*M[i][1] + M[i][2]*M[i][2]);
-        const double inv = sc[i] > 1e-12 ? 1.0 / sc[i] : 0.0;
-        for (int j = 0; j < 3; ++j) R[i][j] = M[i][j] * inv;
-    }
-
-    const double clamped = R[0][2] < -1.0 ? -1.0 : (R[0][2] > 1.0 ? 1.0 : R[0][2]);
-    const double ry = std::asin(clamped);
-    double rx, rz;
-    if (std::fabs(std::cos(ry)) > 1e-6) {
-        rx = std::atan2(R[1][2], R[2][2]);
-        rz = std::atan2(R[0][1], R[0][0]);
-    } else {
-        rx = std::atan2(-R[2][1], R[1][1]);
-        rz = 0.0;
-    }
-
-    NodeTRS T{};
-    T.Pos[0] = (float)G.cols[3].x;
-    T.Pos[1] = (float)G.cols[3].y;
-    T.Pos[2] = (float)-G.cols[3].z; // mesmo flip de Z das posicoes
-    T.Rot[0] = (float)rx; T.Rot[1] = (float)ry; T.Rot[2] = (float)rz;
-    T.Scale[0] = (float)sc[0]; T.Scale[1] = (float)sc[1]; T.Scale[2] = (float)sc[2];
-    return T;
+    return DecomposeToEngineTRS(C);
 }
-
-// ----------------------------------------------------------------------------
-// Weld de vertices: chave = 8 floats (pos3, normal3, uv2), igualdade por bytes.
-struct VertKey {
-    Vertex V;
-    bool operator==(const VertKey& O) const {
-        return std::memcmp(&V, &O.V, sizeof(Vertex)) == 0;
-    }
-};
-struct VertKeyHash {
-    size_t operator()(const VertKey& K) const {
-        // FNV-1a sobre os bytes do vertice.
-        const auto* p = reinterpret_cast<const unsigned char*>(&K.V);
-        size_t h = 1469598103934665603ull;
-        for (size_t i = 0; i < sizeof(Vertex); ++i) { h ^= p[i]; h *= 1099511628211ull; }
-        return h;
-    }
-};
-
-// Sub-mesh acumulado durante o cook.
-struct SubMesh {
-    std::vector<Vertex>   Vertices;
-    std::vector<uint32_t> Indices;
-    std::unordered_map<VertKey, uint32_t, VertKeyHash> Weld;
-    float Min[3] = {  1e30f,  1e30f,  1e30f };
-    float Max[3] = { -1e30f, -1e30f, -1e30f };
-
-    uint32_t Add(const Vertex& v) {
-        VertKey k{ v };
-        auto it = Weld.find(k);
-        if (it != Weld.end()) return it->second;
-        uint32_t idx = static_cast<uint32_t>(Vertices.size());
-        Vertices.push_back(v);
-        Weld.emplace(k, idx);
-        for (int c = 0; c < 3; ++c) {
-            Min[c] = std::min(Min[c], v.Position[c]);
-            Max[c] = std::max(Max[c], v.Position[c]);
-        }
-        return idx;
-    }
-};
 
 // ----------------------------------------------------------------------------
 static std::string ToLower(std::string s) {
@@ -144,11 +72,6 @@ static std::string ToLower(std::string s) {
 static std::string BaseNameNoExt(const std::string& path) {
     return fs::path(path).stem().string();
 }
-static void SetStr(char* dst, size_t cap, const std::string& s) {
-    std::memset(dst, 0, cap);
-    std::strncpy(dst, s.c_str(), cap - 1);
-}
-
 // Extensoes de textura aceitas, em ordem de preferencia (DDS BC primeiro; PNG/etc decodificados
 // por WIC no runtime). O runtime escolhe o loader pela extensao do caminho gravado.
 static bool IsTexExt(const std::string& lowerExt) {
@@ -292,24 +215,81 @@ static bool LooksGlass(const std::vector<std::string>& toks) {
 }
 
 // ----------------------------------------------------------------------------
+static void PrintUsage() {
+    std::printf(
+        "Uso: SmileCooker <entrada.fbx|.gltf|.glb> [saida_sem_extensao] [opcoes]\n"
+        "\n"
+        "  --opaque-glass     vidro cooka OPACO em vez de translucido (so FBX)\n"
+        "  --fit <metros>     escala a cena para caber num cubo de N metros\n"
+        "  --ground           encosta o ponto mais baixo em Y=0\n"
+        "  --center           centraliza o volume em X/Z na origem\n"
+        "  --no-textures      nao extrai as imagens embutidas do glTF\n"
+        "\n"
+        "  --fit/--ground/--center existem para malha gerada por IA, que chega sem unidade nem\n"
+        "  pivot definido. Ajustam so o transform dos renderaveis; a geometria fica intacta.\n");
+}
+
 int main(int argc, char** argv) {
     // --opaque-glass: vidro cooka OPACO (entra no G-buffer -> reflexoes RT pintam nele) em vez
     // de translucido. P/ cenas de casca oca (Emerald Square: predios vazios atras da janela);
     // cenas com interior real atras do vidro (Bistro) ficam no default translucido.
     bool opaqueGlass = false;
+    bool extractTextures = true;
+    FNormalizeOptions normalize;
     std::vector<fs::path> positional;
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--opaque-glass") { opaqueGlass = true; continue; }
-        positional.emplace_back(argv[i]);
+        const std::string arg = argv[i];
+        if (arg == "--opaque-glass") { opaqueGlass = true; continue; }
+        if (arg == "--no-textures")  { extractTextures = false; continue; }
+        if (arg == "--ground")       { normalize.DropToGround = true; continue; }
+        if (arg == "--center")       { normalize.CenterXZ = true; continue; }
+        if (arg == "--fit") {
+            if (i + 1 >= argc) { std::printf("[Cooker] --fit precisa de um valor em metros\n"); return 1; }
+            const double meters = std::atof(argv[++i]);
+            // Faixa fechada: 0 desligaria a normalizacao sem dizer, e um valor absurdo so pode ser
+            // erro de digitacao — em ambos os casos falhar aqui e mais barato que depurar a cena.
+            if (!(meters > 0.0001 && meters < 100000.0)) {
+                std::printf("[Cooker] --fit fora da faixa (0, 100000) metros\n");
+                return 1;
+            }
+            normalize.FitSize = (float)meters;
+            continue;
+        }
+        if (arg == "--help" || arg == "-h") { PrintUsage(); return 0; }
+        if (!arg.empty() && arg[0] == '-') {
+            std::printf("[Cooker] opcao desconhecida: %s\n", arg.c_str());
+            PrintUsage();
+            return 1;
+        }
+        positional.emplace_back(arg);
     }
     if (positional.empty()) {
-        std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao] [--opaque-glass]\n");
+        PrintUsage();
         return 1;
     }
     fs::path inPath = positional[0];
     fs::path sceneDir = inPath.parent_path();
     fs::path outBase = (positional.size() >= 2) ? positional[1]
                                                 : (sceneDir / inPath.stem());
+
+    // Despacho por extensao. glTF/GLB e outro importador inteiro (GltfImport.cpp) — nao ha
+    // caminho comum antes da leitura, so depois dela.
+    {
+        std::string ext = ToLower(inPath.extension().string());
+        if (ext == ".gltf" || ext == ".glb") {
+            std::printf("[Cooker] Carregando glTF: %s\n", inPath.string().c_str());
+            FGltfOptions options;
+            options.Normalize       = normalize;
+            options.ExtractTextures = extractTextures;
+            std::string error;
+            if (!CookGltf(inPath, outBase, options, error)) {
+                std::printf("[Cooker] ERRO glTF: %s\n", error.c_str());
+                return 2;
+            }
+            std::printf("[Cooker] OK.\n");
+            return 0;
+        }
+    }
 
     std::printf("[Cooker] Carregando FBX: %s\n", inPath.string().c_str());
 
@@ -328,8 +308,16 @@ int main(int argc, char** argv) {
     std::printf("[Cooker] Cena carregada: %zu nos, %zu meshes, %zu materiais\n",
                 scene->nodes.count, scene->meshes.count, scene->materials.count);
 
+    // O cozido em construcao — as quatro regioes que vao para disco — e o writer moram no
+    // CookedWriter.h, compartilhados com o importador glTF. As referencias abaixo mantem o resto
+    // deste arquivo lendo exatamente como antes da extracao.
+    FCookedScene cooked;
+    auto& materials   = cooked.Materials;
+    auto& renderables = cooked.Renderables;
+    auto& totalTris   = cooked.TotalTriangles;
+    auto& dedupHits   = cooked.DedupHits;
+
     // --- Tabela global de materiais (ufbx_material* -> indice) ---
-    std::vector<Smile::SSceneMaterial> materials;
     std::unordered_map<const ufbx_material*, uint32_t> matIndex;
 
     auto ResolveMaterial = [&](const ufbx_material* m) -> uint32_t {
@@ -466,9 +454,6 @@ int main(int argc, char** argv) {
     };
 
     // --- Geometria ---
-    std::vector<Smile::SMeshEntry>     entries;
-    std::vector<Smile::SSceneRenderable> renderables;
-    std::vector<uint8_t>               geo; // blob unico (verts + indices intercalados por mesh)
 
     // Dedup (v7): a geometria agora sai em espaco LOCAL, entao dois nos que apontam para o mesmo
     // ufbx_mesh produzem bytes IDENTICOS — a diferenca entre eles passou a viver so no transform.
@@ -480,10 +465,6 @@ int main(int argc, char** argv) {
     std::unordered_map<const ufbx_node*, int32_t> firstRenderableOfNode;
 
     std::vector<uint32_t> triBuf;
-    std::vector<Smile::FRTTriangle> rtTris; // reusado por parte; ver a geracao abaixo
-    size_t totalTris = 0;
-    size_t totalRtTris = 0;
-    size_t dedupHits = 0;
 
     for (size_t ni = 0; ni < scene->nodes.count; ++ni) {
         const ufbx_node* node = scene->nodes.data[ni];
@@ -524,7 +505,7 @@ int main(int argc, char** argv) {
             // (node->materials tem precedencia sobre mesh->materials), entao duas instancias da
             // mesma malha podem legitimamente usar materiais diferentes sem duplicar geometria.
             if (auto hit = meshCache.find({ mesh, pi }); hit != meshCache.end()) {
-                const NodeTRS T = DecomposeToEngineTRS(node->geometry_to_world);
+                const FNodeTRS T = DecomposeNodeTRS(node->geometry_to_world);
                 Smile::SSceneRenderable r{};
                 r.MeshIndex = hit->second;
                 r.MaterialIndex = matIdx;
@@ -539,7 +520,7 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            SubMesh sm;
+            FSubMesh sm;
             for (size_t fi = 0; fi < part.face_indices.count; ++fi) {
                 ufbx_face face = mesh->faces.data[part.face_indices.data[fi]];
                 uint32_t numTri = ufbx_triangulate_face(triBuf.data(), triBuf.size(), mesh, face);
@@ -580,36 +561,13 @@ int main(int argc, char** argv) {
             }
             if (sm.Vertices.empty() || sm.Indices.empty()) continue;
 
-            Smile::SMeshEntry e{};
-            e.VertexCount = (uint32_t)sm.Vertices.size();
-            e.IndexCount  = (uint32_t)sm.Indices.size();
-            for (int c = 0; c < 3; ++c) { e.AABBMin[c] = sm.Min[c]; e.AABBMax[c] = sm.Max[c]; }
-            e.VertexOffset = geo.size();
-            geo.insert(geo.end(), reinterpret_cast<uint8_t*>(sm.Vertices.data()),
-                       reinterpret_cast<uint8_t*>(sm.Vertices.data()) + sm.Vertices.size()*sizeof(Vertex));
-            e.IndexOffset = geo.size();
-            geo.insert(geo.end(), reinterpret_cast<uint8_t*>(sm.Indices.data()),
-                       reinterpret_cast<uint8_t*>(sm.Indices.data()) + sm.Indices.size()*sizeof(uint32_t));
-
-            // v8: payload de RT, AQUI e nao antes. Neste ponto `sm.Indices` ja passou pelo weld
-            // (sm.Add) e pelo reverseWinding do laco acima, entao o triangulo i deste vetor e
-            // exatamente o PrimitiveIndex i que o BLAS vera. Gerar antes do winding inverteria o
-            // cross e a normal de face sairia trocada — silenciosamente, porque so o facing
-            // mudaria e a imagem so denunciaria no verso.
-            rtTris.clear();
-            Smile::BuildRTTriangles(sm.Vertices.data(), (uint32_t)sm.Vertices.size(),
-                                    sm.Indices.data(), (uint32_t)sm.Indices.size(), rtTris);
-            e.RTTriangleOffset = geo.size();
-            e.RTTriangleCount  = (uint32_t)rtTris.size();
-            geo.insert(geo.end(), reinterpret_cast<uint8_t*>(rtTris.data()),
-                       reinterpret_cast<uint8_t*>(rtTris.data()) + rtTris.size()*sizeof(Smile::FRTTriangle));
-            totalRtTris += rtTris.size();
-
-            uint32_t meshIdx = (uint32_t)entries.size();
-            entries.push_back(e);
+            // O AppendMesh anexa [VB][IB][RTTri] ao blob e gera o payload de RT — nesta ordem
+            // e neste ponto, porque `sm.Indices` so agora esta na forma final (depois do weld e
+            // do reverseWinding), que e o que amarra RTTriangle[i] ao PrimitiveIndex i do BLAS.
+            const uint32_t meshIdx = cooked.AppendMesh(sm);
             meshCache.emplace(std::make_pair(mesh, pi), meshIdx);
 
-            const NodeTRS T = DecomposeToEngineTRS(node->geometry_to_world);
+            const FNodeTRS T = DecomposeNodeTRS(node->geometry_to_world);
             Smile::SSceneRenderable r{};
             r.MeshIndex = meshIdx;
             r.MaterialIndex = matIdx;
@@ -625,46 +583,13 @@ int main(int argc, char** argv) {
 
     ufbx_free_scene(scene);
 
-    std::printf("[Cooker] Meshes: %zu | Renderaveis: %zu | Materiais: %zu | Triangulos: %zu | Geo: %.1f MB\n",
-                entries.size(), renderables.size(), materials.size(), totalTris,
-                geo.size() / (1024.0*1024.0));
-    std::printf("[Cooker] Instancing: %zu de %zu renderaveis reusam geometria ja cozida (%.1f%%)\n",
-                dedupHits, renderables.size(),
-                renderables.empty() ? 0.0 : 100.0 * (double)dedupHits / (double)renderables.size());
-    // Triangulos UNICOS, e nao instanciados: o payload de RT mora por (malha, parte), entao a
-    // conta que importa para o custo em disco/VRAM e esta — uma malha usada por 201 nos paga uma
-    // vez so. E o mesmo motivo pelo qual a dedup da v7 vale tanto aqui.
-    std::printf("[Cooker] Payload RT: %zu triangulos unicos x %zu B = %.1f MB (%.1f%% do blob)\n",
-                totalRtTris, sizeof(Smile::FRTTriangle),
-                totalRtTris * sizeof(Smile::FRTTriangle) / (1024.0*1024.0),
-                geo.empty() ? 0.0 : 100.0 * (double)(totalRtTris * sizeof(Smile::FRTTriangle))
-                                  / (double)geo.size());
+    // A conta de RT sai em triangulos UNICOS, e nao instanciados: o payload mora por (malha,
+    // parte), entao uma malha usada por 201 nos paga uma vez so — mesmo motivo pelo qual a dedup
+    // da v7 vale tanto aqui.
+    NormalizeCookedScene(cooked, normalize);
+    cooked.PrintSummary();
 
-    // --- Escreve .smesh ---
-    {
-        fs::path p = outBase; p += ".smesh";
-        FILE* f = std::fopen(p.string().c_str(), "wb");
-        if (!f) { std::printf("[Cooker] ERRO ao abrir %s\n", p.string().c_str()); return 3; }
-        Smile::SMeshHeader h{ Smile::kSMeshMagic, Smile::kCookedVersion, (uint32_t)entries.size(), 0 };
-        std::fwrite(&h, sizeof(h), 1, f);
-        std::fwrite(entries.data(), sizeof(Smile::SMeshEntry), entries.size(), f);
-        std::fwrite(geo.data(), 1, geo.size(), f);
-        std::fclose(f);
-        std::printf("[Cooker] Escrito: %s\n", p.string().c_str());
-    }
-    // --- Escreve .sscene ---
-    {
-        fs::path p = outBase; p += ".sscene";
-        FILE* f = std::fopen(p.string().c_str(), "wb");
-        if (!f) { std::printf("[Cooker] ERRO ao abrir %s\n", p.string().c_str()); return 3; }
-        Smile::SSceneHeader h{ Smile::kSSceneMagic, Smile::kCookedVersion,
-                               (uint32_t)materials.size(), (uint32_t)renderables.size() };
-        std::fwrite(&h, sizeof(h), 1, f);
-        std::fwrite(materials.data(), sizeof(Smile::SSceneMaterial), materials.size(), f);
-        std::fwrite(renderables.data(), sizeof(Smile::SSceneRenderable), renderables.size(), f);
-        std::fclose(f);
-        std::printf("[Cooker] Escrito: %s\n", p.string().c_str());
-    }
+    if (!cooked.Write(outBase)) return 3;
 
     std::printf("[Cooker] OK.\n");
     return 0;

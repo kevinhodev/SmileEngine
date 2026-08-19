@@ -1,11 +1,17 @@
-# SmileCooker — ferramenta offline FBX -> formato proprio (.smesh/.sscene).
+# SmileCooker — ferramenta offline FBX/glTF -> formato proprio (.smesh/.sscene).
 # Console app standalone: linka ufbx (single-file) e usa apenas headers da engine
 # (CookedFormat.h, Mesh.h) — NAO linka a lib SmileEngine nem D3D12.
+# O importador glTF (GltfImport.cpp + Json.h) nao tem dependencia externa nenhuma: o chunk JSON
+# de um .glb usa um subconjunto pequeno demais de JSON para justificar uma biblioteca.
 
 set(UFBX_DIR ${CMAKE_SOURCE_DIR}/Engine/ThirdParty/ufbx)
 
 add_executable(SmileCooker
     main.cpp
+    GltfImport.cpp
+    GltfImport.h
+    CookedWriter.h
+    Json.h
     ${UFBX_DIR}/ufbx.c
 )
 
