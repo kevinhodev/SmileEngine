@@ -1,5 +1,10 @@
 # Protocolo de captura determinística
 
+> [!NOTE]
+> **Tipo:** protocolo estável · **Calibração registrada:** N = 128
+> Para automação por linha de comando e MCP, consulte
+> [Tools/SmileMCP](../Tools/SmileMCP/README.md).
+
 Infraestrutura de medição da série SHaRC (`SHARC-PRIMARY-GI-PLAN.md`). O plano proíbe fechar fase
 por "parece melhor"; este documento é o que dá sentido a essa proibição — sem uma régua, "melhor"
 não é verificável.
@@ -27,7 +32,7 @@ não da cena "mais ou menos igual".
 | Domínio de reset | `HistoryDomain::DeterministicCapture` → `FRenderSettings::NotifyDeterministicCapture` |
 | Máquina de estados, readback, PNG e manifesto | `Engine/{Include/Smile,Source}/Graphics/FrameCapture.*` |
 | Preset, coleta de estado e os 3 call sites | `Renderer::UpdateFrameCapture` / `RecordPost` / `FinishFrameCapture` |
-| Disparo pela UI | `Editor/…/CaptureBridge.*` + card no `SettingsWindow.qml` |
+| Disparo pela UI | `Editor/Include/SmileEditor/CaptureBridge.h` + `Editor/Source/CaptureBridge.cpp` + card no `SettingsWindow.qml` |
 | Commit da build no manifesto | `cmake/StampVersion.cmake` → `SMILE_BUILD_COMMIT` |
 
 O protocolo está fechado. O N default (128) saiu de medição — ver "Calibração do N" abaixo; o

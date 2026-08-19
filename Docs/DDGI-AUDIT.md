@@ -1,6 +1,11 @@
 # Auditoria do DDGI e estado da invalidação
 
-Estado em 12 de agosto de 2026. Este documento registra a revisão completa do DDGI cruzada
+> [!WARNING]
+> **Tipo:** auditoria e contrato · **Revisão de status:** 2026-08-19
+> A fase 6.2b-i foi aprovada. A 6.2b-ii está implementada, mas esta branch ainda não registra
+> a validação completa em runtime; consulte “O que falta” antes de tratar o scrolling como fechado.
+
+Auditoria iniciada em 12 de agosto de 2026. Este documento registra a revisão completa do DDGI cruzada
 com o paper original (Majercik et al., JCGT 2019), o código-fonte local da Flax e do
 RTXDI 3.0, mais o SDK RTXGI de memória — e as fases que saíram dela.
 
@@ -9,8 +14,9 @@ a 6.1 e a 6.2a construíram o encanamento de cascatas sem mudar um pixel; o port
 migrou as três ferramentas de diagnóstico; e a **6.2b‑i acendeu a segunda cascata, fixa** —
 com os três achados da revisão dela corrigidos (entre eles um use-after-free de GPU no
 rebuild pelo editor) e **A/B aprovado: menos vazamento de luz, por +0,83 ms de frame**.
-Falta a 6.2b‑ii — a cascata fina seguindo a câmera, com scrolling toroidal. Ver
-"O que falta".
+A **6.2b-ii implementa** a cascata fina seguindo a câmera com scrolling toroidal, mas seus gates
+de runtime continuam pendentes neste registro. O default permanece em uma cascata até que o
+usuário selecione outra configuração. Ver “O que falta”.
 
 | fase | commit | validação |
 |---|---|---|
@@ -18,7 +24,8 @@ Falta a 6.2b‑ii — a cascata fina seguindo a câmera, com scrolling toroidal.
 | 6.1 | `ad6d754` | imagem idêntica (`CascadeCount = 1`) |
 | 6.2a | `9e6254e` | imagem idêntica, com os wrappers ativos |
 | portão do debug | `4d378ad`, `eb3b9f0` | idem |
-| 6.2b‑i | pendente de commit | **APROVADA** — menos vazamento de luz, por +0,83 ms de frame |
+| 6.2b‑i | `9dbd287` | **APROVADA** — menos vazamento de luz, por +0,83 ms de frame |
+| 6.2b‑ii | `4a72c08` | Implementada; validação completa de runtime ainda não registrada |
 
 Escrito no fim de sessões longas, para a próxima começar do ponto certo.
 
@@ -540,7 +547,8 @@ O que não depende disso: o ×1,95 do update, o gather de graça e os +9,5 MB.
 
 ### Fase 6.2b‑ii — a cascata fina segue a câmera (scrolling toroidal)
 
-Implementada, Debug e Release verdes, **nunca executada**. A fina passou a ser ancorada na
+Implementada, com builds Debug e Release verdes, **sem execução de runtime registrada nesta
+branch**. A fina passou a ser ancorada na
 câmera em vez do centro da cena, e é isso que torna o scrolling obrigatório: com o snap ao
 espaçamento, a origem muda a cada 2 m andados, e sem scrolling todo o conteúdo guardado
 passaria a representar outro ponto do mundo de uma vez.
@@ -945,7 +953,8 @@ item barato e não bloqueante:
   número definitivo. Hoje ele carrega o confounder do Z‑prepass (ver a tabela). Muda a
   atribuição do custo, não o fato dele.
 
-**A 6.2b‑ii está IMPLEMENTADA e nunca rodou** (ver a seção dela). O que ela pede, em ordem:
+**A 6.2b‑ii está IMPLEMENTADA, mas ainda não possui validação de runtime registrada** (ver a
+seção dela). O que ela pede, em ordem:
 
 1. **Smoke com o debug layer ligado.** A mudança de estado do `ProbeData` para `NON_PIXEL` na
    fila direta é a linha mais arriscada da fase, e é a única cujo erro o compilador não pega —
@@ -963,7 +972,7 @@ item barato e não bloqueante:
 **Depois disso**, a ordem acordada continua: A/B dos raios adaptativos, compactação das
 inativas, e o update escalonado por último.
 
-Isso exige **scrolling toroidal**, e não como otimização: com snapping ao espaçamento a
+A implementação usa **scrolling toroidal**, e não como otimização: com snapping ao espaçamento a
 origem muda a cada 2 m andados, e sem scrolling todo o conteúdo guardado passa a
 representar outro ponto do mundo de uma vez — um flash por célula cruzada. O esquema é o da
 Flax (`GetDDGIScrollingProbeIndex`): a sonda de coordenada local `c` guarda no slot
@@ -1009,8 +1018,8 @@ RISCO DE IMPLEMENTAÇÃO, não de retorno.
 otimizar a distribuição de trabalho** — o scrolling da 6.2b‑ii ainda vai mudar quem atualiza
 o quê e quando, então otimizar antes seria calibrar sobre um alvo que se move.
 
-1. commitar a 6.2b‑i com os fixes da revisão;
-2. **6.2b‑ii** — a fina móvel, com scrolling toroidal, validada;
+1. manter registrado o baseline da 6.2b-i (`9dbd287`);
+2. validar a **6.2b‑ii** — a fina móvel, com scrolling toroidal;
 3. A/B dos **raios adaptativos**;
 4. **compactar só as sondas que a Smile JÁ classifica como inativas** (ver a ressalva
    abaixo — é menos do que "sonda que não precisa de raio");

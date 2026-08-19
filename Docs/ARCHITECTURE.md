@@ -6,9 +6,11 @@
 > **Versão:** 3.0.0 · **Stack:** C++20 · DirectX 12 (+ DXR 1.1 inline) · Qt 6 (Widgets + QML) · HLSL SM 6.0/6.6 (DXC)
 > **Plataforma:** Windows x64 (MSVC 2022) · **Build:** CMake + Visual Studio 17 2022
 >
-> **Última verificação contra o código: 2026-08-04.** Este documento é escrito a partir da
-> leitura do código, não gerado — quando divergir dele, o código vence. As seções §4–§10
+> **Revisão técnica parcial: 2026-08-19.** Este documento é escrito a partir da leitura do
+> código, não gerado — quando divergir dele, o código vence. Nesta revisão foram atualizados
+> build, testes, passes, constant buffers, hot-reload e dívida estrutural. As seções §4–§10
 > descrevem estado factual e envelhecem rápido; a §13 lista a dívida conhecida na data acima.
+> O [índice da documentação](README.md) separa referências vivas, planos e auditorias.
 
 ---
 
@@ -42,7 +44,7 @@ quatro artefatos:
 |----------|-------|-----------|------|-----------|
 | **Engine** | `Engine/` | `Smile` | Biblioteca **estática** | RHI DX12 + subsistemas de rendering |
 | **Editor** | `Editor/` | `SmileEditor` | Executável **Qt 6** | Host do viewport, painéis QML, tema dark |
-| **Shaders** | `Shaders/` | — | Alvo de build (DXC) | 130 HLSL compilados para `.cso` em build time |
+| **Shaders** | `Shaders/` | — | Alvo de build (DXC) | 133 fontes HLSL, com 139 compilações/permutações registradas |
 | **Cooker** | `Tools/Cooker/` | `Smile` | Executável CLI | FBX (ufbx) + texturas (dds/png/tga/jpg/bmp) → `.smesh`/`.sscene` |
 
 Princípios de design observados no código:
@@ -102,7 +104,7 @@ CMakeLists.txt (raiz)                  ← project 3.0.0, C++20, x64, /W4, acha 
 ├── Shaders/CMakeLists.txt             ← add_custom_target(Shaders) (lista todos os .hlsl)
 ├── Editor/CMakeLists.txt              ← qt_add_executable(SmileEditor ...) + windeployqt
 ├── Tools/Cooker/CMakeLists.txt        ← executável do cooker de assets
-└── Tests/CMakeLists.txt               ← 2 executáveis de teste (só matemática isolada)
+└── Tests/CMakeLists.txt               ← 3 executáveis de teste (matemática + identidade de cena)
 ```
 
 ### Decisões de build relevantes
@@ -110,7 +112,7 @@ CMakeLists.txt (raiz)                  ← project 3.0.0, C++20, x64, /W4, acha 
 - **C++20**, `/W4 /permissive- /Zc:__cplusplus /MP /utf-8`, `NOMINMAX`, `WIN32_LEAN_AND_MEAN`,
   `UNICODE`. x64 forçado.
 - **Qt** padrão em `C:/Qt/6.10.2/msvc2022_64` (sobrescrevível via `-DCMAKE_PREFIX_PATH`).
-  Componentes: `Core Concurrent Gui Svg Widgets Qml Quick QuickWidgets QuickControls2`.
+  Componentes: `Core Concurrent Gui Network Svg Widgets Qml Quick QuickWidgets QuickControls2`.
   AUTOMOC ligado — headers com `Q_OBJECT` **devem ser listados explicitamente** no
   `qt_add_executable` (estão em `Include/` separado de `Source/`).
 - **Shaders** compilados em build time por **DXC** (`dxc.exe` do Windows SDK `10.0.22621.0`).
@@ -141,8 +143,9 @@ CMakeLists.txt (raiz)                  ← project 3.0.0, C++20, x64, /W4, acha 
    A lista do Visual Studio e as dependências de `#include` saem daí — não há segunda lista.
    Um `.hlsl` em disco que ninguém registrou vira `message(WARNING)` no configure.
 3. No C++, carregue `Nome.cs_6_0.cso` (sufixo = perfil) a partir de `SMILE_SHADER_DIR`.
-4. Se o shader pertence a um PSO com hot-reload, registre o stem na tabela de
-   `Renderer::ReloadShaders` **e** a recriação em `Renderer::RecreateAllPSOs`.
+4. Se o shader pertence a um pipeline com hot-reload, declare o stem em `ShaderStems()` e a
+   recriação em `OnRecreatePipelines()` no respectivo `FRenderPass`/`FPipelineOwner`. O
+   `FPassRegistry` deriva o reload específico e o completo desse registro único.
 
 ### Dependências de `#include` dos shaders
 
@@ -344,7 +347,9 @@ Selecionar `DLSS_RR` **força** o upscaler para DLSS (o RR faz denoise + upscale
 
 ### 5.2 `RenderFrame()` — ordem real dos passes
 
-> `Renderer::RenderFrame()` é **uma única função de ~2500 linhas** (dívida conhecida, §13).
+> `Renderer::RenderFrame()` continua sendo a função explícita de orquestração, hoje com cerca
+> de **370 linhas**. Ciclo de vida, resize, invalidação e hot-reload dos passes migrados são
+> centralizados por `FRenderPass` e `FPassRegistry`; a ordem de execução permanece legível aqui.
 > Os rótulos abaixo são os escopos do `FGpuProfiler` — os mesmos que aparecem na janela de
 > Stats do editor, o que torna a lista verificável em runtime.
 
@@ -414,7 +419,8 @@ e os dois têm de virar juntos.
 
 Quase todo subsistema acumula entre frames. Um parâmetro que entre no sinal **gravado**
 (e não só no exibido) precisa derrubar tudo que acumulou sobre ele, senão o A/B compara um
-estado misturado e o knob parece inerte. O `Renderer` concentra isso em setters dedicados:
+estado misturado e o knob parece inerte. `FRenderSettings` concentra os pontos de entrada e
+`HistoryDomain.h` representa como máscaras os históricos afetados:
 
 | Ponto de entrada | Derruba |
 |---|---|
@@ -630,7 +636,7 @@ swapchain e fazendo o downsample quando `RenderScale > 1` (SSAA).
 > **Não há header compartilhado entre C++ e HLSL** — o espelhamento é manual (§13).
 > Regra de ouro: **campo novo vai no FIM**, para não mexer nos offsets já lidos pelos shaders.
 
-### `FrameConstants` (b0) — 27 `Vec4` + 1 `Mat44` = 496 B (→ 512 B alinhado)
+### `FrameConstants` (b0) — 640 B de payload (768 B com `alignas(256)`)
 
 Blocos, na ordem do struct:
 
@@ -647,6 +653,7 @@ Blocos, na ordem do struct:
 | Luzes | `LightParams`, `LightParams2` |
 | Atmosfera por pixel | `AtmoLightParams`, `SunColorRaw`, `MoonColorRaw` |
 | Ambiente SH-L1 | `SkyAmbientSHR/G/B`, `SkyAmbientSHParams` |
+| Cascatas DDGI | `DDGICascades` (`FDDGICascadeConstants`, 144 B, anexado no offset 496) |
 
 ### `ObjectConstants` (b2) — 4 `Mat44` = 256 B
 `MVP` (jitterada, p/ `SV_POSITION`) · `ModelMatrix` (world) · `CurMVPNoJitter` · `PrevMVP`.
@@ -669,7 +676,8 @@ mips, refine binário) · flags metalness/roughness separados. Espelhado em
 
 ## 9. Pipeline de shaders
 
-**130 shaders** em `Shaders/`, organizados por categoria:
+**133 arquivos fonte HLSL**, com **139 compilações/permutações** registradas no CMake,
+organizados por categoria:
 
 ```
 Shaders/
@@ -685,7 +693,7 @@ Shaders/
 ├── Preview/    material preview           ├── Selection/  Gizmo/  Debug/
 ```
 
-- **Perfis:** `vs_6_0` (21) · `ps_6_0` (47) · `cs_6_0` (50) · **`cs_6_6` (17)**.
+- **Perfis:** `vs_6_0` (21) · `ps_6_0` (47) · `cs_6_0` (50) · **`cs_6_6` (21)**.
   O 6.6 é exigido por RayQuery + heap diretamente indexado (`ResourceDescriptorHeap`) nos
   passes de RT.
 - **Permutações** são registradas como compilações extras com `OUTPUT_NAME`
@@ -693,12 +701,9 @@ Shaders/
   `ReSTIRGITraceTimed`/`ReflectionTraceTimed` sob `SMILE_SHADER_TIMER=1`).
 - **Hot-reload:** `MainWindow` observa `.hlsl`/`.hlsli` via `QFileSystemWatcher`; ao mudar,
   recompila (`cmake --target Shaders`) e chama `Renderer::ReloadShaders(stem)`. O `Renderer`
-  mantém uma tabela `stem → recriação`; stem não mapeado cai num `LogWarning`, e `.hlsli`
-  (include compartilhado) cai em reload completo (`RecreateAllPSOs`).
-
-> ⚠️ A tabela cobre **67 dos 130 shaders**. Os outros 63 — incluindo `DeferredLighting.ps`,
-> `GBuffer.ps`, `DDGITrace.cs`, `ReSTIRGITrace.cs`, GTAO, HZB e todo o Tonemap — avisam
-> "sem pipeline mapeado" e **não recarregam**. Ver §13.
+  consulta o `FPassRegistry`: cada `FRenderPass`/`FPipelineOwner` publica seus stems ao lado da
+  própria criação de PSO. Mudanças em `.hlsli` fazem reload completo; um stem sem dono
+  registrado gera `LogWarning` e não altera pipelines.
 
 ---
 
@@ -748,10 +753,11 @@ o viewport permanece um `HWND` nativo. Os painéis Widgets originais
   acontecem na thread de renderização.
 - **Bridges QML** (`Q_OBJECT` + `Q_PROPERTY`/`Q_INVOKABLE`), uma por domínio:
   `MaterialsBridge`, `LightsBridge`, `SceneOutlinerBridge`, `TimeOfDayBridge`,
-  `RenderSettingsBridge`, `MenuBridge`, `StatusBridge`, `LogBridge`, `WindowBridge`.
+  `RenderSettingsBridge`, `CameraBookmarksBridge`, `CaptureBridge`, `MenuBridge`,
+  `StatusBridge`, `LogBridge` e `WindowBridge`.
 - **Controle externo de render:** `RenderSettingsController` concentra o acesso sincronizado que
-  nao pertence a uma tela. `McpBridge` traduz JSON/named pipe e usa snapshots tipados do
-  controlador; depois de uma mutacao externa, os sinais do controlador invalidam os mesmos
+  não pertence a uma tela. `McpBridge` traduz JSON/named pipe e usa snapshots tipados do
+  controlador; depois de uma mutação externa, os sinais do controlador invalidam os mesmos
   bindings QML usados pelos setters da UI.
 - **QmlHost** carrega os `.qml` do source dir em dev (hot-reload) e do lado do exe em deploy.
   `Theme.qml` é a fonte única de cores/tipografia; a fonte Inter é empacotada.
@@ -857,46 +863,32 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 
 ## 13. Limitações atuais & dívida técnica
 
-> **Reescrito em 2026-08-04 a partir de uma revisão do código.** A versão anterior desta seção
-> descrevia a fase de fundação e estava obsoleta — afirmava "1 frame in-flight", "sem free-list
-> no SRV heap (512 slots)", "sem shadow maps", "cena = uma esfera demo" e "hot-reload só cobre
-> `Triangle.vs/ps`", **todos falsos hoje**. Se você chegou aqui por um link antigo, ignore o
-> que lembrava e leia o que segue.
+> **Revisado parcialmente em 2026-08-19.** Esta seção descreve restrições observáveis no código
+> atual. Planos e auditorias vinculados preservam o histórico das decisões, mas seus números
+> pontuais devem ser lidos na data registrada em cada documento.
 
 ### Estrutural
 
-- **`Renderer` é um God object.** *Em desmembramento desde 2026-08-05 — plano e fila em
-  `KNOBS-AUDIT.md`.* Já saíram os knobs (`FRenderSettings`, com `HistoryDomain.h` no lugar das
-  19 listas de invalidação manuais), o espelho deles no editor (`RenderSettingsBridge`, que
-  tirou 92 dos 134 `Q_PROPERTY` do `ViewportWidget`) e os alvos de cena (`FSceneTargets`: 29
-  membros + as 6 funções de criação). `Renderer.h` foi de 1198 para **873** linhas.
-  **O núcleo continua de pé:** `Renderer.cpp` tem ~4000 linhas e **`RenderFrame()` sozinho
-  ocupa ~2500** (≈40 escopos de GPU numa única função). O desmembramento dele começou pelo
-  `FrameContext.h`: `FFrameModes` (16 flags de "que passes rodam neste frame", resolvidas por
-  `ResolveFrameModes()` no topo em vez de espalhadas por 1200 linhas), `FFrameView`
-  (câmera/matrizes/jitter) e `FFrameLighting` (sol/lua/chuva/luz-chave). Os **locais de nível 0
-  do `RenderFrame` caíram de 115 para 54**, que era o bloqueio real: enquanto o estado
-  compartilhado for local, não há o que passar para um método, e nenhuma fase pode ser extraída.
-  Falta só o ambiente hemisférico (`SkyAmbient`/`GroundAmbient`), soldado ao bloco que publica a
-  SH no constant buffer. Depois disso, a extração das fases.
-- **O grafo de invalidação da §5.4 é escrito à mão.** São ~8 listas parcialmente sobrepostas de
-  "quem cai junto". Já houve caso de knob que passou a entrar no sinal gravado sem o setter
-  acompanhar. Candidato natural a virar dado (`enum class EHistoryDomain` + máscara).
-  *Auditado em 2026-08-05 — ver `KNOBS-AUDIT.md`:* são **quatro** padrões de acesso ao mesmo
-  estado (inclusive campo público cru em `FWeather`), 58 knobs chegam por reach-through sem
-  passar pelo grafo, e **4 divergem** do critério que o próprio código aplica em knobs irmãos.
-  O documento traz a taxonomia de 3 tiers, os domínios propostos e a fila de migração.
-- **Não existe `IRenderPass`.** A convenção de subsistema (§1) é real mas não enforçada, e já
-  divergiu: `IsReady()` vs `IsInitialized()`; `Execute()` vs `Record*()`; `InvalidateHistory()`
-  vs `ResetHistory()` vs `ResetHistoryOnce()` vs `InvalidateResults()`; `Resize()` vs
-  `SetupForResize()`. É por isso que a orquestração precisa saber o nome exato de cada um.
+- **`Renderer` ainda concentra estado e coordenação.** O arquivo `Renderer.cpp` possui cerca de
+  5.700 linhas e o header cerca de 1.260. A extração já criou `FRenderSettings`,
+  `FSceneTargets`, `FrameContext`, captura dedicada e o contrato de passes; `RenderFrame()` caiu
+  para aproximadamente 370 linhas, mas o `Renderer` continua sendo o ponto de integração de
+  muitos subsistemas. O histórico da migração está em [KNOBS-AUDIT.md](KNOBS-AUDIT.md).
+- **O grafo de invalidação virou dado, mas exige disciplina.** `HistoryDomain.h` mantém 17
+  `EHistoryTarget` e máscaras nomeadas pelo motivo da invalidação. Um acumulador novo ainda
+  precisa receber um bit e entrar nos domínios corretos; esquecer esse cadastro produz histórico
+  que sobrevive além do contrato.
+- **A migração para `FRenderPass` é incremental.** `FPassRegistry` já centraliza resize,
+  invalidação, debug targets e recriação de pipelines dos passes migrados. A execução continua
+  explícita por design — não existe um `virtual Execute()` genérico — e subsistemas ainda não
+  migrados conservam assinaturas de ciclo de vida diferentes.
 - **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
   caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
   política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
 - **`ViewportWidget` ainda concentra responsabilidades do editor:** host do HWND, input,
   telemetria, visualizador de alvos e fila de jobs do renderer continuam no mesmo tipo. Os knobs
-  ja sairam para `RenderSettingsBridge`, e configuracao/snapshot externos passam por
-  `RenderSettingsController`; a separacao restante e sobretudo de telemetria e apresentacao.
+  já saíram para `RenderSettingsBridge`, e configuração/snapshot externos passam por
+  `RenderSettingsController`; a separação restante é sobretudo de telemetria e apresentação.
 - **Acoplamento de compilação:** 59 dos 73 headers públicos de `Graphics/` puxam
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` puxa 69 headers e é incluído por 10 TUs.
 - **Inversão de dependência menor:** `Engine/Source/Scene/SceneLoader.cpp` inclui
@@ -912,24 +904,24 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 - ~~**Dependência de shader por GLOB total**~~ — **resolvido em 2026-08-04**: grafo de
   `#include` calculado no configure (§2). O DXC do SDK não suporta depfile; se um dia a engine
   passar a usar um DXC ≥ 1.7, trocar por `-MF` + `DEPFILE` elimina o reconfigure de ~1,2 s.
-- **Hot-reload cobre 67 de 130 shaders.** Os 63 restantes avisam e não recarregam. Além disso a
-  tabela de `ReloadShaders` duplica as chamadas de `RecreateAllPSOs` — dois lugares para manter
-  em sincronia, e já divergiram (`MeshLights.RecreatePSO` está num e não no outro).
+- ~~**Tabelas duplicadas de hot-reload**~~ — **resolvido** pelo `FPassRegistry`: stems e
+  recriação ficam no dono do pipeline. A dívida remanescente é garantir que todo pipeline novo
+  seja registrado; stems sem dono falham de forma explícita no log.
 - **Caminhos absolutos de máquina:** os defaults dos 4 SDKs apontam para `D:/Engines/...`
   (são cache vars, então sobrescrevíveis). O DXC segue procurado em dois caminhos fixos com
   `NO_DEFAULT_PATH`. *O `-I "D:/Engines/NRD/Shaders"` hardcoded 3× foi resolvido em
   2026-08-04 — agora sai de `SMILE_NRD_ROOT`.*
-- **21 headers fora de `ENGINE_HEADERS`** no `Engine/CMakeLists.txt` (só afeta navegação no VS,
-  mas é o mesmo sintoma da lista manual que apodrece).
+- **Lista manual de headers no CMake:** ainda há headers públicos fora de `ENGINE_HEADERS`.
+  Isso não quebra a compilação por si só, mas prejudica a navegação e os filtros do Visual Studio.
 
 ### Cobertura e correção
 
 - **Sem header compartilhado C++/HLSL.** 89 arquivos com `cbuffer`, todo layout espelhado à mão
   com comentários "manter em sincronia". Classe de bug silenciosa e cara; a solução usual é um
   `.hlsli` com `#ifdef __cplusplus` incluído dos dois lados.
-- **Testes: 2 executáveis, ambos de matemática isolada** (`OceanSpectrum`, `TimeOfDay`/lua).
-  Sem cobertura em `Mat44`/`Vec*`, no versionamento do `CookedFormat`, no culling ou na `FScene`
-  — tudo testável sem device D3D12.
+- **Testes: 3 executáveis** (`OceanSpectrum`, `TimeOfDay`/lua e identidade de `FScene`).
+  Ainda não há cobertura dedicada para `Mat44`/`Vec*`, versionamento do `CookedFormat` ou
+  culling; os caminhos completos de renderização também dependem de validação em GPU.
 - **`FScene` é uma lista plana** (sem hierarquia/parentesco); o editor faz `push_back` direto e
   `Renderables()` devolve referência mutável. A encapsulação é por convenção.
 - **Sem serialização de cena / undo-redo / asset DB** no editor. Persistência existe só por

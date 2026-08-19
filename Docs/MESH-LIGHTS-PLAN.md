@@ -1,5 +1,10 @@
 # Mesh lights em escala: plano para ReSTIR DI, ReGIR e meia resolução
 
+> [!WARNING]
+> **Tipo:** plano de trabalho · **Última atualização registrada:** 2026-08-17
+> As fases 0 e 0.5 estão implementadas e medidas. Da Fase 1 em diante, o texto descreve
+> trabalho futuro, salvo indicação explícita em contrário.
+
 > **Estado em 2026-08-17 — FASES 0 e 0.5 ENCERRADAS.** Da Fase 1 em diante, nada deve ser lido como
 > implementado. Todo o detalhe está no §2; este bloco é só o resumo executável.
 >
@@ -269,7 +274,8 @@ A/B separado, **antes** da Fase 1 e sem realimentar o dimensionamento dela:
    (3.653.984 bytes) fica na ordem do L2;
 3. ✅ **FEITO (§2.10)** — A/B do domínio: pool original contra suporte positivo compactado
    (228.374 → 33.160). **−23,5%** em `Amostragem + temporal`, distribuição verificada neutra por
-   discriminação de ruído contra viés. O caminho UPLOAD foi removido junto, já que a decisão fechou;
+   discriminação de ruído contra viés. O consumo direto da tabela em UPLOAD foi removido quando a
+   decisão fechou; o recurso UPLOAD continua existindo apenas como staging para a cópia em VRAM;
 4. repetir M=8 e M=1 nos dois braços, e validar energia e distribuição, não só tempo;
 5. ~~implementar o RIS index-only em `128 × 1.024`~~ — **re-justificado e NÃO recomendado como
    otimização do DI (§2.12)**: o teto de ganho caiu para 0,66 ms, menor que o presample de até 1 ms
@@ -369,10 +375,11 @@ barramento, e pode continuar valendo sobre uma baseline de 3,77 ms. Mas a premis
 dimensionamento mudou de ordem de grandeza, então a Fase 1 deve ser **re-justificada** contra a nova
 baseline antes de ser implementada — não herdada.
 
-✅ **DEFAULT virou o padrão** (`AliasDefaultRequested = true`). O A/B é grande demais, reprodutível
-e semanticamente neutro; UPLOAD heap para uma estrutura de leitura aleatória por candidata é escolha
-errada, não trade-off. O caminho UPLOAD **fica** como A/B temporário — é o único jeito de reproduzir
-a baseline antiga — e sai quando não houver mais o que comparar.
+✅ **DEFAULT virou o padrão.** O A/B é grande demais, reprodutível e semanticamente neutro; consumir
+uma estrutura de leitura aleatória por candidata diretamente de um UPLOAD heap é escolha errada,
+não trade-off. **Nota histórica:** neste ponto da série o caminho direto por UPLOAD ainda existia
+para reproduzir a baseline. No código atual, `AliasBuffer` permanece somente como staging e o Pass A
+amostra `AliasDefaultBuffer` em VRAM.
 
 ### 2.8 Achado de protocolo: descartar a primeira captura da sessão
 
