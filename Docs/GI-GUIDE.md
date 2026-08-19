@@ -62,6 +62,12 @@ problema entre técnicas especializadas:
 
 O resultado é híbrido: nenhuma técnica resolve tudo sozinha.
 
+> [!NOTE]
+> Na inicialização apenas com os defaults do C++, o primário pedido é ReSTIR +
+> SHaRC, mas o passe ReSTIR GI começa desligado. O estado efetivo degrada para
+> DDGI até que o passe seja ligado e esteja pronto. A diferença entre “pedido”
+> e “efetivo” é explicada na seção 8.
+
 ---
 
 ## 2. Luz direta e indireta
@@ -124,7 +130,7 @@ Por isso, GI em tempo real deve ser entendida como um sistema **temporal**.
 
 O diagrama completo de ray tracing está em
 [SmileRTArchitecture.svg](SmileRTArchitecture.svg). O recorte abaixo mostra
-somente GI:
+somente as dependências lógicas de GI:
 
 ```text
  CENA
@@ -165,9 +171,14 @@ Luzes locais ──► ReGIR ─────► seleção de luz no hit secundá
 
 - **ReSTIR GI** produz o sinal difuso por pixel.
 - **SHaRC** tenta responder rapidamente aos hits secundários.
-- **DDGI** responde quando o cache não pode responder e ainda atende
-  volumetria e superfícies auxiliares.
+- **DDGI**, nos raios secundários compartilhados, responde quando o cache não
+  pode responder; separadamente, ainda atende volumetria e superfícies
+  auxiliares.
 - **ReGIR** escolhe luzes, mas não substitui nenhum dos três.
+
+O desenho não representa uma agenda serial. O DDGI pode atualizar em compute
+async enquanto a fila direta produz depth, G-buffer e o update do cache; os
+consumidores esperam a fence somente antes de ler o atlas.
 
 ---
 
@@ -447,6 +458,10 @@ O default é **desligado** para permitir A/B. Desligá-lo não remove as luzes
 locais: o shader usa o loop completo como referência. ReGIR é uma estratégia
 de amostragem, não o interruptor das luzes.
 
+Mesmo ligado, o build só acontece quando existe ao menos um consumidor e uma
+luz puntual elegível. Uma cena composta apenas por emissivos não ativa ReGIR:
+esses triângulos seguem pelo caminho mesh lights → ReSTIR DI.
+
 Código: [`ReGIR.h`](../Engine/Include/Smile/Graphics/ReGIR.h) e
 [`ReGIRBuild.cs.hlsl`](../Shaders/GI/ReGIRBuild.cs.hlsl).
 
@@ -503,10 +518,14 @@ Consulta SHaRC
      │         ├──► calcula sol e luzes locais / ReGIR
      │         ├──► consulta fallback DDGI ou zero
      │         ├──► adiciona emissivo
-     │         └──► opcionalmente atualiza o cache legado
+     │         └──► só escreve no cache se o produtor legado estiver ligado
      │
      └────────────► retorna radiância
 ```
+
+No default, o produtor legado está desligado: o cache é alimentado pelo updater
+dedicado pós-G-buffer. A escrita em hits de render permanece apenas como braço
+de A/B.
 
 ### 6.1 Por que o cache vem antes do material
 
@@ -543,7 +562,8 @@ divisão foi aproximadamente:
 - 1,92% zero.
 
 Esses números pertencem àquela cena, câmera, build e regime de instrumentação.
-Não são uma constante universal da engine.
+Não são uma constante universal da engine nem devem ser reproduzidos fora da
+série de auditoria de agosto de 2026 sem uma nova captura determinística.
 
 ---
 
@@ -552,32 +572,50 @@ Não são uma constante universal da engine.
 Uma versão simplificada da ordem executável:
 
 ```text
-INÍCIO DO FRAME
+ANTES DO BEGIN FRAME
+  │
+  ├─ reconcilia mudanças de materiais, luzes e estrutura de cena
+  └─ processa pedidos da captura determinística
+
+INÍCIO DA GRAVAÇÃO
   │
   ├─ resolve política indireta efetiva
   ├─ detecta mudanças e invalida históricos
-  ├─ atualiza warmup do radiance cache
+  ├─ coleta stats e avança o warmup do radiance cache
   ├─ posiciona cascatas DDGI
+  ├─ atualiza céu, atmosfera, volumetria e oceano
+  ├─ grava céu e nuvens
   │
   ├─ prepara iluminação indireta
   │    ├─ extrai mesh lights quando necessário
-  │    ├─ constrói ReGIR quando há consumidor
-  │    └─ atualiza DDGI em compute async ou direto
+  │    ├─ constrói ReGIR quando há consumidor e luz elegível
+  │    └─ inicia DDGI em compute async ou executa na fila direta
   │
-  ├─ depth prepass e G-buffer
+  ├─ empacota luzes, monta draw lists e grava sombras
+  ├─ depth prepass
+  ├─ G-buffer
   ├─ updater dedicado do radiance cache
   ├─ espera DDGI async apenas quando necessário
   │
-  ├─ ReSTIR GI
-  ├─ reflexões RT
+  ├─ ReSTIR GI, se for o primário efetivo
+  ├─ reflexões RT antes do deferred SOMENTE no caminho NRD indireto
+  ├─ pack GI/reflexões + NRD indireto, quando ativo
   ├─ ReSTIR DI
-  ├─ NRD opcional
+  ├─ NRD direto, quando ativo
   ├─ deferred lighting
+  ├─ resolve do radiance cache
   │
-  ├─ água, translúcidos, nuvens e fog
+  ├─ sem NRD indireto: trace/composite de reflexões acontece aqui
+  ├─ água, translúcidos e nuvens
+  ├─ fog, volumetria e chuva
   ├─ TAA / DLSS-RR / upscaler
   └─ pós-processamento e tonemap
 ```
+
+A posição das reflexões muda conforme o regime. Com NRD indireto, GI e
+reflexões precisam ser traçados antes do pack/denoise. Sem NRD indireto — que
+inclui o cold start com primário DDGI — as reflexões são compostas depois do
+deferred.
 
 O fluxo está em
 [`Renderer.cpp`](../Engine/Source/Graphics/Renderer.cpp), principalmente em:
@@ -622,7 +660,8 @@ presets ou estado persistido pelo editor:
 | ReGIR | desligado |
 | Reflexões RT | ligadas |
 | Denoiser | nenhum |
-| TAA | ligado |
+| TAA pedido (`UseTAA`) | ligado |
+| Upscaler pedido | FSR, com fallback para `None` se indisponível |
 | Radiance cache write/query | ligados |
 
 Isso cria uma armadilha importante:
@@ -633,6 +672,9 @@ Isso cria uma armadilha importante:
 O cache ainda pode participar de outros traces, como reflexões e atualização
 das sondas. Para produzir ReSTIR GI na tela, o passe precisa estar ligado e
 pronto.
+
+O TAA próprio só fica efetivamente ativo quando não existe upscaler ativo. Se o
+FSR inicializar, ele assume a reconstrução temporal e `TAAActive` fica falso.
 
 ### 8.2 Tabela de degradação
 
@@ -703,8 +745,8 @@ Exemplos:
 | Mudou o primário | `IndirectSurfaceRoute` |
 | Volume apareceu/sumiu | `IndirectVolumetricSource` |
 | Mudou material visto por RT | `MaterialRTState` |
-| Objeto nasceu/morreu | `SceneStructure` + região DDGI |
-| Luz ou objeto foi editado | `SceneContent` + região DDGI |
+| Objeto nasceu/morreu | domínio `SceneStructure`; DDGI usa `InvalidateRegion` separadamente |
+| Luz ou objeto foi editado | domínio `SceneContent`; DDGI usa invalidação regional |
 | Câmera teleportou | `CameraCut` |
 | Captura científica iniciou | `DeterministicCapture` |
 
@@ -737,8 +779,10 @@ GI por poucos raios é ruidosa. A engine oferece três caminhos principais.
 
 ### 10.1 Sem denoiser
 
-ReSTIR GI cru segue para o deferred. O TAA ainda pode estabilizar a imagem
-final, mas não conhece toda a semântica do sinal de GI.
+Quando o primário efetivo é ReSTIR + SHaRC, o ReSTIR GI cru segue para o
+deferred. Quando o primário efetivo é DDGI, o deferred lê o atlas de sondas em
+vez da textura do ReSTIR GI. O TAA ainda pode estabilizar a imagem final, mas
+não conhece toda a semântica do sinal de GI.
 
 ### 10.2 NRD RELAX
 
@@ -761,6 +805,10 @@ A engine mantém instâncias separadas para:
 
 Os dois sinais possuem distribuições de ruído diferentes.
 
+O NRD indireto só executa quando o primário efetivo é ReSTIR + SHaRC, o NRD
+está pronto e o modo selecionado é NRD. Com primário DDGI, o atlas continua
+cru e as reflexões seguem o caminho próprio pós-deferred.
+
 ### 10.3 DLSS Ray Reconstruction
 
 DLSS-RR combina denoise e upscale em uma avaliação. Quando selecionado, ele
@@ -782,7 +830,8 @@ Não troque um pelo outro: eles respondem perguntas diferentes.
 
 ## 11. Primeiro passeio pelo editor
 
-Os controles ficam em **Configurações → Iluminação indireta**.
+Os controles ficam em **Configurações → Iluminação global**, no card
+**Pipeline de iluminação indireta**.
 
 > [!WARNING]
 > Não altere vários eixos ao mesmo tempo. GI acumula estado; uma comparação
@@ -869,12 +918,19 @@ Scopes úteis:
 - `DDGI` ou `DDGI (async)`;
 - `Espera do DDGI (async)`;
 - `Radiance cache (update)`;
+- `Radiance cache (resolve)`;
 - `ReSTIR GI`;
 - `Reflexos (trace)`;
+- `Reflexos (composite)`;
+- `Pack GI + reflexos`;
 - `NRD denoise`;
-- `ReSTIR DI`.
+- `NRD direta`;
+- `ReSTIR DI`;
+- `MeshLights (extract)`;
+- `ReGIR (build)`.
 
-Leia o custo do passe junto com o **frame GPU total**.
+Os scopes presentes variam conforme a política e o denoiser efetivos. Leia o
+custo do passe junto com o **frame GPU total**.
 
 ### 12.3 Captura determinística
 
@@ -1067,8 +1123,9 @@ Um layout errado pode compilar e produzir dados silenciosamente corrompidos.
 - comportamento de múltiplas cascatas em todos os movimentos e teleportes;
 - raios e histerese adaptativos permanecem desligados por default;
 - ReGIR está implementado, mas desligado por default;
-- mesh lights cobrem o caminho atual de DI; fases posteriores do plano continuam
-  abertas.
+- o caminho principal de mesh lights para DI — extração, compactação, alias em
+  VRAM e amostragem no ReSTIR DI — está implementado; telemetria e integrações
+  posteriores descritas no plano continuam abertas.
 
 ### Ainda não implementado
 
