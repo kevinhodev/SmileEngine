@@ -349,6 +349,11 @@ namespace Smile {
         // O manifesto descreve execucao efetiva, nao apenas toggles solicitados.
         S.UseGI       = UseGI;               // dominio indireto: intencao, e nao ha passe unico
         S.DDGIReady   = DDGI.IsReady();      // EXISTENCIA do volume (criterio do fallback)
+        S.DDGICascadeCount    = DDGI.CascadeCount();
+        S.DDGIRaysPerProbe    = DDGI.RaysPerProbe();
+        S.DDGIAdaptiveRays    = DDGI.GetAdaptiveRays();
+        S.DDGIAdaptiveMinRays = static_cast<u32>(DDGI.GetMinRays());
+        S.DDGIAdaptiveMaxRays = static_cast<u32>(DDGI.GetMaxRays());
         S.ReSTIRGI    = _Modes.ReSTIRGIActive;
         S.ReSTIRDI    = _Modes.ReSTIRDIActiveFrame;
         // Toggle + consumidor + luz na cena.

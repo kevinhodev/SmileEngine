@@ -4,6 +4,7 @@
 #include "SmileEditor/Rendering/RenderSettingsController.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Core/VersionInfo.h"
+#include "Smile/Graphics/GI/DDGI.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -78,6 +79,70 @@ namespace SmileEditor {
             return true;
         }
 
+        bool ReadNumberClosed(const QJsonObject& _Object, const char* _Name,
+                              double _Min, double _Max, double& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (!Value.isDouble()) return false;
+            const double Number = Value.toDouble();
+            if (!std::isfinite(Number) || Number < _Min || Number > _Max) return false;
+            _Out = Number;
+            return true;
+        }
+
+        bool ReadOptionalIndirectPrimary(
+            const QJsonObject& _Object, const char* _Name,
+            std::optional<Smile::EIndirectPrimary>& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (Value.isUndefined() || Value.isNull()) { _Out.reset(); return true; }
+            if (!Value.isString()) return false;
+            const QString Name = Value.toString();
+            if (Name == QStringLiteral("restir_sharc"))
+                _Out = Smile::EIndirectPrimary::ReSTIR_SHaRC;
+            else if (Name == QStringLiteral("ddgi"))
+                _Out = Smile::EIndirectPrimary::DDGI;
+            else if (Name == QStringLiteral("off"))
+                _Out = Smile::EIndirectPrimary::Off;
+            else
+                return false;
+            return true;
+        }
+
+        bool ReadOptionalIndirectFallback(
+            const QJsonObject& _Object, const char* _Name,
+            std::optional<Smile::EIndirectFallback>& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (Value.isUndefined() || Value.isNull()) { _Out.reset(); return true; }
+            if (!Value.isString()) return false;
+            const QString Name = Value.toString();
+            if (Name == QStringLiteral("ddgi"))
+                _Out = Smile::EIndirectFallback::DDGI;
+            else if (Name == QStringLiteral("environment"))
+                _Out = Smile::EIndirectFallback::Environment;
+            else if (Name == QStringLiteral("black"))
+                _Out = Smile::EIndirectFallback::Black;
+            else
+                return false;
+            return true;
+        }
+
+        QString IndirectPrimaryName(int _Value) {
+            switch (static_cast<Smile::EIndirectPrimary>(_Value)) {
+            case Smile::EIndirectPrimary::ReSTIR_SHaRC: return QStringLiteral("restir_sharc");
+            case Smile::EIndirectPrimary::DDGI:         return QStringLiteral("ddgi");
+            case Smile::EIndirectPrimary::Off:          return QStringLiteral("off");
+            }
+            return QStringLiteral("unknown");
+        }
+
+        QString IndirectFallbackName(int _Value) {
+            switch (static_cast<Smile::EIndirectFallback>(_Value)) {
+            case Smile::EIndirectFallback::DDGI:        return QStringLiteral("ddgi");
+            case Smile::EIndirectFallback::Environment: return QStringLiteral("environment");
+            case Smile::EIndirectFallback::Black:       return QStringLiteral("black");
+            }
+            return QStringLiteral("unknown");
+        }
+
         QJsonArray SerializeTimings(const QVector<FProfileTimingSnapshot>& _Results) {
             QJsonArray Out;
             for (const auto& R : _Results) {
@@ -99,6 +164,9 @@ namespace SmileEditor {
                 { QStringLiteral("restirDI"), _Settings.ReSTIRDI },
                 { QStringLiteral("radianceCache"), _Settings.RadianceCache },
                 { QStringLiteral("cacheQuery"), _Settings.CacheQuery },
+                { QStringLiteral("cacheStats"), _Settings.CacheStats },
+                { QStringLiteral("cacheStatsDetail"), _Settings.CacheStatsDetail },
+                { QStringLiteral("cacheStatsSource"), _Settings.CacheStatsSource },
                 { QStringLiteral("reflections"), _Settings.Reflections },
                 { QStringLiteral("gtao"), _Settings.GTAO },
                 { QStringLiteral("indirectPrimaryRequested"),
@@ -146,6 +214,76 @@ namespace SmileEditor {
                       static_cast<double>(_Snapshot.Vram.NonLocalUsageBytes) },
                 } },
                 { QStringLiteral("settings"), SerializeSettings(_Snapshot.Settings) },
+            };
+        }
+
+        QJsonObject SerializeCamera(const FCameraPoseSnapshot& _Pose) {
+            return QJsonObject{
+                { QStringLiteral("position"), QJsonObject{
+                    { QStringLiteral("x"), _Pose.X },
+                    { QStringLiteral("y"), _Pose.Y },
+                    { QStringLiteral("z"), _Pose.Z },
+                } },
+                { QStringLiteral("pitchDegrees"), _Pose.PitchDeg },
+                { QStringLiteral("yawDegrees"), _Pose.YawDeg },
+            };
+        }
+
+        QJsonObject SerializeGIStatus(const FGIStatusSnapshot& _Status) {
+            QJsonArray Cascades;
+            for (const auto& Cascade : _Status.Cascades) {
+                Cascades.append(QJsonObject{
+                    { QStringLiteral("index"), Cascade.Index },
+                    { QStringLiteral("gridMin"), QJsonObject{
+                        { QStringLiteral("x"), Cascade.GridMinX },
+                        { QStringLiteral("y"), Cascade.GridMinY },
+                        { QStringLiteral("z"), Cascade.GridMinZ },
+                    } },
+                    { QStringLiteral("spacing"), Cascade.Spacing },
+                    { QStringLiteral("scrollCells"), QJsonObject{
+                        { QStringLiteral("x"), Cascade.ScrollX },
+                        { QStringLiteral("y"), Cascade.ScrollY },
+                        { QStringLiteral("z"), Cascade.ScrollZ },
+                    } },
+                });
+            }
+
+            return QJsonObject{
+                { QStringLiteral("frameIndex"), static_cast<double>(_Status.FrameIndex) },
+                { QStringLiteral("policy"), QJsonObject{
+                    { QStringLiteral("primary"), QJsonObject{
+                        { QStringLiteral("requested"), IndirectPrimaryName(
+                            _Status.Settings.IndirectPrimaryRequested) },
+                        { QStringLiteral("effective"), IndirectPrimaryName(
+                            _Status.Settings.IndirectPrimaryEffective) },
+                    } },
+                    { QStringLiteral("fallback"), QJsonObject{
+                        { QStringLiteral("requested"), IndirectFallbackName(
+                            _Status.Settings.IndirectFallbackRequested) },
+                        { QStringLiteral("effective"), IndirectFallbackName(
+                            _Status.Settings.IndirectFallbackEffective) },
+                    } },
+                } },
+                { QStringLiteral("ddgi"), QJsonObject{
+                    { QStringLiteral("enabled"), _Status.Settings.DDGI },
+                    { QStringLiteral("initialized"), _Status.DDGIInitialized },
+                    { QStringLiteral("desiredCascadeCount"), _Status.DesiredCascadeCount },
+                    { QStringLiteral("actualCascadeCount"), _Status.ActualCascadeCount },
+                    { QStringLiteral("gridCount"), QJsonObject{
+                        { QStringLiteral("x"), _Status.GridCountX },
+                        { QStringLiteral("y"), _Status.GridCountY },
+                        { QStringLiteral("z"), _Status.GridCountZ },
+                    } },
+                    { QStringLiteral("probesPerCascade"), _Status.ProbesPerCascade },
+                    { QStringLiteral("totalProbes"), _Status.TotalProbes },
+                    { QStringLiteral("raysPerProbe"), _Status.RaysPerProbe },
+                    { QStringLiteral("adaptiveMinRays"), _Status.AdaptiveMinRays },
+                    { QStringLiteral("adaptiveMaxRays"), _Status.AdaptiveMaxRays },
+                    { QStringLiteral("adaptiveRays"), _Status.AdaptiveRays },
+                    { QStringLiteral("adaptiveHysteresis"), _Status.AdaptiveHysteresis },
+                    { QStringLiteral("cascades"), Cascades },
+                } },
+                { QStringLiteral("settings"), SerializeSettings(_Status.Settings) },
             };
         }
     }
@@ -287,6 +425,36 @@ namespace SmileEditor {
             HandleProfileSnapshot(_Socket, Id);
             return;
         }
+        if (Command == QStringLiteral("camera_get")) {
+            HandleCameraGet(_Socket, Id);
+            return;
+        }
+        if (Command == QStringLiteral("camera_set")) {
+            const QJsonValue Arguments = Request.value(QStringLiteral("arguments"));
+            if (!Arguments.isObject()) {
+                Reply(_Socket, Id, false,
+                      QJsonObject{ { QStringLiteral("error"),
+                                    QStringLiteral("arguments precisa ser objeto") } });
+                return;
+            }
+            HandleCameraSet(_Socket, Id, Arguments.toObject());
+            return;
+        }
+        if (Command == QStringLiteral("gi_status")) {
+            HandleGIStatus(_Socket, Id);
+            return;
+        }
+        if (Command == QStringLiteral("gi_configure")) {
+            const QJsonValue Arguments = Request.value(QStringLiteral("arguments"));
+            if (!Arguments.isObject()) {
+                Reply(_Socket, Id, false,
+                      QJsonObject{ { QStringLiteral("error"),
+                                    QStringLiteral("arguments precisa ser objeto") } });
+                return;
+            }
+            HandleGIConfigure(_Socket, Id, Arguments.toObject());
+            return;
+        }
         if (Command == QStringLiteral("shutdown")) {
             if (Capture && Capture->Busy()) {
                 Reply(_Socket, Id, false,
@@ -362,7 +530,9 @@ namespace SmileEditor {
                                 Overrides.DIMeshCandidates) &&
             ReadOptionalBool(_Arguments, "meshLightsInPool", Overrides.DIMeshLightsInPool) &&
             ReadOptionalBool(_Arguments, "diInitialVisibility", Overrides.DIInitialVisibility) &&
-            ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport);
+            ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
+            ReadOptionalBool(_Arguments, "backgroundThrottle",
+                             Overrides.BackgroundThrottleEnabled);
         if (!KnobsOk) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
@@ -392,6 +562,8 @@ namespace SmileEditor {
                   { QStringLiteral("preset"), Applied->Preset },
                   { QStringLiteral("bookmarkSlot"), Slot },
                   { QStringLiteral("timeOfDayHours"), Applied->TimeOfDayHours },
+                  { QStringLiteral("backgroundThrottle"),
+                    Applied->BackgroundThrottleEnabled },
                   { QStringLiteral("settings"), SerializeSettings(Applied->Settings) },
               } } });
     }
@@ -413,6 +585,121 @@ namespace SmileEditor {
         Reply(_Socket, _Id, true,
               QJsonObject{ { QStringLiteral("result"),
                             SerializeProfileSnapshot(*Snapshot) } });
+    }
+
+    void McpBridge::HandleCameraGet(QLocalSocket* _Socket, const QString& _Id) {
+        if (!RenderSettings) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("controlador de render indisponivel") } });
+            return;
+        }
+        QString Error;
+        const auto Pose = RenderSettings->CameraSnapshot(Error);
+        if (!Pose) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"), Error } });
+            return;
+        }
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"), SerializeCamera(*Pose) } });
+    }
+
+    void McpBridge::HandleCameraSet(QLocalSocket* _Socket, const QString& _Id,
+                                    const QJsonObject& _Arguments) {
+        if (!RenderSettings) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("controlador de render indisponivel") } });
+            return;
+        }
+
+        FCameraPoseSnapshot Pose;
+        const bool Valid =
+            ReadNumberClosed(_Arguments, "x", -1'000'000.0, 1'000'000.0, Pose.X) &&
+            ReadNumberClosed(_Arguments, "y", -1'000'000.0, 1'000'000.0, Pose.Y) &&
+            ReadNumberClosed(_Arguments, "z", -1'000'000.0, 1'000'000.0, Pose.Z) &&
+            ReadNumberClosed(_Arguments, "pitchDegrees", -89.9, 89.9, Pose.PitchDeg) &&
+            ReadNumberClosed(_Arguments, "yawDegrees", -36'000.0, 36'000.0, Pose.YawDeg);
+        const QJsonValue CameraCutValue =
+            _Arguments.value(QStringLiteral("cameraCut"));
+        const bool CameraCutValid =
+            CameraCutValue.isUndefined() || CameraCutValue.isBool();
+        if (!Valid || !CameraCutValid) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("pose de camera invalida") } });
+            return;
+        }
+        const bool CameraCut = CameraCutValue.toBool(true);
+
+        QString Error;
+        const auto Applied = RenderSettings->SetCameraPose(Pose, CameraCut, Error);
+        if (!Applied) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"), Error } });
+            return;
+        }
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"), SerializeCamera(*Applied) } });
+    }
+
+    void McpBridge::HandleGIStatus(QLocalSocket* _Socket, const QString& _Id) {
+        if (!RenderSettings) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("controlador de render indisponivel") } });
+            return;
+        }
+        QString Error;
+        const auto Status = RenderSettings->GIStatus(Error);
+        if (!Status) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"), Error } });
+            return;
+        }
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"), SerializeGIStatus(*Status) } });
+    }
+
+    void McpBridge::HandleGIConfigure(QLocalSocket* _Socket, const QString& _Id,
+                                      const QJsonObject& _Arguments) {
+        if (!RenderSettings) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("controlador de render indisponivel") } });
+            return;
+        }
+
+        FGIOverrides Overrides;
+        const bool Valid =
+            ReadOptionalBool(_Arguments, "ddgiEnabled", Overrides.DDGIEnabled) &&
+            ReadOptionalIndirectPrimary(_Arguments, "indirectPrimary",
+                                        Overrides.IndirectPrimary) &&
+            ReadOptionalIndirectFallback(_Arguments, "indirectFallback",
+                                         Overrides.IndirectFallback) &&
+            ReadOptionalInteger(_Arguments, "cascadeCount", 1,
+                                static_cast<int>(Smile::FDDGI::kMaxCascades),
+                                Overrides.CascadeCount) &&
+            ReadOptionalBool(_Arguments, "adaptiveRays", Overrides.AdaptiveRays) &&
+            ReadOptionalBool(_Arguments, "adaptiveHysteresis",
+                             Overrides.AdaptiveHysteresis);
+        if (!Valid) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("configuracao de GI invalida") } });
+            return;
+        }
+
+        QString Error;
+        const auto Applied = RenderSettings->ApplyGIOverrides(Overrides, Error);
+        if (!Applied) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"), Error } });
+            return;
+        }
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"), SerializeGIStatus(*Applied) } });
     }
 
     void McpBridge::HandleCapture(QLocalSocket* _Socket, const QString& _Id,

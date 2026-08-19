@@ -62,7 +62,8 @@ namespace SmileEditor {
         // Limita o editor em segundo plano a aproximadamente 10 FPS.
         connect(qGuiApp, &QGuiApplication::applicationStateChanged, this,
                 [this](Qt::ApplicationState State) {
-            RedrawTimer->setInterval(State == Qt::ApplicationActive ? 0 : 100);
+            RedrawTimer->setInterval(
+                BackgroundThrottleEnabled && State != Qt::ApplicationActive ? 100 : 0);
         });
 
         FrameTimer.start();
@@ -100,6 +101,14 @@ namespace SmileEditor {
         default:
             return QStringLiteral("Lit");
         }
+    }
+
+    void ViewportWidget::SetBackgroundThrottleEnabled(bool _Enabled) {
+        BackgroundThrottleEnabled = _Enabled;
+        if (!RedrawTimer) return;
+        const bool InBackground =
+            QGuiApplication::applicationState() != Qt::ApplicationActive;
+        RedrawTimer->setInterval(_Enabled && InBackground ? 100 : 0);
     }
 
 

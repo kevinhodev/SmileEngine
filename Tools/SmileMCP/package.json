@@ -1,6 +1,6 @@
 {
   "name": "smile-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Servidor MCP local para inspecionar, compilar e executar a SmileEngine.",
   "type": "module",
@@ -12,7 +12,11 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
-    "smoke:capture": "npm run build && node scripts/capture-smoke.mjs"
+    "smoke:capture": "npm run build && node scripts/capture-smoke.mjs",
+    "validate:gi": "npm run build && node scripts/gi-validation.mjs",
+    "validate:gi:adaptive-visual": "npm run build && node scripts/gi-adaptive-visual.mjs",
+    "benchmark:gi": "npm run build && node scripts/gi-benchmark.mjs",
+    "benchmark:gi:adaptive": "npm run build && node scripts/gi-benchmark.mjs --suite adaptive"
   },
   "engines": {
     "node": ">=20"

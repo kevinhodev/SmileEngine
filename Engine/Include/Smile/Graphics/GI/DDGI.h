@@ -729,7 +729,11 @@ namespace Smile {
         bool FoliageShadows = true; // sombra de folhagem nos shadow rays do GI (GATHER vs OPAQUE)
         bool Relocation     = true; 
         f32  DeactivationThreshold = 0.20f; 
-        bool AdaptiveRays   = false;
+        // Default ON desde o A/B de 19/08/2026: duas repeticoes scientific N=128 ficaram dentro
+        // do proprio piso temporal (57,91 dB / SSIM 0,99953 contra full-64), enquanto o caminho
+        // vivo devolveu 5,21% do DDGI e 1,59% do frame em movimento. OFF continua sendo o controle
+        // full-64 e e bit-identico ao comportamento historico.
+        bool AdaptiveRays   = true;
         int  MaxRays        = 64;
         int  MinRays        = 16;
         f32  SurfaceBiasScale = 0.2f;  // o `bias` do GetDDGISurfaceBias do Flax

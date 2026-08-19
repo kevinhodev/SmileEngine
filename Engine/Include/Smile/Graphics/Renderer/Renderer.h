@@ -428,9 +428,11 @@ namespace Smile {
         // Eixo direito da camera em mundo (coluna da view row-vector).
         Vec3 GetCameraRight() const;
         // Foco de camera do editor (duplo-clique no Scene Outliner): teleporta mantendo
-        // a orientacao atual. Definido no .cpp porque avisa o corte de camera, e o
-        // FRenderSettings so e completo no RenderSettings.h.
-        void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg);
+        // a orientacao atual. O default preserva o corte dos call sites interativos; automacao
+        // pode desligar o corte para produzir um percurso continuo com motion vectors validos.
+        // Definido no .cpp porque FRenderSettings so e completo no RenderSettings.h.
+        void SetCameraPose(const Vec3& Pos, f32 PitchDeg, f32 YawDeg,
+                           bool NotifyCameraCut = true);
 
         const std::wstring& GetGpuDescription() const;
         u64 GetDedicatedVideoMemory() const;

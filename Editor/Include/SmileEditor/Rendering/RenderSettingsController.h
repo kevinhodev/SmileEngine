@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SmileEditor/Viewport/RenderThread.h"
+#include "Smile/Graphics/GI/IndirectPolicy.h"
 
 #include <QObject>
 #include <QString>
@@ -41,6 +42,9 @@ namespace SmileEditor {
         bool   ReSTIRDI              = false;
         bool   RadianceCache         = false;
         bool   CacheQuery            = false;
+        bool   CacheStats            = false;
+        bool   CacheStatsDetail      = false;
+        bool   CacheStatsSource      = false;
         bool   Reflections           = false;
         bool   GTAO                  = false;
         int    IndirectPrimaryRequested  = 0;
@@ -78,6 +82,9 @@ namespace SmileEditor {
         std::optional<bool> DIMeshLightsInPool;
         std::optional<bool> DIInitialVisibility;
         std::optional<bool> DIMeshCompactSupport;
+        // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
+        // janela recebeu o foco enquanto o agente coleta as amostras.
+        std::optional<bool> BackgroundThrottleEnabled;
     };
 
     struct FProfileSnapshot {
@@ -97,7 +104,58 @@ namespace SmileEditor {
     struct FProfileConfiguration {
         QString Preset;
         double  TimeOfDayHours = 0.0;
+        bool    BackgroundThrottleEnabled = false;
         FRenderSettingsSnapshot Settings;
+    };
+
+    struct FCameraPoseSnapshot {
+        double X        = 0.0;
+        double Y        = 0.0;
+        double Z        = 0.0;
+        double PitchDeg = 0.0;
+        double YawDeg   = 0.0;
+    };
+
+    // Campos opcionais para o comando incremental de GI. Diferente de profile_configure, este
+    // comando nao estabelece um regime inteiro: ele muda somente os eixos declarados, o que o
+    // torna apropriado para a matriz de politica e para provocar a invalidacao durante captura.
+    struct FGIOverrides {
+        std::optional<bool> DDGIEnabled;
+        std::optional<Smile::EIndirectPrimary>  IndirectPrimary;
+        std::optional<Smile::EIndirectFallback> IndirectFallback;
+        std::optional<int>  CascadeCount;
+        std::optional<bool> AdaptiveRays;
+        std::optional<bool> AdaptiveHysteresis;
+    };
+
+    struct FDDGICascadeSnapshot {
+        int    Index = 0;
+        double GridMinX = 0.0;
+        double GridMinY = 0.0;
+        double GridMinZ = 0.0;
+        double Spacing  = 0.0;
+        int    ScrollX  = 0;
+        int    ScrollY  = 0;
+        int    ScrollZ  = 0;
+    };
+
+    struct FGIStatusSnapshot {
+        quint64 FrameIndex = 0;
+        FRenderSettingsSnapshot Settings;
+        bool DDGIInitialized = false;
+        int  DesiredCascadeCount = 1;
+        int  ActualCascadeCount  = 0;
+        int  GridCountX = 0;
+        int  GridCountY = 0;
+        int  GridCountZ = 0;
+        int  ProbesPerCascade = 0;
+        int  TotalProbes = 0;
+        int  RaysPerProbe = 0;
+        int  AdaptiveMinRays = 0;
+        int  AdaptiveMaxRays = 0;
+        bool AdaptiveRays = false;
+        bool AdaptiveHysteresis = false;
+        QVector<FDDGICascadeSnapshot> Cascades;
     };
 
     // Fachada compartilhada pelos adaptadores do editor. Ela e dona da fronteira com o
@@ -119,6 +177,12 @@ namespace SmileEditor {
             EProfilePreset Preset, QString& Error,
             const FProfileOverrides& Overrides = {});
         std::optional<FProfileSnapshot> ProfileSnapshot(QString& Error) const;
+        std::optional<FCameraPoseSnapshot> CameraSnapshot(QString& Error) const;
+        std::optional<FCameraPoseSnapshot> SetCameraPose(
+            const FCameraPoseSnapshot& Pose, bool CameraCut, QString& Error);
+        std::optional<FGIStatusSnapshot> GIStatus(QString& Error) const;
+        std::optional<FGIStatusSnapshot> ApplyGIOverrides(
+            const FGIOverrides& Overrides, QString& Error);
 
     signals:
         // Emitidos sempre depois de soltar o lock. Os bridges QML os repassam como NOTIFY das
@@ -130,6 +194,8 @@ namespace SmileEditor {
 
     private:
         static FRenderSettingsSnapshot CollectSettings(const Smile::Renderer& Renderer);
+        static FCameraPoseSnapshot CollectCamera(const Smile::Renderer& Renderer);
+        static FGIStatusSnapshot CollectGIStatus(const Smile::Renderer& Renderer);
 
         RendererHandle  Renderer;
         ViewportWidget* Viewport = nullptr;

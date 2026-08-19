@@ -106,6 +106,13 @@ namespace Smile {
         // Os toggles do A/B da Fase 0. A matriz de quatro baselines do plano se le daqui.
         bool UseGI              = false; // dominio indireto ligado
         bool DDGIReady          = false; // o VOLUME existe (criterio de fallback, ver a67eadd)
+        // Regime de amostragem do volume. Sem este bloco, capturas full-64 e adaptive 16-64
+        // teriam o mesmo manifesto mesmo sendo justamente os dois bracos do A/B.
+        u32  DDGICascadeCount    = 0;
+        u32  DDGIRaysPerProbe    = 0;
+        bool DDGIAdaptiveRays    = false;
+        u32  DDGIAdaptiveMinRays = 0;
+        u32  DDGIAdaptiveMaxRays = 0;
         bool ReSTIRGI           = false;
         bool ReSTIRDI           = false;
         bool ReGIR              = false; // EFETIVO: a grade foi construida neste frame

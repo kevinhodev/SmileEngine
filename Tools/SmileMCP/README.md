@@ -3,7 +3,7 @@
 Servidor MCP local da SmileEngine. O transporte inicial e STDIO: o Codex inicia o processo,
 descobre as ferramentas e recebe resultados estruturados sem acoplar o protocolo ao runtime C++.
 
-## Estado do MVP
+## Ferramentas
 
 Ferramentas disponiveis:
 
@@ -16,8 +16,19 @@ Ferramentas disponiveis:
 - `smile_compile_shaders`: atalho para o alvo `Shaders`.
 - `smile_cook_scene`: recozinha um FBX e valida os cabecalhos `.smesh`/`.sscene` gerados.
 - `smile_editor_status`: consulta PID, executavel, commit, prontidao, cena e captura do editor vivo.
+- `smile_camera_get`: le a pose efetiva da camera do viewport.
+- `smile_camera_set`: define uma pose absoluta e devolve o readback; aplica camera cut por
+  default ou preserva continuidade temporal com `cameraCut: false` para percursos de benchmark.
+- `smile_gi_status`: le politica pedida/efetiva e telemetria do DDGI, incluindo grade, sondas,
+  cascatas, espacamento, scroll toroidal em celulas e os limites configurados dos raios
+  adaptativos. A distribuicao efetiva por sonda permanece GPU-only para nao introduzir readback
+  e stall na regua.
+- `smile_gi_configure`: altera somente os eixos de GI informados: volume, primary/fallback,
+  contagem de cascatas, raios adaptativos e histerese adaptativa.
 - `smile_profile_configure`: fixa o regime de render, a hora (`10:00` por default ou
-  `timeOfDayHours`) e opcionalmente a camera do teste.
+  `timeOfDayHours`) e opcionalmente a camera do teste. O throttle de segundo plano fica desligado
+  por default para o foco de outra janela nao contaminar a regua; `backgroundThrottle: true`
+  restaura o comportamento interativo.
 - `smile_profile_gpu`: amostra timestamps brutos e a EMA do Mini Profiler, com percentis e VRAM.
 - `smile_close_editor`: encerra o editor pelo bridge, esperando o shutdown da render thread.
 - `smile_run_editor`: inicia um `SmileEditor.exe`, aceita uma `.sscene` tipada e aguarda o
@@ -41,6 +52,62 @@ O ciclo completo pode ser feito sem voltar ao terminal:
 `smile_run_editor` detecta uma instancia ja conectada para nao abrir dois editores apontando para
 a mesma named pipe. Se a instancia existente estiver com outra cena, a ferramenta falha alto em
 vez de capturar silenciosamente o viewport errado.
+
+### Matriz de politica e scrolling do DDGI
+
+Para uma matriz controlada, use `smile_profile_configure` como baseline, altere apenas o eixo do
+caso com `smile_gi_configure` e confirme o resultado em `smile_gi_status` antes de capturar. O
+status publica os valores `requested` e `effective` separadamente; uma degradacao para DDGI,
+Black ou Off fica visivel em vez de ser confundida com a selecao pedida.
+
+Para validar scrolling, leia a pose com `smile_camera_get`, avance a posicao em pequenos passos
+absolutos com `smile_camera_set` e espere `frameIndex` avancar em `smile_gi_status`. Compare
+`gridMin` e `scrollCells` de cada cascata entre os passos. A pose e limitada a valores finitos e
+o editor recusa movimento durante captura deterministica. Mudancas de politica GI continuam
+permitidas durante a captura de proposito: esse e o caminho usado para provar que uma troca de
+estimador cancela a sessao e invalida os historicos no frame seguinte.
+
+Para repetir automaticamente a validacao completa na Bistro exterior:
+
+```powershell
+cd D:\Engines\SmileEngine\Tools\SmileMCP
+npm run validate:gi
+```
+
+O harness abre `Assets/Scenes/Bistro/BistroExterior.sscene` se necessario, valida o scrolling de
+duas cascatas, captura a matriz de cinco politicas com o preset cientifico em `N=128`, prova o
+cancelamento por mutacao concorrente e audita o log persistente. O resultado canonico e um JSON
+em `build/bin/Release/Captures/Validation/`, junto dos caminhos dos PNGs e manifestos usados.
+
+Para medir o custo vivo, incluindo o ciclo `1 -> 2 -> 1 -> 2`, scrolling sem camera cuts e a
+matriz de politica:
+
+```powershell
+npm run benchmark:gi
+```
+
+Cada braco usa `gameplay_rr`, 15 s de aquecimento e 60 snapshots. O profile desliga o throttle
+de segundo plano, exige o log do mesmo PID e grava o JSON em
+`build/bin/Release/Captures/Benchmarks/`. Se somente a publicacao final falhar depois das nove
+medidas, `npm run benchmark:gi -- --resume <relatorio-parcial.json>` retoma sem repetir a GPU.
+
+Para isolar o toggle de raios adaptativos com duas cascatas e politica DDGI fixa:
+
+```powershell
+npm run benchmark:gi:adaptive
+```
+
+O harness repete `OFF -> ON -> OFF -> ON` com camera parada e depois em movimento continuo.
+Cada braco confirma pelo MCP o toggle efetivo e os limites 16-64; a distribuicao por sonda
+permanece GPU-only para o benchmark nao introduzir readback e stall nos timestamps.
+
+Para decidir o default por imagem, `npm run validate:gi:adaptive-visual` captura dois pares
+alternados `full64/adaptive` no preset cientifico `N=128`. Os manifestos registram a contagem de
+cascatas, o toggle e os limites de raios, de modo que cada PNG permanece autoexplicativo fora do
+relatorio do harness.
+
+O gate canônico de 19/08/2026 aprovou o candidato 16-64 (57,91 dB, SSIM 0,99953 contra full-64)
+e `AdaptiveRays` passou a ser ON por default; OFF continua disponível como controle full-64.
 
 ## Requisitos
 
@@ -84,7 +151,8 @@ mensagens JSON para expor estado vivo sem incorporar o SDK MCP ao C++:
 Codex <-> SmileMCP (STDIO) <-> bridge local <-> SmileEditor/Renderer
 ```
 
-Os comandos vivos atuais cobrem status, captura, configuracao/snapshot de profiling e shutdown.
+Os comandos vivos atuais cobrem status, camera, GI/DDGI, captura, configuracao/snapshot de
+profiling e shutdown.
 `McpBridge` fica restrito a validar e traduzir o protocolo; acesso sincronizado ao renderer,
 aplicacao dos presets e snapshots tipados moram no `RenderSettingsController`. O mesmo controlador
 notifica os bridges QML depois de uma mutacao externa, evitando que a engine mude pela pipe e a UI

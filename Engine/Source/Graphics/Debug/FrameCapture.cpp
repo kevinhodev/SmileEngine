@@ -535,6 +535,14 @@ namespace Smile {
                 File << "  \"taa\": " << Bool(_State.UseTAA) << ",\n";
                 File << "  \"useGI\": "        << Bool(_State.UseGI)       << ",\n";
                 File << "  \"ddgiReady\": "    << Bool(_State.DDGIReady)   << ",\n";
+                File << "  \"ddgiCascadeCount\": " << _State.DDGICascadeCount << ",\n";
+                File << "  \"ddgiRaysPerProbe\": " << _State.DDGIRaysPerProbe << ",\n";
+                File << "  \"ddgiAdaptiveRays\": "
+                     << Bool(_State.DDGIAdaptiveRays) << ",\n";
+                File << "  \"ddgiAdaptiveMinRays\": "
+                     << _State.DDGIAdaptiveMinRays << ",\n";
+                File << "  \"ddgiAdaptiveMaxRays\": "
+                     << _State.DDGIAdaptiveMaxRays << ",\n";
                 File << "  \"restirGI\": "     << Bool(_State.ReSTIRGI)    << ",\n";
                 File << "  \"restirDI\": "     << Bool(_State.ReSTIRDI)    << ",\n";
                 // `regir` continua sendo o EFETIVO — os manifestos ja capturados da serie usam

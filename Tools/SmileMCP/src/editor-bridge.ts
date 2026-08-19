@@ -81,7 +81,57 @@ export interface ProfileConfiguration {
   preset: "gameplay_rr" | "controlled_native";
   bookmarkSlot: number;
   timeOfDayHours: number;
+  backgroundThrottle: boolean;
   // Readback posterior ao apply, nao eco dos argumentos: inclui pedido/efetivo da politica GI.
+  settings: Record<string, unknown>;
+}
+
+export type IndirectPrimary = "restir_sharc" | "ddgi" | "off";
+export type IndirectFallback = "ddgi" | "environment" | "black";
+
+export interface CameraPose {
+  position: { x: number; y: number; z: number };
+  pitchDegrees: number;
+  yawDegrees: number;
+}
+
+export interface GIConfigureOverrides {
+  ddgiEnabled?: boolean;
+  indirectPrimary?: IndirectPrimary;
+  indirectFallback?: IndirectFallback;
+  cascadeCount?: number;
+  adaptiveRays?: boolean;
+  adaptiveHysteresis?: boolean;
+}
+
+export interface GICascadeStatus {
+  index: number;
+  gridMin: { x: number; y: number; z: number };
+  spacing: number;
+  scrollCells: { x: number; y: number; z: number };
+}
+
+export interface GIStatus {
+  frameIndex: number;
+  policy: {
+    primary: { requested: IndirectPrimary; effective: IndirectPrimary };
+    fallback: { requested: IndirectFallback; effective: IndirectFallback };
+  };
+  ddgi: {
+    enabled: boolean;
+    initialized: boolean;
+    desiredCascadeCount: number;
+    actualCascadeCount: number;
+    gridCount: { x: number; y: number; z: number };
+    probesPerCascade: number;
+    totalProbes: number;
+    raysPerProbe: number;
+    adaptiveMinRays: number;
+    adaptiveMaxRays: number;
+    adaptiveRays: boolean;
+    adaptiveHysteresis: boolean;
+    cascades: GICascadeStatus[];
+  };
   settings: Record<string, unknown>;
 }
 
@@ -95,6 +145,7 @@ export interface ProfileOverrides {
   meshLightsInPool?: boolean;
   diInitialVisibility?: boolean;
   meshCompactSupport?: boolean;
+  backgroundThrottle?: boolean;
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -251,6 +302,7 @@ export class SmileEditorBridge {
       configuration.preset !== preset ||
       typeof configuration.bookmarkSlot !== "number" ||
       typeof configuration.timeOfDayHours !== "number" ||
+      typeof configuration.backgroundThrottle !== "boolean" ||
       !configuration.settings ||
       typeof configuration.settings !== "object" ||
       Array.isArray(configuration.settings)
@@ -270,6 +322,39 @@ export class SmileEditorBridge {
       throw new Error("Snapshot de perfil sem timestamps de GPU.");
     }
     return snapshot as ProfileSnapshot;
+  }
+
+  async cameraPose(timeoutMs = 2_000): Promise<CameraPose> {
+    const result = await this.request("camera_get", {}, timeoutMs);
+    return this.validateCameraPose(result);
+  }
+
+  async setCameraPose(
+    pose: {
+      x: number;
+      y: number;
+      z: number;
+      pitchDegrees: number;
+      yawDegrees: number;
+      cameraCut?: boolean;
+    },
+    timeoutMs = 5_000,
+  ): Promise<CameraPose> {
+    const result = await this.request("camera_set", pose, timeoutMs);
+    return this.validateCameraPose(result);
+  }
+
+  async giStatus(timeoutMs = 2_000): Promise<GIStatus> {
+    const result = await this.request("gi_status", {}, timeoutMs);
+    return this.validateGIStatus(result);
+  }
+
+  async configureGI(
+    overrides: GIConfigureOverrides,
+    timeoutMs = 30_000,
+  ): Promise<GIStatus> {
+    const result = await this.request("gi_configure", { ...overrides }, timeoutMs);
+    return this.validateGIStatus(result);
   }
 
   async shutdown(timeoutSeconds: number): Promise<Record<string, unknown>> {
@@ -372,6 +457,44 @@ export class SmileEditorBridge {
       throw new Error(`SmileEditor retornou um arquivo que nao e ${extension}.`);
     }
     return resolved;
+  }
+
+  private validateCameraPose(result: unknown): CameraPose {
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("Pose de camera invalida retornada pelo editor.");
+    }
+    const pose = result as Partial<CameraPose>;
+    const position = pose.position;
+    if (
+      !position ||
+      typeof position.x !== "number" ||
+      typeof position.y !== "number" ||
+      typeof position.z !== "number" ||
+      typeof pose.pitchDegrees !== "number" ||
+      typeof pose.yawDegrees !== "number"
+    ) {
+      throw new Error("Pose de camera sem posicao ou orientacao numerica.");
+    }
+    return pose as CameraPose;
+  }
+
+  private validateGIStatus(result: unknown): GIStatus {
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("Estado de GI invalido retornado pelo editor.");
+    }
+    const status = result as Partial<GIStatus>;
+    if (
+      typeof status.frameIndex !== "number" ||
+      !status.policy ||
+      !status.ddgi ||
+      !Array.isArray(status.ddgi.cascades) ||
+      !status.settings ||
+      typeof status.settings !== "object" ||
+      Array.isArray(status.settings)
+    ) {
+      throw new Error("Estado de GI sem politica, DDGI ou readback obrigatorio.");
+    }
+    return status as GIStatus;
   }
 
   private samePath(left: string, right: string): boolean {

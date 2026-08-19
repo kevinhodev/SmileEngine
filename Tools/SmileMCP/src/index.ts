@@ -8,12 +8,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   SmileEditorBridge,
+  type GIConfigureOverrides,
   type ProfileOverrides,
   type ProfileSnapshot,
 } from "./editor-bridge.js";
 import { SmileProject, discoverSmileRoot } from "./smile-project.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const project = new SmileProject(discoverSmileRoot());
 const editorBridge = new SmileEditorBridge(project.root);
 
@@ -26,7 +27,9 @@ const server = new McpServer(
       "mudancas somente em HLSL e SmileEditor quando interfaces C++/HLSL tambem mudarem. " +
       "Use smile_cook_scene para regenerar os cozidos e smile_run_editor com scenePath para " +
       "aguardar a cena ficar pronta antes de smile_capture_frame. Para benchmarks, configure " +
-      "um regime deterministico com smile_profile_configure antes de smile_profile_gpu.",
+      "um regime deterministico com smile_profile_configure antes de smile_profile_gpu. Use " +
+      "smile_gi_configure/smile_gi_status para matrizes da politica indireta e " +
+      "smile_camera_get/smile_camera_set para percursos reproduziveis de DDGI.",
   },
 );
 
@@ -428,6 +431,130 @@ server.registerTool(
 );
 
 server.registerTool(
+  "smile_camera_get",
+  {
+    title: "Read Smile camera pose",
+    description:
+      "Le a posicao e a orientacao efetivas da camera do viewport para percursos reproduziveis.",
+    inputSchema: {
+      timeoutSeconds: z.number().min(0.1).max(10).default(2),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      return jsonResult(await editorBridge.cameraPose(Math.round(input.timeoutSeconds * 1000)));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_camera_set",
+  {
+    title: "Set Smile camera pose",
+    description:
+      "Define uma pose absoluta da camera e retorna o readback efetivo. cameraCut=true preserva o teleporte historico; false produz movimento continuo para benchmark. O editor recusa a mudanca durante captura deterministica.",
+    inputSchema: {
+      x: z.number().min(-1_000_000).max(1_000_000),
+      y: z.number().min(-1_000_000).max(1_000_000),
+      z: z.number().min(-1_000_000).max(1_000_000),
+      pitchDegrees: z.number().min(-89.9).max(89.9),
+      yawDegrees: z.number().min(-36_000).max(36_000),
+      cameraCut: z
+        .boolean()
+        .default(true)
+        .describe("true invalida historicos como teleporte; false preserva continuidade temporal."),
+      timeoutSeconds: z.number().min(0.1).max(30).default(5),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const { timeoutSeconds, ...pose } = input;
+      return jsonResult(
+        await editorBridge.setCameraPose(pose, Math.round(timeoutSeconds * 1000)),
+      );
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_gi_status",
+  {
+    title: "Read Smile GI state",
+    description:
+      "Le politica indireta pedida/efetiva e estado vivo do DDGI: cascatas desejadas/reais, grade, sondas, espacamento e scroll em celulas.",
+    inputSchema: {
+      timeoutSeconds: z.number().min(0.1).max(10).default(2),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      return jsonResult(await editorBridge.giStatus(Math.round(input.timeoutSeconds * 1000)));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_gi_configure",
+  {
+    title: "Configure Smile GI",
+    description:
+      "Muda somente os eixos de GI informados e devolve o estado efetivo. Serve para a matriz primary/fallback, A/B do volume e testes de cascata/scroll; pode mudar politica durante uma captura para validar o cancelamento no frame seguinte.",
+    inputSchema: {
+      ddgiEnabled: z.boolean().nullish(),
+      indirectPrimary: z.enum(["restir_sharc", "ddgi", "off"]).nullish(),
+      indirectFallback: z.enum(["ddgi", "environment", "black"]).nullish(),
+      cascadeCount: z.number().int().min(1).max(4).nullish(),
+      adaptiveRays: z.boolean().nullish(),
+      adaptiveHysteresis: z.boolean().nullish(),
+      timeoutSeconds: z.number().min(1).max(120).default(30),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const { timeoutSeconds, ...rest } = input;
+      const overrides = Object.fromEntries(
+        Object.entries(rest).filter(([, value]) => value !== null && value !== undefined),
+      ) as GIConfigureOverrides;
+      return jsonResult(
+        await editorBridge.configureGI(overrides, Math.round(timeoutSeconds * 1000)),
+      );
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
   "smile_profile_configure",
   {
     title: "Configure Smile profiling regime",
@@ -442,6 +569,12 @@ server.registerTool(
         .lt(24)
         .nullish()
         .describe("Hora fixa do teste em [0, 24); ausente ou null usa o default historico de 10:00."),
+      backgroundThrottle: z
+        .boolean()
+        .default(false)
+        .describe(
+          "false mantem o viewport em pacing integral sem foco; true restaura o limite interativo de ~10 FPS em segundo plano.",
+        ),
       // Matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Sem `.default()` de proposito: o editor le
       // ausencia como "preserve o valor corrente", e um default aqui reescreveria a cada chamada
       // o eixo que nao esta em teste. Aplicados DEPOIS do preset.

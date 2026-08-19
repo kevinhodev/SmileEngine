@@ -540,7 +540,7 @@ O que não depende disso: o ×1,95 do update, o gather de graça e os +9,5 MB.
 
 ### Fase 6.2b‑ii — a cascata fina segue a câmera (scrolling toroidal)
 
-Implementada, Debug e Release verdes, **nunca executada**. A fina passou a ser ancorada na
+Implementada, Debug e Release verdes, e **executada na Bistro em 18–19/08/2026**. A fina passou a ser ancorada na
 câmera em vez do centro da cena, e é isso que torna o scrolling obrigatório: com o snap ao
 espaçamento, a origem muda a cada 2 m andados, e sem scrolling todo o conteúdo guardado
 passaria a representar outro ponto do mundo de uma vez.
@@ -657,7 +657,90 @@ Daí os dois predicados separados no CPU: `ScrollDebut` (há lâmina nova neste 
 `ScrollFollowUpPending` também entrou no reset do `SetupForScene`, junto das janelas regionais:
 um follow-up pendente descreve uma lâmina de um volume que não existe mais.
 
-**O que falta:** rodar. Roteiro no fim de "O que falta".
+#### Primeira validação viva e custo (18–19/08/2026)
+
+O harness MCP fixou Bistro exterior, câmera e 10:00, desativou instrumentação, confirmou duas
+cascatas reais (`23×8×24`, 4.416 sondas cada) e moveu a câmera em passos absolutos. O percurso
+de 6 m cruzou três células finas; em todas, `ΔgridMin/spacing` foi inteiro e exatamente igual ao
+delta modular de `scrollCells`. A caminhada de desempenho percorreu 15 m sem camera cuts,
+cruzou oito células finas e repetiu a mesma igualdade. A grossa não cruzou célula nesses
+percursos, como esperado pelo espaçamento de 8,018 m e pela fase inicial da grade.
+
+**Régua de custo:** Release, RTX 3060 Ti, 1573×804, `gameplay_rr`, 15 s de aquecimento + 60
+amostras por braço, timestamps brutos, ciclo `1→2→1→2`, throttle de segundo plano desligado.
+
+- uma cascata: frame mediano **23,87 ms**, p95 **24,78 ms**, DDGI async **2,80 ms**;
+- duas cascatas: frame mediano **25,30 ms**, p95 **26,36 ms**, DDGI async **6,49 ms**;
+- custo da segunda: **+1,43 ms / +5,99%** no frame mediano e **+1,58 ms / +6,40%** no p95;
+- o compute cresceu **+3,69 ms**, mas parte continuou escondida; o wait mediano saiu do piso
+  (**0,02 → 0,49 ms**), portanto duas cascatas já excedem parcialmente a janela de overlap;
+- duas cascatas andando: **24,28 ms** mediano e **25,73 ms** p95. O DDGI async mediano ficou
+  praticamente igual (**6,45 ms**); o p95 subiu 0,25 ms e o wait p95 0,56 ms. Não apareceu
+  regressão sustentada de frame causada pelo scrolling, embora a cauda do wait registre as
+  lâminas novas;
+- o delta de `QueryVideoMemoryInfo` entre uma e duas cascatas foi só 0,56 MiB e não serve para
+  atribuir residência: o allocator preserva heaps comprometidos entre os braços. VRAM por
+  recurso precisa de instrumento próprio se virar gate.
+
+A matriz de política, na mesma sessão, mediu `all_off` 22,18 ms, volume DDGI com superfície Off
+24,53 ms, DDGI primário 25,30 ms, SHaRC+Black 28,59 ms e SHaRC+DDGI 29,48 ms. O relatório
+canônico é `build/bin/Release/Captures/Benchmarks/gi-cascades-2026-08-19T03-14-37-425Z.json`.
+O log persistente do mesmo PID não contém erro D3D12/DXGI, device removal nem erro de validação.
+
+**Ainda falta para fechar toda a 6.2b‑ii:** diagonal, movimento vertical, teleporte maior que a
+grade, objeto cruzando a borda da fina e uma execução explicitamente com o debug layer ligado.
+O caminho axial lento e o custo parado/em movimento estão aprovados.
+
+#### A/B dos raios adaptativos (19/08/2026)
+
+Concluído no mesmo Bistro, GPU, resolução e regime da régua acima, agora mantendo **duas
+cascatas e política DDGI fixa**. Foram dois ciclos independentes `OFF→ON→OFF→ON`: câmera parada
+e caminhada contínua de 15 m. Cada braço confirmou pelo MCP o toggle efetivo, `MinRays=16`,
+`MaxRays=64`, duas cascatas reais e oito células finas cruzadas nos percursos. A distribuição
+efetiva por sonda continua GPU-only de propósito: fazer readback no meio da régua introduziria o
+stall que o teste quer medir.
+
+- parado, o DDGI async caiu de **6,318 para 6,087 ms**: **−0,231 ms / −3,65%**. O wait mediano
+  caiu de 0,413 para 0,234 ms;
+- no frame parado, a média foi só **24,473 → 24,420 ms**: **−0,052 ms / −0,21%**. O p95 ficou
+  essencialmente empatado (25,174 → 25,195 ms), e os pares individuais deram −0,137 ms e
+  +0,241 ms de economia: portanto **não há ganho de frame robusto com câmera parada**;
+- andando, o DDGI async caiu de **6,530 para 6,190 ms**: **−0,340 ms / −5,21%**;
+- no frame andando, os dois pares favoreceram o toggle: **24,032 → 23,650 ms** na mediana
+  (**−0,383 ms / −1,59%**) e **25,731 → 25,006 ms** no p95
+  (**−0,725 ms / −2,82%**). O wait mediano caiu 0,155 ms (−20,37%).
+
+Conclusão: o toggle **faz trabalho real e reduz compute/contenção**, com retorno mais claro
+durante scrolling, mas não devolve sozinho o custo da segunda cascata e não merece ser vendido
+como ganho universal de frame. Continua sendo a alavanca de menor risco.
+
+O gate visual veio em seguida: dois pares alternados full-64/adaptive, `scientific N=128`,
+resolução nativa, sem TAA/upscaler, mesma pose/hora/política. O manifesto passou a registrar
+`ddgiCascadeCount`, o toggle e os limites 16–64 para cada PNG ser auditável sem o relatório MCP.
+
+- média dos dois full-64 contra média dos dois adaptive: **57,91 dB**, SSIM de luminância
+  **0,99953**, erro absoluto médio **0,050 nível de 8 bits por canal**;
+- viés médio de luminância: **−0,0065 / 255** — sem perda sistemática de energia;
+- só **0,064%** dos pixels passaram de 5 níveis por canal na média dos pares e **0,011%**
+  passaram de 10;
+- a repetição adaptive entre si variou **mais** (52,46 dB) que a diferença média contra full-64.
+  O mapa ampliado 8× repetiu o mesmo resíduo temporal em folhagem, luminárias e detalhes finos,
+  sem faixa de cascata, vazamento, escurecimento coerente ou região nova atribuível ao toggle.
+
+**Decisão: raios adaptativos 16–64 ficam ON por default.** O controle OFF permanece full-64
+bit-idêntico para diagnóstico. Esta decisão é para o regime medido da Bistro; cenas de produção
+novas ainda entram na regressão visual normal, não ganham uma promessa universal por decreto.
+
+Relatório canônico:
+`build/bin/Release/Captures/Benchmarks/gi-adaptive-rays-2026-08-19T03-27-42-901Z.json`.
+O log persistente do editor PID 21124 passou sem erro D3D12/DXGI, device removal ou erro de
+validação.
+
+Par visual canônico:
+`build/bin/Release/Captures/Validation/gi-adaptive-visual-2026-08-19T03-34-56-762Z.json`;
+métricas e mapas:
+`build/bin/Release/Captures/Validation/gi-adaptive-visual-2026-08-19T03-34-56-762Z-analysis/`.
+O log do PID 22072 também passou limpo.
 
 ## Gate de medição
 
@@ -945,20 +1028,21 @@ item barato e não bloqueante:
   número definitivo. Hoje ele carrega o confounder do Z‑prepass (ver a tabela). Muda a
   atribuição do custo, não o fato dele.
 
-**A 6.2b‑ii está IMPLEMENTADA e nunca rodou** (ver a seção dela). O que ela pede, em ordem:
+**A 6.2b‑ii já rodou no eixo X e teve o custo medido** (ver a seção dela). O gate axial passou;
+resta completar, em ordem:
 
 1. **Smoke com o debug layer ligado.** A mudança de estado do `ProbeData` para `NON_PIXEL` na
    fila direta é a linha mais arriscada da fase, e é a única cujo erro o compilador não pega —
    o debug layer pega, e na hora.
-2. **Caminhada lenta cruzando células**, que é o teste que o scrolling existe para passar. O
+2. ✅ **Caminhada lenta cruzando células** — passou em 18–19/08/2026. O
    sintoma de scroll errado é um erro de UMA lâmina: invisível parado, rastro atrás da câmera
    em movimento.
 3. **Diagonal** (as três lâminas de uma vez) e **movimento vertical** (o eixo Y tem `count`
    menor, então a lâmina é proporcionalmente maior).
 4. **Teleporte** maior que a grade: tem de reconvergir sem flash, pelo caminho geral.
 5. **Objeto atravessando a borda da fina**, que cruza scrolling com invalidação regional.
-6. **Custo, de novo**: o A/B da 6.2b‑i foi com a fina PARADA. Andando, a relocação passa a
-   rodar a cada célula cruzada — barata agora que é async, mas nunca medida.
+6. ✅ **Custo, de novo** — medido parado no ciclo `1→2→1→2` e andando por 15 m. A segunda
+   cascata custou +1,43 ms de frame; o scrolling não adicionou regressão sustentada.
 
 **Depois disso**, a ordem acordada continua: A/B dos raios adaptativos, compactação das
 inativas, e o update escalonado por último.
@@ -1011,16 +1095,18 @@ o quê e quando, então otimizar antes seria calibrar sobre um alvo que se move.
 
 1. commitar a 6.2b‑i com os fixes da revisão;
 2. **6.2b‑ii** — a fina móvel, com scrolling toroidal, validada;
-3. A/B dos **raios adaptativos**;
+3. A/B dos **raios adaptativos** — concluído em 19/08/2026; ganho de compute confirmado,
+   principalmente em movimento, par visual aprovado e default ON;
 4. **compactar só as sondas que a Smile JÁ classifica como inativas** (ver a ressalva
    abaixo — é menos do que "sonda que não precisa de raio");
 5. avaliar **separadamente** uma política "longe de geometria";
 6. **update escalonado**, já com estado temporal por cascata e medição de frame pacing.
 
-1. **Raios adaptativos** — já implementado (fase 4), nunca A/B'd, e é um toggle. Corta raios
+1. **Raios adaptativos** — já implementado (fase 4) e A/B'd em 19/08/2026. Corta raios
    por sonda onde não há geometria perto, o que reduz compute **e contenção** em TODO frame,
    suavemente, sem tocar em estado nenhum. Era "devolve tempo, que é o que já sobra"; com o
-   orçamento medido em frame, virou a primeira coisa a tentar. Custo de implementação: zero.
+   orçamento medido em frame, virou a primeira coisa a tentar. O par científico aprovou 16–64
+   e o recurso ficou **ON por default**. Custo de implementação: zero.
 2. **Sondas inativas ainda traçam** (a Flax compacta e usa dispatch indireto). Não custa
    variância nenhuma — a sonda inativa não contribui para o gather de todo jeito.
 

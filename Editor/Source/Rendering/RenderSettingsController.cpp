@@ -4,6 +4,8 @@
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
 
+#include <cmath>
+
 namespace SmileEditor {
     namespace {
         QVector<FProfileTimingSnapshot> CopyTimings(
@@ -47,6 +49,9 @@ namespace SmileEditor {
         Out.ReSTIRDI                  = Settings.GetUseReSTIRDI();
         Out.RadianceCache             = Settings.GetRadianceCacheEnabled();
         Out.CacheQuery                = Settings.GetRadianceCacheQuery();
+        Out.CacheStats                = Settings.GetRadianceCacheStatsEnabled();
+        Out.CacheStatsDetail          = Settings.GetRadianceCacheStatsDetailEnabled();
+        Out.CacheStatsSource          = Settings.GetRadianceCacheStatsSourceEnabled();
         Out.Reflections               = Settings.GetUseReflections();
         Out.GTAO                      = Settings.GetUseAO();
         Out.IndirectPrimaryRequested  = static_cast<int>(Settings.GetIndirectPrimary());
@@ -64,6 +69,57 @@ namespace SmileEditor {
         Out.DIMeshLightsInPool        = Settings.GetDIMeshLightsInPool();
         Out.DIInitialVisibility       = Settings.GetDIInitialVisibility();
         Out.DIMeshCompactSupport      = Settings.GetDIMeshCompactSupport();
+        return Out;
+    }
+
+    FCameraPoseSnapshot RenderSettingsController::CollectCamera(
+        const Smile::Renderer& _Renderer) {
+        const auto Position = _Renderer.GetCameraPos();
+        return FCameraPoseSnapshot{
+            Position.X,
+            Position.Y,
+            Position.Z,
+            _Renderer.GetPitch(),
+            _Renderer.GetYaw(),
+        };
+    }
+
+    FGIStatusSnapshot RenderSettingsController::CollectGIStatus(
+        const Smile::Renderer& _Renderer) {
+        const auto& Settings = _Renderer.Settings();
+        const auto& DDGI = _Renderer.GetDDGI();
+        const auto GridCount = DDGI.GridCount();
+
+        FGIStatusSnapshot Out;
+        Out.FrameIndex             = _Renderer.GetFrameIndex();
+        Out.Settings               = CollectSettings(_Renderer);
+        Out.DDGIInitialized        = DDGI.IsInitialized();
+        Out.DesiredCascadeCount    = static_cast<int>(Settings.GetGICascadeCount());
+        Out.ActualCascadeCount     = static_cast<int>(DDGI.CascadeCount());
+        Out.GridCountX             = static_cast<int>(GridCount.X);
+        Out.GridCountY             = static_cast<int>(GridCount.Y);
+        Out.GridCountZ             = static_cast<int>(GridCount.Z);
+        Out.ProbesPerCascade       = static_cast<int>(DDGI.ProbesPerCascade());
+        Out.TotalProbes            = static_cast<int>(DDGI.NumProbesCount());
+        Out.RaysPerProbe           = static_cast<int>(DDGI.RaysPerProbe());
+        Out.AdaptiveMinRays        = DDGI.GetMinRays();
+        Out.AdaptiveMaxRays        = DDGI.GetMaxRays();
+        Out.AdaptiveRays           = DDGI.GetAdaptiveRays();
+        Out.AdaptiveHysteresis     = DDGI.GetAdaptiveHysteresis();
+        Out.Cascades.reserve(Out.ActualCascadeCount);
+        for (int Index = 0; Index < Out.ActualCascadeCount; ++Index) {
+            const auto GridMin = DDGI.CascadeGridMin(static_cast<Smile::u32>(Index));
+            Out.Cascades.append(FDDGICascadeSnapshot{
+                Index,
+                GridMin.X,
+                GridMin.Y,
+                GridMin.Z,
+                DDGI.CascadeSpacing(static_cast<Smile::u32>(Index)),
+                DDGI.CascadeScroll(static_cast<Smile::u32>(Index), 0),
+                DDGI.CascadeScroll(static_cast<Smile::u32>(Index), 1),
+                DDGI.CascadeScroll(static_cast<Smile::u32>(Index), 2),
+            });
+        }
         return Out;
     }
 
@@ -88,6 +144,12 @@ namespace SmileEditor {
             // McpBridge; os setters continuam sendo os donos de invalidacao e realocacao.
             auto& Settings = Access->Settings();
             Settings.SetRadianceCacheAutoWarmup(false);
+            // Instrumentacao altera custo e, no modo detalhado, o trabalho executado. Um preset
+            // de benchmark precisa desligar os tres eixos explicitamente, nao depender do estado
+            // deixado pela UI ou por uma rodada anterior.
+            Settings.SetRadianceCacheStatsEnabled(false);
+            Settings.SetRadianceCacheStatsDetailEnabled(false);
+            Settings.SetRadianceCacheStatsSourceEnabled(false);
             Settings.SetUseGI(true);
             Settings.SetRadianceCacheEnabled(true);
             Settings.SetRadianceCacheQuery(true);
@@ -131,6 +193,8 @@ namespace SmileEditor {
             Tod.TimeHours = static_cast<float>(_Overrides.TimeOfDayHours.value_or(10.0));
 
             Result.TimeOfDayHours = Tod.TimeHours;
+            Result.BackgroundThrottleEnabled =
+                _Overrides.BackgroundThrottleEnabled.value_or(false);
             // Readback no mesmo lock: a resposta descreve exatamente o estado deixado pelo
             // preset, inclusive degradacoes por capacidade.
             Result.Settings = CollectSettings(*Access);
@@ -138,7 +202,10 @@ namespace SmileEditor {
 
         // SetDenoiser/SetUpscaler podem reconstruir a lista de alvos. A lista do viewport e
         // cacheada e deve ser relida depois que o lock foi solto.
-        if (Viewport) Viewport->NotifyRendererResourcesChanged();
+        if (Viewport) {
+            Viewport->SetBackgroundThrottleEnabled(Result.BackgroundThrottleEnabled);
+            Viewport->NotifyRendererResourcesChanged();
+        }
         emit GISettingsChanged();
         emit RenderSettingsChanged();
         emit StatsChanged();
@@ -178,6 +245,114 @@ namespace SmileEditor {
         Result.Vram.LocalBudgetBytes   = VM.LocalBudget;
         Result.Vram.NonLocalUsageBytes = VM.NonLocalUsage;
         Result.Settings = CollectSettings(*Access);
+        return Result;
+    }
+
+    std::optional<FCameraPoseSnapshot> RenderSettingsController::CameraSnapshot(
+        QString& _Error) const {
+        _Error.clear();
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+        auto Access = Renderer.Lock();
+        if (!Access || !Access->IsInitialized()) {
+            _Error = QStringLiteral("renderer ainda nao esta inicializado");
+            return std::nullopt;
+        }
+        return CollectCamera(*Access);
+    }
+
+    std::optional<FCameraPoseSnapshot> RenderSettingsController::SetCameraPose(
+        const FCameraPoseSnapshot& _Pose, bool _CameraCut, QString& _Error) {
+        _Error.clear();
+        const bool Finite = std::isfinite(_Pose.X) && std::isfinite(_Pose.Y) &&
+                            std::isfinite(_Pose.Z) && std::isfinite(_Pose.PitchDeg) &&
+                            std::isfinite(_Pose.YawDeg);
+        if (!Finite || std::abs(_Pose.X) > 1'000'000.0 ||
+            std::abs(_Pose.Y) > 1'000'000.0 || std::abs(_Pose.Z) > 1'000'000.0 ||
+            _Pose.PitchDeg < -89.9 || _Pose.PitchDeg > 89.9 ||
+            std::abs(_Pose.YawDeg) > 36'000.0) {
+            _Error = QStringLiteral("pose de camera fora dos limites do protocolo");
+            return std::nullopt;
+        }
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+
+        auto Access = Renderer.Lock();
+        if (!Access || !Access->IsInitialized()) {
+            _Error = QStringLiteral("renderer ainda nao esta inicializado");
+            return std::nullopt;
+        }
+        // SetCameraPose tambem protege esta invariavel, mas checar aqui permite devolver erro ao
+        // cliente em vez de aceitar um comando que o renderer ignorou silenciosamente.
+        if (Access->CaptureBusy()) {
+            _Error = QStringLiteral("camera travada durante captura deterministica");
+            return std::nullopt;
+        }
+        Access->SetCameraPose(
+            Smile::Vec3{ static_cast<float>(_Pose.X), static_cast<float>(_Pose.Y),
+                         static_cast<float>(_Pose.Z) },
+            static_cast<float>(_Pose.PitchDeg), static_cast<float>(_Pose.YawDeg),
+            _CameraCut);
+        return CollectCamera(*Access);
+    }
+
+    std::optional<FGIStatusSnapshot> RenderSettingsController::GIStatus(QString& _Error) const {
+        _Error.clear();
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+        auto Access = Renderer.Lock();
+        if (!Access || !Access->IsInitialized()) {
+            _Error = QStringLiteral("renderer ainda nao esta inicializado");
+            return std::nullopt;
+        }
+        return CollectGIStatus(*Access);
+    }
+
+    std::optional<FGIStatusSnapshot> RenderSettingsController::ApplyGIOverrides(
+        const FGIOverrides& _Overrides, QString& _Error) {
+        _Error.clear();
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+
+        FGIStatusSnapshot Result;
+        {
+            auto Access = Renderer.Lock();
+            if (!Access || !Access->IsInitialized()) {
+                _Error = QStringLiteral("renderer ainda nao esta inicializado");
+                return std::nullopt;
+            }
+
+            auto& Settings = Access->Settings();
+            if (_Overrides.DDGIEnabled)
+                Settings.SetUseGI(*_Overrides.DDGIEnabled);
+            if (_Overrides.CascadeCount)
+                Settings.SetGICascadeCount(
+                    static_cast<Smile::u32>(*_Overrides.CascadeCount));
+            if (_Overrides.AdaptiveRays)
+                Settings.SetGIAdaptiveRays(*_Overrides.AdaptiveRays);
+            if (_Overrides.AdaptiveHysteresis)
+                Settings.SetGIAdaptiveHysteresis(*_Overrides.AdaptiveHysteresis);
+            if (_Overrides.IndirectPrimary)
+                Settings.SetIndirectPrimary(*_Overrides.IndirectPrimary);
+            if (_Overrides.IndirectFallback)
+                Settings.SetIndirectFallback(*_Overrides.IndirectFallback);
+
+            // Readback no mesmo lock. Desired/actual separados denunciam uma realocacao que nao
+            // materializou, e requested/effective denunciam degradacao da politica.
+            Result = CollectGIStatus(*Access);
+        }
+
+        emit GISettingsChanged();
+        emit RenderSettingsChanged();
+        emit StatsChanged();
         return Result;
     }
 }

@@ -82,6 +82,9 @@ namespace SmileEditor {
         void              BeginInteractiveResize();
         void              EndInteractiveResize();
         void              NotifyRendererResourcesChanged() { emit RendererResourcesChanged(); }
+        // Benchmarks MCP precisam manter o mesmo pacing mesmo quando o Codex recebe o foco.
+        // O comportamento interativo continua throttled por default.
+        void              SetBackgroundThrottleEnabled(bool Enabled);
         QString           GetViewModeLabel() const;
 
         Q_INVOKABLE void SetGizmoMode(int mode);
@@ -157,6 +160,7 @@ namespace SmileEditor {
         bool          RendererShutdownRequested = false;
         bool          RendererStoppedFlag = false;
         bool          InteractiveResize = false;
+        bool          BackgroundThrottleEnabled = true;
         QSize         PendingResizeSize;
         QSize         AppliedResizeSize;
 

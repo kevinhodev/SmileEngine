@@ -75,15 +75,18 @@ namespace Smile {
         SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
     }
 
-    void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg) {
+    void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg,
+                                 bool _NotifyCameraCut) {
         // A pose permanece imutavel durante o aquecimento de uma captura deterministica.
         if (CaptureState->Session.Busy()) {
             LogWarning("Camera travada: ha uma captura deterministica em andamento");
             return;
         }
         SceneState->Camera.SetPose(_Pos, _PitchDeg, _YawDeg);
-        // Nao existe vetor de movimento valido entre poses descontínuas.
-        Settings().NotifyCameraCut();
+        // Nao existe vetor de movimento valido entre poses descontínuas. Em um percurso continuo
+        // automatizado, entretanto, a camera anterior e a nova formam justamente o motion vector
+        // que queremos medir; o chamador declara qual dos dois contratos esta usando.
+        if (_NotifyCameraCut) Settings().NotifyCameraCut();
     }
 
     void Renderer::SetSelectedObject(int _Index) {
