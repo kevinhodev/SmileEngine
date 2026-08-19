@@ -1,6 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title description">
   <title id="title">Fluxo de ray tracing da SmileEngine</title>
-  <desc id="description">Diagrama técnico em quatro camadas: cena e estruturas de aceleração, dados compartilhados na GPU, passes inline ray tracing e reconstrução da imagem.</desc>
+  <desc id="description">Diagrama t&#233;cnico em quatro camadas: cena e estruturas de acelera&#231;&#227;o, dados compartilhados na GPU, passes inline ray tracing e reconstru&#231;&#227;o da imagem.</desc>
 
   <defs>
     <marker id="arrow-primary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
@@ -129,48 +130,47 @@
   <rect width="1600" height="1040" fill="#f7f9fc"/>
   <rect x="0" y="0" width="8" height="116" fill="#2563eb"/>
 
-  <g aria-label="Cabeçalho">
+  <g aria-label="Cabecalho">
     <text x="56" y="34" class="kicker">SMILEENGINE / RENDERER</text>
     <text x="56" y="70" class="title">Fluxo de Ray Tracing</text>
-    <text x="56" y="96" class="subtitle">Dados persistentes, passes inline DXR e reconstrução da imagem</text>
-    <text x="1544" y="48" text-anchor="end" class="meta">DirectX 12 · DXR 1.1 · inline RayQuery</text>
-    <text x="1544" y="72" text-anchor="end" class="meta">Shader Model 6.6 · 2 frames in flight</text>
+    <text x="56" y="96" class="subtitle">Dados persistentes, passes inline DXR e reconstru&#231;&#227;o da imagem</text>
+    <text x="1544" y="48" text-anchor="end" class="meta">DirectX 12 &#183; DXR 1.1 &#183; inline RayQuery</text>
+    <text x="1544" y="72" text-anchor="end" class="meta">Shader Model 6.6 &#183; 2 frames in flight</text>
     <line x1="40" y1="116" x2="1560" y2="116" stroke="#cbd5e1"/>
   </g>
 
-  <!-- 01 / Cena e acceleration structures -->
-  <g id="scene" aria-label="Cena e estruturas de aceleração">
+  <g id="scene" aria-label="Cena e estruturas de aceleracao">
     <rect x="40" y="140" width="1520" height="170" rx="8" class="lane"/>
     <line x1="205" y1="140" x2="205" y2="310" class="lane-rule"/>
 
     <text x="64" y="172" class="lane-number">01</text>
     <text x="64" y="198" class="lane-title">CENA E AS</text>
-    <text x="64" y="220" class="lane-subtitle">CPU ’ GPU</text>
+    <text x="64" y="220" class="lane-subtitle">CPU &#8594; GPU</text>
 
     <rect x="230" y="180" width="200" height="92" rx="6" class="card"/>
     <text x="248" y="207" class="card-title">FScene</text>
     <text x="248" y="231" class="body">Meshes, materiais e luzes</text>
-    <text x="248" y="251" class="small">Transformações e flags RT</text>
+    <text x="248" y="251" class="small">Transforma&#231;&#245;es e flags RT</text>
 
     <rect x="480" y="180" width="230" height="92" rx="6" class="card-blue"/>
     <text x="498" y="207" class="card-title">FRaytracingScene</text>
     <text x="498" y="231" class="body">Build por cena</text>
-    <text x="498" y="251" class="small">Atualização leve por frame</text>
+    <text x="498" y="251" class="small">Atualiza&#231;&#227;o leve por frame</text>
 
     <rect x="770" y="180" width="170" height="92" rx="6" class="card"/>
     <text x="788" y="207" class="card-title">BLAS pool</text>
-    <text x="788" y="231" class="body">Malhas únicas</text>
+    <text x="788" y="231" class="body">Malhas &#250;nicas</text>
     <text x="788" y="251" class="mono">compactado</text>
 
     <rect x="990" y="180" width="170" height="92" rx="6" class="card"/>
     <text x="1008" y="207" class="card-title">TLAS</text>
-    <text x="1008" y="231" class="body">Instâncias visíveis</text>
-    <text x="1008" y="251" class="mono">mask · InstanceID</text>
+    <text x="1008" y="231" class="body">Inst&#226;ncias vis&#237;veis</text>
+    <text x="1008" y="251" class="mono">mask &#183; InstanceID</text>
 
     <rect x="1210" y="180" width="310" height="92" rx="6" class="card"/>
     <text x="1228" y="207" class="card-title">InstanceGeo + materiais</text>
     <text x="1228" y="231" class="body">Geometria e shading compartilhados</text>
-    <text x="1228" y="251" class="mono">VB/IB bindless · alpha test</text>
+    <text x="1228" y="251" class="mono">VB/IB bindless &#183; alpha test</text>
 
     <path d="M430 226H476" class="flow"/>
     <path d="M710 226H766" class="flow"/>
@@ -178,43 +178,42 @@
     <path d="M1160 226H1206" class="flow-secondary"/>
   </g>
 
-  <!-- 02 / Recursos compartilhados -->
   <g id="shared-data" aria-label="Dados compartilhados na GPU">
     <rect x="40" y="330" width="1520" height="215" rx="8" class="lane"/>
     <line x1="205" y1="330" x2="205" y2="545" class="lane-rule"/>
 
     <text x="64" y="362" class="lane-number">02</text>
     <text x="64" y="388" class="lane-title">DADOS GPU</text>
-    <text x="64" y="410" class="lane-subtitle">Por frame / históricos</text>
+    <text x="64" y="410" class="lane-subtitle">Por frame / hist&#243;ricos</text>
 
     <rect x="230" y="372" width="220" height="92" rx="6" class="card"/>
     <text x="248" y="399" class="card-title">G-buffer + depth</text>
-    <text x="248" y="423" class="body">Superfície primária raster</text>
-    <text x="248" y="443" class="small">A/B/C · velocity · IDs</text>
+    <text x="248" y="423" class="body">Superf&#237;cie prim&#225;ria raster</text>
+    <text x="248" y="443" class="small">A/B/C &#183; velocity &#183; IDs</text>
 
     <rect x="480" y="372" width="220" height="92" rx="6" class="card-blue"/>
     <text x="498" y="399" class="card-title">Temporal motion</text>
-    <text x="498" y="423" class="body">Vetores duais confiáveis</text>
+    <text x="498" y="423" class="body">Vetores duais confi&#225;veis</text>
     <text x="498" y="443" class="small">Surface history + transforms</text>
 
     <rect x="730" y="372" width="220" height="92" rx="6" class="card"/>
-    <text x="748" y="399" class="card-title">Domínio de luzes</text>
-    <text x="748" y="423" class="body">Analíticas + mesh lights</text>
-    <text x="748" y="443" class="small">ReGIR para hits secundários</text>
+    <text x="748" y="399" class="card-title">Dom&#237;nio de luzes</text>
+    <text x="748" y="423" class="body">Anal&#237;ticas + mesh lights</text>
+    <text x="748" y="443" class="small">ReGIR para hits secund&#225;rios</text>
 
     <rect x="980" y="372" width="220" height="92" rx="6" class="card-teal"/>
     <text x="998" y="399" class="card-title">DDGI</text>
     <text x="998" y="423" class="body">Volume de probes</text>
-    <text x="998" y="443" class="small">Fallback indireto estável</text>
+    <text x="998" y="443" class="small">Fallback indireto est&#225;vel</text>
 
     <rect x="1230" y="372" width="290" height="92" rx="6" class="card-teal"/>
     <text x="1248" y="399" class="card-title">SHaRC / Radiance cache</text>
-    <text x="1248" y="423" class="body">Radiância de mundo em hash</text>
-    <text x="1248" y="443" class="small">Terminador primário de hits elegíveis</text>
+    <text x="1248" y="423" class="body">Radi&#226;ncia de mundo em hash</text>
+    <text x="1248" y="443" class="small">Terminador prim&#225;rio de hits eleg&#237;veis</text>
 
     <rect x="230" y="490" width="1290" height="40" rx="5" class="bus"/>
     <text x="248" y="507" class="tag" fill="#1d4ed8">CONTRATO COMPARTILHADO DOS PASSES RT</text>
-    <text x="248" y="522" class="small">TLAS · geometria bindless · materiais · céu · luzes · superfície primária · motion · caches de GI</text>
+    <text x="248" y="522" class="small">TLAS &#183; geometria bindless &#183; materiais &#183; c&#233;u &#183; luzes &#183; superf&#237;cie prim&#225;ria &#183; motion &#183; caches de GI</text>
 
     <path d="M340 464V486" class="flow-history"/>
     <path d="M590 464V486" class="flow-history"/>
@@ -225,7 +224,6 @@
     <path d="M1075 272V316H280V368" class="flow-secondary"/>
   </g>
 
-  <!-- 03 / Inline RT passes -->
   <g id="rt-passes" aria-label="Passes inline ray tracing">
     <rect x="40" y="565" width="1520" height="240" rx="8" class="lane"/>
     <line x1="205" y1="565" x2="205" y2="805" class="lane-rule"/>
@@ -236,13 +234,13 @@
 
     <rect x="230" y="604" width="1290" height="42" rx="5" fill="#172033"/>
     <text x="248" y="630" class="tag" fill="#ffffff">DXR 1.1 / RAYQUERY</text>
-    <text x="1502" y="630" text-anchor="end" font-size="11" fill="#cbd5e1">HitShading compartilhado · política de indireto em IndirectPolicy.h</text>
+    <text x="1502" y="630" text-anchor="end" font-size="11" fill="#cbd5e1">HitShading compartilhado &#183; pol&#237;tica de indireto em IndirectPolicy.h</text>
 
     <rect x="230" y="674" width="400" height="102" rx="6" class="card-blue"/>
     <rect x="230" y="674" width="6" height="102" fill="#2563eb"/>
     <text x="252" y="698" class="tag" fill="#1d4ed8">DIRETA LOCAL</text>
     <text x="252" y="725" class="card-title">ReSTIR DI</text>
-    <text x="252" y="748" class="body">Candidatas ’ reuso temporal / espacial</text>
+    <text x="252" y="748" class="body">Candidatas &#8594; reuso temporal / espacial</text>
     <text x="252" y="768" class="small">Visibilidade final por shadow ray</text>
 
     <rect x="670" y="674" width="400" height="102" rx="6" class="card-teal"/>
@@ -250,13 +248,13 @@
     <text x="692" y="698" class="tag" fill="#0f766e">INDIRETA DIFUSA</text>
     <text x="692" y="725" class="card-title">ReSTIR GI</text>
     <text x="692" y="748" class="body">Final gather + reservoirs temporais</text>
-    <text x="692" y="768" class="small">Primário: SHaRC · fallback: DDGI / zero</text>
+    <text x="692" y="768" class="small">Prim&#225;rio: SHaRC &#183; fallback: DDGI / zero</text>
 
     <rect x="1110" y="674" width="410" height="102" rx="6" class="card-violet"/>
     <rect x="1110" y="674" width="6" height="102" fill="#6d5cae"/>
     <text x="1132" y="698" class="tag" fill="#6d5cae">INDIRETA ESPECULAR</text>
     <text x="1132" y="725" class="card-title">Reflexos RT</text>
-    <text x="1132" y="748" class="body">Trace inline em meia / plena resolução</text>
+    <text x="1132" y="748" class="body">Trace inline em meia / plena resolu&#231;&#227;o</text>
     <text x="1132" y="768" class="small">Resolve temporal interno ou sinal para NRD / RR</text>
 
     <path d="M430 530V600" class="flow"/>
@@ -267,29 +265,28 @@
     <path d="M1315 646V670" class="flow"/>
   </g>
 
-  <!-- 04 / Reconstruction and output -->
-  <g id="output" aria-label="Reconstrução e saída">
+  <g id="output" aria-label="Reconstrucao e saida">
     <rect x="40" y="825" width="1520" height="160" rx="8" class="lane"/>
     <line x1="205" y1="825" x2="205" y2="985" class="lane-rule"/>
 
     <text x="64" y="857" class="lane-number">04</text>
-    <text x="64" y="883" class="lane-title">SAÍDA</text>
-    <text x="64" y="905" class="lane-subtitle">Reconstrução / display</text>
+    <text x="64" y="883" class="lane-title">SA&#205;DA</text>
+    <text x="64" y="905" class="lane-subtitle">Reconstru&#231;&#227;o / display</text>
 
     <rect x="230" y="866" width="350" height="80" rx="6" class="card-violet"/>
     <text x="248" y="893" class="card-title">Condicionamento do sinal</text>
-    <text x="248" y="916" class="body">NRD RELAX · temporal interno · bypass</text>
-    <text x="248" y="936" class="small">Difuso, especular e direta em instâncias próprias</text>
+    <text x="248" y="916" class="body">NRD RELAX &#183; temporal interno &#183; bypass</text>
+    <text x="248" y="936" class="small">Difuso, especular e direta em inst&#226;ncias pr&#243;prias</text>
 
     <rect x="640" y="866" width="350" height="80" rx="6" class="card-blue"/>
-    <text x="658" y="893" class="card-title">Composição HDR</text>
+    <text x="658" y="893" class="card-title">Composi&#231;&#227;o HDR</text>
     <text x="658" y="916" class="body">Deferred + DI + GI + reflexos</text>
     <text x="658" y="936" class="small">Scene color antes dos overlays do editor</text>
 
     <rect x="1050" y="866" width="470" height="80" rx="6" class="card"/>
-    <text x="1068" y="893" class="card-title">Reconstrução temporal e display</text>
-    <text x="1068" y="916" class="body">TAA / FSR / DLSS-SR · ou DLSS Ray Reconstruction</text>
-    <text x="1068" y="936" class="small">Pós-processamento ’ tonemap ’ swapchain</text>
+    <text x="1068" y="893" class="card-title">Reconstru&#231;&#227;o temporal e display</text>
+    <text x="1068" y="916" class="body">TAA / FSR / DLSS-SR &#183; ou DLSS Ray Reconstruction</text>
+    <text x="1068" y="936" class="small">P&#243;s-processamento &#8594; tonemap &#8594; swapchain</text>
 
     <path d="M430 776V824H405V862" class="flow-secondary"/>
     <path d="M870 776V814H405V862" class="flow-secondary"/>
@@ -302,7 +299,7 @@
     <line x1="56" y1="1014" x2="96" y2="1014" class="flow"/>
     <text x="110" y="1018" class="small">fluxo principal</text>
     <line x1="238" y1="1014" x2="278" y2="1014" class="flow-history"/>
-    <text x="292" y="1018" class="small">histórico / dependência</text>
-    <text x="1544" y="1018" text-anchor="end" class="small">FPassRegistry coordena ciclo de vida; Renderer preserva a ordem explícita dos passes</text>
+    <text x="292" y="1018" class="small">hist&#243;rico / depend&#234;ncia</text>
+    <text x="1544" y="1018" text-anchor="end" class="small">FPassRegistry coordena ciclo de vida; Renderer preserva a ordem expl&#237;cita dos passes</text>
   </g>
 </svg>
