@@ -2,7 +2,7 @@
 
 Texture2D<float4> SkyViewLUT       : register(t0);
 Texture2D<float4> TransmittanceLUT : register(t1);
-Texture2D<float4> MoonTex          : register(t2); 
+Texture2D<float4> MoonTex          : register(t2);
 
 struct PSInput {
     float4 pos    : SV_POSITION;
@@ -41,20 +41,67 @@ float3 StarField(float3 dir, float time) {
     const float sigmaPx = 0.65f;
     float sigma2 = outputPixelAngle2 * sigmaPx * sigmaPx;
     float core = exp(-dot(delta, delta) / (2.0f * sigma2));
-    float  bright = 0.15f + 0.45f * rnd.y;            
+    float  bright = 0.15f + 0.45f * rnd.y;
     float  twinkle = 0.65f + 0.35f * sin(time * 3.0f + rnd.z * 6.2831853f);
     float3 tint = lerp(float3(1.0f, 0.82f, 0.65f), float3(0.7f, 0.8f, 1.0f), rnd.z);
     return present * core * bright * twinkle * tint;
 }
 
+// Polo norte lunar medio no frame equatorial ICRF/J2000 usado pelo catalogo de estrelas:
+// RA=269.9949, Dec=66.5392 graus (NAIF pck00011.tpc, BODY301_POLE_RA/DEC). A matriz sideral
+// leva esse vetor ao mundo. Nao inclui libracao/nutacao fina: o TOD ainda usa uma orbita lunar
+// simplificada, mas o roll deixa de ser preso ao horizonte e passa a acompanhar o ceu.
+static const float3 kMoonNorthPoleJ2000 =
+    float3(-0.0000354375f, 0.917332672f, -0.398121550f);
+
+// Lunar-Lambert simplificado: 90% do single scattering de Lommel-Seeliger e 10% Lambert
+// representando o multiple scattering que o modelo puro omite. O fator 2 normaliza LS para
+// resposta 1 no centro da Lua cheia (mu0=mu=1), preservando a semantica de brilho do disco.
+static const float kMoonLommelSeeligerWeight = 0.90f;
+
+// Shadow-Hiding Opposition Effect de Hapke. hS=0.055 fica entre os valores tipicos medidos
+// pelo LROC para maria (~0.050) e planaltos (~0.074). A amplitude e deliberadamente discreta:
+// o JPEG ja e uma composicao fotometricamente normalizada e nao traz o mapa B_S0 por texel.
+static const float kMoonOppositionAmplitude = 0.14f;
+static const float kMoonOppositionWidth     = 0.055f;
+
+float MoonPhotometricResponse(float mu0, float mu, float cosPhase) {
+    float ls = 2.0f * mu0 / max(mu0 + mu, 1e-5f);
+
+    // tan(g/2) sem acos: estavel tanto em g=0 (Lua cheia) quanto proximo de pi (Lua nova).
+    float tanHalfPhase = sqrt(max((1.0f - cosPhase) / max(1.0f + cosPhase, 1e-5f), 0.0f));
+    float opposition = kMoonOppositionAmplitude /
+                       (1.0f + tanHalfPhase / kMoonOppositionWidth);
+    float singleScatter = ls * (1.0f + opposition);
+    return lerp(mu0, singleScatter, kMoonLommelSeeligerWeight);
+}
+
 float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, float brightness,
                 out float coverage) {
-    float3 up0   = abs(moonDir.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-    float3 right = normalize(cross(up0, moonDir));
-    float3 up    = cross(moonDir, right);
+    float3 moonDirN  = normalize(moonDir);
+    float3 moonNorth = normalize(mul(kMoonNorthPoleJ2000, (float3x3)StarMatrix));
+    float3 northProj = moonNorth - moonDirN * dot(moonNorth, moonDirN);
 
-    float  rad = sqrt(max(1.0f - cosRadius * cosRadius, 1e-6f)); 
-    float2 uv  = float2(dot(viewDir, right), dot(viewDir, up)) / rad; 
+    // A direcao do polo projetada so degenera se a camera olhar ao longo do eixo lunar. O
+    // fallback pelo polo celeste preserva a continuidade nesse caso artificial; o ultimo eixo
+    // cobre tambem os polos geograficos do TOD sem normalizar um vetor quase nulo.
+    if (dot(northProj, northProj) < 1e-8f) {
+        float3 celestialNorth = normalize(StarAxis.xyz);
+        northProj = celestialNorth - moonDirN * dot(celestialNorth, moonDirN);
+    }
+    if (dot(northProj, northProj) < 1e-8f) {
+        float3 fallback = abs(moonDirN.y) < 0.99f
+                        ? float3(0.0f, 1.0f, 0.0f)
+                        : float3(1.0f, 0.0f, 0.0f);
+        northProj = fallback - moonDirN * dot(fallback, moonDirN);
+    }
+
+    float3 up0   = normalize(northProj);
+    float3 right = normalize(cross(up0, moonDirN));
+    float3 up    = cross(moonDirN, right);
+
+    float  rad = sqrt(max(1.0f - cosRadius * cosRadius, 1e-6f));
+    float2 uv  = float2(dot(viewDir, right), dot(viewDir, up)) / rad;
     float  rr  = dot(uv, uv);
 
     // Cobertura analitica de aproximadamente um pixel. Os returns antigos aconteciam na borda
@@ -64,9 +111,15 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     float edge   = 1.0f - smoothstep(1.0f - edgeAA, 1.0f + edgeAA, rr);
     coverage = edge;
 
-    float  z      = sqrt(max(1.0f - rr, 0.0f));
-    float3 fwd    = -moonDir;                            
-    float3 normal = normalize(right * uv.x + up * uv.y + fwd * z);
+    // O filtro do limbo cobre meio pixel fora da esfera. Avalie a fotometria nesse trecho no
+    // limite INTERNO da superficie; usar z=0 fora fazia o LS saltar de 1 para 0 na Lua cheia e
+    // anulava a metade externa do antialias.
+    float  surfaceRr = min(rr, 1.0f - 1e-6f);
+    float  surfaceScale = sqrt(surfaceRr / max(rr, 1e-8f));
+    float2 surfaceUv = uv * surfaceScale;
+    float  z      = sqrt(max(1.0f - surfaceRr, 0.0f));
+    float3 fwd    = -moonDirN;
+    float3 normal = normalize(right * surfaceUv.x + up * surfaceUv.y + fwd * z);
 
     float  nx  = dot(normal, right), ny = dot(normal, up), nz = dot(normal, fwd);
     float2 muv = float2(0.5f + atan2(nx, nz) / (2.0f * PI),
@@ -80,7 +133,12 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
     float2 muvDx = ddx(muv);
     float2 muvDy = ddy(muv);
     float terminatorAA = max(0.5f * fwidth(ndl), 1e-6f);
-    float lit = smoothstep(-terminatorAA, terminatorAA, ndl);
+    float terminator = smoothstep(-terminatorAA, terminatorAA, ndl);
+
+    float mu0 = max(ndl, 0.0f); // cos(incidencia): normal -> Sol
+    float mu  = max(dot(normal, fwd), 0.0f); // cos(emissao): normal -> observador
+    float cosPhase = clamp(dot(sunDir, fwd), -1.0f, 1.0f);
+    float photometric = MoonPhotometricResponse(mu0, mu, cosPhase) * terminator;
 
     if (edge <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
     float3 albedo = MoonTex.SampleGrad(LinearClampSampler, muv, muvDx, muvDy).rgb;
@@ -89,7 +147,7 @@ float3 MoonDisk(float3 viewDir, float3 moonDir, float cosRadius, float3 sunDir, 
 
     // Sem earthshine: a olho nu a parte escura e invisivel contra o ceu; ela continua tapando
     // as estrelas atras (coverage cobre o disco inteiro), entao vira silhueta como na vida real.
-    return lit * edge * brightness * albedo;
+    return photometric * edge * brightness * albedo;
 }
 
 float4 main(PSInput input) : SV_TARGET {
