@@ -204,7 +204,9 @@ namespace SmileEditor {
             const QByteArray Line = Buffer.left(Newline).trimmed();
             Buffer.remove(0, Newline + 1);
             if (!Line.isEmpty()) HandleRequest(Socket, Line);
-            if (Socket == ActiveCaptureSocket) break;
+            // Operacao assincrona pendente neste socket: o resto do buffer espera a resposta
+            // sair, senao duas requisicoes disputariam o mesmo slot de "quem esta esperando".
+            if (Socket == ActiveCaptureSocket || Socket == ActiveLoadSocket) break;
         }
     }
 
@@ -213,6 +215,11 @@ namespace SmileEditor {
         if (!Socket) return;
         Buffers.remove(Socket);
         if (Socket == ActiveCaptureSocket) ActiveCaptureSocket.clear();
+        // O ActiveLoadId NAO e limpo junto: a carga ja esta em andamento no MainWindow e vai
+        // chamar OnSceneLoadFinished de qualquer jeito. Zerar o id aqui faria aquela chamada
+        // parecer "carga disparada pela UI" e o proximo pedido pela pipe encontraria o slot livre
+        // com uma carga ainda rodando.
+        if (Socket == ActiveLoadSocket) ActiveLoadSocket.clear();
         Socket->deleteLater();
     }
 
@@ -285,6 +292,17 @@ namespace SmileEditor {
         }
         if (Command == QStringLiteral("profile_snapshot")) {
             HandleProfileSnapshot(_Socket, Id);
+            return;
+        }
+        if (Command == QStringLiteral("load_scene")) {
+            const QJsonValue Arguments = Request.value(QStringLiteral("arguments"));
+            if (!Arguments.isObject()) {
+                Reply(_Socket, Id, false,
+                      QJsonObject{ { QStringLiteral("error"),
+                                    QStringLiteral("arguments precisa ser objeto") } });
+                return;
+            }
+            HandleLoadScene(_Socket, Id, Arguments.toObject());
             return;
         }
         if (Command == QStringLiteral("shutdown")) {
@@ -483,6 +501,82 @@ namespace SmileEditor {
 
         ActiveCaptureSocket = _Socket;
         ActiveCaptureId = _Id;
+    }
+
+    // Carga de cena na sessao viva. O bridge valida e enfileira; quem carrega e o MainWindow.
+    void McpBridge::HandleLoadScene(QLocalSocket* _Socket, const QString& _Id,
+                                    const QJsonObject& _Arguments) {
+        if (!ActiveLoadId.isEmpty()) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("ja existe uma carga de cena em andamento") } });
+            return;
+        }
+        // Mesma prontidao que a captura exige: sem renderer inicializado nao ha o que comitar, e
+        // o MainWindow so descobriria isso depois de preparar a cena numa thread.
+        const bool Ready = RenderSettings ? RenderSettings->Ready()
+                                          : Capture && Capture->Available();
+        if (!Ready) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("renderer ainda nao esta pronto") } });
+            return;
+        }
+        if (Capture && Capture->Busy()) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("captura em andamento") } });
+            return;
+        }
+
+        const QString Path = _Arguments.value(QStringLiteral("path")).toString();
+        const QFileInfo Info(Path);
+        if (Path.isEmpty() || !Info.exists() || !Info.isFile() ||
+            Info.suffix().compare(QStringLiteral("sscene"), Qt::CaseInsensitive) != 0) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("path precisa apontar para um .sscene existente") } });
+            return;
+        }
+
+        const QJsonValue AdditiveValue = _Arguments.value(QStringLiteral("additive"));
+        if (!AdditiveValue.isUndefined() && !AdditiveValue.isBool()) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("additive precisa ser booleano") } });
+            return;
+        }
+        // Aditivo por default: o uso desta rota e acrescentar uma malha nova a cena aberta.
+        // Substituir a cena inteira e o caso raro, e tem de ser pedido explicitamente.
+        const bool Additive = AdditiveValue.toBool(true);
+
+        ActiveLoadSocket = _Socket;
+        ActiveLoadId     = _Id;
+        const QString Absolute = Info.absoluteFilePath();
+        // singleShot: sai do parse da requisicao antes de mexer na cena. A carga passa por uma
+        // thread de preparo e volta pelo OnSceneLoadFinished.
+        QTimer::singleShot(0, this, [this, Absolute, Additive]() {
+            emit SceneLoadRequested(Absolute, Additive);
+        });
+    }
+
+    void McpBridge::OnSceneLoadFinished(bool _Success, const QString& _Error) {
+        if (ActiveLoadId.isEmpty()) return; // carga disparada pela UI, nao pelo MCP
+
+        QJsonObject Payload;
+        if (_Success) {
+            Payload.insert(QStringLiteral("result"), QJsonObject{
+                { QStringLiteral("loaded"), true },
+                { QStringLiteral("scenePath"), ScenePath },
+            });
+        } else {
+            Payload.insert(QStringLiteral("error"), _Error.isEmpty()
+                ? QStringLiteral("carga de cena falhou sem detalhe") : _Error);
+        }
+
+        if (ActiveLoadSocket) Reply(ActiveLoadSocket, ActiveLoadId, _Success, Payload);
+        ActiveLoadSocket.clear();
+        ActiveLoadId.clear();
     }
 
     void McpBridge::OnCaptureFinished(bool _Success, const QString& _PngPath,

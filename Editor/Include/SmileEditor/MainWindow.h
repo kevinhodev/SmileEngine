@@ -4,6 +4,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
+
 class QActionGroup;
 class QLabel;
 class QMenu;
@@ -72,7 +74,12 @@ namespace SmileEditor {
         void CreateDocks();
         QWidget* CreateViewportChrome();
         void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
-        void BeginSceneLoad(const QString& path, bool additive);
+        // OnDone != nullptr => carga NAO interativa: os QMessageBox de falha ficam de fora e o
+        // resultado volta pelo callback. E o que separa "o usuario escolheu um arquivo no menu"
+        // de "o SmileMCP pediu a carga": um dialogo modal num ciclo automatizado trava o editor
+        // esperando um clique que nao vem.
+        using SceneLoadCallback = std::function<void(bool ok, const QString& error)>;
+        void BeginSceneLoad(const QString& path, bool additive, SceneLoadCallback onDone = {});
         void FinishBootStage();   // idempotente: emite BootFinished uma unica vez
         void ContinueApprovedClose(QCloseEvent* event);
 

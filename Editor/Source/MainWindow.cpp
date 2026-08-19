@@ -103,6 +103,15 @@ namespace SmileEditor {
         CaptureBr  = new CaptureBridge(this);         // captura deterministica (renderer depois)
         RenderSettingsCtrl = new RenderSettingsController(this);
         McpBr      = new McpBridge(CaptureBr, CameraBookmarksBr, RenderSettingsCtrl, this);
+        // Carga aditiva pedida pelo SmileMCP: e o que fecha o ciclo do gerador de malha por IA —
+        // o .glb recem-cozido entra na cena ABERTA, sem reiniciar o editor e sem perder camera,
+        // hora do dia nem o resto do estado da sessao.
+        connect(McpBr, &McpBridge::SceneLoadRequested, this,
+                [this](const QString& _Path, bool _Additive) {
+            BeginSceneLoad(_Path, _Additive, [this](bool _Ok, const QString& _Error) {
+                if (McpBr) McpBr->OnSceneLoadFinished(_Ok, _Error);
+            });
+        });
         connect(McpBr, &McpBridge::ShutdownRequested, this, [this]() {
             // Benchmark automatizado nao pode parar num dialogo de sidecar. O fechamento ainda
             // passa pelo segundo estagio de closeEvent, que espera a render thread terminar.
@@ -438,13 +447,26 @@ namespace SmileEditor {
         Sb->addWidget(Bar, 1);
     }
 
-    void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive) {
+    void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive,
+                                    SceneLoadCallback _OnDone) {
+        // Uma unica saida de falha para os dois chamadores: quem passou callback recebe o erro e
+        // reporta do seu jeito (o McpBridge devolve pela named pipe); quem nao passou continua
+        // vendo o dialogo modal de sempre.
+        const auto Fail = [this, _Additive, _OnDone](const QString& _Message, bool _Modal) {
+            if (_OnDone) { _OnDone(false, _Message); return; }
+            if (!_Modal) return;
+            QMessageBox::warning(this, _Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
+                                 _Message);
+        };
+
         if (SceneLoadInProgress) {
             if (StatusBr) StatusBr->ShowMessage(tr("Uma cena já está sendo preparada"), 2500);
+            Fail(tr("Uma cena já está sendo preparada."), false);
             return;
         }
         if (!Viewport || !Viewport->GetRenderer() || !Viewport->GetRenderer()->IsInitialized()) {
             FinishBootStage();
+            Fail(tr("O renderizador ainda não está pronto."), false);
             return;
         }
 
@@ -458,21 +480,20 @@ namespace SmileEditor {
         using Result = Smile::FPreparedCookedScenePtr;
         auto* Watcher = new QFutureWatcher<Result>(this);
         connect(Watcher, &QFutureWatcher<Result>::finished, this,
-                [this, Watcher, Path = _Path, Additive = _Additive]() {
+                [this, Watcher, Path = _Path, Additive = _Additive, OnDone = _OnDone, Fail]() {
             Result Prepared = Watcher->result();
             Watcher->deleteLater();
             if (CloseApproved || RendererShutdownForClose) {
                 SceneLoadInProgress = false;
                 FinishBootStage();
+                Fail(tr("O editor está encerrando."), false);
                 return;
             }
             if (!Prepared) {
                 SceneLoadInProgress = false;
                 FinishBootStage();
                 if (StatusBr) StatusBr->ShowMessage(tr("Falha ao preparar a cena"), 5000);
-                QMessageBox::warning(
-                    this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
-                    tr("Falha ao carregar a cena. Veja o console."));
+                Fail(tr("Falha ao carregar a cena. Veja o console."), true);
                 return;
             }
 
@@ -481,17 +502,16 @@ namespace SmileEditor {
                 emit BootProgress(tr("Finalizando recursos da cena…"), {}, 0.98);
             const bool Queued = Viewport && Viewport->CommitPreparedSceneAsync(
                 std::move(Prepared), Additive,
-                [this, Path, Additive](bool _Success, const QString& _Error) {
-                    Q_UNUSED(_Error);
+                [this, Path, Additive, OnDone, Fail](bool _Success, const QString& _Error) {
                     SceneLoadInProgress = false;
                     FinishBootStage();
 
                     if (!_Success) {
                         if (StatusBr)
                             StatusBr->ShowMessage(tr("Falha ao finalizar a cena"), 5000);
-                        QMessageBox::warning(
-                            this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
-                            tr("Falha ao carregar a cena. Veja o console."));
+                        Fail(_Error.isEmpty()
+                                 ? tr("Falha ao carregar a cena. Veja o console.") : _Error,
+                             true);
                         return;
                     }
 
@@ -509,14 +529,13 @@ namespace SmileEditor {
                         StatusBr->ShowMessage(
                             Additive ? tr("Cena adicionada") : tr("Cena carregada"), 3000);
                     }
+                    if (OnDone) OnDone(true, QString());
                 });
             if (!Queued) {
                 SceneLoadInProgress = false;
                 FinishBootStage();
                 if (StatusBr) StatusBr->ShowMessage(tr("Renderizador indisponível"), 5000);
-                QMessageBox::warning(
-                    this, Additive ? tr("Adicionar Cena") : tr("Carregar Cena"),
-                    tr("O renderizador foi encerrado antes de finalizar a cena."));
+                Fail(tr("O renderizador foi encerrado antes de finalizar a cena."), true);
             }
         });
 

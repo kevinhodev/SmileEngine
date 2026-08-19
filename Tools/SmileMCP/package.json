@@ -5,14 +5,17 @@
   "description": "Servidor MCP local para inspecionar, compilar e executar a SmileEngine.",
   "type": "module",
   "bin": {
-    "smile-mcp": "dist/index.js"
+    "smile-mcp": "dist/index.js",
+    "smile-meshgen": "dist/meshgen-cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
-    "smoke:capture": "npm run build && node scripts/capture-smoke.mjs"
+    "smoke:capture": "npm run build && node scripts/capture-smoke.mjs",
+    "meshgen": "node dist/meshgen-cli.js",
+    "smoke:meshgen": "npm run build && node scripts/meshgen-smoke.mjs"
   },
   "engines": {
     "node": ">=20"

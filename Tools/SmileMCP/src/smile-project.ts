@@ -59,7 +59,15 @@ export interface CookSceneOptions {
   configuration: BuildConfiguration;
   opaqueGlass: boolean;
   timeoutSeconds: number;
+  /** Normalizacao de escala/pivot do Cooker. Existe para malha gerada, que chega sem unidade. */
+  fitMeters?: number;
+  dropToGround?: boolean;
+  centerXZ?: boolean;
+  extractTextures?: boolean;
 }
+
+/** Formatos que o SmileCooker le. FBX pela ufbx; glTF/GLB pelo importador proprio. */
+export const COOKABLE_EXTENSIONS = [".fbx", ".gltf", ".glb"] as const;
 
 function usesBuildDirectory(name: string): boolean {
   const lower = name.toLowerCase();
@@ -346,8 +354,11 @@ export class SmileProject {
   async cookScene(options: CookSceneOptions): Promise<Record<string, unknown>> {
     const sourcePath = await this.resolveProjectPath(options.sourcePath);
     const sourceStat = await stat(sourcePath);
-    if (!sourceStat.isFile() || path.extname(sourcePath).toLocaleLowerCase() !== ".fbx") {
-      throw new Error("sourcePath precisa apontar para um arquivo .fbx dentro da SmileEngine.");
+    const extension = path.extname(sourcePath).toLocaleLowerCase();
+    if (!sourceStat.isFile() || !(COOKABLE_EXTENSIONS as readonly string[]).includes(extension)) {
+      throw new Error(
+        `sourcePath precisa apontar para um ${COOKABLE_EXTENSIONS.join("/")} dentro da SmileEngine.`,
+      );
     }
 
     const executable = this.cookerExecutable(options.configuration);
@@ -363,6 +374,10 @@ export class SmileProject {
 
     const args = [sourcePath];
     if (options.opaqueGlass) args.push("--opaque-glass");
+    if (options.fitMeters !== undefined) args.push("--fit", String(options.fitMeters));
+    if (options.dropToGround) args.push("--ground");
+    if (options.centerXZ) args.push("--center");
+    if (options.extractTextures === false) args.push("--no-textures");
     const result = await runCommand(executable, args, {
       cwd: this.root,
       timeoutMs: options.timeoutSeconds * 1000,
@@ -394,7 +409,13 @@ export class SmileProject {
     return {
       ...result,
       sourcePath: this.relative(sourcePath),
+      sourceFormat: extension.slice(1),
       opaqueGlass: options.opaqueGlass,
+      normalize: {
+        fitMeters: options.fitMeters ?? null,
+        dropToGround: Boolean(options.dropToGround),
+        centerXZ: Boolean(options.centerXZ),
+      },
       cookedVersion: mesh.version,
       outputs: { mesh, scene },
     };

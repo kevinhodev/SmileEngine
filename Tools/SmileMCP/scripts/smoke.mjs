@@ -38,6 +38,9 @@ try {
     "smile_close_editor",
     "smile_run_editor",
     "smile_capture_frame",
+    "smile_meshgen_providers",
+    "smile_generate_mesh",
+    "smile_load_scene",
   ];
   const names = new Set(tools.tools.map((tool) => tool.name));
   const missing = expected.filter((name) => !names.has(name));
@@ -101,7 +104,28 @@ try {
     name: "smile_cook_scene",
     arguments: { sourcePath: "CMakeLists.txt", configuration: "Release" },
   });
-  if (!invalidCookSource.isError) throw new Error("smile_cook_scene aceitou uma fonte que nao e FBX");
+  if (!invalidCookSource.isError)
+    throw new Error("smile_cook_scene aceitou uma fonte que nao e FBX/glTF");
+
+  // A geracao por IA e a unica rota que sai para a rede: os pre-requisitos tem de falhar ANTES
+  // de qualquer chamada paga.
+  const missingPrompt = await client.callTool({
+    name: "smile_generate_mesh",
+    arguments: { name: "smoke", provider: "local" },
+  });
+  if (!missingPrompt.isError) throw new Error("smile_generate_mesh aceitou pedido sem prompt nem imagem");
+
+  const bothInputs = await client.callTool({
+    name: "smile_generate_mesh",
+    arguments: { name: "smoke", provider: "local", prompt: "x", imagePath: "CMakeLists.txt" },
+  });
+  if (!bothInputs.isError) throw new Error("smile_generate_mesh aceitou prompt e imagem juntos");
+
+  const invalidLoadScene = await client.callTool({
+    name: "smile_load_scene",
+    arguments: { scenePath: "CMakeLists.txt" },
+  });
+  if (!invalidLoadScene.isError) throw new Error("smile_load_scene aceitou um arquivo que nao e SScene");
 
   const invalidEditorScene = await client.callTool({
     name: "smile_run_editor",

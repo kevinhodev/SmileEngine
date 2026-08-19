@@ -28,11 +28,20 @@ namespace SmileEditor {
         ~McpBridge() override;
 
         void OnSceneLoaded(const QString& ScenePath, bool Additive);
+        // Resultado da carga pedida por SceneLoadRequested. O MainWindow e quem sabe carregar
+        // cena (thread de preparo, commit no renderer, pontes a notificar); o bridge so guarda
+        // qual requisicao esta esperando e devolve a resposta pela pipe quando ela termina.
+        void OnSceneLoadFinished(bool Success, const QString& Error);
 
     signals:
         // MainWindow aprova o fechamento antes de fechar, evitando dialogos de sidecar durante
         // um ciclo automatizado de benchmark e preservando o shutdown ordenado do renderer.
         void ShutdownRequested();
+
+        // Carga de uma .sscene na sessao viva. Additive=true acrescenta a cena aberta em vez de
+        // substitui-la — e o que faz uma malha recem-gerada aparecer no viewport sem reiniciar o
+        // editor, preservando camera, hora do dia e o resto do estado.
+        void SceneLoadRequested(const QString& Path, bool Additive);
 
     private slots:
         void OnNewConnection();
@@ -49,6 +58,8 @@ namespace SmileEditor {
         void HandleProfileConfigure(QLocalSocket* Socket, const QString& Id,
                                     const QJsonObject& Arguments);
         void HandleProfileSnapshot(QLocalSocket* Socket, const QString& Id);
+        void HandleLoadScene(QLocalSocket* Socket, const QString& Id,
+                             const QJsonObject& Arguments);
         void Reply(QLocalSocket* Socket, const QString& Id, bool Ok,
                    const QJsonObject& Payload);
 
@@ -59,6 +70,8 @@ namespace SmileEditor {
         QHash<QLocalSocket*, QByteArray> Buffers;
         QPointer<QLocalSocket> ActiveCaptureSocket;
         QString               ActiveCaptureId;
+        QPointer<QLocalSocket> ActiveLoadSocket;
+        QString               ActiveLoadId;
         QString               PipeName;
         QString               ScenePath;
     };

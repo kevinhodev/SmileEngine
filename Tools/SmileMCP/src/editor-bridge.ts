@@ -272,6 +272,27 @@ export class SmileEditorBridge {
     return snapshot as ProfileSnapshot;
   }
 
+  /**
+   * Carrega uma .sscene no editor ja aberto. Aditivo por default: e assim que uma malha
+   * recem-gerada entra na cena sem reiniciar o editor nem perder camera e hora do dia.
+   * O caminho vai ABSOLUTO — quem resolve relativo a raiz e o servidor, nao o editor.
+   */
+  async loadScene(
+    absoluteScenePath: string,
+    additive: boolean,
+    timeoutSeconds: number,
+  ): Promise<Record<string, unknown>> {
+    const result = await this.request(
+      "load_scene",
+      { path: absoluteScenePath, additive },
+      timeoutSeconds * 1000,
+    );
+    if (!result || typeof result !== "object") {
+      throw new Error("Resultado de carga de cena invalido retornado pelo editor.");
+    }
+    return result as Record<string, unknown>;
+  }
+
   async shutdown(timeoutSeconds: number): Promise<Record<string, unknown>> {
     const accepted = await this.request("shutdown", {}, 5_000);
     const deadline = Date.now() + timeoutSeconds * 1000;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -11,6 +11,7 @@ import {
   type ProfileOverrides,
   type ProfileSnapshot,
 } from "./editor-bridge.js";
+import { PROVIDER_IDS, describeProviders, generateMesh, slugify } from "./meshgen.js";
 import { SmileProject, discoverSmileRoot } from "./smile-project.js";
 
 const VERSION = "0.3.0";
@@ -26,7 +27,10 @@ const server = new McpServer(
       "mudancas somente em HLSL e SmileEditor quando interfaces C++/HLSL tambem mudarem. " +
       "Use smile_cook_scene para regenerar os cozidos e smile_run_editor com scenePath para " +
       "aguardar a cena ficar pronta antes de smile_capture_frame. Para benchmarks, configure " +
-      "um regime deterministico com smile_profile_configure antes de smile_profile_gpu.",
+      "um regime deterministico com smile_profile_configure antes de smile_profile_gpu. " +
+      "Para prototipagem rapida, smile_generate_mesh gera uma malha por IA, cozinha e (com " +
+      "loadInEditor) a coloca na cena aberta; smile_meshgen_providers diz quais provedores " +
+      "estao configurados antes de gastar uma chamada paga.",
   },
 );
 
@@ -368,15 +372,24 @@ server.registerTool(
   {
     title: "Cook a Smile scene",
     description:
-      "Recozinha um FBX com o SmileCooker e valida os cabecalhos .smesh/.sscene produzidos ao lado da fonte.",
+      "Recozinha um FBX ou glTF/GLB com o SmileCooker e valida os cabecalhos .smesh/.sscene " +
+      "produzidos ao lado da fonte.",
     inputSchema: {
       sourcePath: z
         .string()
         .min(1)
-        .describe("Caminho relativo de um FBX dentro da raiz da SmileEngine."),
+        .describe("Caminho relativo de um .fbx/.gltf/.glb dentro da raiz da SmileEngine."),
       configuration: z.enum(["Debug", "Release", "RelWithDebInfo"]).default("Release"),
       opaqueGlass: z.boolean().default(false),
       timeoutSeconds: z.number().int().min(10).max(1800).default(900),
+      fitMeters: z
+        .number()
+        .min(0.01)
+        .max(1000)
+        .optional()
+        .describe("Escala a cena para caber num cubo deste tamanho. Para malha sem unidade definida."),
+      dropToGround: z.boolean().default(false),
+      centerXZ: z.boolean().default(false),
     },
     annotations: {
       readOnlyHint: false,
@@ -392,6 +405,9 @@ server.registerTool(
         configuration: input.configuration,
         opaqueGlass: input.opaqueGlass,
         timeoutSeconds: input.timeoutSeconds,
+        fitMeters: input.fitMeters,
+        dropToGround: input.dropToGround,
+        centerXZ: input.centerXZ,
       });
       return result.exitCode === 0 ? jsonResult(result) : { ...jsonResult(result), isError: true };
     } catch (error) {
@@ -739,6 +755,189 @@ server.registerTool(
       > = [{ type: "text", text: JSON.stringify(metadata, null, 2) }];
       if (imageData) content.push({ type: "image", data: imageData, mimeType: "image/png" });
       return { content };
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_meshgen_providers",
+  {
+    title: "List AI mesh providers",
+    description:
+      "Lista os provedores de geracao de malha 3D por IA, o endpoint em uso e se a chave de API " +
+      "esta configurada. Nunca retorna o valor da chave. Consulte antes de smile_generate_mesh.",
+    inputSchema: {},
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async () => {
+    try {
+      return jsonResult({ providers: describeProviders() });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+// Extensoes de imagem aceitas como referencia para image-to-3D, e o mime que vai no data URI.
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+};
+const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024;
+
+server.registerTool(
+  "smile_generate_mesh",
+  {
+    title: "Generate a 3D mesh with AI",
+    description:
+      "Gera uma malha 3D a partir de um prompt (ou de uma imagem de referencia) num provedor de " +
+      "IA, grava o .glb em Assets/Generated/<nome>/, cozinha para .smesh/.sscene e, com " +
+      "loadInEditor, adiciona a cena do editor aberto. Chamada paga e demorada: confirme o " +
+      "provedor com smile_meshgen_providers antes.",
+    inputSchema: {
+      name: z
+        .string()
+        .min(1)
+        .max(64)
+        .describe("Nome do asset; vira o diretorio Assets/Generated/<slug>."),
+      provider: z.enum(PROVIDER_IDS as [string, ...string[]]).default("meshy"),
+      prompt: z.string().min(1).max(2000).optional().describe("Descricao textual da malha."),
+      imagePath: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Caminho relativo de uma imagem de referencia dentro da SmileEngine."),
+      negativePrompt: z.string().max(2000).optional(),
+      artStyle: z.string().max(64).optional(),
+      timeoutSeconds: z.number().int().min(30).max(3600).default(900),
+      pollSeconds: z.number().int().min(2).max(60).default(5),
+      cook: z.boolean().default(true).describe("Cozinha o .glb para .smesh/.sscene."),
+      configuration: z.enum(["Debug", "Release", "RelWithDebInfo"]).default("Release"),
+      fitMeters: z
+        .number()
+        .min(0.01)
+        .max(1000)
+        .default(2)
+        .describe("Escala a malha para caber num cubo deste tamanho. Malha gerada chega sem unidade."),
+      dropToGround: z.boolean().default(true),
+      centerXZ: z.boolean().default(true),
+      loadInEditor: z
+        .boolean()
+        .default(false)
+        .describe("Adiciona o cozido a cena do SmileEditor aberto, sem reinicia-lo."),
+      loadTimeoutSeconds: z.number().int().min(10).max(600).default(120),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      // Unica ferramenta do servidor que fala com a rede: sai para a API do provedor.
+      openWorldHint: true,
+    },
+  },
+  async (input) => {
+    try {
+      if ((input.prompt ? 1 : 0) + (input.imagePath ? 1 : 0) !== 1) {
+        throw new Error("Informe exatamente um de prompt ou imagePath.");
+      }
+
+      let imageDataUri: string | undefined;
+      if (input.imagePath) {
+        const imagePath = await project.resolveProjectPath(input.imagePath);
+        const imageStat = await stat(imagePath);
+        const extension = path.extname(imagePath).toLocaleLowerCase();
+        const mime = IMAGE_MIME_BY_EXTENSION[extension];
+        if (!imageStat.isFile() || !mime) {
+          throw new Error(
+            `imagePath precisa ser um ${Object.keys(IMAGE_MIME_BY_EXTENSION).join("/")} dentro da SmileEngine.`,
+          );
+        }
+        if (imageStat.size > MAX_REFERENCE_IMAGE_BYTES) {
+          throw new Error("A imagem de referencia excede 8 MiB.");
+        }
+        imageDataUri = `data:${mime};base64,${(await readFile(imagePath)).toString("base64")}`;
+      }
+
+      const generation = await generateMesh(project.root, {
+        provider: input.provider as (typeof PROVIDER_IDS)[number],
+        name: input.name,
+        prompt: input.prompt,
+        imageDataUri,
+        negativePrompt: input.negativePrompt,
+        artStyle: input.artStyle,
+        timeoutSeconds: input.timeoutSeconds,
+        pollSeconds: input.pollSeconds,
+      });
+
+      if (!input.cook) {
+        return jsonResult({ generation, cooked: null, loaded: null });
+      }
+
+      const cooked = await project.cookScene({
+        sourcePath: generation.modelPath,
+        configuration: input.configuration,
+        opaqueGlass: false,
+        timeoutSeconds: Math.min(900, input.timeoutSeconds),
+        fitMeters: input.fitMeters,
+        dropToGround: input.dropToGround,
+        centerXZ: input.centerXZ,
+      });
+      if (typeof cooked.exitCode === "number" && cooked.exitCode !== 0) {
+        return jsonResult({ generation, cooked, loaded: null });
+      }
+
+      let loaded: unknown = null;
+      if (input.loadInEditor) {
+        const slug = slugify(input.name);
+        const scenePath = await project.resolveProjectPath(
+          `Assets/Generated/${slug}/${slug}.sscene`,
+        );
+        loaded = await editorBridge.loadScene(scenePath, true, input.loadTimeoutSeconds);
+      }
+      return jsonResult({ generation, cooked, loaded });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_load_scene",
+  {
+    title: "Load a scene into the running editor",
+    description:
+      "Carrega uma .sscene ja cozida no SmileEditor aberto. Aditivo por default: acrescenta a " +
+      "cena atual sem reiniciar o editor, preservando camera e hora do dia. Com additive=false " +
+      "substitui a cena inteira.",
+    inputSchema: {
+      scenePath: z.string().min(1).describe("Caminho relativo de uma .sscene dentro da SmileEngine."),
+      additive: z.boolean().default(true),
+      timeoutSeconds: z.number().int().min(10).max(600).default(120),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const scenePath = await project.resolveProjectPath(input.scenePath);
+      if (path.extname(scenePath).toLocaleLowerCase() !== ".sscene") {
+        throw new Error("scenePath precisa apontar para um arquivo .sscene.");
+      }
+      const result = await editorBridge.loadScene(scenePath, input.additive, input.timeoutSeconds);
+      return jsonResult({ scenePath: project.relative(scenePath), additive: input.additive, result });
     } catch (error) {
       return errorResult(error);
     }
