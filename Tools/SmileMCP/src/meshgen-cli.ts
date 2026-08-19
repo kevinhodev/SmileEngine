@@ -154,6 +154,7 @@ async function main(): Promise<void> {
     name: options.name!,
     prompt: options.prompt,
     imageDataUri,
+    imageLabel: options.imagePath,
     negativePrompt: options.negativePrompt,
     artStyle: options.artStyle,
     timeoutSeconds: options.timeoutSeconds,

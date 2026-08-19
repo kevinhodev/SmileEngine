@@ -110,6 +110,12 @@ try {
   assert.deepEqual(written, model, "o .glb gravado deve ser byte a byte o baixado");
   await stat(path.join(generatedDirectory, `${slug}.glb`));
 
+  // Sidecar de procedencia: sem ele o .glb e um binario sem historia.
+  const sidecar = JSON.parse(await readFile(path.join(generatedDirectory, `${slug}.meshgen.json`), "utf8"));
+  assert.equal(sidecar.provider, "local");
+  assert.equal(sidecar.input.prompt, "um cubo de pedra");
+  assert.equal(result.sidecarPath, `Assets/Generated/${slug}/${slug}.meshgen.json`);
+
   // Modo de falha classico do servico: pagina de erro com HTTP 200.
   servedBody = Buffer.from("<html><body>rate limited</body></html>", "utf8");
   servedType = "text/html";

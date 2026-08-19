@@ -8,3 +8,9 @@ default_tools_approval_mode = "writes"
 
 [mcp_servers.smile.env]
 SMILE_ROOT = "D:/Engines/SmileEngine"
+# Geracao de malha por IA (smile_generate_mesh). Opcional: sem chave, o provedor apenas aparece
+# como nao configurado em smile_meshgen_providers. Preencha SO os que voce usa — e prefira definir
+# a chave no ambiente do usuario a deixa-la neste arquivo, que costuma ir para o repositorio.
+# SMILE_MESHGEN_MESHY_KEY = ""
+# SMILE_MESHGEN_TRIPO_KEY = ""
+# SMILE_MESHGEN_LOCAL_URL = "http://127.0.0.1:8000"

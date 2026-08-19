@@ -43,7 +43,7 @@ quatro artefatos:
 | **Engine** | `Engine/` | `Smile` | Biblioteca **estática** | RHI DX12 + subsistemas de rendering |
 | **Editor** | `Editor/` | `SmileEditor` | Executável **Qt 6** | Host do viewport, painéis QML, tema dark |
 | **Shaders** | `Shaders/` | — | Alvo de build (DXC) | 130 HLSL compilados para `.cso` em build time |
-| **Cooker** | `Tools/Cooker/` | `Smile` | Executável CLI | FBX (ufbx) + texturas (dds/png/tga/jpg/bmp) → `.smesh`/`.sscene` |
+| **Cooker** | `Tools/Cooker/` | `SmileCook` (consome `Smile::`) | Executável CLI | FBX (ufbx) e glTF/GLB (importador próprio) + texturas (dds/png/tga/jpg/bmp) → `.smesh`/`.sscene` |
 
 Princípios de design observados no código:
 
@@ -101,7 +101,7 @@ CMakeLists.txt (raiz)                  ← project 3.0.0, C++20, x64, /W4, acha 
 ├── Engine/CMakeLists.txt              ← add_library(SmileEngine STATIC ...) + SDKs externos
 ├── Shaders/CMakeLists.txt             ← add_custom_target(Shaders) (lista todos os .hlsl)
 ├── Editor/CMakeLists.txt              ← qt_add_executable(SmileEditor ...) + windeployqt
-├── Tools/Cooker/CMakeLists.txt        ← executável do cooker de assets
+├── Tools/Cooker/CMakeLists.txt        ← executável do cooker de assets (FBX + glTF/GLB)
 └── Tests/CMakeLists.txt               ← 2 executáveis de teste (só matemática isolada)
 ```
 
@@ -227,6 +227,13 @@ Engine/Include/Smile/
     │   └── DebugTargets · DebugView · ShaderTimer · BvhDebugView · FlickerHeatmap · VramTracker
     └── Renderer             maestro: cria tudo, monta o frame, expõe setters p/ o Editor
 ```
+
+> **Dois importadores, um formato.** O Cooker lê FBX (`main.cpp`, via ufbx) e glTF/GLB
+> (`GltfImport.cpp`, sem dependência externa) e os dois produzem o MESMO `.smesh`/`.sscene`. O
+> que vem depois da leitura — weld, layout `[VB][IB][RTTri]` do blob, payload de RT e a
+> decomposição do transform de mundo em TRS — mora em `CookedWriter.h`, compartilhado: duplicá-lo
+> faria um `.glb` e um `.fbx` da mesma malha divergirem no dia em que um dos lados fosse
+> corrigido. O caminho glTF existe para malha gerada por IA — ver [`AI-MESHGEN.md`](AI-MESHGEN.md).
 
 ---
 

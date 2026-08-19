@@ -26,6 +26,8 @@ export interface GenerateRequest {
   prompt?: string;
   /** Imagem de referencia, ja em data URI (o chamador le o arquivo). Exclusivo com prompt. */
   imageDataUri?: string;
+  /** Caminho da imagem, so para registro no sidecar. O data URI em si nunca e persistido. */
+  imageLabel?: string;
   /** Nome do asset; vira o diretorio e o nome dos arquivos. */
   name: string;
   negativePrompt?: string;
@@ -335,6 +337,8 @@ export interface GenerateResult {
   bytes: number;
   elapsedSeconds: number;
   pollCount: number;
+  /** Sidecar com o que gerou este asset, ao lado do .glb. */
+  sidecarPath: string;
   log: string[];
 }
 
@@ -476,10 +480,38 @@ export async function generateMesh(root: string, request: GenerateRequest): Prom
   await writeFile(modelPath, bytes);
   note(`gravado ${(bytes.length / 1024).toFixed(0)} KB`);
 
+  // Sidecar de procedencia. Sem ele, um .glb em Assets/Generated/ e um arquivo binario sem
+  // historia: ninguem sabe qual prompt o produziu nem em que provedor regerar uma variante. O
+  // data URI da imagem NAO entra (sao megabytes de base64), so o caminho dela; a chave de API,
+  // obviamente, nunca.
+  const sidecarPath = path.join(directory, `${slug}.meshgen.json`);
+  await writeFile(
+    sidecarPath,
+    `${JSON.stringify(
+      {
+        name: request.name,
+        slug,
+        provider: spec.id,
+        providerLabel: spec.label,
+        taskId: taskId || null,
+        input: request.imageDataUri
+          ? { kind: "image", image: request.imageLabel ?? "(data uri)" }
+          : { kind: "prompt", prompt: request.prompt, negativePrompt: request.negativePrompt ?? null,
+              artStyle: request.artStyle ?? null },
+        bytes: bytes.length,
+        generatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
   return {
     provider: spec.id,
     taskId: taskId || "(sincrono)",
     modelPath: path.relative(root, modelPath).split(path.sep).join("/"),
+    sidecarPath: path.relative(root, sidecarPath).split(path.sep).join("/"),
     bytes: bytes.length,
     elapsedSeconds: Number(((Date.now() - started) / 1000).toFixed(1)),
     pollCount,

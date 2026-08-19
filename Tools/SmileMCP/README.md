@@ -14,7 +14,8 @@ Ferramentas disponiveis:
 - `smile_get_latest_logs`: cauda dos logs persistentes do editor.
 - `smile_build`: build de um alvo CMake.
 - `smile_compile_shaders`: atalho para o alvo `Shaders`.
-- `smile_cook_scene`: recozinha um FBX e valida os cabecalhos `.smesh`/`.sscene` gerados.
+- `smile_cook_scene`: recozinha um FBX ou glTF/GLB e valida os cabecalhos `.smesh`/`.sscene`
+  gerados; aceita as opcoes de normalizacao de escala/pivot.
 - `smile_editor_status`: consulta PID, executavel, commit, prontidao, cena e captura do editor vivo.
 - `smile_profile_configure`: fixa o regime de render, a hora (`10:00` por default ou
   `timeOfDayHours`) e opcionalmente a camera do teste.
@@ -24,6 +25,11 @@ Ferramentas disponiveis:
   renderer ficar pronto.
 - `smile_capture_frame`: captura o viewport do editor aberto e retorna PNG, manifesto e,
   opcionalmente, a imagem embutida na resposta MCP.
+- `smile_meshgen_providers`: lista os provedores de geracao de malha por IA, o endpoint em uso e
+  se a chave esta configurada (nunca o valor dela).
+- `smile_generate_mesh`: gera uma malha por prompt ou imagem, grava o `.glb`, cozinha e
+  opcionalmente adiciona a cena aberta.
+- `smile_load_scene`: carrega uma `.sscene` no editor vivo, aditivo por default.
 
 Os acessos a arquivos aceitam somente caminhos relativos que permanecem dentro da raiz da
 SmileEngine. Processos sao iniciados sem shell, e nomes de alvo CMake sao validados.
@@ -42,9 +48,32 @@ O ciclo completo pode ser feito sem voltar ao terminal:
 a mesma named pipe. Se a instancia existente estiver com outra cena, a ferramenta falha alto em
 vez de capturar silenciosamente o viewport errado.
 
+## Geracao de malha por IA
+
+`smile_generate_mesh` e a unica ferramenta que sai para a rede. O ciclo e
+prompt -> `.glb` -> `SmileCooker` -> carga aditiva na cena aberta, e esta descrito por inteiro em
+[`Docs/AI-MESHGEN.md`](../../Docs/AI-MESHGEN.md).
+
+Chave e endpoint saem do ambiente do processo do servidor — nunca de arquivo do projeto:
+
+```powershell
+$env:SMILE_MESHGEN_MESHY_KEY = "..."   # ou SMILE_MESHGEN_TRIPO_KEY
+$env:SMILE_MESHGEN_LOCAL_URL = "http://127.0.0.1:8000"  # servico self-hosted
+```
+
+Sem cliente MCP, a mesma coisa pelo terminal:
+
+```powershell
+npm run meshgen -- --name tocho --prompt "tocho medieval de ferro" --load
+npm run meshgen -- --providers
+```
+
+Os assets caem em `Assets/Generated/<slug>/`, fora do controle de versao, com um
+`<slug>.meshgen.json` ao lado registrando prompt e provedor.
+
 ## Requisitos
 
-- Node.js 20 ou mais recente.
+- Node.js 20 ou mais recente (o `fetch` global da geracao por IA vem dele).
 - `rg` (ripgrep) no `PATH` para `smile_find_text`.
 - CMake no `PATH` para as ferramentas de build.
 - Uma arvore de build ja configurada em `build/`.
@@ -59,6 +88,7 @@ cd D:\Engines\SmileEngine\Tools\SmileMCP
 npm install
 npm run build
 npm run smoke
+npm run smoke:meshgen   # provedor falso em loopback; nao chama servico real nem gasta chave
 ```
 
 O servidor encontra a raiz subindo a partir do diretorio atual. Para eliminar ambiguidade, defina

@@ -34,6 +34,10 @@ Desktop.ini
 .DS_Store
 
 /Assets/Scenes/
+# Malhas geradas por IA + seus cozidos: derivados de um prompt, nao fonte. O prompt que gerou
+# cada asset fica no <slug>.meshgen.json ao lado — esse sim vale versionar se o asset virar
+# permanente (mova-o para Assets/Scenes/ nesse caso).
+/Assets/Generated/
 /.codex_deps
 /.claude
 # Material local de referencia (PDFs, extracoes) — nao versionado.

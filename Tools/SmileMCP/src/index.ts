@@ -851,6 +851,7 @@ server.registerTool(
       }
 
       let imageDataUri: string | undefined;
+      let imageLabel: string | undefined;
       if (input.imagePath) {
         const imagePath = await project.resolveProjectPath(input.imagePath);
         const imageStat = await stat(imagePath);
@@ -865,6 +866,7 @@ server.registerTool(
           throw new Error("A imagem de referencia excede 8 MiB.");
         }
         imageDataUri = `data:${mime};base64,${(await readFile(imagePath)).toString("base64")}`;
+        imageLabel = project.relative(imagePath);
       }
 
       const generation = await generateMesh(project.root, {
@@ -872,6 +874,7 @@ server.registerTool(
         name: input.name,
         prompt: input.prompt,
         imageDataUri,
+        imageLabel,
         negativePrompt: input.negativePrompt,
         artStyle: input.artStyle,
         timeoutSeconds: input.timeoutSeconds,
