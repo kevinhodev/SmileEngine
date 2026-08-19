@@ -14,6 +14,7 @@ consulte o [README principal](../README.md).
 | Objetivo | Documento |
 |---|---|
 | Compilar e executar o projeto | [README principal](../README.md) |
+| Aprender iluminação global do zero | [Guia de GI](GI-GUIDE.md) |
 | Entender a arquitetura da engine | [Arquitetura](ARCHITECTURE.md) |
 | Produzir capturas comparáveis | [Protocolo de captura](CAPTURE-PROTOCOL.md) |
 | Automatizar build, execução e profiling | [SmileMCP](../Tools/SmileMCP/README.md) |
@@ -35,6 +36,7 @@ consulte o [README principal](../README.md).
 
 | Documento | Tipo | Estado |
 |---|---|---|
+| [Guia de iluminação global](GI-GUIDE.md) | Guia introdutório e técnico | Revisado em 2026-08-19 |
 | [Arquitetura da engine](ARCHITECTURE.md) | Referência ativa | Revisão técnica parcial em 2026-08-19 |
 | [Protocolo de captura determinística](CAPTURE-PROTOCOL.md) | Protocolo estável | Calibrado com 128 frames de aquecimento |
 | [Motion vectors temporais](TEMPORAL_MOTION_VECTORS.md) | Nota técnica | Implementação atual |

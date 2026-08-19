@@ -145,6 +145,7 @@ protocolos, planos ativos e auditorias históricas.
 
 Atalhos:
 
+- [Guia de iluminação global — do básico à implementação](Docs/GI-GUIDE.md)
 - [Arquitetura da engine](Docs/ARCHITECTURE.md)
 - [Protocolo de captura determinística](Docs/CAPTURE-PROTOCOL.md)
 - [SmileMCP e automação local](Tools/SmileMCP/README.md)
