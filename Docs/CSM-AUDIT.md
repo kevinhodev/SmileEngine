@@ -1,5 +1,10 @@
 # Auditoria e contrato do CSM
 
+> [!NOTE]
+> **Tipo:** auditoria e contrato · **Estado registrado:** 2026-08-04  
+> As fases 1–4 descritas neste documento foram aplicadas. Itens restantes continuam na seção
+> “O que falta”; medições e caminhos externos devem ser lidos como referências datadas.
+
 Estado em 4 de agosto de 2026. Este documento registra a revisão completa da sombra do
 sol (cascaded shadow maps), cruzada com o código-fonte local da Unreal 5.7/5.8, da
 CryEngine e da Flax, mais bibliografia pública. Registra também o que a fase 1 corrigiu

@@ -40,19 +40,8 @@ processar e automatizar o fluxo de assets.
 
 ## Screenshots
 
-> Capturas do editor e das cenas de referência serão adicionadas aqui.
-
-<!--
-Sugestão de arquivos em Docs/Screenshots/:
-
-| Viewport | Editor de materiais |
-|:--:|:--:|
-| ![Viewport](Docs/Screenshots/viewport.png) | ![Editor de materiais](Docs/Screenshots/material-editor.png) |
-
-| Configurações de render | Time of Day |
-|:--:|:--:|
-| ![Configurações](Docs/Screenshots/render-settings.png) | ![Time of Day](Docs/Screenshots/time-of-day.png) |
--->
+Galeria em preparação. A organização e os nomes sugeridos estão em
+[`Docs/Screenshots`](Docs/Screenshots/README.md).
 
 ## Requisitos
 
@@ -151,10 +140,14 @@ Para detalhes sobre o frame graph, RHI, shaders e subsistemas, consulte a
 
 ## Documentação
 
+Comece pelo [índice da documentação](Docs/README.md), que separa referências,
+protocolos, planos ativos e auditorias históricas.
+
+Atalhos:
+
 - [Arquitetura da engine](Docs/ARCHITECTURE.md)
 - [Protocolo de captura determinística](Docs/CAPTURE-PROTOCOL.md)
-- [Movimentos e dados temporais](Docs/TEMPORAL_MOTION_VECTORS.md)
-- [SmileMCP](Tools/SmileMCP/README.md)
+- [SmileMCP e automação local](Tools/SmileMCP/README.md)
 
 ## Status
 

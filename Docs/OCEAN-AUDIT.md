@@ -1,5 +1,10 @@
 # Auditoria e contrato do oceano
 
+> [!NOTE]
+> **Tipo:** auditoria e contrato · **Estado registrado:** 2026-08-03  
+> O núcleo espectral e o clipmap foram validados. Funcionalidades de gameplay e compromissos de
+> renderização permanecem explicitamente listados em “Limites conhecidos”.
+
 Estado em 3 de agosto de 2026. Este documento registra a validação do oceano FFT,
 as correções aplicadas e os limites que continuam deliberadamente fora do sistema.
 

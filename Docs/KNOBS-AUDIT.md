@@ -1,11 +1,17 @@
 # Auditoria e contrato dos knobs de render
 
+> [!NOTE]
+> **Tipo:** auditoria histórica com implementação concluída · **Estado inicial:** 2026-08-05  
+> A varredura começou sem alterar código, mas a fila ao fim do documento foi implementada.
+> O estado atual usa `FRenderSettings`, 17 `EHistoryTarget` e máscaras em `HistoryDomain.h`.
+
 Estado em 5 de agosto de 2026. Este documento registra a varredura de **como os
 parâmetros de render chegam do editor ao motor** e de **quais deles entram em sinal
 acumulado**. É o insumo da fatia 1 do desmembramento do `Renderer` (§13 do
-`ARCHITECTURE.md`): a fachada `FRenderSettings` e a tabela `EHistoryDomain`.
+`ARCHITECTURE.md`): a fachada `FRenderSettings` e o grafo `EHistoryTarget`/`HistoryDomain`.
 
-Nada aqui foi alterado no código. A varredura é reprodutível — os comandos estão no fim.
+A auditoria original foi somente leitura e continua reprodutível — os comandos estão no fim.
+As mudanças aplicadas posteriormente estão registradas na seção “Fila”.
 
 ## Veredito
 
@@ -204,6 +210,11 @@ knobs de `SunShadows` são tier B, e chegam a histórico só pela via indireta d
 
 ## Domínios propostos
 
+> [!NOTE]
+> Esta seção preserva a proposta original. A implementação consolidada usa o enum
+> `EHistoryTarget` para os acumuladores e constantes no namespace `HistoryDomain` para as
+> máscaras nomeadas pelo motivo.
+
 Derivados da varredura, não inventados. `RayVisibility` e `SkyRadiance` reproduzem quase
 exatamente as listas manuais de `SetRayEpsilons` (`Renderer.h:619`) e
 `NotifyIndirectLightingChanged` (`Renderer.h:755`) — sinal de que a taxonomia bate com o que
@@ -241,7 +252,7 @@ de sete chamadas para lembrar.
    `GetWater().GetDebugStats()` no `MainWindow`, que é telemetria, não knob — mesma categoria
    de `GetScene()`. A invalidação foi preservada **bit a bit**; as 4 divergências continuam
    exatamente como estavam, de propósito. Detalhes de desenho na nota de transição do
-   `RenderSettings.h`. Compila Debug + Release, 2/2 testes passam, e o editor foi exercitado
+   `RenderSettings.h`. À época, compilava Debug + Release, os 2 testes existentes passavam e o editor foi exercitado
    em runtime mexendo nos knobs sem diferença observada — que era o critério de aceite (o
    passo é mecânico: se a imagem tivesse mudado, seria erro de digitação no move).
 2. ~~**Corrigir as 4 divergências.**~~ **FEITO em 2026-08-05**, em dois commits (chuva
@@ -259,9 +270,9 @@ de sete chamadas para lembrar.
    apontando para ela. Compila Debug + Release. **Muda imagem.**
 3. ~~**Tabela `EHistoryDomain`** como dado.~~ **FEITO em 2026-08-05**, bit a bit (nenhuma
    mudança de imagem). Está em `Graphics/HistoryDomain.h`, no formato de `RTMasks.h`:
-   14 `EHistoryTarget` (um bit por histórico que sobrevive ao frame) e 11 domínios nomeados
-   **pelo motivo**, não pelos alvos. O executor único é `FRenderSettings::Invalidate(mask)`,
-   uma linha por alvo.
+   nasceu com 14 `EHistoryTarget` (um bit por histórico que sobrevive ao frame) e 11 domínios
+   nomeados **pelo motivo**, não pelos alvos. O código atual possui 17 alvos. O executor único
+   é `FRenderSettings::Invalidate(mask)`, uma linha por alvo.
 
    Invariante verificável — o mapeamento bit → chamada existe em **um** lugar:
 
@@ -283,10 +294,10 @@ de sete chamadas para lembrar.
 
    | | antes | depois |
    |---|---|---|
-   | `ViewportWidget` `Q_PROPERTY` | 134 | **42** |
-   | `ViewportWidget.h` | 645 linhas | **357** |
-   | `ViewportWidget.cpp` | 2796 linhas | **1646** |
-   | `RenderSettingsBridge` | — | 93 `Q_PROPERTY` |
+   | `ViewportWidget` `Q_PROPERTY` | 134 | **44** atualmente |
+   | `ViewportWidget.h` | 645 linhas | **395** atualmente |
+   | `ViewportWidget.cpp` | 2796 linhas | **1923** atualmente |
+   | `RenderSettingsBridge` | — | **127** `Q_PROPERTY` atualmente |
 
    O que sobrou no `viewportModel` é exatamente o que não é knob: view mode, visualizador de
    render targets, diagnóstico de sonda, instrumentação (BVH / timer de RT) e telemetria

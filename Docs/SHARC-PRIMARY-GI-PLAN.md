@@ -1,5 +1,11 @@
 # SHaRC/WRC como GI primário, DDGI como fallback
 
+> [!WARNING]
+> **Tipo:** plano de trabalho ativo · **Última atualização registrada:** 2026-08-15  
+> Fases 0–5 concluídas; Fase 6 possui gates de runtime pendentes e a Fase 7 está em andamento.
+> Leia o bloco de estado abaixo antes das seções históricas. O contrato executável atual está em
+> `Engine/Include/Smile/Graphics/IndirectPolicy.h`.
+
 > **Onde estamos:** Fases 0-5 **FECHADAS**. A Fase 5 fechou com o SHaRC promovido a fonte
 > primária por default e com o número que faltava: **o DDGI responde 30,14% dos hits secundários**,
 > e não os 8,4% que a primeira versão da telemetria reportava — a diferença é o achado, não o
