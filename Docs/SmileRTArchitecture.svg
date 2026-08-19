@@ -66,6 +66,16 @@
         font-weight: 700;
         letter-spacing: 0.8px;
       }
+      .rt-bar-title {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        fill: #ffffff;
+      }
+      .rt-bar-meta {
+        font-size: 11px;
+        fill: #cbd5e1;
+      }
       .mono {
         font-family: Consolas, "SFMono-Regular", monospace;
         font-size: 11px;
@@ -233,8 +243,8 @@
     <text x="64" y="645" class="lane-subtitle">Passes por pixel</text>
 
     <rect x="230" y="604" width="1290" height="42" rx="5" fill="#172033"/>
-    <text x="248" y="630" class="tag" fill="#ffffff">DXR 1.1 / RAYQUERY</text>
-    <text x="1502" y="630" text-anchor="end" font-size="11" fill="#cbd5e1">HitShading compartilhado &#183; pol&#237;tica de indireto em IndirectPolicy.h</text>
+    <text x="248" y="630" class="rt-bar-title">DXR 1.1 / RAYQUERY</text>
+    <text x="1502" y="630" text-anchor="end" class="rt-bar-meta">HitShading compartilhado &#183; pol&#237;tica de indireto em IndirectPolicy.h</text>
 
     <rect x="230" y="674" width="400" height="102" rx="6" class="card-blue"/>
     <rect x="230" y="674" width="6" height="102" fill="#2563eb"/>
