@@ -256,7 +256,10 @@ namespace Smile {
                 ID3D12DescriptorHeap* CHeaps[] = { Backend->SRVHeap.Native() };
                 CCL->SetDescriptorHeaps(_countof(CHeaps), CHeaps);
                 {
-                    FGpuScope Scope(Backend->ComputeProfiler, CCL, "DDGI");
+                    FGpuScope TotalScope(Backend->ComputeProfiler, CCL, "DDGI");
+                    const char* Phase = DDGI.ScheduledCascadeCount() < DDGI.CascadeCount()
+                                      ? "DDGI (fine)" : "DDGI (fine+coarse)";
+                    FGpuScope PhaseScope(Backend->ComputeProfiler, CCL, Phase);
                     DDGI.RecordUpdate(CCL, Backend->SRVHeap);
                 }
                 Backend->ComputeProfiler.Resolve(CCL);
@@ -269,7 +272,10 @@ namespace Smile {
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
             } else {
-                FGpuScope Scope(Backend->DirectProfiler, CommandList, "DDGI");
+                FGpuScope TotalScope(Backend->DirectProfiler, CommandList, "DDGI");
+                const char* Phase = DDGI.ScheduledCascadeCount() < DDGI.CascadeCount()
+                                  ? "DDGI (fine)" : "DDGI (fine+coarse)";
+                FGpuScope PhaseScope(Backend->DirectProfiler, CommandList, Phase);
                 DDGI.TransitionForUpdate(CommandList);
                 DDGI.RecordUpdate(CommandList, Backend->SRVHeap);
                 DDGI.TransitionForRead(CommandList);

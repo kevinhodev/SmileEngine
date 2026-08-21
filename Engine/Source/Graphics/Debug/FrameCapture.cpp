@@ -539,6 +539,10 @@ namespace Smile {
                 File << "  \"ddgiRaysPerProbe\": " << _State.DDGIRaysPerProbe << ",\n";
                 File << "  \"ddgiAdaptiveRays\": "
                      << Bool(_State.DDGIAdaptiveRays) << ",\n";
+                File << "  \"ddgiInterleavedUpdates\": "
+                     << Bool(_State.DDGIInterleavedUpdates) << ",\n";
+                File << "  \"ddgiLastUpdatedCascadeCount\": "
+                     << _State.DDGILastUpdatedCascadeCount << ",\n";
                 File << "  \"ddgiAdaptiveMinRays\": "
                      << _State.DDGIAdaptiveMinRays << ",\n";
                 File << "  \"ddgiAdaptiveMaxRays\": "

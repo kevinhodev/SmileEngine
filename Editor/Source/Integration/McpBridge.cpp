@@ -245,6 +245,7 @@ namespace SmileEditor {
                         { QStringLiteral("y"), Cascade.ScrollY },
                         { QStringLiteral("z"), Cascade.ScrollZ },
                     } },
+                    { QStringLiteral("updateAge"), Cascade.UpdateAge },
                 });
             }
 
@@ -279,6 +280,13 @@ namespace SmileEditor {
                     { QStringLiteral("raysPerProbe"), _Status.RaysPerProbe },
                     { QStringLiteral("adaptiveMinRays"), _Status.AdaptiveMinRays },
                     { QStringLiteral("adaptiveMaxRays"), _Status.AdaptiveMaxRays },
+                    { QStringLiteral("interleavedUpdates"), _Status.InterleavedUpdates },
+                    { QStringLiteral("scheduledCascadeCount"), _Status.ScheduledCascadeCount },
+                    { QStringLiteral("lastUpdatedCascadeCount"), _Status.LastUpdatedCascadeCount },
+                    { QStringLiteral("updateSerial"), static_cast<double>(_Status.UpdateSerial) },
+                    { QStringLiteral("lastForcedUpdateSerial"),
+                      static_cast<double>(_Status.LastForcedUpdateSerial) },
+                    { QStringLiteral("scheduledFullForced"), _Status.ScheduledFullForced },
                     { QStringLiteral("adaptiveRays"), _Status.AdaptiveRays },
                     { QStringLiteral("adaptiveHysteresis"), _Status.AdaptiveHysteresis },
                     { QStringLiteral("cascades"), Cascades },
@@ -681,6 +689,7 @@ namespace SmileEditor {
             ReadOptionalInteger(_Arguments, "cascadeCount", 1,
                                 static_cast<int>(Smile::FDDGI::kMaxCascades),
                                 Overrides.CascadeCount) &&
+            ReadOptionalBool(_Arguments, "interleavedUpdates", Overrides.InterleavedUpdates) &&
             ReadOptionalBool(_Arguments, "adaptiveRays", Overrides.AdaptiveRays) &&
             ReadOptionalBool(_Arguments, "adaptiveHysteresis",
                              Overrides.AdaptiveHysteresis);

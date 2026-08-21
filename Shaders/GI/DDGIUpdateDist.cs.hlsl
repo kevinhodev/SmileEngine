@@ -35,6 +35,7 @@ cbuffer DDGICB : register(b0) {
                               // aberta (e mais longa que a da irradiancia — ver DDGI.h)
     // Cascatas: a posicao da sonda no teste de invalidacao regional e o clamp dos momentos saem
     // daqui, nao do GridMinSpacing (que e a GROSSA).
+    // z = prefixo de sondas atualizado; w = intervalo temporal da cascata grossa neste update.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
     // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
@@ -76,9 +77,10 @@ static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
 [numthreads(DDGI_DIST_TILE, DDGI_DIST_TILE, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int numProbes = (int)AtlasParams.w;
+    int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
     // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
-    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, numProbes);
-    if (probeIdx >= numProbes) return;
+    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, updateProbes);
+    if (probeIdx >= updateProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
     // Indice GLOBAL -> (cascata, indice local). A geometria da sonda e sempre LOCAL; so o atlas e
@@ -158,7 +160,11 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // piscando em vez de brilho piscando).
     // Lamina nova: momentos zerados de fato, e nao "quase". Com media e 2o momento de outro lugar,
     // o Chebyshev prende todo tap no piso de 0,05 e a sonda nova ocluiria tudo a volta dela.
-    float  hyst  = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : DistAtlasParams.w;
+    // Mesma compensacao temporal da irradiancia: quando a grossa ficou um frame sem update,
+    // h^2 conserva a meia-vida dos momentos em frames, sem fingir que ela atualizou no intervalo.
+    const float temporalInterval = (cascade > 0) ? max(GICascadeParams.w, 1.0f) : 1.0f;
+    const float temporalHyst = pow(saturate(DistAtlasParams.w), temporalInterval);
+    float  hyst  = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : temporalHyst;
     // Janela propria: a do dist e mais longa, entao o flag de "aberta" nao pode ser o da
     // irradiancia. So o w do InvalidateMin e substituido; a CAIXA e a mesma.
     const float4 distInvMin = float4(InvalidateMin.xyz, MiscParams3.y);

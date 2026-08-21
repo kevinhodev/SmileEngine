@@ -104,6 +104,12 @@ namespace SmileEditor {
         Out.RaysPerProbe           = static_cast<int>(DDGI.RaysPerProbe());
         Out.AdaptiveMinRays        = DDGI.GetMinRays();
         Out.AdaptiveMaxRays        = DDGI.GetMaxRays();
+        Out.InterleavedUpdates     = DDGI.GetInterleavedUpdates();
+        Out.ScheduledCascadeCount  = static_cast<int>(DDGI.ScheduledCascadeCount());
+        Out.LastUpdatedCascadeCount = static_cast<int>(DDGI.LastUpdatedCascadeCount());
+        Out.UpdateSerial           = DDGI.UpdateSerial();
+        Out.LastForcedUpdateSerial = DDGI.LastForcedUpdateSerial();
+        Out.ScheduledFullForced    = DDGI.ScheduledFullWasForced();
         Out.AdaptiveRays           = DDGI.GetAdaptiveRays();
         Out.AdaptiveHysteresis     = DDGI.GetAdaptiveHysteresis();
         Out.Cascades.reserve(Out.ActualCascadeCount);
@@ -118,6 +124,7 @@ namespace SmileEditor {
                 DDGI.CascadeScroll(static_cast<Smile::u32>(Index), 0),
                 DDGI.CascadeScroll(static_cast<Smile::u32>(Index), 1),
                 DDGI.CascadeScroll(static_cast<Smile::u32>(Index), 2),
+                static_cast<int>(DDGI.CascadeUpdateAge(static_cast<Smile::u32>(Index))),
             });
         }
         return Out;
@@ -336,6 +343,8 @@ namespace SmileEditor {
             if (_Overrides.CascadeCount)
                 Settings.SetGICascadeCount(
                     static_cast<Smile::u32>(*_Overrides.CascadeCount));
+            if (_Overrides.InterleavedUpdates)
+                Settings.SetGIInterleavedUpdates(*_Overrides.InterleavedUpdates);
             if (_Overrides.AdaptiveRays)
                 Settings.SetGIAdaptiveRays(*_Overrides.AdaptiveRays);
             if (_Overrides.AdaptiveHysteresis)

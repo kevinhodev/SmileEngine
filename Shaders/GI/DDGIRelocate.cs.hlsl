@@ -50,7 +50,8 @@ uint DDGI_DesiredRays(float closestFront, float spacing, int minRays, int maxRay
 void main(uint3 DTid : SV_DispatchThreadID) {
     int probeIdx  = (int)DTid.x;
     int numProbes = (int)AtlasParams.w;
-    if (probeIdx >= numProbes) return;
+    int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    if (probeIdx >= updateProbes) return;
 
     int  maxRays  = (int)MiscParams.z;
     int  minRays  = (int)MiscParams.w;

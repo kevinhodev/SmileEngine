@@ -111,6 +111,8 @@ namespace Smile {
         u32  DDGICascadeCount    = 0;
         u32  DDGIRaysPerProbe    = 0;
         bool DDGIAdaptiveRays    = false;
+        bool DDGIInterleavedUpdates = false;
+        u32  DDGILastUpdatedCascadeCount = 0;
         u32  DDGIAdaptiveMinRays = 0;
         u32  DDGIAdaptiveMaxRays = 0;
         bool ReSTIRGI           = false;

@@ -668,6 +668,13 @@ namespace Smile {
         Invalidate(Dom::GIAccumulation);
     }
 
+    bool FRenderSettings::GetGIInterleavedUpdates() const {
+        return R.DDGI.GetInterleavedUpdates();
+    }
+    void FRenderSettings::SetGIInterleavedUpdates(bool _V) {
+        R.DDGI.SetInterleavedUpdates(_V);
+    }
+
     bool FRenderSettings::GetGIAdaptiveRays() const { return R.DDGI.GetAdaptiveRays(); }
     void FRenderSettings::SetGIAdaptiveRays(bool _V) {
         if (_V == R.DDGI.GetAdaptiveRays()) return;

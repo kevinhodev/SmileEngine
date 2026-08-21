@@ -33,6 +33,7 @@ cbuffer DDGICB : register(b0) {
     float4 MiscParams3;
     // Cascatas: a posicao da sonda no teste de invalidacao regional sai daqui, nao do
     // GridMinSpacing (que e a GROSSA).
+    // z = prefixo de sondas atualizado; w = intervalo temporal da cascata grossa neste update.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
     // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
@@ -68,9 +69,10 @@ groupshared uint gChangeAccum;
 [numthreads(DDGI_TILE, DDGI_TILE, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int numProbes = (int)AtlasParams.w;
+    int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
     // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
-    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, numProbes);
-    if (probeIdx >= numProbes) return;
+    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, updateProbes);
+    if (probeIdx >= updateProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
     // Indice GLOBAL -> (cascata, indice local). A geometria da sonda e sempre LOCAL; so o atlas e
@@ -126,7 +128,11 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     // slot descreve outro ponto do mundo, exatamente como o da sonda que acabou de sair de dentro
     // de uma parede. Misturar 1% da estimativa nova com 99% de um lugar a dezenas de metros e o
     // arrasto que o scrolling existe para evitar.
-    float  hyst    = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : SunColorHyst.w;
+    // Se a grossa pulou o frame anterior, h^2 preserva a meia-vida em tempo de parede do update
+    // completo. O expoente vem da idade REAL na CPU, entao um full forcado consecutivo usa h^1.
+    const float temporalInterval = (cascade > 0) ? max(GICascadeParams.w, 1.0f) : 1.0f;
+    const float temporalHyst = pow(saturate(SunColorHyst.w), temporalInterval);
+    float  hyst    = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : temporalHyst;
 
     // Invalidacao ESPACIAL (FDDGI::InvalidateRegion): um objeto nasceu ou morreu aqui perto.
     // Diferente do caso acima, a historia desta sonda continua quase toda valida — so a parcela

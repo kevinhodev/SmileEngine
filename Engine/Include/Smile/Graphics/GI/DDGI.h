@@ -43,7 +43,9 @@ namespace Smile {
     // Espelhado em HLSL pela trinca (CascadeParams, CascadeGridMinSpacing[4],
     // CascadeScrollOffset[4]) — a ordem dos campos e o tamanho dos arrays fazem parte do contrato.
     struct alignas(16) FDDGICascadeConstants {
-        Vec4 Params{ 1.0f, 0.0f, 0.0f, 0.0f }; // x = nº de cascatas, y = sondas por cascata
+        Vec4 Params{ 1.0f, 0.0f, 0.0f, 1.0f }; // x = nº de cascatas, y = sondas por cascata;
+                                               // no DDGICB, z = sondas atualizadas neste frame,
+                                               // w = intervalo temporal da grossa neste update
         // Espacamento 1 e nao 0 no DEFAULT, e isto e a garantia e nao um detalhe: o seletor de
         // cascata divide pelo espacamento, entao um bloco zerado — o que qualquer instancia
         // default-construida seria — daria divisao por zero se algum caminho novo o ler. A
@@ -183,7 +185,7 @@ namespace Smile {
         static constexpr int kDistTileSize = 14;
         // Cascatas: volumes concentricos com a MESMA contagem de sondas e espacamentos
         // diferentes. A de indice 0 e a mais FINA; a ULTIMA e a que cobre a cena inteira — o
-        // volume unico de hoje. Essa ordem e o oposto da Flax, onde a ultima cascata cai num
+        // volume unico historico. Essa ordem e o oposto da Flax, onde a ultima cascata cai num
         // FallbackIrradiance constante: aqui o fallback da cascata fina e a grossa, e so quem sai
         // da grossa (o terreno) cai no ambiente hemisferico. Preserva a propriedade que o volume
         // unico ja tinha — cobertura da cena inteira, convergindo em todo lugar.
@@ -288,6 +290,23 @@ namespace Smile {
         u32  ProbesPerCascade()const { return ProbesPerCascade_; }
         u32  CascadeCount()    const { return CascadeCount_; }
         u32  RaysPerProbe()    const { return kRaysPerProbe; }
+        // Scheduler de update: com EXATAMENTE duas cascatas, a fina roda sempre e a grossa em
+        // frames alternados. Reset, invalidacao, reclassificacao e teleporte promovem o frame
+        // para as duas. Com 1/3/4 o caminho continua completo ate existir round-robin generico.
+        void SetInterleavedUpdates(bool V) {
+            if (InterleavedUpdates == V) return;
+            InterleavedUpdates = V;
+            CoarseDue_ = true; // ao ligar, estabelece um baseline completo antes de intercalar
+        }
+        bool GetInterleavedUpdates() const { return InterleavedUpdates; }
+        u32  ScheduledCascadeCount() const { return ScheduledCascadeCount_; }
+        u32  LastUpdatedCascadeCount() const { return LastUpdatedCascadeCount_; }
+        u64  UpdateSerial() const { return UpdateSerial_; }
+        u64  LastForcedUpdateSerial() const { return LastForcedUpdateSerial_; }
+        bool ScheduledFullWasForced() const { return ScheduledFullForced_; }
+        u32  CascadeUpdateAge(u32 C) const {
+            return CascadeUpdateAge_[C < kMaxCascades ? C : 0];
+        }
 
         // Cascata 0 e a mais FINA; a ULTIMA e a que cobre a cena.
         //
@@ -295,7 +314,7 @@ namespace Smile {
         // das cascatas — o fade de borda, o fallback fora do volume, a folga da invalidacao
         // regional, o alcance do trace — quer dizer "o volume da cena", e essa e a grossa. Fazer
         // estes dois apontarem para a cascata 0 mudaria o significado de cada um deles em
-        // silencio no dia em que a segunda cascata acender. Com uma cascata os dois sao o mesmo.
+        // silencio no default de duas cascatas. Com uma cascata os dois sao o mesmo.
         u32  CoarseCascade() const { return CascadeCount_ > 0 ? CascadeCount_ - 1 : 0; }
         Vec3 GridMin()   const { return Cascades[CoarseCascade()].GridMin; }
         f32  Spacing()   const { return Cascades[CoarseCascade()].Spacing; }
@@ -316,7 +335,7 @@ namespace Smile {
         FDDGICascadeConstants CascadeConstants() const {
             FDDGICascadeConstants C{};
             C.Params = { static_cast<f32>(CascadeCount_),
-                         static_cast<f32>(ProbesPerCascade_), 0.0f, 0.0f };
+                         static_cast<f32>(ProbesPerCascade_), 0.0f, 1.0f };
             for (u32 i = 0; i < kMaxCascades; ++i) {
                 const FCascade& Cs = Cascades[i < CascadeCount_ ? i : CoarseCascade()];
                 C.GridMinSpacing[i] = { Cs.GridMin.X, Cs.GridMin.Y, Cs.GridMin.Z, Cs.Spacing };
@@ -555,6 +574,7 @@ namespace Smile {
             if (Ready && RelocateFramesLeft < kReclassifyFrames)
                 RelocateFramesLeft = kReclassifyFrames;
         }
+        void ScheduleUpdate();
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
 
@@ -632,11 +652,29 @@ namespace Smile {
         // sentido contrario.
         static constexpr f32 kCascadeSpacingRatio = 4.0f;
         // Pedido pelo usuario; so vira CascadeCount_ no proximo SetupForScene, porque a contagem
-        // dimensiona atlas e buffers. Default 1 = comportamento historico ate a 6.2b ter A/B.
-        u32  DesiredCascades  = 1;
+        // dimensiona atlas e buffers. Default 2 desde 21/08/2026: fina de camera + grossa da cena.
+        // O valor 1 preserva o volume historico e continua sendo o modo de menor custo.
+        u32  DesiredCascades  = 2;
         int  CountX = 0, CountY = 0, CountZ = 0;
         u32  ProbesPerCascade_ = 0;
         u32  NumProbes   = 0; // TOTAL = ProbesPerCascade_ * CascadeCount_
+        // Prefixo de sondas que os quatro passes atualizam neste frame. A fina ocupa o primeiro
+        // bloco fisico, entao atualizar uma cascata e literalmente despachar [0, probesPerCascade).
+        // AtlasParams.w continua sendo o TOTAL: o layout do ProbesTrace depende dele em cenas
+        // pequenas e nao pode mudar junto com o dispatch.
+        u32  ScheduledProbeCount_ = 0;
+        u32  ScheduledCascadeCount_ = 1;
+        u32  LastUpdatedCascadeCount_ = 0;
+        u32  CascadeUpdateAge_[kMaxCascades]{};
+        u64  UpdateSerial_ = 0;
+        u64  LastForcedUpdateSerial_ = 0;
+        // Default ON junto das duas cascatas. O A/B pareado de 21/08/2026 mediu 22,19% de economia
+        // contra atualizar as duas sempre; SSIM 0,99974 e somente 0,0037% dos pixels passaram de
+        // cinco niveis. O gate numerico mais estrito marcou viés de luma 0,116/255 contra teto
+        // 0,10; a revisao perceptual aceitou a diferenca e o perfil ao vivo marcou 0,02 ms de wait.
+        bool InterleavedUpdates = true;
+        bool CoarseDue_ = true;
+        bool ScheduledFullForced_ = false;
         u32  AtlasWidth  = 0, AtlasHeight = 0;
         u32  DistAtlasWidth = 0, DistAtlasHeight = 0;
         // Grade de tiles do atlas. TilesPerRow e sempre um MULTIPLO de CountX (a banda contem

@@ -352,6 +352,8 @@ namespace Smile {
         S.DDGICascadeCount    = DDGI.CascadeCount();
         S.DDGIRaysPerProbe    = DDGI.RaysPerProbe();
         S.DDGIAdaptiveRays    = DDGI.GetAdaptiveRays();
+        S.DDGIInterleavedUpdates = DDGI.GetInterleavedUpdates();
+        S.DDGILastUpdatedCascadeCount = DDGI.LastUpdatedCascadeCount();
         S.DDGIAdaptiveMinRays = static_cast<u32>(DDGI.GetMinRays());
         S.DDGIAdaptiveMaxRays = static_cast<u32>(DDGI.GetMaxRays());
         S.ReSTIRGI    = _Modes.ReSTIRGIActive;

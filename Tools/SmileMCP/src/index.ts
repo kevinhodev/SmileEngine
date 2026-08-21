@@ -497,7 +497,7 @@ server.registerTool(
   {
     title: "Read Smile GI state",
     description:
-      "Le politica indireta pedida/efetiva e estado vivo do DDGI: cascatas desejadas/reais, grade, sondas, espacamento e scroll em celulas.",
+      "Le politica indireta pedida/efetiva e estado vivo do DDGI: cascatas desejadas/reais, grade, sondas, espacamento, scroll e fase do update intercalado.",
     inputSchema: {
       timeoutSeconds: z.number().min(0.1).max(10).default(2),
     },
@@ -528,6 +528,7 @@ server.registerTool(
       indirectPrimary: z.enum(["restir_sharc", "ddgi", "off"]).nullish(),
       indirectFallback: z.enum(["ddgi", "environment", "black"]).nullish(),
       cascadeCount: z.number().int().min(1).max(4).nullish(),
+      interleavedUpdates: z.boolean().nullish(),
       adaptiveRays: z.boolean().nullish(),
       adaptiveHysteresis: z.boolean().nullish(),
       timeoutSeconds: z.number().min(1).max(120).default(30),

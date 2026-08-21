@@ -15,6 +15,8 @@
     "smoke:capture": "npm run build && node scripts/capture-smoke.mjs",
     "validate:gi": "npm run build && node scripts/gi-validation.mjs",
     "validate:gi:adaptive-visual": "npm run build && node scripts/gi-adaptive-visual.mjs",
+    "validate:gi:interleaved": "npm run build && node scripts/gi-interleaved.mjs",
+    "analyze:gi:interleaved": "python scripts/compare-gi-interleaved.py",
     "benchmark:gi": "npm run build && node scripts/gi-benchmark.mjs",
     "benchmark:gi:adaptive": "npm run build && node scripts/gi-benchmark.mjs --suite adaptive"
   },

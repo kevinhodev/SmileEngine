@@ -124,6 +124,7 @@ namespace SmileEditor {
         std::optional<Smile::EIndirectPrimary>  IndirectPrimary;
         std::optional<Smile::EIndirectFallback> IndirectFallback;
         std::optional<int>  CascadeCount;
+        std::optional<bool> InterleavedUpdates;
         std::optional<bool> AdaptiveRays;
         std::optional<bool> AdaptiveHysteresis;
     };
@@ -137,6 +138,7 @@ namespace SmileEditor {
         int    ScrollX  = 0;
         int    ScrollY  = 0;
         int    ScrollZ  = 0;
+        int    UpdateAge = 0;
     };
 
     struct FGIStatusSnapshot {
@@ -153,6 +155,12 @@ namespace SmileEditor {
         int  RaysPerProbe = 0;
         int  AdaptiveMinRays = 0;
         int  AdaptiveMaxRays = 0;
+        bool InterleavedUpdates = false;
+        int  ScheduledCascadeCount = 0;
+        int  LastUpdatedCascadeCount = 0;
+        quint64 UpdateSerial = 0;
+        quint64 LastForcedUpdateSerial = 0;
+        bool ScheduledFullForced = false;
         bool AdaptiveRays = false;
         bool AdaptiveHysteresis = false;
         QVector<FDDGICascadeSnapshot> Cascades;

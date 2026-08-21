@@ -268,6 +268,14 @@ namespace Smile {
 
         ProbesPerCascade_ = static_cast<u32>(CountX) * CountY * CountZ;
         NumProbes         = ProbesPerCascade_ * CascadeCount_;
+        ScheduledProbeCount_     = NumProbes;
+        ScheduledCascadeCount_   = CascadeCount_;
+        LastUpdatedCascadeCount_ = 0;
+        UpdateSerial_            = 0;
+        LastForcedUpdateSerial_  = 0;
+        CoarseDue_               = true;
+        ScheduledFullForced_     = false;
+        for (u32 C = 0; C < kMaxCascades; ++C) CascadeUpdateAge_[C] = 0;
 
         // Grade 2D de tiles. O shader NAO recebe tilesPerRow por cbuffer: ele o recupera da
         // LARGURA (DDGI_TilesPerRow), e as duas contas so batem porque a largura e construida aqui
@@ -542,10 +550,43 @@ namespace Smile {
         }
     }
 
+    void FDDGI::ScheduleUpdate() {
+        ScheduledFullForced_ = false;
+        ScheduledCascadeCount_ = CascadeCount_;
+
+        // O layout atual permite atualizar um PREFIXO. Com duas cascatas esse prefixo e
+        // exatamente "fina" ou "fina+grossa". Para 1/3/4 mantemos o caminho completo ate haver
+        // um scheduler round-robin com base de indice explicita no shader.
+        if (InterleavedUpdates && CascadeCount_ == 2) {
+            // Teleporte que substitui a grade fina INTEIRA: o delta deixa de descrever laminas
+            // incrementais e DDGI_NewlyExposed considera todas as sondas novas. Promove tambem a
+            // grossa neste update para o frame de corte nao misturar fases temporais diferentes.
+            // Movimento normal, inclusive diagonal/vertical, continua fine-only quando for a vez.
+            const int Counts[3] = { CountX, CountY, CountZ };
+            bool FullFineReplacement = false;
+            for (u32 C = 0; C < CoarseCascade() && !FullFineReplacement; ++C) {
+                for (int A = 0; A < 3; ++A) {
+                    const int Delta = Cascades[C].OriginCells[A] - Cascades[C].PrevOriginCells[A];
+                    if (std::abs(Delta) >= std::max(Counts[A], 1)) {
+                        FullFineReplacement = true;
+                        break;
+                    }
+                }
+            }
+            const bool Urgent = HysteresisResetPending || InvalidateFramesLeft_ > 0 ||
+                                InvalidateDistFramesLeft_ > 0 || RelocateFramesLeft > 0 ||
+                                ReclassifyPending_ || FullFineReplacement;
+            ScheduledFullForced_ = Urgent;
+            ScheduledCascadeCount_ = (Urgent || CoarseDue_) ? 2u : 1u;
+        }
+        ScheduledProbeCount_ = ProbesPerCascade_ * ScheduledCascadeCount_;
+    }
+
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
                                const Vec3& _SunColor, u32 _FrameIndex, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
+        ScheduleUpdate();
         CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
         // Histerese 0 enquanto houver reset pendente: o update SUBSTITUI o atlas em vez de
         // misturar 99% do conteudo velho (ver ResetHistoryOnce). O flag so e consumido quando o
@@ -582,6 +623,17 @@ namespace Smile {
         // mandar os 64 raios e nao alimentar o classificador com a propria decimacao.
         // Cascatas: mesmo bloco que vai para os outros quatro cbuffers (ver CascadeConstants).
         CPU.Cascades = CascadeConstants();
+        // z e deliberadamente separado de AtlasParams.w. O primeiro limita o PREFIXO atualizado;
+        // o segundo continua descrevendo o layout fisico completo do ProbesTrace/atlas.
+        CPU.Cascades.Params.Z = static_cast<f32>(ScheduledProbeCount_);
+        // A grossa intercalada ficou um update sem integrar. Elevar a histerese ao numero de
+        // intervalos preserva a mesma meia-vida em FRAMES do caminho completo: apos dois frames
+        // o peso da historia seria h*h. Em update forcado logo apos um completo a idade e zero,
+        // portanto o expoente continua 1 e invalidacao/reset nao sao acelerados em dobro.
+        CPU.Cascades.Params.W = static_cast<f32>(
+            (InterleavedUpdates && CascadeCount_ == 2 && ScheduledCascadeCount_ == 2)
+                ? std::min(CascadeUpdateAge_[CoarseCascade()] + 1u, 2u)
+                : 1u);
         // Delta de scroll em CELULAS desde o ultimo update que rodou, so para os passes de update
         // (o gather nao limpa nada). Inteiro, e por isso identico nos quatro passes: se cada um
         // deduzisse a lamina comparando gaiolas em float, teriam tolerancias diferentes na borda
@@ -759,8 +811,9 @@ namespace Smile {
         // grade, e o shader recalcula X pela mesma formula em vez de recebe-la (ver
         // DDGI_ProbeFromGroup). Com 1D o teto era 65535 sondas — abaixo do que os atlas
         // comportam, e sem sintoma ate o Dispatch falhar.
-        const u32 GroupsX = DispatchGroupsX(NumProbes);
-        const u32 GroupsY = DispatchGroupsY(NumProbes);
+        const u32 UpdateProbes = std::max(ScheduledProbeCount_, 1u);
+        const u32 GroupsX = DispatchGroupsX(UpdateProbes);
+        const u32 GroupsY = DispatchGroupsY(UpdateProbes);
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
@@ -793,7 +846,7 @@ namespace Smile {
             _CL->SetComputeRootConstantBufferView(0, CBAddr());
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
-            _CL->Dispatch((NumProbes + 63) / 64, 1, 1);
+            _CL->Dispatch((UpdateProbes + 63) / 64, 1, 1);
             // A promocao acima e NON_PIXEL -> UAV, legal em compute: quem tira o ProbeData do
             // kAtlasRead (que contem PIXEL) e o TransitionForUpdate, na fila DIRETA. A volta para
             // kAtlasRead fica no TransitionForRead, tambem na direta, depois do wait.
@@ -817,6 +870,17 @@ namespace Smile {
             ReclassifyPending_ = false;
             if (Relocation || AdaptiveRays) TriggerReclassify();
         }
+
+        LastUpdatedCascadeCount_ = ScheduledCascadeCount_;
+        for (u32 C = 0; C < CascadeCount_; ++C) {
+            if (C < ScheduledCascadeCount_) CascadeUpdateAge_[C] = 0;
+            else if (CascadeUpdateAge_[C] < 0xFFFFFFFFu) ++CascadeUpdateAge_[C];
+        }
+        ++UpdateSerial_;
+        if (ScheduledFullForced_) LastForcedUpdateSerial_ = UpdateSerial_;
+        // Um update completo, inclusive forcado, satisfaz a vez da grossa. O proximo frame
+        // estavel pode ser fine-only; depois dele a grossa volta a vencer.
+        CoarseDue_ = ScheduledCascadeCount_ < CascadeCount_;
     }
 
     void FDDGI::CreatePipelines(ID3D12Device* _Device) {

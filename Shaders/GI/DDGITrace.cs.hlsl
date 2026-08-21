@@ -74,10 +74,11 @@ SamplerState LinearWrap  : register(s1);
 [numthreads(DDGI_RAYS, 1, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int   numProbes = (int)AtlasParams.w;
+    int   updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
     // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
-    int   probeIdx  = DDGI_ProbeFromGroup(Gid.xy, numProbes);
+    int   probeIdx  = DDGI_ProbeFromGroup(Gid.xy, updateProbes);
     int   rayIdx    = (int)GTid.x;
-    if (probeIdx >= numProbes) return;
+    if (probeIdx >= updateProbes) return;
 
     int3  count   = (int3)GridCountRays.xyz;
     // Indice GLOBAL -> (cascata, indice local). A GEOMETRIA da sonda — coordenada no grid, origem

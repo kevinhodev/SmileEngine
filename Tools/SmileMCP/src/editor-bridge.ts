@@ -100,6 +100,7 @@ export interface GIConfigureOverrides {
   indirectPrimary?: IndirectPrimary;
   indirectFallback?: IndirectFallback;
   cascadeCount?: number;
+  interleavedUpdates?: boolean;
   adaptiveRays?: boolean;
   adaptiveHysteresis?: boolean;
 }
@@ -109,6 +110,7 @@ export interface GICascadeStatus {
   gridMin: { x: number; y: number; z: number };
   spacing: number;
   scrollCells: { x: number; y: number; z: number };
+  updateAge: number;
 }
 
 export interface GIStatus {
@@ -128,6 +130,12 @@ export interface GIStatus {
     raysPerProbe: number;
     adaptiveMinRays: number;
     adaptiveMaxRays: number;
+    interleavedUpdates: boolean;
+    scheduledCascadeCount: number;
+    lastUpdatedCascadeCount: number;
+    updateSerial: number;
+    lastForcedUpdateSerial: number;
+    scheduledFullForced: boolean;
     adaptiveRays: boolean;
     adaptiveHysteresis: boolean;
     cascades: GICascadeStatus[];

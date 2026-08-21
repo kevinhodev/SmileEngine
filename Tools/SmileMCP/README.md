@@ -20,11 +20,11 @@ Ferramentas disponiveis:
 - `smile_camera_set`: define uma pose absoluta e devolve o readback; aplica camera cut por
   default ou preserva continuidade temporal com `cameraCut: false` para percursos de benchmark.
 - `smile_gi_status`: le politica pedida/efetiva e telemetria do DDGI, incluindo grade, sondas,
-  cascatas, espacamento, scroll toroidal em celulas e os limites configurados dos raios
-  adaptativos. A distribuicao efetiva por sonda permanece GPU-only para nao introduzir readback
-  e stall na regua.
+  cascatas, espacamento, scroll toroidal em celulas, idade/contagem das cascatas atualizadas,
+  serial do ultimo full forcado e os limites configurados dos raios adaptativos. A distribuicao
+  efetiva por sonda permanece GPU-only para nao introduzir readback e stall na regua.
 - `smile_gi_configure`: altera somente os eixos de GI informados: volume, primary/fallback,
-  contagem de cascatas, raios adaptativos e histerese adaptativa.
+  contagem de cascatas, update intercalado, raios adaptativos e histerese adaptativa.
 - `smile_profile_configure`: fixa o regime de render, a hora (`10:00` por default ou
   `timeOfDayHours`) e opcionalmente a camera do teste. O throttle de segundo plano fica desligado
   por default para o foco de outra janela nao contaminar a regua; `backgroundThrottle: true`
@@ -108,6 +108,24 @@ relatorio do harness.
 
 O gate canônico de 19/08/2026 aprovou o candidato 16-64 (57,91 dB, SSIM 0,99953 contra full-64)
 e `AdaptiveRays` passou a ser ON por default; OFF continua disponível como controle full-64.
+
+Para validar o scheduler intercalado de duas cascatas (fina todo update, grossa a cada dois):
+
+```powershell
+npm run validate:gi:interleaved
+npm run analyze:gi:interleaved -- <relatorio.json>
+```
+
+O harness repete `full -> interleaved -> full -> interleaved`, exige os scopes `DDGI (fine)` e
+`DDGI (fine+coarse)`, prova idade maxima 1 da grossa, scrolling axial/diagonal/vertical e full
+forcado em teleporte. Depois captura o mesmo ciclo no preset cientifico `N=128`; o analisador
+compara repeticoes, pares e medias e publica montagem e diffs 8x.
+
+O A/B de 21/08/2026 mediu 22,19% de economia no passe DDGI com compensacao temporal da grossa,
+SSIM 0,99974 e somente 0,0037% dos pixels acima de cinco niveis de diferenca. O gate numerico
+mais estrito sinalizou viés medio de luminancia 0,116 contra teto 0,10; a revisao perceptual nao
+encontrou diferenca visivel e aceitou o candidato. `cascadeCount = 2` e `interleavedUpdates = true`
+passaram a ser os defaults; uma cascata continua disponivel como modo de menor custo.
 
 ## Requisitos
 

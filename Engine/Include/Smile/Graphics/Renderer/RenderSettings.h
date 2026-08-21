@@ -269,9 +269,15 @@ namespace Smile {
         void SetGIAdaptiveHysteresis(bool V);
 
         // Numero de CASCATAS do DDGI. Recria o volume — a contagem dimensiona atlas,
-        // ProbesTrace, buffers e dispatch. Default 1 = comportamento historico.
+        // ProbesTrace, buffers e dispatch. Default 2; 1 preserva o modo historico mais barato.
         u32  GetGICascadeCount() const;
         void SetGICascadeCount(u32 V);
+
+        // Atualiza a fina todo frame e, com duas cascatas, a grossa em frames alternados.
+        // Default ON. Nao muda o estimador nem o layout; so a cadencia, portanto o toggle nao
+        // limpa historia. Com 1/3/4 cascatas o scheduler usa update completo.
+        bool GetGIInterleavedUpdates() const;
+        void SetGIInterleavedUpdates(bool V);
 
         // Raios por sonda variaveis com a proximidade de geometria: sonda em espaco aberto
         // decima para MinRays, sonda encostada em geometria fica no teto. E a alavanca de CUSTO
