@@ -21,6 +21,21 @@ namespace SmileEditor {
         std::atomic_bool                 Available{false};
     };
 
+    RendererHandle::Access::Access(Access&& _Other) noexcept
+        : StateRef(std::move(_Other.StateRef)),
+          Lock(std::move(_Other.Lock)),
+          Instance(std::exchange(_Other.Instance, nullptr)) {}
+
+    RendererHandle::Access& RendererHandle::Access::operator=(Access&& _Other) noexcept {
+        if (this == &_Other) return *this;
+
+        // Libera o lock antigo enquanto seu SharedState ainda esta vivo.
+        Lock = std::move(_Other.Lock);
+        StateRef = std::move(_Other.StateRef);
+        Instance = std::exchange(_Other.Instance, nullptr);
+        return *this;
+    }
+
     RendererHandle::Access::Access(std::shared_ptr<SharedState> _State, bool _TryOnly)
         : StateRef(std::move(_State)),
           Lock(StateRef->Mutex, std::defer_lock)
@@ -56,8 +71,8 @@ namespace SmileEditor {
         explicit Impl(std::shared_ptr<RendererHandle::Access::SharedState> _State)
             : State(std::move(_State)) {}
 
-        // Único acesso sem o mutex compartilhado; preserva RenderFrame -> Present -> callback.
-        void PresentSubmittedFrame() {
+        // Present pode enviar mensagens sincronas ao HWND; bloquear a GUI aqui causaria deadlock.
+        void PresentFrameUnlocked() {
             State->Instance->PresentFrame();
         }
 
@@ -108,7 +123,6 @@ namespace SmileEditor {
             try {
                 {
                     auto Renderer = Handle.Lock();
-                    // O callback existe apenas durante Initialize.
                     if (Thread.Hooks.Progress) {
                         Renderer->SetInitProgressCallback(
                             [&Thread](std::string_view Label, std::string_view Detail,
@@ -117,9 +131,13 @@ namespace SmileEditor {
                                                       Fraction);
                             });
                     }
-                    Renderer->Initialize(static_cast<HWND>(_NativeWindow), _Width, _Height);
+                    try {
+                        Renderer->Initialize(static_cast<HWND>(_NativeWindow), _Width, _Height);
+                    } catch (...) {
+                        Renderer->SetInitProgressCallback({});
+                        throw;
+                    }
                     Renderer->SetInitProgressCallback({});
-                    // Materializa a preferência de upscaler já na thread proprietária.
                     Renderer->Settings().SetUpscaler(Renderer->Settings().GetUpscaler());
                 }
                 InitializationSucceeded = true;
@@ -138,7 +156,6 @@ namespace SmileEditor {
                 {
                     std::lock_guard WorkLock(Thread.WorkMutex);
                     if (!Thread.StopRequested) {
-                        // Ready e StopRequested compartilham o mutex para resolver a corrida do boot.
                         Thread.State->Available.store(true, std::memory_order_release);
                         Thread.Ready.store(true, std::memory_order_release);
                         PublishInitialization = true;
@@ -182,8 +199,12 @@ namespace SmileEditor {
                     }
                     if (!Completion.Success)
                         Smile::LogError("Falha no job do renderer: " + Completion.Error);
-                    if (RendererJob->Completion)
+                    if (RendererJob->Completion) {
                         RendererJob->Completion(std::move(Completion));
+                    } else {
+                        Thread.JobOutstanding.store(false, std::memory_order_release);
+                        Thread.WorkReady.notify_one();
+                    }
                     continue;
                 }
 
@@ -194,8 +215,8 @@ namespace SmileEditor {
                         auto Renderer = Handle.Lock();
                         Renderer->RenderFrame();
                     }
-                    // FrameOutstanding cobre Present e impede ResizeBuffers concorrente.
-                    Thread.PresentSubmittedFrame();
+                    // O chamador mantem ResizeBuffers suspenso enquanto o frame esta pendente.
+                    Thread.PresentFrameUnlocked();
                     Completion.Success = true;
                     ConsecutiveFailures = 0;
                 } catch (const std::exception& Error) {
@@ -217,13 +238,15 @@ namespace SmileEditor {
                         Thread.Ready.store(false, std::memory_order_release);
                 }
 
-                // A GUI libera o flag somente depois de consumir a conclusão de Present.
-                if (Thread.Hooks.FrameCompleted)
+                if (Thread.Hooks.FrameCompleted) {
                     Thread.Hooks.FrameCompleted(std::move(Completion));
+                } else {
+                    Thread.FrameOutstanding.store(false, std::memory_order_release);
+                    Thread.WorkReady.notify_one();
+                }
                 if (!Thread.Ready.load(std::memory_order_acquire)) break;
             }
 
-            // Jobs cancelados concluem antes de Stopped para liberar ownership na GUI.
             std::optional<Impl::QueuedRendererJob> CancelledRendererJob;
             {
                 std::lock_guard WorkLock(Thread.WorkMutex);
@@ -270,7 +293,6 @@ namespace SmileEditor {
         Impl& I = *Implementation;
         if (!I.Worker.joinable()) return;
 
-        // No fallback, a thread dona do HWND continua atendendo SendMessage durante o join.
         if (!I.Exited.load(std::memory_order_acquire) && I.NativeWindow &&
             GetWindowThreadProcessId(I.NativeWindow, nullptr) == GetCurrentThreadId()) {
             HANDLE WorkerHandle = static_cast<HANDLE>(I.Worker.native_handle());
@@ -279,7 +301,6 @@ namespace SmileEditor {
                     1, &WorkerHandle, INFINITE, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE);
                 if (WaitResult == WAIT_OBJECT_0) break;
                 if (WaitResult != WAIT_OBJECT_0 + 1) break;
-                // PM_NOREMOVE despacha SendMessage sem executar callbacks Qt postados.
                 MSG Message{};
                 PeekMessageW(&Message, nullptr, 0, 0, PM_NOREMOVE);
             }

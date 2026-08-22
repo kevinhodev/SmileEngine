@@ -9,16 +9,14 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Handle compartilhado do Renderer. Cada acesso externo adquire o mesmo lock usado pela
-    // render thread, portanto nenhuma bridge da UI observa o estado enquanto RenderFrame grava
-    // command lists ou apresenta a swap chain.
+    // Serializa o acesso externo com RenderFrame e os jobs do renderer.
     class RendererHandle {
     public:
         class Access {
         public:
             Access() = default;
-            Access(Access&&) noexcept = default;
-            Access& operator=(Access&&) noexcept = default;
+            Access(Access&& Other) noexcept;
+            Access& operator=(Access&& Other) noexcept;
             Access(const Access&) = delete;
             Access& operator=(const Access&) = delete;
 
@@ -40,8 +38,7 @@ namespace SmileEditor {
 
         RendererHandle() = default;
 
-        // Habilita Renderer->Method(): o temporario Access conserva o lock ate o fim da
-        // expressao. Para uma sequencia que guarda referencias internas, use Lock().
+        // O temporario mantem o lock ate o fim da expressao; use Lock() para sequencias.
         Access operator->() const { return Lock(); }
         Access Lock() const;
         Access TryLock() const;
@@ -55,8 +52,7 @@ namespace SmileEditor {
         std::shared_ptr<Access::SharedState> StateRef;
     };
 
-    // Executa Initialize, RenderFrame, Present e Shutdown em uma thread dedicada. Frames sao
-    // coalescidos: a UI so pode pedir outro depois de consumir a conclusao do anterior.
+    // Worker do renderer do Editor. Mantem no maximo um frame pendente.
     class RenderThread {
     public:
         struct FrameCompletion {
@@ -76,8 +72,7 @@ namespace SmileEditor {
             std::function<void(FrameCompletion)>              FrameCompleted;
             std::function<void(const std::string&)>            InitializationFailed;
             std::function<void()>                             Stopped;
-            // Etapas do Renderer::Initialize (splash). Chamado na render thread COM o lock do
-            // handle preso: so postar para a GUI, nunca reentrar no Renderer daqui.
+            // Executado no worker com o renderer bloqueado; nao deve reentrar no handle.
             std::function<void(const std::string& Label,
                                const std::string& Detail, float Fraction)> Progress;
         };
@@ -90,19 +85,16 @@ namespace SmileEditor {
 
         void Start(void* NativeWindow, Smile::u32 Width, Smile::u32 Height,
                    Callbacks ThreadCallbacks);
-        // RequestStop nunca espera pelo worker: a thread que bombeia mensagens deve continuar
-        // viva ate o callback Stopped, pois Initialize/Present podem usar SendMessage.
+        // Nao bloqueia: a thread do HWND precisa continuar bombeando mensagens.
         void RequestStop();
-        // Chamado normalmente depois de Stopped. O fallback de teardown bombeia apenas
-        // mensagens sincronas do Win32 enquanto aguarda, nunca eventos Qt postados.
+        // Enquanto aguarda, processa apenas mensagens sincronas do Win32.
         void Join();
 
         // Retorna false quando ja existe um frame solicitado/em execucao/aguardando consumo.
         bool RequestFrame();
         void CompleteFrame();
 
-        // Jobs GPU sao serializados no mesmo worker dos frames. JobOutstanding permanece ativo
-        // ate a GUI consumir o callback, impedindo que o proximo frame observe bridges antigas.
+        // O job permanece ativo ate a GUI consumir a conclusao com CompleteJob().
         bool RequestRendererJob(RendererJob Job,
                                 std::function<void(JobCompletion)> Completion);
         void CompleteJob();
