@@ -238,6 +238,10 @@ namespace Smile {
         bool GetDIMeshLightsInPool() const;
         void SetDIInitialVisibility(bool V);
         bool GetDIInitialVisibility() const;
+        // Residual local de BRDF aplicado somente depois do RELAX direto. Nao altera reservoir nem
+        // historico do denoiser, portanto serve como toggle A/B imediato.
+        void SetDIBrdfRatioDemodulation(bool V);
+        bool GetDIBrdfRatioDemodulation() const;
 
         // Compactacao do pool para o SUPORTE POSITIVO (fluxo > 0). A/B da Fase 0.5, passo 3:
         // isola TAMANHO DO DOMINIO agora que a residencia ja esta fixa em VRAM.

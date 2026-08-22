@@ -189,6 +189,7 @@ namespace SmileEditor {
                 { QStringLiteral("diMeshCandidates"), _Settings.DIMeshCandidates },
                 { QStringLiteral("meshLightsInPool"), _Settings.DIMeshLightsInPool },
                 { QStringLiteral("diInitialVisibility"), _Settings.DIInitialVisibility },
+                { QStringLiteral("diBrdfRatio"), _Settings.DIBrdfRatio },
                 { QStringLiteral("meshCompactSupport"), _Settings.DIMeshCompactSupport },
             };
         }
@@ -509,7 +510,8 @@ namespace SmileEditor {
         const QString Preset = _Arguments.value(QStringLiteral("preset"))
                                    .toString(QStringLiteral("gameplay_rr"));
         if (Preset != QStringLiteral("gameplay_rr") &&
-            Preset != QStringLiteral("controlled_native")) {
+            Preset != QStringLiteral("controlled_native") &&
+            Preset != QStringLiteral("controlled_nrd")) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
                                 QStringLiteral("preset de perfil invalido") } });
@@ -553,13 +555,14 @@ namespace SmileEditor {
                                 Overrides.DIMeshCandidates) &&
             ReadOptionalBool(_Arguments, "meshLightsInPool", Overrides.DIMeshLightsInPool) &&
             ReadOptionalBool(_Arguments, "diInitialVisibility", Overrides.DIInitialVisibility) &&
+            ReadOptionalBool(_Arguments, "diBrdfRatio", Overrides.DIBrdfRatio) &&
             ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
             ReadOptionalBool(_Arguments, "backgroundThrottle",
                              Overrides.BackgroundThrottleEnabled);
         if (!KnobsOk) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
-                                QStringLiteral("knob de amostragem do DI invalido") } });
+                                QStringLiteral("knob do DI invalido") } });
             return;
         }
 
@@ -571,7 +574,9 @@ namespace SmileEditor {
         }
 
         const EProfilePreset ProfilePreset = Preset == QStringLiteral("gameplay_rr")
-            ? EProfilePreset::GameplayRR : EProfilePreset::ControlledNative;
+            ? EProfilePreset::GameplayRR
+            : (Preset == QStringLiteral("controlled_nrd")
+                ? EProfilePreset::ControlledNrd : EProfilePreset::ControlledNative);
         QString Error;
         const auto Applied = RenderSettings->ApplyProfilePreset(ProfilePreset, Error, Overrides);
         if (!Applied) {

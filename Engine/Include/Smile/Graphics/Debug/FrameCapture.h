@@ -265,6 +265,9 @@ namespace Smile {
         bool DIMeshLightsInPoolRequested = false, DIMeshLightsInPoolEffective = false;
         // Visibilidade inicial (Alg. 5 passo 2): pedido = toggle, efetivo = toggle E o DI rodou.
         bool DIInitialVisibilityRequested = false, DIInitialVisibilityEffective = false;
+        // BRDF-ratio so participa do caminho ReSTIR DI + NRD direto. Pedido fica separado para o
+        // manifesto nao confundir "ligado, mas RR/None" com o braco desligado do A/B.
+        bool DIBrdfRatioRequested = false, DIBrdfRatioEffective = false;
         // Resolucao INTERNA do DI. Hoje sempre igual a de render; vira o par
         // requested/effective quando a meia resolucao da Fase 3 entrar.
         u32  DIRenderWidth = 0, DIRenderHeight = 0;

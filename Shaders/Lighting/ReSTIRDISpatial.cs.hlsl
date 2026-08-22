@@ -23,6 +23,7 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
     row_major float4x4 PrevViewProj;
+    float4 MeshSampling; // x=candidatas mesh; y=BRDF-ratio demodulation
 };
 
 #include "../RayOffset.hlsli"
@@ -47,6 +48,7 @@ RWTexture2D<float4> OutDirect : register(u0);
 RWTexture2D<float4> OutDiffuse : register(u1);
 RWTexture2D<float4> OutSpecular : register(u2);
 RWTexture2D<float4> OutShadowMotion : register(u3); // xy=curUV-prevUV, z=confianca, w=valido
+RWTexture2D<float2> OutBrdfRatio : register(u4); // x=difuso, y=especular; aplicado pos-RELAX
 
 #include "../GI/RTAlphaTest.hlsli"
 
@@ -58,6 +60,68 @@ float3 WorldFromDepth(int2 p, float deviceZ) {
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float4 wh  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
     return wh.xyz / wh.w;
+}
+
+// O RELAX acumula melhor a radiancia sem detalhes de material, mas esse historico tambem tende a
+// apagar variacao subpixel da normal mapeada. O fator abaixo preserva somente esse residual local:
+// avalia a MESMA BRDF/material/direcao de luz com a normal central e com as quatro normais
+// vizinhas. Radiancia, visibilidade, pdf e peso do reservoir ficam fora da razao por construcao.
+float2 BrdfLuminanceForNormal(float3 normal, float3 V, float3 L, GBufferData centerMaterial) {
+    const float3 diffuseColor = centerMaterial.BaseColor * (1.0f - centerMaterial.Metallic);
+    const float3 specularColor = lerp(0.04f.xxx, centerMaterial.BaseColor,
+                                      centerMaterial.Metallic);
+    const float3 transColor = centerMaterial.BaseColor * centerMaterial.Subsurface;
+    const float roughness = max(centerMaterial.Roughness, 0.04f);
+    const float a2 = roughness * roughness * roughness * roughness;
+    float3 diffuse, specular;
+    BRDF_DirectAreaSplit(normal, V, L, L, 1.0f, 1.0f.xxx,
+                         diffuseColor, specularColor, roughness, a2, transColor,
+                         diffuse, specular);
+    // Pisos e teto sao os mesmos da implementacao descrita no capitulo: evitam 0/0 e impedem
+    // que um highlight numericamente extremo domine a razao antes do clamp final.
+    return clamp(float2(DI_Luminance(diffuse), DI_Luminance(specular)),
+                 0.001f.xx, 1000.0f.xx);
+}
+
+float2 ComputeBrdfRatio(int2 px, float3 centerPos, float3 L,
+                        GBufferData centerMaterial) {
+    if (MeshSampling.y < 0.5f) return 1.0f.xx;
+
+    const float3 V = normalize(CameraPos.xyz - centerPos);
+    const float2 centerBrdf = BrdfLuminanceForNormal(
+        centerMaterial.WorldNormal, V, L, centerMaterial);
+    const float centerViewZ = max(abs(mul(float4(centerPos, 1.0f), View).z), 1.0e-4f);
+    const int2 offsets[4] = {
+        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+    };
+
+    float2 neighborSum = 0.0f;
+    uint validCount = 0u;
+    [unroll]
+    for (uint i = 0u; i < 4u; ++i) {
+        const int2 qpx = px + offsets[i];
+        if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)ScreenParams.x ||
+            qpx.y >= (int)ScreenParams.y) continue;
+
+        const float qz = Depth.Load(int3(qpx, 0));
+        if (qz <= 0.0f) continue;
+        const float3 qpos = WorldFromDepth(qpx, qz);
+        const float qViewZ = abs(mul(float4(qpos, 1.0f), View).z);
+        // O depth relativo impede que a cruz atravesse silhuetas. Nao rejeitamos por normal:
+        // justamente a variacao de normal mapeada e o detalhe que queremos recolocar.
+        if (abs(qViewZ - centerViewZ) > centerViewZ * 0.02f) continue;
+
+        const GBufferData neighbor = DecodeGBuffer(GBufferA.Load(int3(qpx, 0)),
+                                                   GBufferB.Load(int3(qpx, 0)),
+                                                   GBufferC.Load(int3(qpx, 0)));
+        neighborSum += BrdfLuminanceForNormal(neighbor.WorldNormal, V, L, centerMaterial);
+        ++validCount;
+    }
+
+    if (validCount == 0u) return 1.0f.xx;
+    const float2 ratio = centerBrdf / (neighborSum / (float)validCount);
+    // Expoente < 1 comprime contraste; 15 evita amplificar fireflies/reservoirs ruins sem limite.
+    return clamp(pow(max(ratio, 0.0f.xx), 0.7f), 0.0f.xx, 15.0f.xx);
 }
 
 float4 ComputeShadowMotion(int2 px, float3 receiverPos, float3 receiverNormal,
@@ -120,6 +184,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     if (deviceZ <= 0.0f || totalCount == 0u) {
         OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
         OutShadowMotion[px] = 0.0f;
+        OutBrdfRatio[px] = 1.0f.xx;
         return;
     }
 
@@ -202,6 +267,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     if (r.LightIndex >= totalCount) {
         OutDirect[px] = OutDiffuse[px] = OutSpecular[px] = 0.0f;
         OutShadowMotion[px] = 0.0f;
+        OutBrdfRatio[px] = 1.0f.xx;
         return;
     }
 
@@ -210,6 +276,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 diffuse, specular, L; float dist;
     const float selectedTarget = DI_TargetFromSample(selSample, g, x1, CameraPos.xyz,
                                                      diffuse, specular, L, dist);
+    OutBrdfRatio[px] = selSample.Valid
+        ? ComputeBrdfRatio(px, x1, L, g) : 1.0f.xx;
 
     // Correcao de vies (Alg. 6 / Secao 4.3), mesma convencao do ReSTIRGISpatial.cs.hlsl:
     // balance heuristic continua no lugar do 1/M. ps_c = pHat da luz VENCEDORA avaliada no

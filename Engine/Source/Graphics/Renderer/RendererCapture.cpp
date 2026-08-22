@@ -405,12 +405,15 @@ namespace Smile {
             S.DIMeshCandidatesRequested     = ReSTIRDI.GetMeshCandidates();
             S.DIMeshLightsInPoolRequested   = ReSTIRDI.GetMeshLightsInPool();
             S.DIInitialVisibilityRequested  = ReSTIRDI.GetInitialVisibility();
+            S.DIBrdfRatioRequested          = ReSTIRDI.GetBrdfRatioDemodulation();
             // Valores efetivos sao os publicados no cbuffer do frame concluido.
             const bool DIRan = _Modes.ReSTIRDIActiveFrame;
             S.DIAnalyticCandidatesEffective = DIRan ? ReSTIRDI.EffectiveAnalyticCandidates() : 0u;
             S.DIMeshCandidatesEffective     = DIRan ? ReSTIRDI.EffectiveMeshCandidates() : 0u;
             S.DIMeshLightsInPoolEffective   = DIRan && ReSTIRDI.EffectiveMeshLightCount() > 0u;
             S.DIInitialVisibilityEffective  = DIRan && ReSTIRDI.GetInitialVisibility();
+            S.DIBrdfRatioEffective          = _Modes.NrdDirectMode &&
+                                              ReSTIRDI.GetBrdfRatioDemodulation();
             S.DIRenderWidth  = DIRan ? ReSTIRDI.DIRenderWidth()  : 0u;
             S.DIRenderHeight = DIRan ? ReSTIRDI.DIRenderHeight() : 0u;
             // RIS, dado compacto e meia resolucao continuam nao existindo. Ficam explicitamente

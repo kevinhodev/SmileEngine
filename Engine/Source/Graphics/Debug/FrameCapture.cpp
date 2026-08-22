@@ -113,6 +113,9 @@ namespace Smile {
                 // O outro A/B que a Fase 0 pede. So aparece desligada: ligada e o default, e o
                 // nome nao precisa repetir o que nao mudou.
                 if (!S.DIInitialVisibilityRequested) Di += "-noVis";
+                // O sufixo positivo evita misturar capturas novas com a era anterior a tecnica.
+                // Em None/RR o toggle pode estar pedido, mas nao participa e portanto nao nomeia.
+                if (S.DIBrdfRatioEffective) Di += "-brdfRatio";
                 // Compactacao do suporte positivo. O EFETIVO, e so quando ligada: desligada e o
                 // braco de controle do A/B, e ele herda o nome historico — o que precisa se
                 // distinguir e o braco novo.
@@ -607,6 +610,10 @@ namespace Smile {
                      << Bool(_State.DIInitialVisibilityRequested) << ",\n";
                 File << "  \"diInitialVisibilityEffective\": "
                      << Bool(_State.DIInitialVisibilityEffective) << ",\n";
+                File << "  \"diBrdfRatioRequested\": "
+                     << Bool(_State.DIBrdfRatioRequested) << ",\n";
+                File << "  \"diBrdfRatioEffective\": "
+                     << Bool(_State.DIBrdfRatioEffective) << ",\n";
                 File << "  \"diRenderWidth\": "  << _State.DIRenderWidth  << ",\n";
                 File << "  \"diRenderHeight\": " << _State.DIRenderHeight << ",\n";
                 File << "  \"meshLightTrianglePayloadBytes\": "

@@ -12,6 +12,7 @@ using Microsoft::WRL::ComPtr;
 namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        constexpr DXGI_FORMAT kBrdfRatioFormat = DXGI_FORMAT_R16G16_FLOAT;
         // Só o W. O ponto visivel X1 morava aqui num RGBA32F inteiro e era redundante com o depth
         // (espacial) e com o historico de superficie (temporal) — ver ReSTIRDICommon.hlsli.
         constexpr DXGI_FORMAT kResWFormat   = DXGI_FORMAT_R32_FLOAT;
@@ -25,7 +26,7 @@ namespace Smile {
         constexpr u32 kInitialSRVs = 13;
         constexpr u32 kInitialUAVs = 2;
         constexpr u32 kSpatialSRVs = 13;
-        constexpr u32 kSpatialUAVs = 4;
+        constexpr u32 kSpatialUAVs = 5;
 
         // Posicao dos descritores de MESH LIGHT dentro de cada tabela. Existem com nome porque o
         // RefreshMeshLightDescriptors reescreve ESTES slots sem refazer a tabela inteira — e um
@@ -40,7 +41,7 @@ namespace Smile {
                       "indice de mesh light fora da tabela");
         constexpr u32 kNrdPackSRVs = 8;
         constexpr u32 kNrdPackUAVs = 5;
-        constexpr u32 kNrdCompositeSRVs = 6;
+        constexpr u32 kNrdCompositeSRVs = 7;
 
         ComPtr<ID3D12Resource> CreateUAVTexture(ID3D12Device* Device, u32 Width, u32 Height,
                                                 DXGI_FORMAT Format) {
@@ -100,6 +101,7 @@ namespace Smile {
         Free(OutSRV, 1); Free(OutUAV, 1);
         Free(RawDiffuseSRV, 1); Free(RawDiffuseUAV, 1);
         Free(RawSpecularSRV, 1); Free(RawSpecularUAV, 1);
+        Free(BrdfRatioSRV, 1); Free(BrdfRatioUAV, 1);
         Free(ShadowMotionSRV, 1); Free(ShadowMotionUAV, 1);
         Free(SpatialUAVTable, kSpatialUAVs);
         Free(NrdPackSrvTable, kNrdPackSRVs);
@@ -117,8 +119,9 @@ namespace Smile {
             ResW[p].Reset(); ResB[p].Reset();
             ResWState[p] = ResBState[p] = D3D12_RESOURCE_STATE_COMMON;
         }
-        Output.Reset(); RawDiffuse.Reset(); RawSpecular.Reset(); ShadowMotion.Reset();
-        OutputState = RawDiffuseState = RawSpecularState = ShadowMotionState =
+        Output.Reset(); RawDiffuse.Reset(); RawSpecular.Reset(); BrdfRatio.Reset();
+        ShadowMotion.Reset();
+        OutputState = RawDiffuseState = RawSpecularState = BrdfRatioState = ShadowMotionState =
             D3D12_RESOURCE_STATE_COMMON;
         NrdReady = false;
         Ready = false;
@@ -148,6 +151,7 @@ namespace Smile {
         Output = CreateUAVTexture(Device, Width, Height, kOutputFormat);
         RawDiffuse = CreateUAVTexture(Device, Width, Height, kOutputFormat);
         RawSpecular = CreateUAVTexture(Device, Width, Height, kOutputFormat);
+        BrdfRatio = CreateUAVTexture(Device, Width, Height, kBrdfRatioFormat);
         ShadowMotion = CreateUAVTexture(Device, Width, Height, kOutputFormat);
         for (u32 p = 0; p < kParityCount; ++p) {
             ResW[p] = CreateUAVTexture(Device, Width, Height, kResWFormat);
@@ -171,6 +175,7 @@ namespace Smile {
         MakeViews(Output.Get(), kOutputFormat, OutSRV, OutUAV);
         MakeViews(RawDiffuse.Get(), kOutputFormat, RawDiffuseSRV, RawDiffuseUAV);
         MakeViews(RawSpecular.Get(), kOutputFormat, RawSpecularSRV, RawSpecularUAV);
+        MakeViews(BrdfRatio.Get(), kBrdfRatioFormat, BrdfRatioSRV, BrdfRatioUAV);
         MakeViews(ShadowMotion.Get(), kOutputFormat, ShadowMotionSRV, ShadowMotionUAV);
         for (u32 p = 0; p < kParityCount; ++p) {
             MakeViews(ResW[p].Get(), kResWFormat, ResWSRV[p], ResWUAV[p]);
@@ -192,7 +197,7 @@ namespace Smile {
 
         SpatialUAVTable = SRVHeap.Allocate(kSpatialUAVs);
         const u32 SpatialUAVSlots[kSpatialUAVs] = {
-            OutUAV, RawDiffuseUAV, RawSpecularUAV, ShadowMotionUAV };
+            OutUAV, RawDiffuseUAV, RawSpecularUAV, ShadowMotionUAV, BrdfRatioUAV };
         CopyTable(SpatialUAVTable, SpatialUAVSlots, kSpatialUAVs);
 
         for (u32 p = 0; p < kParityCount; ++p) {
@@ -354,7 +359,7 @@ namespace Smile {
         NrdCompositeSrvTable = SRVHeap.Allocate(kNrdCompositeSRVs);
         const u32 CompositeSRVs[kNrdCompositeSRVs] = {
             NrdOutDiffuseSRV, NrdOutSpecularSRV,
-            GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot };
+            GBufferASlot, GBufferBSlot, GBufferCSlot, DepthSlot, BrdfRatioSRV };
         CopyTable(NrdCompositeSrvTable, CompositeSRVs, kNrdCompositeSRVs);
         NrdReady = true;
     }
@@ -410,7 +415,8 @@ namespace Smile {
         // O orcamento de mesh vai INTEIRO, sem o max(1) que o Sampling.x carrega: zero aqui e uma
         // configuracao pedida (nenhuma proposta de triangulo), enquanto zero no analitico so
         // acontece por ausencia de luz e o shader ja trata com o proprio gate de lightCount.
-        CPU.MeshSampling = { static_cast<f32>(MeshCandidates), 0.0f, 0.0f, 0.0f };
+        CPU.MeshSampling = { static_cast<f32>(MeshCandidates),
+                             BrdfRatioDemodulation ? 1.0f : 0.0f, 0.0f, 0.0f };
         CPU.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,
@@ -446,6 +452,7 @@ namespace Smile {
         Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, RawDiffuse.Get(), RawDiffuseState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, RawSpecular.Get(), RawSpecularState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(CL, BrdfRatio.Get(), BrdfRatioState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(CL, ShadowMotion.Get(), ShadowMotionState,
                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -477,6 +484,8 @@ namespace Smile {
         Transition(CL, RawDiffuse.Get(), RawDiffuseState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(CL, RawSpecular.Get(), RawSpecularState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(CL, BrdfRatio.Get(), BrdfRatioState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(CL, ShadowMotion.Get(), ShadowMotionState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

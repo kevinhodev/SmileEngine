@@ -68,6 +68,7 @@ namespace SmileEditor {
         Out.DIMeshCandidates          = static_cast<int>(Settings.GetDIMeshCandidates());
         Out.DIMeshLightsInPool        = Settings.GetDIMeshLightsInPool();
         Out.DIInitialVisibility       = Settings.GetDIInitialVisibility();
+        Out.DIBrdfRatio               = Settings.GetDIBrdfRatioDemodulation();
         Out.DIMeshCompactSupport      = Settings.GetDIMeshCompactSupport();
         return Out;
     }
@@ -182,8 +183,11 @@ namespace SmileEditor {
                 Settings.SetUpscalerQuality(0);
                 Settings.SetDenoiser(Smile::EDenoiser::DLSS_RR);
             } else {
-                Result.Preset = QStringLiteral("controlled_native");
-                Settings.SetDenoiser(Smile::EDenoiser::None);
+                const bool UseNrd = _Preset == EProfilePreset::ControlledNrd;
+                Result.Preset = UseNrd ? QStringLiteral("controlled_nrd")
+                                       : QStringLiteral("controlled_native");
+                Settings.SetDenoiser(UseNrd ? Smile::EDenoiser::NRD
+                                            : Smile::EDenoiser::None);
                 Settings.SetUpscaler(Smile::EUpscaler::None);
                 Settings.SetRenderScale(1.0f);
             }
@@ -201,6 +205,8 @@ namespace SmileEditor {
                 Settings.SetDIMeshLightsInPool(*_Overrides.DIMeshLightsInPool);
             if (_Overrides.DIInitialVisibility)
                 Settings.SetDIInitialVisibility(*_Overrides.DIInitialVisibility);
+            if (_Overrides.DIBrdfRatio)
+                Settings.SetDIBrdfRatioDemodulation(*_Overrides.DIBrdfRatio);
             // Muda o DOMINIO amostrado: o setter forca rebuild da tabela e limpa historico.
             if (_Overrides.DIMeshCompactSupport)
                 Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);

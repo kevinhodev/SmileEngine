@@ -17,6 +17,7 @@ namespace SmileEditor {
     enum class EProfilePreset {
         GameplayRR,
         ControlledNative,
+        ControlledNrd,
     };
 
     struct FProfileTimingSnapshot {
@@ -64,6 +65,7 @@ namespace SmileEditor {
         int    DIMeshCandidates      = 0;
         bool   DIMeshLightsInPool    = false;
         bool   DIInitialVisibility   = false;
+        bool   DIBrdfRatio           = false;
         bool   DIMeshCompactSupport  = false;
     };
 
@@ -81,6 +83,7 @@ namespace SmileEditor {
         std::optional<int>  DIMeshCandidates;
         std::optional<bool> DIMeshLightsInPool;
         std::optional<bool> DIInitialVisibility;
+        std::optional<bool> DIBrdfRatio;
         std::optional<bool> DIMeshCompactSupport;
         // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
         // janela recebeu o foco enquanto o agente coleta as amostras.

@@ -582,6 +582,13 @@ namespace Smile {
         return R.ReSTIRDI.GetInitialVisibility();
     }
 
+    void FRenderSettings::SetDIBrdfRatioDemodulation(bool _V) {
+        R.ReSTIRDI.SetBrdfRatioDemodulation(_V);
+    }
+    bool FRenderSettings::GetDIBrdfRatioDemodulation() const {
+        return R.ReSTIRDI.GetBrdfRatioDemodulation();
+    }
+
     // Muda o DOMINIO amostrado, entao o indice guardado no reservoir passa a significar outro
     // triangulo: o clear nao e opcional aqui, e sim correcao. Sem ele, um reservoir do braco
     // anterior apontaria para o triangulo errado no dominio novo.

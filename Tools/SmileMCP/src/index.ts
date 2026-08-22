@@ -562,9 +562,10 @@ server.registerTool(
   {
     title: "Configure Smile profiling regime",
     description:
-      "Fixa camera opcional, TOD e os consumidores do hit path; gameplay_rr replica o regime do Mini Profiler com DLSS Ray Reconstruction. timeOfDayHours permite escolher a hora fixa (10 por default). Os knobs de amostragem do ReSTIR DI sao opcionais e, quando omitidos, preservam o valor corrente.",
+      "Fixa camera opcional, TOD e os consumidores do hit path; gameplay_rr usa DLSS Ray Reconstruction, controlled_native desliga denoise/upscale e controlled_nrd usa NRD nativo. timeOfDayHours permite escolher a hora fixa (10 por default). Os knobs do ReSTIR DI sao opcionais e, quando omitidos, preservam o valor corrente.",
     inputSchema: {
-      preset: z.enum(["gameplay_rr", "controlled_native"]).default("gameplay_rr"),
+      preset: z.enum(["gameplay_rr", "controlled_native", "controlled_nrd"])
+        .default("gameplay_rr"),
       bookmarkSlot: z.number().int().min(-1).max(3).default(-1),
       timeOfDayHours: z
         .number()
@@ -610,6 +611,12 @@ server.registerTool(
         .boolean()
         .nullish()
         .describe("A/B do passo 2 do Alg. 5: raio de visibilidade sobre a candidata escolhida."),
+      diBrdfRatio: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B da demodulacao por razao de BRDF na direta com NRD/RELAX; restaura detalhe local de normal map depois do denoise.",
+        ),
       // Fase 0.5, passo 3: TAMANHO DO DOMINIO, agora que a residencia ja esta fixa em VRAM.
       meshCompactSupport: z
         .boolean()

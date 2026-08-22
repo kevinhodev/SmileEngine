@@ -34,7 +34,7 @@ namespace Smile {
         // Cabe sem quebrar o assert: o conteudo declarado soma 336 bytes e o alignas(256) ja
         // arredondava os 320 anteriores para 512. Ha folga para mais sete float4 antes de a fatia
         // do CBV precisar dobrar.
-        Vec4  MeshSampling;  // x = candidatas de mesh light; yzw livres
+        Vec4  MeshSampling;  // x = candidatas mesh; y = BRDF-ratio demodulation; zw livres
     };
     static_assert(sizeof(ReSTIRDIConstants) == 512,
                   "ReSTIRDIConstants deve ocupar fatias CBV alinhadas a 256 bytes");
@@ -132,12 +132,16 @@ namespace Smile {
         void SetInitialVisibility(bool V) {
             if (V != InitialVisibility) { InitialVisibility = V; NeedsClear = true; }
         }
+        // Pos-processo do caminho NRD: nao muda reservoir nem o sinal acumulado pelo RELAX, entao
+        // o A/B e imediato e nao precisa limpar historico.
+        void SetBrdfRatioDemodulation(bool V) { BrdfRatioDemodulation = V; }
 
         // PEDIDO — o que o operador configurou.
         u32  GetInitialCandidates() const { return InitialCandidates; }
         u32  GetMeshCandidates()    const { return MeshCandidates; }
         bool GetMeshLightsInPool()  const { return MeshLightsInPool; }
         bool GetInitialVisibility() const { return InitialVisibility; }
+        bool GetBrdfRatioDemodulation() const { return BrdfRatioDemodulation; }
 
         // EFETIVO — o que foi para o cbuffer no ultimo UpdatePerFrame, com os mesmos gates que o
         // shader aplica. Divergem do pedido sozinhos: sem luz analitica na cena o orcamento
@@ -167,19 +171,21 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FComputePipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
-        FComputePipeline SpatialPSO;         // 12 SRV, 4 UAV, bindless alpha-test
+        FComputePipeline SpatialPSO;         // 13 SRV, 5 UAV, bindless alpha-test
         FComputePipeline NrdPackPSO;          // 8 SRV, 5 UAV
-        FComputePipeline NrdCompositePSO;     // 6 SRV, 1 UAV
+        FComputePipeline NrdCompositePSO;     // 7 SRV, 1 UAV
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Output;
         Microsoft::WRL::ComPtr<ID3D12Resource> RawDiffuse;  // rgb modulado, a = distancia da luz
         Microsoft::WRL::ComPtr<ID3D12Resource> RawSpecular; // rgb modulado, a = distancia da luz
+        Microsoft::WRL::ComPtr<ID3D12Resource> BrdfRatio;   // RG16F: difuso/especular pos-RELAX
         Microsoft::WRL::ComPtr<ID3D12Resource> ShadowMotion;// xy=MV, z=confianca, w=valido
         Microsoft::WRL::ComPtr<ID3D12Resource> ResW[2]; // R32F: W (o x1 saiu — reconstruido)
         Microsoft::WRL::ComPtr<ID3D12Resource> ResB[2]; // RGBA32_UINT: luz, uv, M+idade, n1 oct
         D3D12_RESOURCE_STATES OutputState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawDiffuseState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES RawSpecularState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES BrdfRatioState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ShadowMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ResWState[2] = {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
@@ -194,6 +200,8 @@ namespace Smile {
         u32 RawDiffuseUAV = kInvalidSlot;
         u32 RawSpecularSRV = kInvalidSlot;
         u32 RawSpecularUAV = kInvalidSlot;
+        u32 BrdfRatioSRV = kInvalidSlot;
+        u32 BrdfRatioUAV = kInvalidSlot;
         u32 ShadowMotionSRV = kInvalidSlot;
         u32 ShadowMotionUAV = kInvalidSlot;
         u32 ResWSRV[2] = { kInvalidSlot, kInvalidSlot };
@@ -261,6 +269,9 @@ namespace Smile {
         // Alg. 5 passo 2. Custa 1 raio/pixel a mais (2 no total com o resolve do Pass B); a chave
         // existe para dar A/B contra o custo.
         bool InitialVisibility = true;
+        // Tecnica da secao 7.11.3 do capitulo do Cyberpunk: restaura detalhe de normal-map que a
+        // acumulacao temporal suaviza. So tem efeito quando a direta usa NRD/RELAX.
+        bool BrdfRatioDemodulation = true;
 
         // Tira os triangulos emissivos do POOL de propostas (o buffer continua sendo extraido).
         // ON agora que existe orcamento por pool e alias table por potencia — sem os dois, o

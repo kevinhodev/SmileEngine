@@ -79,7 +79,7 @@ export interface ProfileSnapshot {
 }
 
 export interface ProfileConfiguration {
-  preset: "gameplay_rr" | "controlled_native";
+  preset: "gameplay_rr" | "controlled_native" | "controlled_nrd";
   bookmarkSlot: number;
   timeOfDayHours: number;
   backgroundThrottle: boolean;
@@ -167,6 +167,7 @@ export interface ProfileOverrides {
   diMeshCandidates?: number;
   meshLightsInPool?: boolean;
   diInitialVisibility?: boolean;
+  diBrdfRatio?: boolean;
   meshCompactSupport?: boolean;
   backgroundThrottle?: boolean;
 }
@@ -307,7 +308,7 @@ export class SmileEditorBridge {
   }
 
   async configureProfile(
-    preset: "gameplay_rr" | "controlled_native",
+    preset: "gameplay_rr" | "controlled_native" | "controlled_nrd",
     bookmarkSlot: number,
     overrides: ProfileOverrides = {},
   ): Promise<ProfileConfiguration> {
