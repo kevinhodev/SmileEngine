@@ -9,6 +9,7 @@
 #include <QHideEvent>
 #include <QPaintEvent>
 #include <QKeyEvent>
+#include <QFocusEvent>
 #include <QMouseEvent>
 #include <QTimer>
 #include <QGuiApplication>
@@ -20,8 +21,11 @@
 #include <cmath>
 
 namespace SmileEditor {
-    static constexpr float kMouseSensitivity = 0.15f;  
-    static constexpr int   kResizeDebounceMs = 80;
+    namespace {
+        constexpr float kMouseSensitivity = 0.15f;
+        constexpr int   kResizeDebounceMs = 80;
+    }
+
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
           Renderer(RendererThread.GetRenderer())
@@ -40,7 +44,7 @@ namespace SmileEditor {
         setMinimumSize(320, 200);
         setMouseTracking(true);
 
-        // Present controla o pacing; o timer apenas agenda quando o event loop fica livre.
+        // Present controla o pacing; o timer apenas agenda o proximo frame.
         RedrawTimer = new QTimer(this);
         RedrawTimer->setInterval(0);
         RedrawTimer->setSingleShot(true);
@@ -53,7 +57,7 @@ namespace SmileEditor {
         connect(InitializationDebounce, &QTimer::timeout,
                 this, &ViewportWidget::EnsureRendererIsInitialized);
 
-        // Coalesce resizes que não passam por WM_ENTERSIZEMOVE.
+        // Coalesce resizes que nao passam por WM_ENTERSIZEMOVE.
         ResizeDebounce = new QTimer(this);
         ResizeDebounce->setSingleShot(true);
         ResizeDebounce->setInterval(kResizeDebounceMs);
@@ -73,7 +77,7 @@ namespace SmileEditor {
         if (RedrawTimer) RedrawTimer->stop();
         if (InitializationDebounce) InitializationDebounce->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
-        // O fluxo normal já espera RendererStopped; isto cobre teardown parcial.
+        // Cobre teardown parcial fora do fluxo de RendererStopped.
         RendererThread.RequestStop();
         RendererThread.Join();
     }
@@ -150,7 +154,7 @@ namespace SmileEditor {
 
     void ViewportWidget::SetSnapValue(int _Mode, double _Value) {
         const float V = static_cast<float>(_Value);
-        if (!(V > 0.0f)) return;
+        if (!std::isfinite(V) || V <= 0.0f) return;
         switch (_Mode) {
             case 1: GizmoCtrl.SetSnapTranslateM(V); break;
             case 2: GizmoCtrl.SetSnapRotateDeg(V);  break;
@@ -267,7 +271,7 @@ namespace SmileEditor {
     bool ViewportWidget::CommitImportedSceneAsync(
             std::shared_ptr<Smile::FSceneImportResult> _Imported,
             bool _Additive,
-            SceneCommitCallback _Completion) {
+            RendererJobCallback _Completion) {
         if (!_Imported) return false;
         return EnqueueRendererJob(
             {},
@@ -285,7 +289,7 @@ namespace SmileEditor {
     bool ViewportWidget::EnqueueRendererJob(
             const QString& _CoalesceKey,
             RenderThread::RendererJob _Job,
-            SceneCommitCallback _Completion) {
+            RendererJobCallback _Completion) {
         if (!_Job || RendererShutdownRequested || !RendererThread.IsReady()) return false;
 
         // Conserva somente o último job ainda não iniciado de cada família.
@@ -314,8 +318,8 @@ namespace SmileEditor {
         RendererJobActive = true;
 
         QPointer<ViewportWidget> Self(this);
-        SceneCommitCallback Completion = std::move(Job.Completion);
-        SceneCommitCallback FailureCompletion = Completion;
+        RendererJobCallback Completion = std::move(Job.Completion);
+        RendererJobCallback FailureCompletion = Completion;
         const bool Queued = RendererThread.RequestRendererJob(
             std::move(Job.Execute),
             [Self, Completion = std::move(Completion)](
@@ -385,6 +389,7 @@ namespace SmileEditor {
         RedrawTimer->stop();
         InitializationDebounce->stop();
         ResizeDebounce->stop();
+        ResetTransientInput();
         QWidget::hideEvent(_Event);
     }
 
@@ -419,7 +424,7 @@ namespace SmileEditor {
         if (RendererThread.HasFrameInFlight() || RendererThread.HasJobInFlight()) return;
         auto RendererAccess = Renderer.TryLock();
         if (!RendererAccess) {
-            // Mantém a GUI responsiva enquanto Present possui o Renderer.
+            // Outro acesso ao renderer nao deve bloquear a thread Qt.
             ResizeDebounce->start(1);
             return;
         }
@@ -514,23 +519,23 @@ namespace SmileEditor {
     }
 
     void ViewportWidget::OnFrameRendered() {
-        // FrameReady observa um snapshot consistente antes de o próximo frame ser solicitado.
+        // FrameReady observa um snapshot antes do proximo frame.
         auto RendererAccess = Renderer.Lock();
         if (!RendererAccess || !RendererAccess->IsInitialized()) return;
 
         // Consome o resultado assíncrono do ID-buffer.
         int PickedIndex = -1;
-        if (Renderer->TryGetPickResult(PickedIndex)) {
-            Renderer->ClearLightSelection();
+        if (RendererAccess->TryGetPickResult(PickedIndex)) {
+            RendererAccess->ClearLightSelection();
             if (PickedIndex >= 0) {
-                Renderer->SetSelectedObject(PickedIndex);
-                const auto& Renderables = Renderer->GetScene().Renderables();
+                RendererAccess->SetSelectedObject(PickedIndex);
+                const auto& Renderables = RendererAccess->GetScene().Renderables();
                 if (PickedIndex < static_cast<int>(Renderables.size())) {
                     Smile::LogDebug("Selecionado [" + std::to_string(PickedIndex) + "] " +
                                    Renderables[static_cast<size_t>(PickedIndex)].Name);
                 }
             } else {
-                Renderer->ClearSelection();
+                RendererAccess->ClearSelection();
                 Smile::LogDebug("Selecao limpa (clique no vazio)");
             }
             emit ObjectSelected(PickedIndex);
@@ -584,6 +589,25 @@ namespace SmileEditor {
         QWidget::keyReleaseEvent(_Event);
     }
 
+    void ViewportWidget::focusOutEvent(QFocusEvent* _Event) {
+        ResetTransientInput();
+        QWidget::focusOutEvent(_Event);
+    }
+
+    void ViewportWidget::ResetTransientInput() {
+        HeldKeys.clear();
+        MouseDelta = Smile::Vec2::Zero();
+        MouseLookActive = false;
+        IgnoreNextMove = false;
+        unsetCursor();
+
+        if (GizmoCtrl.IsDragging()) {
+            GizmoReleasePending = true;
+        } else {
+            GizmoMousePending = false;
+        }
+    }
+
     void ViewportWidget::FlushPendingGizmoInput(Smile::Renderer& _Renderer) {
         if (GizmoMousePending) {
             GizmoCtrl.SetSnapInverted(PendingGizmoSnapInverted);
@@ -622,13 +646,13 @@ namespace SmileEditor {
                 if (!GizmoCtrl.OnMousePress(*RendererAccess, Px, Py)) {
                     const int LightHit = GizmoCtrl.PickLightIcon(*RendererAccess, Px, Py);
                     if (LightHit >= 0) {
-                        Renderer->SetSelectedLight(LightHit);
-                        Renderer->ClearSelection();
-                        const auto& Lights = Renderer->GetScene().Lights();
+                        RendererAccess->SetSelectedLight(LightHit);
+                        RendererAccess->ClearSelection();
+                        const auto& Lights = RendererAccess->GetScene().Lights();
                         Smile::LogDebug("Luz selecionada [" + std::to_string(LightHit) + "] " +
                                        Lights[static_cast<size_t>(LightHit)].Name);
                     } else {
-                        Renderer->RequestPick(Px, Py);
+                        RendererAccess->RequestPick(Px, Py);
                     }
                 }
             }

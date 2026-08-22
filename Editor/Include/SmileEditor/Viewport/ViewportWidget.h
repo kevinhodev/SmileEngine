@@ -16,6 +16,7 @@ class QTimer;
 class QPaintEngine;
 class QKeyEvent;
 class QMouseEvent;
+class QFocusEvent;
 
 namespace Smile {
     class Renderer;
@@ -49,15 +50,19 @@ namespace SmileEditor {
         explicit ViewportWidget(QWidget* parent = nullptr);
         ~ViewportWidget() override;
 
-        // Solicita shutdown assíncrono; o objeto deve viver até RendererStopped.
+        // O objeto deve viver ate RendererStopped.
         void              BeginRendererShutdown();
         bool              IsRendererStopped() const { return RendererStoppedFlag; }
         RendererHandle    GetRenderer() const { return Renderer; }
-        using SceneCommitCallback = std::function<void(bool, const QString&)>;
+        using RendererJobCallback = std::function<void(bool, const QString&)>;
         bool CommitImportedSceneAsync(
             std::shared_ptr<Smile::FSceneImportResult> Imported,
             bool Additive,
-            SceneCommitCallback Completion);
+            RendererJobCallback Completion);
+        // Serializa operacoes que recriam recursos com a producao de frames.
+        bool EnqueueRendererJob(const QString& CoalesceKey,
+                                RenderThread::RendererJob Job,
+                                RendererJobCallback Completion);
         float            GetFPS()      const { return LastFPS; }
         int               GetViewMode() const { return CurrentViewMode; }
         int               GetGizmoMode() const {
@@ -78,12 +83,10 @@ namespace SmileEditor {
         double            GetSnapTranslateM()  const { return GizmoCtrl.Snap().TranslateM; }
         double            GetSnapRotateDeg()   const { return GizmoCtrl.Snap().RotateDeg; }
         double            GetSnapScaleStep()   const { return GizmoCtrl.Snap().ScaleStep; }
-        // Durante resize interativo, o DXGI preserva o backbuffer até o gesto terminar.
         void              BeginInteractiveResize();
         void              EndInteractiveResize();
         void              NotifyRendererResourcesChanged() { emit RendererResourcesChanged(); }
-        // Benchmarks MCP precisam manter o mesmo pacing mesmo quando o Codex recebe o foco.
-        // O comportamento interativo continua throttled por default.
+        // Desative para benchmarks que precisam do mesmo pacing em segundo plano.
         void              SetBackgroundThrottleEnabled(bool Enabled);
         QString           GetViewModeLabel() const;
 
@@ -107,6 +110,7 @@ namespace SmileEditor {
 
         void keyPressEvent(QKeyEvent* event)     override;
         void keyReleaseEvent(QKeyEvent* event)   override;
+        void focusOutEvent(QFocusEvent* event)   override;
         void mousePressEvent(QMouseEvent* event) override;
         void mouseReleaseEvent(QMouseEvent* event) override;
         void mouseMoveEvent(QMouseEvent* event)  override;
@@ -140,13 +144,8 @@ namespace SmileEditor {
         void OnRendererInitializationFailed(const QString& Error);
         void OnRenderThreadStopped();
         void FlushPendingGizmoInput(Smile::Renderer& Renderer);
+        void ResetTransientInput();
         void ApplyPendingResize();
-    public:
-        // Serializa operações que recriam recursos com a produção de frames.
-        bool EnqueueRendererJob(const QString& CoalesceKey,
-                                RenderThread::RendererJob Job,
-                                SceneCommitCallback Completion);
-    private:
         void DispatchNextRendererJob();
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
@@ -172,7 +171,7 @@ namespace SmileEditor {
         struct FQueuedRendererJob {
             QString                     CoalesceKey;
             RenderThread::RendererJob   Execute;
-            SceneCommitCallback         Completion;
+            RendererJobCallback         Completion;
         };
         std::deque<FQueuedRendererJob> RendererJobs;
         bool          RendererJobActive = false;
