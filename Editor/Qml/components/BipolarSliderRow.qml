@@ -100,7 +100,7 @@ Item {
                 width: Math.abs(slider.visualPosition - root.centerPosition) * parent.width
                 height: parent.height
                 radius: 1
-                color: Theme.green
+                color: Theme.accent
             }
 
             Rectangle {
@@ -119,7 +119,7 @@ Item {
             height: 10
             radius: 5
             color: Theme.knob
-            border.color: Theme.green
+            border.color: Theme.accent
             border.width: 1.3
         }
     }

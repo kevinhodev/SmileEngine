@@ -69,7 +69,6 @@ namespace SmileEditor {
     private:
         void CreateTopBar();
         void WireMenuActions();
-        void CreateStatusBar();
         void CreateDocks();
         QWidget* CreateViewportChrome();
         void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
@@ -99,7 +98,8 @@ namespace SmileEditor {
         LightsBridge*         LightsBr    = nullptr;
         SceneOutlinerBridge*  OutlinerBr  = nullptr;
         SceneDocument*        SceneDoc    = nullptr;
-        QDockWidget*          LightsDock  = nullptr;
+        QDockWidget*          LightsDock  = nullptr;    // outliner (dock esquerdo)
+        QDockWidget*          InspectorDock = nullptr;  // propriedades da selecao (dock direito)
         MaterialsBridge*      MaterialsBr = nullptr;
         CameraBookmarksBridge* CameraBookmarksBr = nullptr;
         CaptureBridge*        CaptureBr  = nullptr;

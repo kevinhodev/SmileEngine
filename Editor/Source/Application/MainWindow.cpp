@@ -57,7 +57,6 @@
 #include <QQuickWidget>
 #include <QShortcut>
 #include <QSizePolicy>
-#include <QStatusBar>
 #include <QTime>
 #include <QTimer>
 #include <QVariant>
@@ -78,6 +77,11 @@ namespace SmileEditor {
 
         setDockNestingEnabled(true);
         setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
+        // A faixa inferior atravessa a janela inteira, por baixo dos docks laterais. Sem isto o
+        // Qt entrega os cantos as areas esquerda/direita e o console nasce espremido entre o
+        // outliner e o inspector — o oposto da faixa cheia que o conceito pede.
+        setCorner(Qt::BottomLeftCorner,  Qt::BottomDockWidgetArea);
+        setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
 
         // O sink deve existir antes de qualquer host QML emitir logs.
         ConsoleLog = new LogBridge(this);
@@ -96,6 +100,10 @@ namespace SmileEditor {
         } SinkRollback;
 
         WindowBr   = new WindowBridge(this);
+        // Antes vivia no CreateStatusBar. A QStatusBar deixou de existir (o rodape de metricas
+        // e a faixa do console agora), e tanto a MainBar quanto o ConsolePanel leem daqui —
+        // entao a ponte precisa existir antes dos dois.
+        StatusBr   = new StatusBridge(this);
         Menus      = new MenuBridge(this);
         TodBridge  = new TimeOfDayBridge(this);
         CloudsBr   = new CloudsBridge(this);
@@ -152,8 +160,6 @@ namespace SmileEditor {
         setCentralWidget(CreateViewportChrome());
         CreateDocks();
         WireMenuActions();
-
-        CreateStatusBar();
 
         // Persistência e captura publicam o resultado assíncrono na barra de status.
         if (CameraBookmarksBr && StatusBr) {
@@ -378,7 +384,10 @@ namespace SmileEditor {
         QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("MainBar.qml"),
             { { QStringLiteral("windowBridge"), WindowBr },
-              { QStringLiteral("menuBridge"),   Menus } },
+              { QStringLiteral("menuBridge"),   Menus },
+              { QStringLiteral("sceneDoc"),     SceneDoc },
+              { QStringLiteral("mcpModel"),     McpBr },
+              { QStringLiteral("statusModel"),  StatusBr } },
             this,
             { { QStringLiteral("smilelogo"), new SmileLogoImageProvider() } });
         Bar->setObjectName("MainBar");
@@ -394,21 +403,6 @@ namespace SmileEditor {
         });
         qApp->installNativeEventFilter(WinFilter);
         NativeWindowFilter::EnableFrameless(winId());
-    }
-
-    void MainWindow::CreateStatusBar() {
-        StatusBr = new StatusBridge(this);
-        QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
-            QStringLiteral("StatusBar.qml"),
-            { { QStringLiteral("statusModel"), StatusBr } },
-            this);
-        Bar->setObjectName("StatusBar");
-
-        QStatusBar* Sb = statusBar();
-        Sb->setObjectName("SmileStatusBar");
-        Sb->setSizeGripEnabled(false);
-        Sb->setContentsMargins(0, 0, 0, 0);
-        Sb->addWidget(Bar, 1);
     }
 
     void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive) {
@@ -656,7 +650,9 @@ namespace SmileEditor {
 
         QQuickWidget* Console = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ConsolePanel.qml"),
-            { { QStringLiteral("logModel"), ConsoleLog } },
+            { { QStringLiteral("logModel"),    ConsoleLog },
+              { QStringLiteral("statusModel"), StatusBr },
+              { QStringLiteral("statsModel"),  StatsBr } },
             ConsoleDock);
         Console->setObjectName("ConsolePanel");
 
@@ -669,12 +665,12 @@ namespace SmileEditor {
         connect(ConsoleLog, &LogBridge::CloseRequested, ConsoleDock, &QDockWidget::close);
 
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        Console->setMinimumHeight(82);
-        resizeDocks({ ConsoleDock }, { 124 }, Qt::Vertical);
+        Console->setMinimumHeight(132); // faixa de comando + rodape de metricas + 2 linhas
+        resizeDocks({ ConsoleDock }, { 176 }, Qt::Vertical);
 
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
 
-        // Cena / Scene Outliner.
+        // Cena / Scene Outliner — dock ESQUERDO no split outliner|viewport|inspector.
         LightsDock = new QDockWidget(tr("Cena"), this);
         LightsDock->setObjectName("SceneOutlinerDock");
         LightsDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -685,11 +681,9 @@ namespace SmileEditor {
         QQuickWidget* OutlinerPanel = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("SceneOutlinerPanel.qml"),
             { { QStringLiteral("outlinerModel"), OutlinerBr },
-              { QStringLiteral("sceneDoc"),       SceneDoc },
+              { QStringLiteral("sceneDoc"),      SceneDoc },
               { QStringLiteral("lightsModel"),   LightsBr },
-              { QStringLiteral("cloudsModel"),   CloudsBr },
-              { QStringLiteral("weatherModel"),  WeatherBr },
-              { QStringLiteral("oceanModel"),    OceanBr } },
+              { QStringLiteral("cloudsModel"),   CloudsBr } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
         LightsDock->setWidget(OutlinerPanel);
@@ -699,11 +693,42 @@ namespace SmileEditor {
         LightsDock->setTitleBarWidget(OutlinerEmptyTitleBar);
         connect(OutlinerBr, &SceneOutlinerBridge::CloseRequested, LightsDock, &QDockWidget::close);
 
-        addDockWidget(Qt::RightDockWidgetArea, LightsDock);
-        OutlinerPanel->setMinimumWidth(300);
-        resizeDocks({ LightsDock }, { 340 }, Qt::Horizontal);
+        addDockWidget(Qt::LeftDockWidgetArea, LightsDock);
+        OutlinerPanel->setMinimumWidth(272);
 
         connect(LightsDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetLightsVisible);
+
+        // Inspector — dock DIREITO. Saiu de dentro do outliner na migracao para o Signal
+        // Graphite: o painel unico empilhava arvore e propriedades numa coluna so, e as duas
+        // disputavam a mesma altura justamente quando havia mais de uma para ver.
+        InspectorDock = new QDockWidget(tr("Inspector"), this);
+        InspectorDock->setObjectName("InspectorDock");
+        InspectorDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        InspectorDock->setFeatures(QDockWidget::DockWidgetMovable |
+                                   QDockWidget::DockWidgetFloatable |
+                                   QDockWidget::DockWidgetClosable);
+
+        QQuickWidget* Inspector = CreateQmlPanel(*SharedQmlEngine,
+            QStringLiteral("InspectorPanel.qml"),
+            { { QStringLiteral("outlinerModel"), OutlinerBr },
+              { QStringLiteral("lightsModel"),   LightsBr },
+              { QStringLiteral("cloudsModel"),   CloudsBr },
+              { QStringLiteral("weatherModel"),  WeatherBr },
+              { QStringLiteral("oceanModel"),    OceanBr } },
+            InspectorDock);
+        Inspector->setObjectName("InspectorPanel");
+        InspectorDock->setWidget(Inspector);
+
+        auto* InspectorEmptyTitleBar = new QWidget(InspectorDock);
+        InspectorEmptyTitleBar->setFixedHeight(0);
+        InspectorDock->setTitleBarWidget(InspectorEmptyTitleBar);
+
+        addDockWidget(Qt::RightDockWidgetArea, InspectorDock);
+        Inspector->setMinimumWidth(288);
+
+        // Um resizeDocks por eixo, com os dois docks juntos: chamadas separadas se anulam,
+        // porque a segunda redistribui a largura que a primeira acabou de fixar.
+        resizeDocks({ LightsDock, InspectorDock }, { 296, 320 }, Qt::Horizontal);
     }
 
     void MainWindow::OnRendererReady() {

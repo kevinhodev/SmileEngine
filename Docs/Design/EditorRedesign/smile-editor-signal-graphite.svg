@@ -1,0 +1,388 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <!-- Smile Editor - conceito "Signal Graphite" -->
+  <style>
+    .sans { font-family: Inter, 'Segoe UI', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace; }
+    .tp { fill: #F2F2F0; }
+    .ts { fill: #A0A0A8; }
+    .tm { fill: #5F5F66; }
+    .tacc { fill: #FF6B2C; }
+    .hdr { fill: #A0A0A8; font-size: 10px; letter-spacing: 1.6px; font-weight: 600; }
+    text { dominant-baseline: middle; }
+  </style>
+  <defs>
+    <clipPath id="vpClip"><rect x="296" y="80" width="1304" height="836"/></clipPath>
+    <symbol id="i-cursor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M5 3l7.5 17 2.2-7.3L22 10.5z"/></symbol>
+    <symbol id="i-move" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20"/><path d="M9 5l3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"/></g></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></g></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3l-7 7M3 21l7-7"/><path d="M15 3h6v6M9 21H3v-6"/></g></symbol>
+    <symbol id="i-magnet" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3z"/><path d="M5 8l4 4M12 15l4 4"/></g></symbol>
+    <symbol id="i-angle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v16h16"/><path d="M5 11a9 9 0 0 1 9 9"/></g></symbol>
+    <symbol id="i-percent" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M19 5L5 19"/><circle cx="6.8" cy="6.8" r="2.4"/><circle cx="17.2" cy="17.2" r="2.4"/></g></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></g></symbol>
+    <symbol id="i-eyeoff" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8c2.2 2.7 4.9 4 8 4s5.8-1.3 8-4"/><path d="M12 12v3.5M6.5 11l-2 2.8M17.5 11l2 2.8"/></g></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></g></symbol>
+    <symbol id="i-chevd" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-chevr" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M6.5 19a4.5 4.5 0 0 1-.68-8.95A7 7 0 0 1 19.4 11 4 4 0 0 1 18 19z"/></symbol>
+    <symbol id="i-waves" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 9c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M2 15c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></g></symbol>
+    <symbol id="i-mountain" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M3 20l7-12 4 6.5L16.5 11 21 20z"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v9"/></g></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 1 4 10.5c-.6.55-1 1.3-1 2.5h-6c0-1.2-.4-1.95-1-2.5A6 6 0 0 1 12 3z"/><path d="M9.5 19h5M10.5 22h3"/></g></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-lights" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 6c5 5.5 15 5.5 20 0"/><circle cx="6" cy="11.4" r="1.7"/><circle cx="12" cy="12.8" r="1.7"/><circle cx="18" cy="11.4" r="1.7"/></g></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></g></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></g></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></g></symbol>
+    <symbol id="i-max" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/></g></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></g></symbol>
+    <symbol id="i-focus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="6"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></g></symbol>
+    <symbol id="i-stats" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 20V12M12 20V4M19 20v-6"/></g></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v4h8"/></g></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></g></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M5 12h14"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="4" y="8" width="12" height="12" rx="1.5"/><path d="M8 8V5.5A1.5 1.5 0 0 1 9.5 4h9A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H16"/></g></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></g></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 4h6v5l2.5 3.5h-11L9 9z"/></g></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07.07l2.5-2.5a5 5 0 0 0-7.07-7.07L11 5"/><path d="M14 11a5 5 0 0 0-7.07-.07l-2.5 2.5a5 5 0 0 0 7.07 7.07L13 19"/></g></symbol>
+  </defs>
+
+  <!-- Fundo geral -->
+  <rect x="0" y="0" width="1920" height="1080" fill="#111113"/>
+
+  <!-- Barra superior -->
+  <g>
+    <rect x="0" y="0" width="1920" height="44" fill="#111113"/>
+    <rect x="0" y="43" width="1920" height="1" fill="#26262B"/>
+    <rect x="16" y="10" width="24" height="24" rx="5" fill="#FF6B2C"/>
+    <g stroke="#111113" stroke-width="1.9" stroke-linecap="round" fill="none">
+      <path d="M23.5 20.5v1M32.5 20.5v1"/>
+      <path d="M23 25.5c1.4 2 8.6 2 10 0"/>
+    </g>
+    <text x="50" y="23" class="sans tp" font-size="14" font-weight="650">Smile</text>
+    <text x="92" y="24" class="mono tm" font-size="9" letter-spacing="1.2">EDITOR</text>
+    <text x="160" y="23" class="sans ts" font-size="13">Arquivo</text>
+    <text x="222" y="23" class="sans ts" font-size="13">Editar</text>
+    <text x="276" y="23" class="sans ts" font-size="13">Janela</text>
+    <text x="334" y="23" class="sans ts" font-size="13">Op&#231;&#245;es</text>
+    <rect x="796" y="9" width="328" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+    <circle cx="814" cy="22" r="3" fill="#FF6B2C"/>
+    <text x="826" y="23" class="mono tm" font-size="11.5">paris_bistro /</text>
+    <text x="925" y="23" class="mono tp" font-size="11.5">main.scene</text>
+    <text x="1014" y="23" class="mono tm" font-size="10">modificado</text>
+    <rect x="1666" y="11" width="64" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <circle cx="1680" cy="22" r="3" fill="#46D68C"/>
+    <text x="1690" y="23" class="mono ts" font-size="10">MCP</text>
+    <rect x="1738" y="11" width="72" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="1750" y="23" class="mono ts" font-size="10">100 FPS</text>
+    <use href="#i-minus" x="1826" y="14" width="16" height="16" color="#5F5F66"/>
+    <use href="#i-restore" x="1858" y="14" width="16" height="16" color="#5F5F66"/>
+    <use href="#i-x" x="1890" y="14" width="16" height="16" color="#5F5F66"/>
+  </g>
+
+  <!-- Toolbar do viewport -->
+  <g transform="translate(296,44)">
+    <rect x="0" y="0" width="1304" height="36" fill="#111113"/>
+    <rect x="0" y="35" width="1304" height="1" fill="#26262B"/>
+    <use href="#i-undo" x="12" y="10" width="16" height="16" color="#A0A0A8"/>
+    <use href="#i-redo" x="40" y="10" width="16" height="16" color="#3A3A40"/>
+    <rect x="68" y="8" width="1" height="20" fill="#26262B"/>
+    <use href="#i-cursor" x="84" y="10" width="16" height="16" color="#A0A0A8"/>
+    <rect x="110" y="4" width="28" height="28" rx="3" fill="rgba(255,107,44,0.14)" stroke="rgba(255,107,44,0.45)"/>
+    <use href="#i-move" x="116" y="10" width="16" height="16" color="#FF6B2C"/>
+    <use href="#i-rotate" x="148" y="10" width="16" height="16" color="#A0A0A8"/>
+    <use href="#i-scale" x="180" y="10" width="16" height="16" color="#A0A0A8"/>
+    <rect x="208" y="8" width="1" height="20" fill="#26262B"/>
+    <rect x="220" y="6" width="74" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="232" y="19" class="sans ts" font-size="12">Local</text>
+    <use href="#i-chevd" x="272" y="11" width="13" height="13" color="#5F5F66"/>
+    <rect x="304" y="8" width="1" height="20" fill="#26262B"/>
+    <rect x="316" y="6" width="92" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <use href="#i-magnet" x="324" y="11" width="14" height="14" color="#A0A0A8"/>
+    <text x="344" y="19" class="mono ts" font-size="11">10 cm</text>
+    <use href="#i-chevd" x="389" y="11" width="12" height="12" color="#5F5F66"/>
+    <rect x="414" y="6" width="74" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <use href="#i-angle" x="422" y="11" width="14" height="14" color="#A0A0A8"/>
+    <text x="442" y="19" class="mono ts" font-size="11">15&#176;</text>
+    <use href="#i-chevd" x="470" y="11" width="12" height="12" color="#5F5F66"/>
+    <rect x="494" y="6" width="76" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <use href="#i-percent" x="502" y="11" width="14" height="14" color="#A0A0A8"/>
+    <text x="522" y="19" class="mono ts" font-size="11">10%</text>
+    <use href="#i-chevd" x="552" y="11" width="12" height="12" color="#5F5F66"/>
+    <rect x="582" y="8" width="1" height="20" fill="#26262B"/>
+    <text x="598" y="19" class="sans ts" font-size="12">Perspectiva</text>
+    <use href="#i-chevd" x="668" y="11" width="13" height="13" color="#5F5F66"/>
+    <rect x="694" y="6" width="66" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <circle cx="708" cy="18" r="3" fill="#F5C043"/>
+    <text x="717" y="19" class="sans tp" font-size="12">Lit</text>
+    <use href="#i-chevd" x="740" y="11" width="13" height="13" color="#5F5F66"/>
+    <text x="776" y="19" class="sans ts" font-size="12">Mostrar</text>
+    <use href="#i-chevd" x="826" y="11" width="13" height="13" color="#5F5F66"/>
+    <use href="#i-focus" x="1056" y="10" width="16" height="16" color="#A0A0A8"/>
+    <text x="1084" y="19" class="mono ts" font-size="11">4.0&#215;</text>
+    <rect x="1122" y="8" width="1" height="20" fill="#26262B"/>
+    <use href="#i-grid" x="1136" y="10" width="16" height="16" color="#A0A0A8"/>
+    <use href="#i-stats" x="1168" y="10" width="16" height="16" color="#A0A0A8"/>
+    <use href="#i-max" x="1200" y="10" width="16" height="16" color="#A0A0A8"/>
+    <use href="#i-more" x="1232" y="10" width="16" height="16" color="#A0A0A8"/>
+  </g>
+
+  <!-- Viewport -->
+  <g clip-path="url(#vpClip)">
+    <rect x="296" y="80" width="1304" height="836" fill="#09090A"/>
+    <!-- A referencia e um screenshot do editor antigo; o offset/escala abaixo recorta
+         apenas a area limpa da cena (sem toolbar, painel lateral e console antigos). -->
+    <image href="viewport-reference.png" x="118.3" y="1.6" width="2005.4" height="1081.6" preserveAspectRatio="none"/>
+  </g>
+  <g stroke="#333338" stroke-opacity="0.55">
+    <path d="M360 80v5M424 80v5M488 80v5M616 80v5M680 80v5M744 80v5M872 80v5M936 80v5M1000 80v5M1128 80v5M1192 80v5M1256 80v5M1384 80v5M1448 80v5M1512 80v5"/>
+    <path d="M552 80v9M808 80v9M1064 80v9M1320 80v9M1576 80v9" stroke-opacity="0.85"/>
+  </g>
+  <g stroke="#5F5F66" stroke-width="1.4" fill="none" opacity="0.75">
+    <path d="M304 96v-8h8M1592 96v-8h-8M304 900v8h8M1592 900v8h-8"/>
+  </g>
+  <g transform="translate(1548,120)" font-size="8.5">
+    <path d="M0 0L0 -22" stroke="#46D68C" stroke-width="1.6"/>
+    <path d="M0 0L19 11" stroke="#FF5C5C" stroke-width="1.6"/>
+    <path d="M0 0L-19 11" stroke="#6FA8FF" stroke-width="1.6"/>
+    <circle cx="0" cy="0" r="2.4" fill="#F2F2F0"/>
+    <text x="-3" y="-29" class="mono" fill="#46D68C">Y</text>
+    <text x="22" y="14" class="mono" fill="#FF5C5C">X</text>
+    <text x="-28" y="14" class="mono" fill="#6FA8FF">Z</text>
+  </g>
+  <g transform="translate(312,856)">
+    <rect x="0" y="0" width="252" height="42" rx="3" fill="#111113" fill-opacity="0.92" stroke="#26262B"/>
+    <rect x="0" y="0" width="2" height="42" fill="#FF6B2C"/>
+    <text x="14" y="15" class="sans tp" font-size="13" font-weight="600">BistroExterior</text>
+    <text x="14" y="31" class="mono tm" font-size="9.5" letter-spacing="0.6">STATIC MESH &#183; 1.24M TRI</text>
+  </g>
+  <text x="1584" y="898" text-anchor="end" class="mono tm" font-size="10">1572&#215;884 &#183; DLSS-RR</text>
+
+  <!-- Outliner (esquerda) -->
+  <g transform="translate(0,44)">
+    <rect x="0" y="0" width="296" height="872" fill="#111113"/>
+    <rect x="295" y="0" width="1" height="872" fill="#26262B"/>
+    <text x="16" y="21" class="mono hdr">CENA</text>
+    <text x="58" y="21" class="mono tm" font-size="10">1 591</text>
+    <g>
+      <use href="#i-save" x="238" y="13" width="15" height="15" color="#A0A0A8"/>
+      <circle cx="254" cy="14" r="3" fill="#FF6B2C"/>
+    </g>
+    <use href="#i-more" x="268" y="13" width="15" height="15" color="#5F5F66"/>
+    <rect x="0" y="40" width="296" height="1" fill="#26262B"/>
+    <rect x="12" y="52" width="272" height="28" rx="3" fill="#18181B" stroke="#26262B"/>
+    <use href="#i-search" x="22" y="59" width="14" height="14" color="#5F5F66"/>
+    <text x="44" y="67" class="sans tm" font-size="12">Buscar na cena&#8230;</text>
+    <text x="272" y="67" text-anchor="end" class="mono tm" font-size="9">CTRL K</text>
+    <rect x="12" y="92" width="48" height="22" rx="2" fill="rgba(255,107,44,0.12)" stroke="rgba(255,107,44,0.5)"/>
+    <text x="36" y="104" text-anchor="middle" class="sans tacc" font-size="11" font-weight="600">Tudo</text>
+    <rect x="66" y="92" width="52" height="22" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="92" y="104" text-anchor="middle" class="sans ts" font-size="11">Luzes</text>
+    <rect x="124" y="92" width="60" height="22" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="154" y="104" text-anchor="middle" class="sans ts" font-size="11">Meshes</text>
+    <rect x="190" y="92" width="70" height="22" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="225" y="104" text-anchor="middle" class="sans ts" font-size="11">Ambiente</text>
+
+    <use href="#i-chevd" x="12" y="132" width="13" height="13" color="#5F5F66"/>
+    <use href="#i-globe" x="32" y="131" width="15" height="15" color="#A0A0A8"/>
+    <text x="56" y="139" class="sans tp" font-size="12.5" font-weight="550">Ambiente</text>
+    <text x="282" y="139" text-anchor="end" class="mono tm" font-size="10">5</text>
+    <use href="#i-sun" x="36" y="157" width="15" height="15" color="#F5C043"/>
+    <text x="60" y="165" class="sans ts" font-size="12.5">Sol &amp; Atmosfera</text>
+    <use href="#i-eye" x="266" y="158" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-cloud" x="36" y="183" width="15" height="15" color="#A0A0A8"/>
+    <text x="60" y="191" class="sans ts" font-size="12.5">Clima</text>
+    <use href="#i-eye" x="266" y="184" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-cloud" x="36" y="209" width="15" height="15" color="#3A3A40"/>
+    <text x="60" y="217" class="sans tm" font-size="12.5">Nuvens volum&#233;tricas</text>
+    <use href="#i-eyeoff" x="266" y="210" width="14" height="14" color="#3A3A40"/>
+    <use href="#i-waves" x="36" y="235" width="15" height="15" color="#3A3A40"/>
+    <text x="60" y="243" class="sans tm" font-size="12.5">Oceano FFT</text>
+    <use href="#i-eyeoff" x="266" y="236" width="14" height="14" color="#3A3A40"/>
+    <use href="#i-mountain" x="36" y="261" width="15" height="15" color="#A0A0A8"/>
+    <text x="60" y="269" class="sans ts" font-size="12.5">Terreno</text>
+    <use href="#i-eye" x="266" y="262" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-chevr" x="12" y="288" width="13" height="13" color="#5F5F66"/>
+    <use href="#i-bulb" x="32" y="287" width="15" height="15" color="#A0A0A8"/>
+    <text x="56" y="295" class="sans tp" font-size="12.5" font-weight="550">Luzes</text>
+    <rect x="176" y="284" width="50" height="20" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="201" y="295" text-anchor="middle" class="mono ts" font-size="9.5">+ POINT</text>
+    <rect x="232" y="284" width="46" height="20" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="255" y="295" text-anchor="middle" class="mono ts" font-size="9.5">+ SPOT</text>
+    <use href="#i-chevd" x="12" y="314" width="13" height="13" color="#5F5F66"/>
+    <use href="#i-box" x="32" y="313" width="15" height="15" color="#A0A0A8"/>
+    <text x="56" y="321" class="sans tp" font-size="12.5" font-weight="550">Meshes</text>
+    <text x="282" y="321" text-anchor="end" class="mono tm" font-size="10">1 591</text>
+    <rect x="0" y="334" width="296" height="26" fill="rgba(255,107,44,0.10)"/>
+    <rect x="0" y="334" width="2" height="26" fill="#FF6B2C"/>
+    <use href="#i-chevd" x="28" y="340" width="13" height="13" color="#FF6B2C"/>
+    <use href="#i-folder" x="46" y="339" width="15" height="15" color="#FF6B2C"/>
+    <text x="70" y="347" class="sans tp" font-size="12.5" font-weight="600">BistroExterior</text>
+    <text x="282" y="347" text-anchor="end" class="mono tacc" font-size="10">1 591</text>
+    <use href="#i-box" x="52" y="365" width="14" height="14" color="#5F5F66"/>
+    <text x="74" y="373" class="sans ts" font-size="12.5">Storefront_A</text>
+    <use href="#i-eye" x="266" y="366" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-box" x="52" y="391" width="14" height="14" color="#5F5F66"/>
+    <text x="74" y="399" class="sans ts" font-size="12.5">Cafe_Props</text>
+    <use href="#i-eye" x="266" y="392" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-box" x="52" y="417" width="14" height="14" color="#5F5F66"/>
+    <text x="74" y="425" class="sans ts" font-size="12.5">Street_Furniture</text>
+    <use href="#i-eye" x="266" y="418" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-lights" x="52" y="443" width="14" height="14" color="#F5C043"/>
+    <text x="74" y="451" class="sans ts" font-size="12.5">StringLights_20</text>
+    <use href="#i-eye" x="266" y="444" width="14" height="14" color="#5F5F66"/>
+    <use href="#i-box" x="52" y="469" width="14" height="14" color="#5F5F66"/>
+    <text x="74" y="477" class="sans ts" font-size="12.5">Scooter_Blue</text>
+    <use href="#i-eye" x="266" y="470" width="14" height="14" color="#5F5F66"/>
+    <text x="74" y="503" class="mono tm" font-size="10.5">+ 1 580 objetos&#8230;</text>
+    <rect x="0" y="840" width="296" height="1" fill="#26262B"/>
+    <text x="16" y="857" class="mono tm" font-size="10">1 591 objetos &#183; 1 selecionado &#183; 2 ocultos</text>
+  </g>
+
+  <!-- Inspector (direita) -->
+  <g transform="translate(1600,44)">
+    <rect x="0" y="0" width="320" height="872" fill="#111113"/>
+    <rect x="0" y="0" width="1" height="872" fill="#26262B"/>
+    <text x="16" y="21" class="mono hdr">INSPECTOR</text>
+    <use href="#i-pin" x="290" y="13" width="15" height="15" color="#5F5F66"/>
+    <rect x="0" y="40" width="320" height="1" fill="#26262B"/>
+    <rect x="14" y="54" width="292" height="54" rx="4" fill="#18181B" stroke="#26262B"/>
+    <rect x="26" y="66" width="30" height="30" rx="3" fill="rgba(255,107,44,0.12)" stroke="rgba(255,107,44,0.45)"/>
+    <use href="#i-box" x="33" y="73" width="16" height="16" color="#FF6B2C"/>
+    <text x="68" y="76" class="sans tp" font-size="14" font-weight="600">BistroExterior</text>
+    <text x="68" y="94" class="mono tm" font-size="9.5" letter-spacing="0.6">STATIC MESH &#183; 1.24M TRI</text>
+    <text x="16" y="134" class="mono hdr">TRANSFORM</text>
+    <use href="#i-chevd" x="292" y="127" width="13" height="13" color="#5F5F66"/>
+    <text x="16" y="158" class="sans tm" font-size="11">Posi&#231;&#227;o</text>
+    <g>
+      <rect x="14" y="168" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="14" y="168" width="2" height="26" fill="#FF5C5C"/>
+      <text x="24" y="182" class="mono tm" font-size="10">X</text>
+      <text x="98" y="182" text-anchor="end" class="mono tp" font-size="11">-12.400</text>
+      <rect x="114" y="168" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="114" y="168" width="2" height="26" fill="#46D68C"/>
+      <text x="124" y="182" class="mono tm" font-size="10">Y</text>
+      <text x="198" y="182" text-anchor="end" class="mono tp" font-size="11">0.000</text>
+      <rect x="214" y="168" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="214" y="168" width="2" height="26" fill="#6FA8FF"/>
+      <text x="224" y="182" class="mono tm" font-size="10">Z</text>
+      <text x="298" y="182" text-anchor="end" class="mono tp" font-size="11">8.250</text>
+    </g>
+    <text x="16" y="216" class="sans tm" font-size="11">Rota&#231;&#227;o</text>
+    <g>
+      <rect x="14" y="226" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="14" y="226" width="2" height="26" fill="#FF5C5C"/>
+      <text x="98" y="240" text-anchor="end" class="mono tp" font-size="11">0.0</text>
+      <rect x="114" y="226" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="114" y="226" width="2" height="26" fill="#46D68C"/>
+      <text x="198" y="240" text-anchor="end" class="mono tp" font-size="11">90.0</text>
+      <rect x="214" y="226" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="214" y="226" width="2" height="26" fill="#6FA8FF"/>
+      <text x="298" y="240" text-anchor="end" class="mono tp" font-size="11">0.0</text>
+    </g>
+    <text x="16" y="274" class="sans tm" font-size="11">Escala</text>
+    <use href="#i-link" x="60" y="266" width="13" height="13" color="#5F5F66"/>
+    <g>
+      <rect x="14" y="284" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <text x="98" y="298" text-anchor="end" class="mono tp" font-size="11">1.00</text>
+      <rect x="114" y="284" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <text x="198" y="298" text-anchor="end" class="mono tp" font-size="11">1.00</text>
+      <rect x="214" y="284" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <text x="298" y="298" text-anchor="end" class="mono tp" font-size="11">1.00</text>
+    </g>
+    <rect x="14" y="330" width="292" height="1" fill="#26262B"/>
+    <text x="16" y="352" class="mono hdr">MATERIAIS</text>
+    <text x="292" y="352" text-anchor="end" class="mono tm" font-size="10">12</text>
+    <g>
+      <rect x="14" y="366" width="14" height="14" rx="2" fill="#7A5A44" stroke="#333338"/>
+      <text x="38" y="374" class="sans ts" font-size="12">M_Facade_Paris</text>
+      <rect x="14" y="392" width="14" height="14" rx="2" fill="#8C2F2A" stroke="#333338"/>
+      <text x="38" y="400" class="sans ts" font-size="12">M_Awning_Red</text>
+      <rect x="14" y="418" width="14" height="14" rx="2" fill="#41535A" stroke="#333338"/>
+      <text x="38" y="426" class="sans ts" font-size="12">M_Glass_Cafe</text>
+      <text x="38" y="452" class="mono tm" font-size="10.5">+ 9 materiais&#8230;</text>
+    </g>
+    <rect x="14" y="472" width="292" height="1" fill="#26262B"/>
+    <text x="16" y="494" class="mono hdr">RENDERIZA&#199;&#195;O</text>
+    <text x="16" y="522" class="sans ts" font-size="12.5">Projeta sombras</text>
+    <rect x="276" y="514" width="30" height="16" rx="8" fill="#FF6B2C"/>
+    <circle cx="298" cy="522" r="6" fill="#F2F2F0"/>
+    <text x="16" y="550" class="sans ts" font-size="12.5">Din&#226;mico</text>
+    <rect x="276" y="542" width="30" height="16" rx="8" fill="#18181B" stroke="#333338"/>
+    <circle cx="284" cy="550" r="6" fill="#5F5F66"/>
+    <text x="16" y="578" class="sans ts" font-size="12.5">Peso no GI</text>
+    <rect x="246" y="566" width="60" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="578" text-anchor="end" class="mono tp" font-size="11">1.00</text>
+    <rect x="14" y="608" width="292" height="1" fill="#26262B"/>
+    <text x="16" y="630" class="mono hdr">ESTAT&#205;STICAS</text>
+    <text x="16" y="658" class="sans ts" font-size="12">Tri&#226;ngulos</text>
+    <text x="306" y="658" text-anchor="end" class="mono tp" font-size="11">1 243 812</text>
+    <text x="16" y="684" class="sans ts" font-size="12">V&#233;rtices</text>
+    <text x="306" y="684" text-anchor="end" class="mono tp" font-size="11">897 004</text>
+    <text x="16" y="710" class="sans ts" font-size="12">VRAM geometria</text>
+    <text x="306" y="710" text-anchor="end" class="mono tp" font-size="11">142.3 MB</text>
+    <text x="16" y="736" class="sans ts" font-size="12">Draw calls</text>
+    <text x="306" y="736" text-anchor="end" class="mono tp" font-size="11">38</text>
+  </g>
+
+  <!-- Console -->
+  <g transform="translate(0,916)">
+    <rect x="0" y="0" width="1920" height="164" fill="#111113"/>
+    <rect x="0" y="0" width="1920" height="1" fill="#333338"/>
+    <use href="#i-term" x="16" y="10" width="15" height="15" color="#F2F2F0"/>
+    <text x="40" y="19" class="sans tp" font-size="12.5" font-weight="600">Console</text>
+    <rect x="12" y="34" width="82" height="2" fill="#FF6B2C"/>
+    <text x="122" y="19" class="sans tm" font-size="12.5">Build</text>
+    <text x="176" y="19" class="sans tm" font-size="12.5">Profiler</text>
+    <text x="240" y="19" class="sans tm" font-size="12.5">Assets</text>
+    <rect x="300" y="8" width="1" height="20" fill="#26262B"/>
+    <rect x="316" y="7" width="54" height="22" rx="2" fill="rgba(255,107,44,0.12)" stroke="rgba(255,107,44,0.5)"/>
+    <text x="343" y="19" text-anchor="middle" class="sans tacc" font-size="11" font-weight="600">Todos</text>
+    <rect x="378" y="7" width="66" height="22" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="411" y="19" text-anchor="middle" class="sans ts" font-size="11">Info &#183; 128</text>
+    <rect x="452" y="7" width="72" height="22" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="488" y="19" text-anchor="middle" class="sans ts" font-size="11">Avisos &#183; 2</text>
+    <rect x="532" y="7" width="64" height="22" rx="2" fill="#18181B" stroke="#26262B"/>
+    <text x="564" y="19" text-anchor="middle" class="sans ts" font-size="11">Erros &#183; 0</text>
+    <rect x="1584" y="6" width="240" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+    <use href="#i-search" x="1592" y="11" width="13" height="13" color="#5F5F66"/>
+    <text x="1612" y="19" class="sans tm" font-size="11.5">Filtrar mensagens&#8230;</text>
+    <use href="#i-pin" x="1840" y="10" width="15" height="15" color="#A0A0A8"/>
+    <use href="#i-more" x="1868" y="10" width="15" height="15" color="#5F5F66"/>
+    <use href="#i-chevd" x="1894" y="10" width="15" height="15" color="#5F5F66"/>
+    <rect x="0" y="36" width="1920" height="1" fill="#26262B"/>
+    <text x="16" y="53" class="mono tm" font-size="11">12:05:47.473</text>
+    <rect x="126" y="45" width="42" height="16" rx="2" fill="#1F1F23"/>
+    <text x="147" y="53" text-anchor="middle" class="mono ts" font-size="9.5">INFO</text>
+    <text x="184" y="53" class="sans ts" font-size="12">SmileMCP bridge ativo: <tspan class="tp">SmileEngine-MCP-v1</tspan></text>
+    <text x="16" y="77" class="mono tm" font-size="11">12:05:54.721</text>
+    <rect x="126" y="69" width="42" height="16" rx="2" fill="#14202E"/>
+    <text x="147" y="77" text-anchor="middle" class="mono" font-size="9.5" fill="#6FA8FF">GPU</text>
+    <text x="184" y="77" class="sans ts" font-size="12">D3D12MA: pool <tspan class="tp">DEFAULT</tspan> ativo &#183; Heap Tier 2</text>
+    <text x="16" y="101" class="mono tm" font-size="11">12:05:59.906</text>
+    <rect x="126" y="93" width="42" height="16" rx="2" fill="#1F1F23"/>
+    <text x="147" y="101" text-anchor="middle" class="mono ts" font-size="9.5">INFO</text>
+    <text x="184" y="101" class="sans ts" font-size="12">NVAPI ligada: instrumenta&#231;&#227;o de timers nos shaders de RT dispon&#237;vel</text>
+    <text x="16" y="125" class="mono tm" font-size="11">12:06:03.118</text>
+    <rect x="126" y="117" width="42" height="16" rx="2" fill="#1F1F23"/>
+    <text x="147" y="125" text-anchor="middle" class="mono ts" font-size="9.5">INFO</text>
+    <text x="184" y="125" class="sans ts" font-size="12">Renderer pronto em 6 515 ms &#183; <tspan class="tp">DXR &#183; FSR &#183; DLSS-RR</tspan></text>
+    <rect x="0" y="132" width="1920" height="1" fill="#26262B"/>
+    <circle cx="20" cy="148" r="3" fill="#46D68C"/>
+    <text x="32" y="149" class="mono" font-size="10.5" fill="#46D68C" letter-spacing="1">PRONTO</text>
+    <g text-anchor="end">
+      <text x="1428" y="149" class="mono tm" font-size="10.5">FPS</text>
+      <text x="1469" y="149" class="mono tp" font-size="11">100.9</text>
+      <text x="1529" y="149" class="mono tm" font-size="10.5">FRAME</text>
+      <text x="1583" y="149" class="mono tp" font-size="11">9.18 ms</text>
+      <text x="1629" y="149" class="mono tm" font-size="10.5">GPU</text>
+      <text x="1683" y="149" class="mono tp" font-size="11">7.42 ms</text>
+      <text x="1749" y="149" class="mono tm" font-size="10.5">MESHES</text>
+      <text x="1810" y="149" class="mono tp" font-size="11">846/1592</text>
+      <text x="1856" y="149" class="mono tm" font-size="10.5">MEM</text>
+      <text x="1904" y="149" class="mono tp" font-size="11">3.8 GB</text>
+    </g>
+  </g>
+</svg>

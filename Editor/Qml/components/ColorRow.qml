@@ -55,7 +55,7 @@ Item {
         y: 2
         width: 46; height: 18; radius: 4
         color: colorRow.value
-        border.color: swHover.hovered ? Theme.blue : Theme.borderColor
+        border.color: swHover.hovered ? Theme.accent : Theme.borderColor
         border.width: 1
         HoverHandler { id: swHover; cursorShape: Qt.PointingHandCursor }
         TapHandler {

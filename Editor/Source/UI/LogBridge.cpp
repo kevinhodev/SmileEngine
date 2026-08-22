@@ -146,7 +146,19 @@ namespace SmileEditor {
             emit RowsAppended();
         }
 
-        if (StatsDirty) emit StatsChanged();
+        if (StatsDirty) {
+            RecountLevels();
+            emit StatsChanged();
+        }
+    }
+
+    void LogBridge::RecountLevels() {
+        LevelCounts[0] = LevelCounts[1] = LevelCounts[2] = 0;
+        for (const Entry& E : Entries) {
+            if (E.Tag == QLatin1String("ERR"))       ++LevelCounts[2];
+            else if (E.Tag == QLatin1String("WARN")) ++LevelCounts[1];
+            else                                     ++LevelCounts[0];
+        }
     }
 
     void LogBridge::Clear() {
@@ -166,6 +178,7 @@ namespace SmileEditor {
         }
         DroppedCount_ = 0;
         EvictedCount_ = 0;
+        RecountLevels();
         emit StatsChanged();
     }
 

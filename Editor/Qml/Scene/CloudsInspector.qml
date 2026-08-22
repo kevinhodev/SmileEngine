@@ -54,12 +54,12 @@ C.Card {
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 6; height: 6; radius: 3
-                color: root.model.enabled ? "#61c894" : C.Theme.textMuted
+                color: root.model.enabled ? C.Theme.green : C.Theme.textMuted
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.model.enabled ? "Ativa" : "Desativada"
-                color: root.model.enabled ? "#8fd6ae" : C.Theme.textMuted
+                color: root.model.enabled ? C.Theme.green : C.Theme.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
@@ -73,8 +73,8 @@ C.Card {
         property string iconName
         signal clicked()
         implicitWidth: buttonRow.implicitWidth + 18
-        height: 26; radius: 6
-        color: buttonHover.hovered ? C.Theme.controlHover : "#171912"
+        height: 26; radius: C.Theme.radiusControl
+        color: buttonHover.hovered ? C.Theme.controlHover : C.Theme.surface
         border.color: C.Theme.controlBorder
         border.width: 1
         Row {
@@ -146,9 +146,9 @@ C.Card {
                 color: C.Theme.textSecondary
             }
             background: Rectangle {
-                radius: 6
-                color: presetCombo.hovered ? C.Theme.controlHover : "#111209"
-                border.color: presetCombo.activeFocus ? C.Theme.green : C.Theme.controlBorder
+                radius: C.Theme.radiusControl
+                color: presetCombo.hovered ? C.Theme.controlHover : C.Theme.surface
+                border.color: presetCombo.activeFocus ? C.Theme.accent : C.Theme.hairline
                 border.width: 1
             }
             popup: Popup {
@@ -163,7 +163,7 @@ C.Card {
                     currentIndex: presetCombo.highlightedIndex
                 }
                 background: Rectangle {
-                    radius: 6; color: "#181a15"
+                    radius: C.Theme.radiusCard; color: C.Theme.surfaceRaised
                     border.color: C.Theme.controlBorder; border.width: 1
                 }
             }
@@ -181,7 +181,7 @@ C.Card {
                 }
                 background: Rectangle {
                     radius: 4
-                    color: presetDelegate.highlighted ? C.Theme.greenBg : "transparent"
+                    color: presetDelegate.highlighted ? C.Theme.accentBg : "transparent"
                 }
             }
         }

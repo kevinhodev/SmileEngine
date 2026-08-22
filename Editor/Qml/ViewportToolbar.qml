@@ -10,14 +10,14 @@ Rectangle {
     required property var renderModel
     required property var debugModel
 
-    color: "#131410"
+    color: C.Theme.shell
     implicitWidth: 900
-    implicitHeight: 34
+    implicitHeight: 36
 
-    readonly property color textPrimary: "#e6e2d8"
-    readonly property color textNormal: "#c8c2b4"
-    readonly property color textMuted: "#6c6a61"
-    readonly property color accent: C.Theme.green
+    readonly property color textPrimary: C.Theme.textPrimary
+    readonly property color textNormal: C.Theme.textSecondary
+    readonly property color textMuted: C.Theme.textMuted
+    readonly property color accent: C.Theme.accent
     readonly property bool compact: width < 1040
     readonly property bool narrow: width < 760
 
@@ -46,22 +46,22 @@ Rectangle {
         property bool framed: false
         property string tipShortcut: ""
         signal tapped()
-        implicitWidth: 26
-        implicitHeight: 22
-        radius: 5
+        implicitWidth: 28
+        implicitHeight: 28
+        radius: C.Theme.radiusControl
         opacity: enabledVisual ? 1.0 : 0.38
-        color: active ? C.Theme.greenBg
-                      : (iconHover.hovered && enabledVisual ? "#22241e"
-                         : (framed ? "#1a1c17" : "transparent"))
-        border.color: active ? C.Theme.greenBorder
-                             : (iconHover.hovered && enabledVisual ? "#393b32"
-                                : (framed ? "#2d2f28" : "transparent"))
+        color: active ? C.Theme.accentBg
+                      : (iconHover.hovered && enabledVisual ? C.Theme.surfaceRaised
+                         : (framed ? C.Theme.surface : "transparent"))
+        border.color: active ? C.Theme.accentBorder
+                             : (iconHover.hovered && enabledVisual ? C.Theme.hairlineStrong
+                                : (framed ? C.Theme.hairline : "transparent"))
         border.width: 1
         C.ToolbarIcon {
             anchors.centerIn: parent
             width: 14; height: 14
             name: iconButton.iconName
-            color: iconButton.active ? root.accent : "#a7a397"
+            color: iconButton.active ? root.accent : C.Theme.textSecondary
         }
         HoverHandler {
             id: iconHover
@@ -90,7 +90,7 @@ Rectangle {
                 const cy = height / 2
                 ctx.reset()
                 ctx.lineWidth = 1.25
-                ctx.strokeStyle = radioMark.checked ? root.accent : "#4a4b41"
+                ctx.strokeStyle = radioMark.checked ? root.accent : C.Theme.hairlineStrong
                 ctx.beginPath()
                 ctx.arc(cx, cy, 4.75, 0, Math.PI * 2)
                 ctx.stroke()
@@ -115,8 +115,8 @@ Rectangle {
         property bool hasSubmenu: false
         signal tapped()
 
-        radius: 5
-        color: selected ? C.Theme.greenBg : (modeHover.hovered ? "#22231c" : "transparent")
+        radius: C.Theme.radiusControl
+        color: selected ? C.Theme.accentBg : (modeHover.hovered ? C.Theme.surfaceRaised : "transparent")
 
         RadioMark {
             anchors.left: parent.left
@@ -141,15 +141,15 @@ Rectangle {
             anchors.left: modeLabel.right
             anchors.leftMargin: 8
             anchors.verticalCenter: modeLabel.verticalCenter
-            width: 34; height: 15; radius: 7.5
-            color: "#33260f"
-            border.color: "#57431a"
+            width: 34; height: 15; radius: C.Theme.radiusChip
+            color: C.Theme.surfaceRaised
+            border.color: C.Theme.hairlineStrong
             Text {
                 anchors.centerIn: parent
-                text: "beta"
-                color: "#d8a03a"
-                font.family: C.Theme.fontFamily
-                font.pixelSize: 10
+                text: "BETA"
+                color: C.Theme.amber
+                font.family: C.Theme.fontMono
+                font.pixelSize: 9
             }
         }
         Text {
@@ -169,7 +169,7 @@ Rectangle {
             anchors.rightMargin: 7
             anchors.verticalCenter: modeLabel.verticalCenter
             text: modeRow.shortcutText
-            color: modeRow.selected ? C.Theme.greenText : root.textMuted
+            color: modeRow.selected ? C.Theme.accent : root.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 10
         }
@@ -204,9 +204,9 @@ Rectangle {
         property bool interactive: true
         signal toggled()
 
-        radius: 5
+        radius: C.Theme.radiusControl
         opacity: interactive ? 1.0 : 0.48
-        color: toggleHover.hovered && interactive ? "#22231c" : "transparent"
+        color: toggleHover.hovered && interactive ? C.Theme.surfaceRaised : "transparent"
 
         Text {
             id: toggleLabel
@@ -234,13 +234,13 @@ Rectangle {
             anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
             width: 28; height: 16; radius: 8
-            color: toggleRow.checked ? root.accent : "#383931"
-            border.color: toggleRow.checked ? root.accent : "#4a4b41"
+            color: toggleRow.checked ? root.accent : C.Theme.controlBg
+            border.color: toggleRow.checked ? root.accent : C.Theme.hairlineStrong
             Rectangle {
                 width: 11; height: 11; radius: 5.5
                 y: 2.5
                 x: toggleRow.checked ? 14.5 : 2.5
-                color: toggleRow.checked ? "#f2efe6" : "#a29e93"
+                color: toggleRow.checked ? C.Theme.knob : C.Theme.textMuted
                 Behavior on x { NumberAnimation { duration: 100 } }
             }
         }
@@ -273,13 +273,14 @@ Rectangle {
             property string tip: ""
 
             implicitWidth: body.implicitWidth
-            implicitHeight: 22
+            implicitHeight: 28
 
             C.ToolbarButton {
                 id: body
                 anchors.fill: parent
                 iconName: snapButton.iconName
                 label: snapButton.label
+                monoLabel: true   // valor de snap e dado, nao comando
                 dropDown: true
                 active: snapButton.on
                 tip: snapButton.tip
@@ -296,7 +297,8 @@ Rectangle {
                 padding: 4
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
                 background: Rectangle {
-                    color: "#1b1c17"; border.color: "#33342c"; border.width: 1; radius: 7
+                    color: C.Theme.surface; border.color: C.Theme.hairlineStrong; border.width: 1
+                    radius: C.Theme.radiusCard
                 }
                 contentItem: Column {
                     SnapRow {
@@ -334,7 +336,7 @@ Rectangle {
             property bool muted: false
             signal picked()
             width: 124; height: 26; radius: 4
-            color: snapRowHover.hovered ? "#2a2b24" : "transparent"
+            color: snapRowHover.hovered ? C.Theme.surfaceRaised : "transparent"
             RadioMark {
                 anchors.left: parent.left; anchors.leftMargin: 7
                 anchors.verticalCenter: parent.verticalCenter
@@ -375,19 +377,19 @@ Rectangle {
         }
 
         Rectangle {
-            width: 1; height: 18
+            width: 1; height: 20
             anchors.verticalCenter: parent.verticalCenter
-            color: "#2d2f28"
+            color: C.Theme.hairline
         }
 
         Item {
-            width: 107; height: 22
+            width: 115; height: 28
             anchors.verticalCenter: parent.verticalCenter
             Rectangle {
                 anchors.fill: parent
-                radius: 5
-                color: "#181a15"
-                border.color: "#2d2f28"
+                radius: C.Theme.radiusControl
+                color: C.Theme.surface
+                border.color: C.Theme.hairline
             }
             // Grupo exclusivo: o estado vive no GizmoController (C++), nao aqui — os atalhos
             // Q/W/E/R chegam pelo ViewportWidget e a marcacao acompanha pelo mesmo binding.
@@ -395,22 +397,22 @@ Rectangle {
                 anchors.fill: parent
                 spacing: 1
                 IconToolButton {
-                    width: 26; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q"
+                    width: 28; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q"
                     active: root.viewportModel.gizmoMode === 0
                     onTapped: root.viewportModel.SetGizmoMode(0)
                 }
                 IconToolButton {
-                    width: 26; iconName: "move"; tip: "Mover"; tipShortcut: "W"
+                    width: 28; iconName: "move"; tip: "Mover"; tipShortcut: "W"
                     active: root.viewportModel.gizmoMode === 1
                     onTapped: root.viewportModel.SetGizmoMode(1)
                 }
                 IconToolButton {
-                    width: 26; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E"
+                    width: 28; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E"
                     active: root.viewportModel.gizmoMode === 2
                     onTapped: root.viewportModel.SetGizmoMode(2)
                 }
                 IconToolButton {
-                    width: 26; iconName: "scale"; tip: "Escalar"; tipShortcut: "R"
+                    width: 28; iconName: "scale"; tip: "Escalar"; tipShortcut: "R"
                     active: root.viewportModel.gizmoMode === 3
                     onTapped: root.viewportModel.SetGizmoMode(3)
                 }
@@ -442,10 +444,10 @@ Rectangle {
         }
 
         Rectangle {
-            width: 1; height: 18
+            width: 1; height: 20
             visible: !root.narrow
             anchors.verticalCenter: parent.verticalCenter
-            color: "#2d2f28"
+            color: C.Theme.hairline
         }
 
         SnapButton {
@@ -488,9 +490,9 @@ Rectangle {
         }
 
         Rectangle {
-            width: 1; height: 18
+            width: 1; height: 20
             anchors.verticalCenter: parent.verticalCenter
-            color: "#2d2f28"
+            color: C.Theme.hairline
         }
 
         C.ToolbarButton {
@@ -499,12 +501,15 @@ Rectangle {
             dropDown: true
             tip: "Projeção e vistas da câmera"
         }
+        // O modo de visualizacao nao usa o accent: ele nao e "ativo", e o VALOR vigente de um
+        // seletor. O ponto ambar carrega o sentido (luz) e o rotulo forte a enfase.
         C.ToolbarButton {
             id: viewModeButton
             iconName: "lit"
             label: root.compact ? "" : root.debugModel.viewModeLabel
+            dotColor: C.Theme.amber
+            strongLabel: true
             dropDown: true
-            active: true
             onTapped: {
                 if (viewModesPopup.opened) viewModesPopup.close()
                 else viewModesPopup.open()
@@ -534,7 +539,8 @@ Rectangle {
         }
         C.ToolbarButton {
             iconName: "speed"
-            label: root.compact ? "" : "4,0×"
+            label: root.compact ? "" : "4.0×"
+            monoLabel: true
             dropDown: true
             tip: "Velocidade da câmera: 4,0×"
         }
@@ -559,7 +565,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: "#292b24"
+        color: C.Theme.hairline
     }
 
     Popup {
@@ -576,8 +582,8 @@ Rectangle {
         }
 
         background: Rectangle {
-            color: "#1b1c17"
-            border.color: "#33342c"
+            color: C.Theme.surface
+            border.color: C.Theme.hairlineStrong
             border.width: 1
             radius: 8
         }
@@ -615,7 +621,7 @@ Rectangle {
                 }
             }
 
-            Rectangle { x: 14; y: 122; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 122; width: 252; height: 1; color: C.Theme.hairline }
             Text {
                 x: 14; y: 132
                 text: "Iluminação global"
@@ -667,7 +673,7 @@ Rectangle {
                 onToggled: root.renderModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 350; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 350; width: 252; height: 1; color: C.Theme.hairline }
             Text {
                 x: 14; y: 360
                 text: "Reflexos"
@@ -684,15 +690,15 @@ Rectangle {
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
 
-            Rectangle { x: 14; y: 410; width: 252; height: 1; color: "#23241d" }
+            Rectangle { x: 14; y: 410; width: 252; height: 1; color: C.Theme.hairline }
             Rectangle {
                 x: 8; y: 416; width: 264; height: 28; radius: 5
-                color: settingsHover.hovered ? "#22231c" : "transparent"
+                color: settingsHover.hovered ? C.Theme.surfaceRaised : "transparent"
                 Text {
                     x: 8
                     anchors.verticalCenter: parent.verticalCenter
                     text: "☼"
-                    color: "#9a958a"
+                    color: C.Theme.textSecondary
                     font.family: "Segoe UI Symbol"
                     font.pixelSize: 14
                 }
@@ -700,7 +706,7 @@ Rectangle {
                     x: 26
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Configurações de renderização…"
-                    color: "#9a958a"
+                    color: C.Theme.textSecondary
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                 }
@@ -741,8 +747,8 @@ Rectangle {
         padding: 6
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
-            color: "#1b1c17"
-            border.color: "#33342c"
+            color: C.Theme.surface
+            border.color: C.Theme.hairlineStrong
             border.width: 1
             radius: 7
         }
@@ -753,7 +759,7 @@ Rectangle {
                 id: debugTargetCol
                 Rectangle {
                     width: 220; height: 28; radius: 4
-                    color: offHover.hovered ? "#2a2b24" : "transparent"
+                    color: offHover.hovered ? C.Theme.surfaceRaised : "transparent"
                     RadioMark {
                         anchors.left: parent.left; anchors.leftMargin: 7
                         anchors.verticalCenter: parent.verticalCenter
@@ -782,7 +788,7 @@ Rectangle {
                         required property string modelData
                         required property int index
                         width: 220; height: 28; radius: 4
-                        color: targetHover.hovered ? "#2a2b24" : "transparent"
+                        color: targetHover.hovered ? C.Theme.surfaceRaised : "transparent"
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter

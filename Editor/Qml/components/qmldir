@@ -16,3 +16,8 @@ ColorRow 1.0 ColorRow.qml
 ToolTip 1.0 ToolTip.qml
 ToolbarIcon 1.0 ToolbarIcon.qml
 ToolbarButton 1.0 ToolbarButton.qml
+SectionHeader 1.0 SectionHeader.qml
+AxisField 1.0 AxisField.qml
+VectorRow 1.0 VectorRow.qml
+StatRow 1.0 StatRow.qml
+SwitchRow 1.0 SwitchRow.qml

@@ -20,6 +20,10 @@ namespace SmileEditor {
     // e JSON por linha e versionado, sem incorporar o SDK MCP ao executavel C++.
     class McpBridge final : public QObject {
         Q_OBJECT
+        // Chip "MCP" da barra de titulo. `listening` diz que o named pipe subiu; `clientCount`
+        // diz quantos agentes estao falando com o editor agora.
+        Q_PROPERTY(bool listening READ Listening NOTIFY ConnectionsChanged)
+        Q_PROPERTY(int clientCount READ ClientCount NOTIFY ConnectionsChanged)
 
     public:
         explicit McpBridge(CaptureBridge* Capture, CameraBookmarksBridge* Bookmarks,
@@ -29,10 +33,14 @@ namespace SmileEditor {
 
         void OnSceneLoaded(const QString& ScenePath, bool Additive);
 
+        bool Listening() const   { return IsListening; }
+        int  ClientCount() const { return Buffers.size(); }
+
     signals:
         // MainWindow aprova o fechamento antes de fechar, evitando dialogos de sidecar durante
         // um ciclo automatizado de benchmark e preservando o shutdown ordenado do renderer.
         void ShutdownRequested();
+        void ConnectionsChanged();
 
     private slots:
         void OnNewConnection();
@@ -66,6 +74,7 @@ namespace SmileEditor {
         QPointer<QLocalSocket> ActiveCaptureSocket;
         QString               ActiveCaptureId;
         QString               PipeName;
+        bool                  IsListening = false;
         QString               ScenePath;
     };
 }

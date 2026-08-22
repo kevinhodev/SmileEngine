@@ -62,7 +62,7 @@ C.Card {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.model.raining ? "Chovendo" : "Seco"
-                color: root.model.raining ? C.Theme.greenText : C.Theme.textMuted
+                color: root.model.raining ? C.Theme.green : C.Theme.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
@@ -123,9 +123,9 @@ C.Card {
                 color: C.Theme.textSecondary
             }
             background: Rectangle {
-                radius: 6
-                color: presetCombo.hovered ? C.Theme.controlHover : "#111209"
-                border.color: presetCombo.activeFocus ? C.Theme.green : C.Theme.controlBorder
+                radius: C.Theme.radiusControl
+                color: presetCombo.hovered ? C.Theme.controlHover : C.Theme.surface
+                border.color: presetCombo.activeFocus ? C.Theme.accent : C.Theme.hairline
                 border.width: 1
             }
             popup: Popup {
@@ -140,8 +140,8 @@ C.Card {
                     currentIndex: presetCombo.highlightedIndex
                 }
                 background: Rectangle {
-                    radius: 6
-                    color: "#181a15"
+                    radius: C.Theme.radiusControl
+                    color: C.Theme.surfaceRaised
                     border.color: C.Theme.controlBorder
                     border.width: 1
                 }
@@ -162,7 +162,7 @@ C.Card {
                 }
                 background: Rectangle {
                     radius: 4
-                    color: presetDelegate.highlighted ? C.Theme.greenBg : "transparent"
+                    color: presetDelegate.highlighted ? C.Theme.accentBg : "transparent"
                 }
             }
         }

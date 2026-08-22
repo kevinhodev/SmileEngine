@@ -65,9 +65,9 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         width: Math.min(142, parent.width * 0.52)
         height: 24
-        radius: 5
-        color: "#111209"
-        border.color: root.editing ? Theme.green : Theme.controlBorder
+        radius: Theme.radiusControl
+        color: Theme.surface
+        border.color: root.editing ? Theme.accent : Theme.controlBorder
         border.width: 1
 
         Rectangle {
@@ -76,7 +76,7 @@ Item {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: 34
-            radius: 5
+            radius: Theme.radiusControl
             color: minusHover.containsMouse ? Theme.controlHover : Theme.controlBg
 
             Text {
@@ -103,15 +103,15 @@ Item {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: 34
-            radius: 5
-            color: plusHover.containsMouse ? Theme.greenBg : "transparent"
-            border.color: plusHover.containsMouse ? Theme.greenBorder : "transparent"
+            radius: Theme.radiusControl
+            color: plusHover.containsMouse ? Theme.accentBg : "transparent"
+            border.color: plusHover.containsMouse ? Theme.accentBorder : "transparent"
             border.width: 1
 
             Text {
                 anchors.centerIn: parent
                 text: "+"
-                color: Theme.greenText
+                color: Theme.accent
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
             }
@@ -146,7 +146,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             visible: root.editing
             color: Theme.textPrimary
-            selectionColor: Theme.greenBorder
+            selectionColor: Theme.accentBorder
             selectedTextColor: Theme.textPrimary
             horizontalAlignment: TextInput.AlignHCenter
             inputMethodHints: Qt.ImhDigitsOnly

@@ -79,12 +79,12 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: 5
-        color: root.editing ? Theme.greenBg
-                            : dragArea.containsMouse ? Theme.controlHover : "#111209"
+        radius: Theme.radiusControl
+        color: root.editing ? Theme.accentBg
+                            : dragArea.containsMouse ? Theme.surfaceRaised : Theme.surface
         border.width: 1
-        border.color: root.editing || root.dragging ? Theme.green
-                                                    : dragArea.containsMouse ? Theme.greenBorder
+        border.color: root.editing || root.dragging ? Theme.accent
+                                                    : dragArea.containsMouse ? Theme.accentBorder
                                                                              : Theme.controlBorder
 
         Rectangle {
@@ -94,7 +94,7 @@ Item {
             width: Math.max(0, Math.min(1, root.visualPosition)) * parent.width
             height: 2
             radius: 1
-            color: Theme.green
+            color: Theme.accent
         }
     }
 
@@ -116,7 +116,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         visible: (dragArea.containsMouse || root.dragging) && !root.editing
         text: "\u2194"
-        color: Theme.greenText
+        color: Theme.accent
         font.family: Theme.fontFamily
         font.pixelSize: 12
     }
@@ -128,7 +128,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         visible: !root.editing
         text: root.formatted(root.displayValue)
-        color: root.dragging ? Theme.greenText : Theme.textPrimary
+        color: root.dragging ? Theme.accent : Theme.textPrimary
         font.family: Theme.fontMono
         font.pixelSize: 9
         font.weight: Font.DemiBold
@@ -142,7 +142,7 @@ Item {
         width: Math.min(82, parent.width - 16)
         visible: root.editing
         color: Theme.textPrimary
-        selectionColor: Theme.greenBorder
+        selectionColor: Theme.accentBorder
         selectedTextColor: Theme.textPrimary
         horizontalAlignment: TextInput.AlignRight
         inputMethodHints: Qt.ImhFormattedNumbersOnly

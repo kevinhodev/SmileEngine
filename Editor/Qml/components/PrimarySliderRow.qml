@@ -34,16 +34,16 @@ Item {
         y: 0
         width: Math.max(48, badgeText.implicitWidth + 16)
         height: 20
-        radius: 4
-        color: Theme.greenBg
-        border.color: Theme.greenBorder
+        radius: Theme.radiusChip
+        color: Theme.accentBg
+        border.color: Theme.accentBorder
         border.width: 1
 
         Text {
             id: badgeText
             anchors.centerIn: parent
             text: root.valueText
-            color: Theme.greenText
+            color: Theme.accent
             font.family: Theme.fontMono
             font.pixelSize: 8
             font.weight: Font.DemiBold
@@ -82,7 +82,7 @@ Item {
                 width: slider.visualPosition * parent.width
                 height: parent.height
                 radius: 1
-                color: Theme.green
+                color: Theme.accent
             }
         }
 
@@ -91,9 +91,9 @@ Item {
             y: slider.topPadding + slider.availableHeight / 2 - height / 2
             width: 10
             height: 10
-            radius: 5
+            radius: Theme.radiusControl
             color: Theme.knob
-            border.color: Theme.green
+            border.color: Theme.accent
             border.width: 1.3
         }
     }

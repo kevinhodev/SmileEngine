@@ -12,7 +12,7 @@ Rectangle {
     property alias contentSpacing: inner.spacing
     property bool dimmed: false
     width: parent.width
-    radius: 8
+    radius: Theme.radiusCard
     color: Theme.cardBg
     border.color: Theme.borderColor
     border.width: 1

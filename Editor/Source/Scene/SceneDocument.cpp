@@ -4,6 +4,7 @@
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -37,6 +38,18 @@ namespace SmileEditor {
 
     SceneDocument::SceneDocument(QObject* _Parent) : QObject(_Parent) {}
 
+    // Nome do arquivo COZIDO, nao do .smap: o breadcrumb mostra a cena que o usuario abriu.
+    // O MapPath so troca a extensao, entao o basename e o mesmo dos dois.
+    QString SceneDocument::SceneName() const {
+        if (MapPath.isEmpty()) return {};
+        return QFileInfo(MapPath).completeBaseName() + QStringLiteral(".sscene");
+    }
+
+    QString SceneDocument::SceneFolder() const {
+        if (MapPath.isEmpty()) return {};
+        return QFileInfo(MapPath).dir().dirName();
+    }
+
     void SceneDocument::SetRenderer(RendererHandle _R) { Renderer = _R; }
 
     void SceneDocument::OnSceneLoaded(const QString& _ScenePath, bool _Additive) {
@@ -54,6 +67,7 @@ namespace SmileEditor {
 
         const QFileInfo Info(_ScenePath);
         MapPath = Info.path() + "/" + Info.completeBaseName() + ".smap";
+        emit ScenePathChanged();
         if (IsDirty) { IsDirty = false; emit DirtyChanged(); }
 
         // Baseline ANTES de aplicar o .smap — e a foto do que o asset trouxe.

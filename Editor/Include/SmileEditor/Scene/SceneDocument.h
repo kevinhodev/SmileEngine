@@ -29,6 +29,11 @@ namespace SmileEditor {
         Q_OBJECT
         Q_PROPERTY(bool dirty READ Dirty NOTIFY DirtyChanged)
         Q_PROPERTY(bool available READ Available NOTIFY DirtyChanged)
+        // Breadcrumb da barra de titulo: pasta que contem a cena e o nome do arquivo.
+        // Derivados do MapPath para o QML poder BINDAR — mapPath() e Q_INVOKABLE e nao
+        // notifica, entao um binding em cima dele ficaria congelado na primeira leitura.
+        Q_PROPERTY(QString sceneName READ SceneName NOTIFY ScenePathChanged)
+        Q_PROPERTY(QString sceneFolder READ SceneFolder NOTIFY ScenePathChanged)
 
     public:
         explicit SceneDocument(QObject* Parent = nullptr);
@@ -39,6 +44,8 @@ namespace SmileEditor {
 
         bool Dirty() const     { return IsDirty; }
         bool Available() const { return !MapPath.isEmpty(); }
+        QString SceneName() const;
+        QString SceneFolder() const;
 
         // Chamado por quem muta a camada autorada (outliner: criar/apagar/esconder; gizmo: mover).
         Q_INVOKABLE void markDirty();
@@ -47,6 +54,7 @@ namespace SmileEditor {
 
     signals:
         void DirtyChanged();
+        void ScenePathChanged();
         void Applied(); // .smap aplicado: as pontes precisam reconstruir suas listas
 
     private:

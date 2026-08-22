@@ -20,15 +20,15 @@ Item {
     Text {
         x: 0; y: 0
         text: row.label
-        color: Theme.textNormal
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
         font.pixelSize: 11
     }
     Text {
         anchors.right: parent.right; y: 0
         text: row.valueText
-        color: Theme.textSecondary
-        font.family: Theme.fontFamily
+        color: Theme.textPrimary
+        font.family: Theme.fontMono
         font.pixelSize: 11
     }
     Slider {
@@ -56,7 +56,7 @@ Item {
             Rectangle {
                 width: sl.visualPosition * parent.width
                 height: parent.height; radius: 2
-                color: Theme.blue
+                color: Theme.accent
             }
         }
         handle: Rectangle {
@@ -64,7 +64,7 @@ Item {
             y: sl.topPadding + sl.availableHeight / 2 - height / 2
             width: 12; height: 12; radius: 6
             color: Theme.knob
-            border.color: Theme.blue
+            border.color: Theme.accent
             border.width: 1.5
         }
     }

@@ -9,14 +9,14 @@ Rectangle {
     height: 24
     width: chipText.implicitWidth + 18
     radius: 6
-    color: active ? Theme.blueBg : (chipHover.hovered ? Theme.controlHover : Theme.controlBg)
-    border.color: active ? Theme.blueBorder : Theme.controlBorder
+    color: active ? Theme.accentBg : (chipHover.hovered ? Theme.controlHover : Theme.controlBg)
+    border.color: active ? Theme.accentBorder : Theme.controlBorder
     border.width: 1
     Text {
         id: chipText
         anchors.centerIn: parent
         text: chip.label
-        color: chip.active ? Theme.blue : Theme.textNormal
+        color: chip.active ? Theme.accent : Theme.textNormal
         font.family: Theme.fontFamily
         font.pixelSize: 10
     }

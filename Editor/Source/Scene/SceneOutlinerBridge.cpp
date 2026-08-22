@@ -27,6 +27,9 @@ namespace SmileEditor {
         };
 
         constexpr double kToRad = 3.14159265358979 / 180.0;
+
+        // Mesmo piso do GizmoController: abaixo disso a matriz colapsa e a normal vai junto.
+        constexpr float kMinMeshScale = 0.001f;
     }
 
     SceneOutlinerBridge::SceneOutlinerBridge(QObject* _Parent)
@@ -482,6 +485,97 @@ namespace SmileEditor {
         emit SelectionChanged();
     }
 
+    // ---- Transform da mesh selecionada ----
+    //
+    // Mesmo caminho de escrita do GizmoController::CommitRenderableEdit: sem o
+    // NotifyGIRegionChanged nos dois volumes (o de antes e o de depois) o indireto fica com o
+    // rastro do objeto na posicao velha ate o DDGI reconvergir sozinho.
+    void SceneOutlinerBridge::WriteMeshTransform(int _Component, double _Value) {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess) return;
+        auto& List = Renderer->GetScene().Renderables();
+        const int Sel = Renderer->GetSelectedObject();
+        if (Sel < 0 || Sel >= static_cast<int>(List.size())) return;
+
+        Smile::FRenderable& R = List[static_cast<size_t>(Sel)];
+        const Smile::Vec3 OldMin = R.AABBMin;
+        const Smile::Vec3 OldMax = R.AABBMax;
+        const float V = static_cast<float>(_Value);
+
+        switch (_Component) {
+            case 0: R.Transform.Position.X = V; break;
+            case 1: R.Transform.Position.Y = V; break;
+            case 2: R.Transform.Position.Z = V; break;
+            case 3: R.Transform.RotationEuler.X = V; break;
+            case 4: R.Transform.RotationEuler.Y = V; break;
+            case 5: R.Transform.RotationEuler.Z = V; break;
+            // Escala zero colapsa a matriz e leva junto a normal (inversa-transposta); o piso
+            // e o mesmo kMinScale do gizmo, por isso o arraste e a digitacao param no mesmo
+            // lugar em vez de o campo aceitar um estado que o gizmo recusa.
+            case 6: R.Transform.Scale.X = std::max(V, kMinMeshScale); break;
+            case 7: R.Transform.Scale.Y = std::max(V, kMinMeshScale); break;
+            case 8: R.Transform.Scale.Z = std::max(V, kMinMeshScale); break;
+            default: return;
+        }
+        // Com o elo ligado, escrever um eixo da escala escreve os tres.
+        if (ScaleLocked && _Component >= 6) {
+            const float S = std::max(V, kMinMeshScale);
+            R.Transform.Scale = Smile::Vec3{ S, S, S };
+        }
+
+        R.RefreshWorldBounds();
+        Renderer->GetScene().BumpTransformsVersion();
+        Renderer->NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
+        Renderer->NotifyGIRegionChanged(R.AABBMin, R.AABBMax, Smile::EGIRegionChange::Geometry);
+
+        MarkDirty();
+        emit TransformChanged();
+    }
+
+    double SceneOutlinerBridge::ReadMeshTransform(int _Component) const {
+        const auto R = SelMesh(Renderer);
+        if (!R) return _Component >= 6 ? 1.0 : 0.0;
+        switch (_Component) {
+            case 0: return R->Transform.Position.X;
+            case 1: return R->Transform.Position.Y;
+            case 2: return R->Transform.Position.Z;
+            case 3: return R->Transform.RotationEuler.X;
+            case 4: return R->Transform.RotationEuler.Y;
+            case 5: return R->Transform.RotationEuler.Z;
+            case 6: return R->Transform.Scale.X;
+            case 7: return R->Transform.Scale.Y;
+            case 8: return R->Transform.Scale.Z;
+            default: return 0.0;
+        }
+    }
+
+    double SceneOutlinerBridge::MeshPosX() const   { return ReadMeshTransform(0); }
+    double SceneOutlinerBridge::MeshPosY() const   { return ReadMeshTransform(1); }
+    double SceneOutlinerBridge::MeshPosZ() const   { return ReadMeshTransform(2); }
+    double SceneOutlinerBridge::MeshRotX() const   { return ReadMeshTransform(3); }
+    double SceneOutlinerBridge::MeshRotY() const   { return ReadMeshTransform(4); }
+    double SceneOutlinerBridge::MeshRotZ() const   { return ReadMeshTransform(5); }
+    double SceneOutlinerBridge::MeshScaleX() const { return ReadMeshTransform(6); }
+    double SceneOutlinerBridge::MeshScaleY() const { return ReadMeshTransform(7); }
+    double SceneOutlinerBridge::MeshScaleZ() const { return ReadMeshTransform(8); }
+
+    void SceneOutlinerBridge::SetMeshPosX(double _V)   { WriteMeshTransform(0, _V); }
+    void SceneOutlinerBridge::SetMeshPosY(double _V)   { WriteMeshTransform(1, _V); }
+    void SceneOutlinerBridge::SetMeshPosZ(double _V)   { WriteMeshTransform(2, _V); }
+    void SceneOutlinerBridge::SetMeshRotX(double _V)   { WriteMeshTransform(3, _V); }
+    void SceneOutlinerBridge::SetMeshRotY(double _V)   { WriteMeshTransform(4, _V); }
+    void SceneOutlinerBridge::SetMeshRotZ(double _V)   { WriteMeshTransform(5, _V); }
+    void SceneOutlinerBridge::SetMeshScaleX(double _V) { WriteMeshTransform(6, _V); }
+    void SceneOutlinerBridge::SetMeshScaleY(double _V) { WriteMeshTransform(7, _V); }
+    void SceneOutlinerBridge::SetMeshScaleZ(double _V) { WriteMeshTransform(8, _V); }
+
+    void SceneOutlinerBridge::SetMeshScaleLocked(bool _V) {
+        if (ScaleLocked == _V) return;
+        ScaleLocked = _V;
+        emit ScaleLockChanged();
+    }
+
     // ---- Acoes ----
     void SceneOutlinerBridge::toggleExpand(int _Row) {
         if (_Row < 0 || _Row >= Rows.size()) return;
@@ -875,8 +969,18 @@ namespace SmileEditor {
             if (!Rows.isEmpty())
                 emit dataChanged(index(0), index((int)Rows.size() - 1), { RSelected });
             emit SelectionChanged();
+            emit TransformChanged();
             const int Row = RevealSelection(); // expande o caminho se estiver colapsado
             if (Row >= 0) emit ScrollToRequested(Row);
+        }
+
+        // Gizmo arrastando: os campos do Inspector acompanham. Chaveado pela versao dos
+        // transforms, e nao emitido a cada frame, porque cada leitura das nove propriedades
+        // retoma o lock do renderer — de graca so quando alguem realmente moveu algo.
+        const Smile::u64 XfVersion = Scene.TransformsVersion();
+        if (XfVersion != CachedTransformsVersion) {
+            CachedTransformsVersion = XfVersion;
+            if (SelMesh >= 0) emit TransformChanged();
         }
 
         // Toggles de ambiente mudaram por fora (SettingsWindow etc.).

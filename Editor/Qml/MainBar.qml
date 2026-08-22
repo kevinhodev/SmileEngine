@@ -1,41 +1,130 @@
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
-// Barra unificada (titulo + janela) 100% QML. Menus virao na esquerda (Fase 3); por ora:
-// logo da engine centralizado + botoes de janela (min/max/fechar) a direita.
-// `windowBridge` e `menuBridge` sao dependencias explicitas da raiz;
+// Barra superior unificada (titulo + janela) 100% QML, no conceito Signal Graphite:
+// marca e menus a esquerda, breadcrumb da cena no centro, telemetria e controles de janela
+// a direita. Chrome fino (44 px) fechado por uma hairline de 1 px, sem gradiente.
+//
+// Dependencias explicitas da raiz (chegam por setInitialProperties; sem o `required property`
+// aqui a propriedade fica undefined e o handler morre em silencio):
+//  - `windowBridge` (WindowBridge):  minimizar/maximizar/fechar e arrasto nativo.
+//  - `menuBridge`   (MenuBridge):    acoes dos menus.
+//  - `sceneDoc`     (SceneDocument): nome da cena e dirty state do breadcrumb.
+//  - `mcpModel`     (McpBridge):     estado do canal do SmileMCP.
+//  - `statusModel`  (StatusBridge):  FPS do chip de telemetria.
 // `image://smilelogo/<px>` e o logo.
-// A barra reporta ao bridge a sua altura e os retangulos interativos (botoes) -> o
+//
+// A barra reporta ao bridge a sua altura e os retangulos interativos (menus e botoes) -> o
 // NativeWindowFilter usa isso pra decidir HTCAPTION (arrasto) x HTCLIENT (controles).
 Rectangle {
     id: bar
     required property var windowBridge
     required property var menuBridge
+    required property var sceneDoc
+    required property var mcpModel
+    required property var statusModel
 
-    color: "#141511"
+    color: C.Theme.shell
     implicitWidth: 800
-    implicitHeight: 36
+    implicitHeight: 44
+
+    // Hairline inferior: no conceito ela e elemento de identidade, nao so separador.
+    Rectangle {
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: 1
+        color: C.Theme.hairline
+    }
+
+    // ---- Chip de dado (mono, superficie + hairline) ----
+    component DataChip: Rectangle {
+        id: dataChip
+        property color dotColor: "transparent"
+        property alias text: dataChipLabel.text
+        property color textColor: C.Theme.textSecondary
+        implicitWidth: dataChipRow.implicitWidth + 24
+        implicitHeight: 22
+        radius: C.Theme.radiusControl
+        color: C.Theme.surface
+        border.color: C.Theme.hairline
+        border.width: 1
+        Row {
+            id: dataChipRow
+            anchors.centerIn: parent
+            spacing: 8
+            Rectangle {
+                visible: dataChip.dotColor.a > 0
+                anchors.verticalCenter: parent.verticalCenter
+                width: 6; height: 6; radius: 3
+                color: dataChip.dotColor
+            }
+            Text {
+                id: dataChipLabel
+                anchors.verticalCenter: parent.verticalCenter
+                color: dataChip.textColor
+                font.family: C.Theme.fontMono
+                font.pixelSize: 10
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
+        }
+    }
 
     // ---- Botao de janela (estilo Windows: cheio, edge-to-edge) ----
     component WinButton: Item {
         id: wb
         property string icon
-        property color hoverColor: "#23241d"
-        property color iconColor: "#c8c2b4"
+        property color hoverColor: C.Theme.surfaceRaised
         signal clicked()
-        implicitWidth: 46; implicitHeight: bar.height
+        implicitWidth: 46; implicitHeight: bar.height - 1
         Rectangle { anchors.fill: parent; color: wbHover.hovered ? wb.hoverColor : "transparent" }
         LucideIcon { anchors.centerIn: parent; name: wb.icon; size: 15
-                     color: wbHover.hovered ? "#ffffff" : wb.iconColor }
+                     color: wbHover.hovered ? C.Theme.textPrimary : C.Theme.textMuted }
         HoverHandler { id: wbHover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: wb.clicked() }
     }
 
-    // ---- Menus (esquerda) ----
+    // ---- Marca (esquerda) ----
+    Row {
+        id: brand
+        anchors { left: parent.left; leftMargin: 14; verticalCenter: parent.verticalCenter }
+        spacing: 9
+        Image {
+            anchors.verticalCenter: parent.verticalCenter
+            source: "image://smilelogo/48"
+            sourceSize: Qt.size(48, 48) // 2x p/ nitidez
+            height: 24; width: 24
+            fillMode: Image.PreserveAspectFit
+            smooth: true; mipmap: true
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Smile"
+            color: C.Theme.textPrimary
+            font.family: C.Theme.fontFamily
+            font.pixelSize: 14
+            font.weight: Font.DemiBold
+            renderType: Text.QtRendering
+            renderTypeQuality: Text.HighRenderTypeQuality
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: 1
+            text: "EDITOR"
+            color: C.Theme.textMuted
+            font.family: C.Theme.fontMono
+            font.pixelSize: 9
+            font.letterSpacing: 1.2
+            renderType: Text.QtRendering
+            renderTypeQuality: Text.HighRenderTypeQuality
+        }
+    }
+
+    // ---- Menus ----
     EditorMenuBar {
         id: menuBar
         menuBridge: bar.menuBridge
-        anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
+        anchors { left: brand.right; leftMargin: 18; verticalCenter: parent.verticalCenter }
     }
 
     // ---- Area de arrasto (caption) ----
@@ -54,27 +143,91 @@ Rectangle {
         onDoubleClicked: windowBridge.toggleMaximize()
     }
 
-    // ---- Logo central ----
-    Image {
+    // ---- Breadcrumb da cena (centro) ----
+    // O ponto accent e o dirty state: mesma linguagem do ponto no botao de salvar do outliner.
+    Rectangle {
+        id: breadcrumb
         anchors.centerIn: parent
-        source: "image://smilelogo/40"
-        sourceSize: Qt.size(height * 2, height * 2) // 2x p/ nitidez
-        height: 22; width: 22
-        fillMode: Image.PreserveAspectFit
-        smooth: true; mipmap: true
+        visible: sceneDoc.available
+        width: Math.min(breadcrumbRow.implicitWidth + 32, bar.width * 0.34)
+        height: 26
+        radius: C.Theme.radiusControl
+        color: C.Theme.surface
+        border.color: C.Theme.hairline
+        border.width: 1
+
+        Row {
+            id: breadcrumbRow
+            anchors.centerIn: parent
+            spacing: 8
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 6; height: 6; radius: 3
+                color: sceneDoc.dirty ? C.Theme.accent : C.Theme.textMuted
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: sceneDoc.sceneFolder + " /"
+                color: C.Theme.textMuted
+                font.family: C.Theme.fontMono
+                font.pixelSize: 11
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: sceneDoc.sceneName
+                color: C.Theme.textPrimary
+                font.family: C.Theme.fontMono
+                font.pixelSize: 11
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: sceneDoc.dirty
+                text: "modificado"
+                color: C.Theme.textMuted
+                font.family: C.Theme.fontMono
+                font.pixelSize: 10
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
+        }
     }
 
-    // ---- Botoes de janela (direita) ----
+    // ---- Telemetria (direita, antes dos controles de janela) ----
+    Row {
+        id: rightChips
+        anchors { right: winButtons.left; rightMargin: 14; verticalCenter: parent.verticalCenter }
+        spacing: 8
+
+        DataChip {
+            anchors.verticalCenter: parent.verticalCenter
+            // Verde = agente conectado, ambar = ouvindo sem cliente, muted = pipe nao subiu.
+            // Papel semantico fixo: o accent nunca entra aqui, ele e so selecao/ativo/dirty.
+            dotColor: !mcpModel.listening ? C.Theme.textMuted
+                    : mcpModel.clientCount > 0 ? C.Theme.green
+                    : C.Theme.amber
+            text: "MCP"
+        }
+        DataChip {
+            anchors.verticalCenter: parent.verticalCenter
+            text: Math.round(statusModel.fps) + " FPS"
+        }
+    }
+
     Row {
         id: winButtons
-        anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
+        anchors { right: parent.right; top: parent.top }
         WinButton { icon: "minus"; onClicked: windowBridge.minimize() }
         WinButton {
             icon: windowBridge.maximized ? "copy" : "square"
             onClicked: windowBridge.toggleMaximize()
         }
         WinButton {
-            icon: "x"; hoverColor: "#c42b1c"
+            icon: "x"; hoverColor: "#C42B1C"
             onClicked: windowBridge.close()
         }
     }
@@ -94,5 +247,8 @@ Rectangle {
         windowBridge.setTitleBarHeight(height)
         Qt.callLater(reportRects) // espera o layout do menuBar p/ pegar width/x corretos
     }
-    Connections { target: menuBar; function onWidthChanged() { reportRects() } }
+    // A marca fica ANTES dos menus, entao a largura dela empurra o x do menuBar: os dois
+    // precisam re-reportar, senao a faixa de arrasto cobre os menus ate o proximo resize.
+    Connections { target: menuBar; function onWidthChanged() { bar.reportRects() } }
+    Connections { target: brand;   function onWidthChanged() { Qt.callLater(bar.reportRects) } }
 }

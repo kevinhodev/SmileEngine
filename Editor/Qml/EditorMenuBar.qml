@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
 // Barra de menus do editor (Arquivo/Janela/Ajuda), estilo escuro. Liga em `menuBridge`
 // (MenuBridge, propriedade obrigatoria). Popups usam popupType Window pra escapar do QQuickWidget fino
@@ -15,15 +16,16 @@ MenuBar {
         padding: 0
         contentItem: Text {
             text: mbi.text
-            color: "#c8c2b4"
-            font.pixelSize: 12
+            color: C.Theme.textSecondary
+            font.family: C.Theme.fontFamily
+            font.pixelSize: 13
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             leftPadding: 10; rightPadding: 10
         }
         background: Rectangle {
-            radius: 5
-            color: mbi.highlighted ? "#23241d" : "transparent"
+            radius: C.Theme.radiusControl
+            color: mbi.highlighted ? C.Theme.surfaceRaised : "transparent"
         }
     }
     background: Rectangle { color: "transparent" }
@@ -59,7 +61,7 @@ MenuBar {
                 anchors.horizontalCenter: parent.left
                 anchors.horizontalCenterOffset: mi.padX + mi.checkW / 2
                 anchors.verticalCenter: parent.verticalCenter
-                text: "✓"; color: "#5b9dff"; font.pixelSize: 12
+                text: "✓"; color: C.Theme.accent; font.pixelSize: 12
             }
             Text {
                 id: label
@@ -67,8 +69,8 @@ MenuBar {
                 anchors.leftMargin: mi.padX + mi.checkW
                 anchors.verticalCenter: parent.verticalCenter
                 text: mi.text
-                color: mi.enabled ? "#c8c2b4" : "#5a5950"
-                font.pixelSize: 12
+                color: mi.enabled ? C.Theme.textNormal : C.Theme.textDisabled
+                font.pixelSize: 13
             }
             Text {
                 id: shortcut
@@ -77,17 +79,18 @@ MenuBar {
                 anchors.rightMargin: mi.padX
                 anchors.verticalCenter: parent.verticalCenter
                 text: mi.shortcutText
-                color: "#6c6a61"; font.pixelSize: 11
+                color: C.Theme.textMuted; font.pixelSize: 11
+                font.family: C.Theme.fontMono
             }
         }
-        background: Rectangle { color: mi.highlighted ? "#2a2b24" : "transparent" }
+        background: Rectangle { color: mi.highlighted ? C.Theme.surfaceRaised : "transparent" }
     }
 
     component MSep: MenuSeparator {
         // padding minimo (bem menor que o default): so o suficiente pra linha de 1px aparecer.
         // O grosso da folga vertical ja vem da altura dos itens vizinhos (26px).
         topPadding: 4; bottomPadding: 4; leftPadding: 0; rightPadding: 0
-        contentItem: Rectangle { implicitHeight: 1; color: "#2a2b24" }
+        contentItem: Rectangle { implicitHeight: 1; color: C.Theme.hairline }
     }
 
     // ---- Menu escuro (popup como janela propria, largura pelo conteudo) ----
@@ -108,7 +111,8 @@ MenuBar {
             return w;
         }
         background: Rectangle {
-            color: "#1b1c17"; border.color: "#33342c"; border.width: 1; radius: 6
+            color: C.Theme.surface; border.color: C.Theme.hairlineStrong; border.width: 1
+            radius: C.Theme.radiusCard
         }
     }
 

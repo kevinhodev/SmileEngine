@@ -325,6 +325,8 @@ namespace SmileEditor {
                               "': " + Server->errorString().toStdString());
             return;
         }
+        IsListening = true;
+        emit ConnectionsChanged();
         Smile::LogInfo("SmileMCP bridge ativo: " + PipeName.toStdString());
     }
 
@@ -342,6 +344,7 @@ namespace SmileEditor {
             connect(Socket, &QLocalSocket::readyRead, this, &McpBridge::OnSocketReadyRead);
             connect(Socket, &QLocalSocket::disconnected, this, &McpBridge::OnSocketDisconnected);
         }
+        emit ConnectionsChanged();
     }
 
     void McpBridge::OnSocketReadyRead() {
@@ -372,6 +375,7 @@ namespace SmileEditor {
         Buffers.remove(Socket);
         if (Socket == ActiveCaptureSocket) ActiveCaptureSocket.clear();
         Socket->deleteLater();
+        emit ConnectionsChanged();
     }
 
     void McpBridge::HandleRequest(QLocalSocket* _Socket, const QByteArray& _Line) {

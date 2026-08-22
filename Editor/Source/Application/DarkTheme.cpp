@@ -47,19 +47,14 @@ namespace SmileEditor {
         } else {
             _App.setStyleSheet(R"(
                 QToolTip {
-                    color: #ddd8ca;
-                    background-color: #151512;
-                    border: 1px solid #3a3321;
+                    color: #F2F2F0;
+                    background-color: #18181B;
+                    border: 1px solid #333338;
                 }
                 QMainWindow::separator {
-                    background: #20211f;
-                    width: 1px;
-                    height: 1px;
-                }
-                QDockWidget::title {
-                    background: #171816;
-                    padding: 4px;
-                    border-bottom: 1px solid #292820;
+                    background: #26262B;
+                    width: 4px;
+                    height: 4px;
                 }
             )");
         }
@@ -70,15 +65,18 @@ namespace SmileEditor {
 
         QPalette Palette;
 
-        const QColor WindowBg(8, 9, 9);
-        const QColor BaseBg(16, 17, 15);
-        const QColor AltBaseBg(24, 25, 22);
-        const QColor Text(221, 216, 202);
-        const QColor DisabledText(102, 99, 91);
-        const QColor Button(25, 26, 23);
-        const QColor Highlight(212, 154, 17);
-        const QColor HighlightText(10, 10, 9);
-        const QColor Link(255, 211, 93);
+        // Paleta base do Fusion no conceito "Signal Graphite". Vale para os dialogos nativos
+        // (abrir cena, mensagens) e para tudo que o QSS nao alcanca; os valores repetem os
+        // tokens de Qml/components/Theme.qml, que o C++ nao consegue ler.
+        const QColor WindowBg(0x09, 0x09, 0x0A);
+        const QColor BaseBg(0x11, 0x11, 0x13);
+        const QColor AltBaseBg(0x18, 0x18, 0x1B);
+        const QColor Text(0xC9, 0xC9, 0xCF);
+        const QColor DisabledText(0x5F, 0x5F, 0x66);
+        const QColor Button(0x18, 0x18, 0x1B);
+        const QColor Highlight(0xFF, 0x6B, 0x2C);
+        const QColor HighlightText(0x09, 0x09, 0x0A);
+        const QColor Link(0x6F, 0xA8, 0xFF);
 
         Palette.setColor(QPalette::Window,          WindowBg);
         Palette.setColor(QPalette::WindowText,      Text);
@@ -89,7 +87,7 @@ namespace SmileEditor {
         Palette.setColor(QPalette::Text,            Text);
         Palette.setColor(QPalette::Button,          Button);
         Palette.setColor(QPalette::ButtonText,      Text);
-        Palette.setColor(QPalette::BrightText,      QColor(255, 95, 87));
+        Palette.setColor(QPalette::BrightText,      QColor(0xFF, 0x5C, 0x5C));
         Palette.setColor(QPalette::Link,            Link);
         Palette.setColor(QPalette::Highlight,       Highlight);
         Palette.setColor(QPalette::HighlightedText, HighlightText);
@@ -98,7 +96,7 @@ namespace SmileEditor {
         Palette.setColor(QPalette::Disabled, QPalette::WindowText,      DisabledText);
         Palette.setColor(QPalette::Disabled, QPalette::Text,            DisabledText);
         Palette.setColor(QPalette::Disabled, QPalette::ButtonText,      DisabledText);
-        Palette.setColor(QPalette::Disabled, QPalette::Highlight,       QColor(58, 52, 35));
+        Palette.setColor(QPalette::Disabled, QPalette::Highlight,       QColor(0x1F, 0x1F, 0x23));
         Palette.setColor(QPalette::Disabled, QPalette::HighlightedText, DisabledText);
 
         _App.setPalette(Palette);
