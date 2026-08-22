@@ -3,12 +3,12 @@
 
 namespace SmileEditor {
     StatusBridge::StatusBridge(QObject* _Parent)
-        : QObject(_Parent), Message_(QStringLiteral("Pronto"))
+        : QObject(_Parent)
     {
         MsgTimer = new QTimer(this);
         MsgTimer->setSingleShot(true);
         connect(MsgTimer, &QTimer::timeout, this, [this]() {
-            Message_ = QStringLiteral("Pronto");
+            Message_.clear();
             emit MessageChanged();
         });
     }

@@ -26,7 +26,7 @@ namespace SmileEditor {
 
         // Chamado por frame pelo MainWindow::UpdateStats (textos sem separador; a QML os junta).
         void SetStats(double fps, double frameMs, const QString& scene, const QString& ocean);
-        // Mensagem transiente; timeoutMs > 0 volta a "Pronto" depois (0 = persistente).
+        // Mensagem transiente; timeoutMs > 0 limpa depois (0 = persistente).
         void ShowMessage(const QString& text, int timeoutMs = 0);
 
     signals:

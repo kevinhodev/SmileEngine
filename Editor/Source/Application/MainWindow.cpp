@@ -147,7 +147,7 @@ namespace SmileEditor {
         connect(OceanBr, &OceanBridge::SettingsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Refresh);
 
-        connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
+        connect(OutlinerBr, &SceneOutlinerBridge::SceneChanged,
                 SceneDoc, &SceneDocument::markDirty);
 
         connect(MaterialsBr, &MaterialsBridge::VisibilityChanged,
@@ -529,6 +529,9 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::ToggleLightsRequested, this, [this]() {
             if (LightsDock) LightsDock->setVisible(!LightsDock->isVisible());
         });
+        connect(Menus, &MenuBridge::ToggleInspectorRequested, this, [this]() {
+            if (InspectorDock) InspectorDock->setVisible(!InspectorDock->isVisible());
+        });
         connect(Menus, &MenuBridge::ToggleStatsRequested, this, [this]() {
             if (StatsDlg && StatsDlg->isVisible()) StatsDlg->hide();
             else                                   ShowStats();
@@ -703,10 +706,8 @@ namespace SmileEditor {
         // disputavam a mesma altura justamente quando havia mais de uma para ver.
         InspectorDock = new QDockWidget(tr("Inspector"), this);
         InspectorDock->setObjectName("InspectorDock");
-        InspectorDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-        InspectorDock->setFeatures(QDockWidget::DockWidgetMovable |
-                                   QDockWidget::DockWidgetFloatable |
-                                   QDockWidget::DockWidgetClosable);
+        InspectorDock->setAllowedAreas(Qt::RightDockWidgetArea);
+        InspectorDock->setFeatures(QDockWidget::DockWidgetClosable);
 
         QQuickWidget* Inspector = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("InspectorPanel.qml"),
@@ -725,6 +726,9 @@ namespace SmileEditor {
 
         addDockWidget(Qt::RightDockWidgetArea, InspectorDock);
         Inspector->setMinimumWidth(288);
+
+        connect(InspectorDock, &QDockWidget::visibilityChanged,
+                Menus, &MenuBridge::SetInspectorVisible);
 
         // Um resizeDocks por eixo, com os dois docks juntos: chamadas separadas se anulam,
         // porque a segunda redistribui a largura que a primeira acabou de fixar.

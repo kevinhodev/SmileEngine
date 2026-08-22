@@ -60,29 +60,10 @@ Rectangle {
         z: 1
     }
 
-    // ---- Header do painel ----
-    Item {
+    C.DockPanelHeader {
         id: header
         anchors.left: parent.left; anchors.right: parent.right
-        height: 40
-
-        Text {
-            x: 16
-            anchors.verticalCenter: parent.verticalCenter
-            text: "INSPECTOR"
-            color: C.Theme.textSecondary
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
-            font.letterSpacing: 1.5
-            font.weight: Font.DemiBold
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
-        }
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1; color: C.Theme.hairline
-        }
+        title: "INSPECTOR"
     }
 
     // ---- Card de identidade da selecao ----

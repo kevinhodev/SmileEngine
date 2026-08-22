@@ -54,7 +54,14 @@ namespace SmileEditor {
 
     public:
         // Tipos de linha (role `kind` no delegate).
-        enum ERowKind { KGroup = 0, KEnv = 1, KLight = 2, KAsset = 3, KMesh = 4 };
+        enum ERowKind {
+            KGroup = 0,
+            KEnv = 1,
+            KLight = 2,
+            KAsset = 3,
+            KMesh = 4,
+            KMore = 5
+        };
         Q_ENUM(ERowKind)
 
         // Grupos (id em `sceneIdx` quando kind == KGroup) / filtro dos chips (0 = Tudo).
@@ -133,6 +140,7 @@ namespace SmileEditor {
         bool    Dirty() const { return VisDirty; }
 
         Q_INVOKABLE void toggleExpand(int row);
+        Q_INVOKABLE void showMore(int row);      // amplia o lote da pasta indicado por KMore
         Q_INVOKABLE void selectRow(int row);    // ambiente/luz/mesh: selecao exclusiva
         // Pasta aplica visibilidade ao range inteiro do asset.
         Q_INVOKABLE void toggleEye(int row);
@@ -163,6 +171,7 @@ namespace SmileEditor {
         void FiltersChanged();
         void EnvChanged();
         void DirtyChanged();
+        void SceneChanged();
         void CloseRequested();
         void ScrollToRequested(int row); // selecao veio do viewport: QML rola ate a linha
 
@@ -205,6 +214,7 @@ namespace SmileEditor {
         RendererHandle Renderer;
         QVector<FRow>        Rows;
         QVector<FAssetRange> Assets;
+        QHash<int, int>       AssetVisibleLimits; // indice do asset -> meshes reveladas
         QString JsonPath;          // <cena>.visibility.json da cena principal (nao-aditiva)
         bool    VisDirty = false;
         bool    ScaleLocked = true;   // elo da escala uniforme (Inspector)

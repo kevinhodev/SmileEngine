@@ -133,7 +133,7 @@ Rectangle {
                  : tab.current ? C.Theme.textPrimary
                  : (tabHover.hovered ? C.Theme.textSecondary : C.Theme.textMuted)
             font.family: C.Theme.fontFamily
-            font.pixelSize: 13
+            font.pixelSize: 12
             font.weight: tab.current ? Font.DemiBold : Font.Normal
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
@@ -181,7 +181,7 @@ Rectangle {
             text: chip.badge >= 0 ? chip.label + " · " + chip.badge : chip.label
             color: chip.active ? C.Theme.accent : C.Theme.textSecondary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 11
+            font.pixelSize: 10
             font.weight: chip.active ? Font.DemiBold : Font.Normal
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
@@ -208,7 +208,7 @@ Rectangle {
             text: metric.label
             color: C.Theme.textMuted
             font.family: C.Theme.fontMono
-            font.pixelSize: 10
+            font.pixelSize: 9
             font.letterSpacing: 0.5
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
@@ -218,7 +218,7 @@ Rectangle {
             text: metric.value
             color: C.Theme.textPrimary
             font.family: C.Theme.fontMono
-            font.pixelSize: 11
+            font.pixelSize: 10
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
         }
@@ -328,7 +328,7 @@ Rectangle {
                     text: "Filtrar mensagens…"
                     color: C.Theme.textMuted
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: 11
                     renderType: Text.QtRendering
                     renderTypeQuality: Text.HighRenderTypeQuality
                 }
@@ -347,7 +347,7 @@ Rectangle {
                     selectionColor: C.Theme.accentBorder
                     selectedTextColor: C.Theme.shell
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: 11
                     renderType: Text.QtRendering
                     selectByMouse: true
                     clip: true
@@ -569,7 +569,7 @@ Rectangle {
                     text: logRow.time
                     color: C.Theme.textMuted
                     font.family: C.Theme.fontMono
-                    font.pixelSize: 11
+                    font.pixelSize: 10
                     renderType: Text.QtRendering
                     renderTypeQuality: Text.VeryHighRenderTypeQuality
                 }
@@ -594,7 +594,7 @@ Rectangle {
                         text: logRow.tag
                         color: logRow.tagColor
                         font.family: C.Theme.fontMono
-                        font.pixelSize: 10
+                        font.pixelSize: 9
                         renderType: Text.QtRendering
                         renderTypeQuality: Text.VeryHighRenderTypeQuality
                     }
@@ -613,7 +613,7 @@ Rectangle {
                          : logRow.tag === "WARN" ? C.Theme.textNormal
                          : C.Theme.textSecondary
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: 11
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     maximumLineCount: 1
@@ -722,7 +722,7 @@ Rectangle {
                 text: statusModel.message !== "" ? statusModel.message : "PRONTO"
                 color: statusModel.message !== "" ? C.Theme.textSecondary : C.Theme.green
                 font.family: C.Theme.fontMono
-                font.pixelSize: 11
+                font.pixelSize: 10
                 font.letterSpacing: statusModel.message !== "" ? 0 : 1
                 elide: Text.ElideRight
                 renderType: Text.QtRendering

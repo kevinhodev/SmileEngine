@@ -144,6 +144,11 @@ MenuBar {
             onTriggered: menuBridge.toggleLights()
         }
         MItem {
+            text: "Inspector"; checkColumn: true
+            markVisible: menuBridge.inspectorVisible
+            onTriggered: menuBridge.toggleInspector()
+        }
+        MItem {
             text: "Mini Profiler"; checkColumn: true
             markVisible: menuBridge.statsVisible
             onTriggered: menuBridge.toggleStats()

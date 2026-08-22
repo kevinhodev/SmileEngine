@@ -42,6 +42,7 @@ Rectangle {
         property color dotColor: "transparent"
         property alias text: dataChipLabel.text
         property color textColor: C.Theme.textSecondary
+        property int maxTextWidth: 100000
         implicitWidth: dataChipRow.implicitWidth + 24
         implicitHeight: 22
         radius: C.Theme.radiusControl
@@ -61,9 +62,11 @@ Rectangle {
             Text {
                 id: dataChipLabel
                 anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(implicitWidth, dataChip.maxTextWidth)
                 color: dataChip.textColor
                 font.family: C.Theme.fontMono
                 font.pixelSize: 10
+                elide: Text.ElideRight
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
             }
@@ -205,16 +208,21 @@ Rectangle {
 
         DataChip {
             anchors.verticalCenter: parent.verticalCenter
+            visible: statusModel.message !== ""
+            dotColor: C.Theme.amber
+            text: statusModel.message
+            textColor: C.Theme.textSecondary
+            maxTextWidth: 220
+        }
+
+        DataChip {
+            anchors.verticalCenter: parent.verticalCenter
             // Verde = agente conectado, ambar = ouvindo sem cliente, muted = pipe nao subiu.
             // Papel semantico fixo: o accent nunca entra aqui, ele e so selecao/ativo/dirty.
             dotColor: !mcpModel.listening ? C.Theme.textMuted
                     : mcpModel.clientCount > 0 ? C.Theme.green
                     : C.Theme.amber
             text: "MCP"
-        }
-        DataChip {
-            anchors.verticalCenter: parent.verticalCenter
-            text: Math.round(statusModel.fps) + " FPS"
         }
     }
 

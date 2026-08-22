@@ -10,6 +10,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool consoleVisible READ ConsoleVisible NOTIFY ConsoleVisibleChanged)
         Q_PROPERTY(bool timeOfDayVisible READ TimeOfDayVisible NOTIFY TimeOfDayVisibleChanged)
         Q_PROPERTY(bool lightsVisible READ LightsVisible NOTIFY LightsVisibleChanged)
+        Q_PROPERTY(bool inspectorVisible READ InspectorVisible NOTIFY InspectorVisibleChanged)
         Q_PROPERTY(bool statsVisible READ StatsVisible NOTIFY StatsVisibleChanged)
         Q_PROPERTY(bool debugTargetsVisible READ DebugTargetsVisible NOTIFY DebugTargetsVisibleChanged)
         Q_PROPERTY(bool materialsVisible READ MaterialsVisible NOTIFY MaterialsVisibleChanged)
@@ -23,6 +24,8 @@ namespace SmileEditor {
         void SetTimeOfDayVisible(bool v);
         bool LightsVisible() const { return LightsVis; }
         void SetLightsVisible(bool v);
+        bool InspectorVisible() const { return InspectorVis; }
+        void SetInspectorVisible(bool v);
         bool StatsVisible() const { return StatsVis; }
         void SetStatsVisible(bool v);
         bool DebugTargetsVisible() const { return DebugTargetsVis; }
@@ -38,6 +41,7 @@ namespace SmileEditor {
         void toggleConsole()    { emit ToggleConsoleRequested(); }
         void toggleTimeOfDay()  { emit ToggleTimeOfDayRequested(); }
         void toggleLights()     { emit ToggleLightsRequested(); }
+        void toggleInspector()  { emit ToggleInspectorRequested(); }
         void toggleStats()      { emit ToggleStatsRequested(); }
         void toggleDebugTargets() { emit ToggleDebugTargetsRequested(); }
         void toggleMaterials()  { emit ToggleMaterialsRequested(); }
@@ -53,12 +57,14 @@ namespace SmileEditor {
         void ToggleConsoleRequested();
         void ToggleTimeOfDayRequested();
         void ToggleLightsRequested();
+        void ToggleInspectorRequested();
         void ToggleStatsRequested();
         void ToggleDebugTargetsRequested();
         void ToggleMaterialsRequested();
         void MaterialsVisibleChanged();
         void TimeOfDayVisibleChanged();
         void LightsVisibleChanged();
+        void InspectorVisibleChanged();
         void StatsVisibleChanged();
         void DebugTargetsVisibleChanged();
         void VSyncToggled(bool on);
@@ -70,6 +76,7 @@ namespace SmileEditor {
         bool ConsoleVis   = true;
         bool TimeOfDayVis = false; // TOD agora e janela flutuante: comeca fechada
         bool LightsVis    = true;
+        bool InspectorVis = true;
         bool StatsVis     = false; // Estatisticas: janela flutuante, comeca fechada
         bool DebugTargetsVis = false; // Visualizador de render targets: idem
         bool MaterialsVis = false; // Editor de Materiais: janela flutuante, comeca fechada

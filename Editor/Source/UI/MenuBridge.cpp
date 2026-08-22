@@ -24,6 +24,12 @@ namespace SmileEditor {
         emit LightsVisibleChanged();
     }
 
+    void MenuBridge::SetInspectorVisible(bool _V) {
+        if (InspectorVis == _V) return;
+        InspectorVis = _V;
+        emit InspectorVisibleChanged();
+    }
+
     void MenuBridge::SetStatsVisible(bool _V) {
         if (StatsVis == _V) return;
         StatsVis = _V;

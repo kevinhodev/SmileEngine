@@ -28,7 +28,7 @@ namespace SmileEditor {
     class SceneDocument : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool dirty READ Dirty NOTIFY DirtyChanged)
-        Q_PROPERTY(bool available READ Available NOTIFY DirtyChanged)
+        Q_PROPERTY(bool available READ Available NOTIFY ScenePathChanged)
         // Breadcrumb da barra de titulo: pasta que contem a cena e o nome do arquivo.
         // Derivados do MapPath para o QML poder BINDAR — mapPath() e Q_INVOKABLE e nao
         // notifica, entao um binding em cima dele ficaria congelado na primeira leitura.

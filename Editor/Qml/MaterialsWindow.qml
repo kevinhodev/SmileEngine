@@ -6,7 +6,7 @@ import "components" as C
 // e `materialsWindow` (WindowBridge da QDialog frameless). Browser a esquerda (busca, chips,
 // badges, VRAM por material), propriedades em cards a direita — edicao AO VIVO na cena
 // (estilo Material Instance da Flax); clicar numa mesh do viewport seleciona o material dela
-// (o "pick from scene" da Cry via picking GPU existente). Ref: Docs/material-editor-ref.svg.
+// pelo picking GPU existente.
 // Mesmo chrome/linguagem do TimeOfDayWindow/StatsWindow.
 Rectangle {
     id: root

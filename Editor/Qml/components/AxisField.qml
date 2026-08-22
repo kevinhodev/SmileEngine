@@ -55,11 +55,11 @@ Rectangle {
         selectByMouse: true
         selectionColor: Theme.accentBorder
         text: root.value.toFixed(root.decimals) + root.suffix
-        validator: DoubleValidator { locale: "C"; notation: DoubleValidator.StandardNotation }
+        validator: RegularExpressionValidator {
+            regularExpression: /^[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)?$/
+        }
         onActiveFocusChanged: if (activeFocus) selectAll()
         onEditingFinished: {
-            // Aceita virgula: o teclado numerico brasileiro so tem ela, e o DoubleValidator
-            // esta em locale C justamente para nao brigar com o ponto digitado.
             var v = parseFloat(text.replace(",", "."))
             if (!isNaN(v)) root.committed(v)
             focus = false

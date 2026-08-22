@@ -178,98 +178,63 @@ Rectangle {
         z: 1
     }
 
-    // ---- Header do painel ----
-    // Header de secao no conceito: 10 px, caixa alta, tracking de 1.5 px, em mono.
-    Item {
+    C.DockPanelHeader {
         id: header
         anchors.left: parent.left; anchors.right: parent.right
-        height: 40
+        title: "CENA"
+        detail: outlinerModel.totalCount > 0 ? root.fmtCount(outlinerModel.totalCount) : ""
+        actions: Component {
+            Row {
+                spacing: 2
 
-        Text {
-            x: 16
-            anchors.verticalCenter: parent.verticalCenter
-            text: "CENA"
-            color: C.Theme.textSecondary
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
-            font.letterSpacing: 1.5
-            font.weight: Font.DemiBold
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
-        }
-        Text {
-            x: 58
-            anchors.verticalCenter: parent.verticalCenter
-            visible: outlinerModel.totalCount > 0
-            text: root.fmtCount(outlinerModel.totalCount)
-            color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
-        }
-
-        // salvar (ponto accent = mudancas nao salvas; e o mesmo dirty state do breadcrumb)
-        Item {
-            id: saveBtn
-            anchors.right: moreBtn.left
-            anchors.rightMargin: 2
-            anchors.verticalCenter: parent.verticalCenter
-            width: 24; height: 24
-            opacity: lightsModel.hasSceneFile ? 1.0 : 0.35
-            Rectangle {
-                anchors.fill: parent; radius: C.Theme.radiusChip
-                color: saveHover.hovered && lightsModel.hasSceneFile ? C.Theme.surfaceRaised
-                                                                     : "transparent"
-            }
-            LucideIcon {
-                anchors.centerIn: parent
-                name: "save"; size: 14
-                color: saveHover.hovered && lightsModel.hasSceneFile ? C.Theme.textPrimary
-                                                                     : C.Theme.textSecondary
-            }
-            Rectangle {
-                visible: lightsModel.dirty || outlinerModel.dirty
-                x: 15; y: 2
-                width: 7; height: 7; radius: 3.5
-                color: C.Theme.accent
-                border.color: C.Theme.shell
-                border.width: 1
-            }
-            HoverHandler {
-                id: saveHover
-                cursorShape: lightsModel.hasSceneFile ? Qt.PointingHandCursor : Qt.ArrowCursor
-            }
-            TapHandler {
-                enabled: lightsModel.hasSceneFile
-                onTapped: {
-                    lightsModel.saveLights()
-                    // O .smap carrega a camada de OBJETOS (movidos, ocultos, criados, apagados).
-                    // O saveVisibility continua por compatibilidade com mapas antigos: quem le a
-                    // visibilidade primeiro e o .visibility.json, e o .smap sobrescreve depois.
-                    outlinerModel.saveVisibility()
-                    sceneDoc.save()
+                Item {
+                    id: saveBtn
+                    width: 24; height: 24
+                    opacity: lightsModel.hasSceneFile ? 1.0 : 0.35
+                    Rectangle {
+                        anchors.fill: parent; radius: C.Theme.radiusChip
+                        color: saveHover.hovered && lightsModel.hasSceneFile
+                               ? C.Theme.surfaceRaised : "transparent"
+                    }
+                    LucideIcon {
+                        anchors.centerIn: parent
+                        name: "save"; size: 14
+                        color: saveHover.hovered && lightsModel.hasSceneFile
+                               ? C.Theme.textPrimary : C.Theme.textSecondary
+                    }
+                    Rectangle {
+                        visible: lightsModel.dirty || outlinerModel.dirty
+                        x: 15; y: 2
+                        width: 7; height: 7; radius: 3.5
+                        color: C.Theme.accent
+                        border.color: C.Theme.shell
+                        border.width: 1
+                    }
+                    HoverHandler {
+                        id: saveHover
+                        cursorShape: lightsModel.hasSceneFile ? Qt.PointingHandCursor
+                                                              : Qt.ArrowCursor
+                    }
+                    TapHandler {
+                        enabled: lightsModel.hasSceneFile
+                        onTapped: {
+                            lightsModel.saveLights()
+                            outlinerModel.saveVisibility()
+                            sceneDoc.save()
+                        }
+                    }
+                    ToolTip.visible: saveHover.hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: lightsModel.hasSceneFile
+                                  ? "Salvar cena (<cena>.smap) + luzes"
+                                  : "Carregue uma cena para salvar"
+                }
+                IconButton {
+                    icon: "x"
+                    tip: "Fechar painel"
+                    onClicked: outlinerModel.closePanel()
                 }
             }
-            ToolTip.visible: saveHover.hovered
-            ToolTip.delay: 600
-            ToolTip.text: lightsModel.hasSceneFile
-                          ? "Salvar cena (<cena>.smap) + luzes"
-                          : "Carregue uma cena para salvar"
-        }
-        IconButton {
-            id: moreBtn
-            anchors.right: parent.right
-            anchors.rightMargin: 10
-            anchors.verticalCenter: parent.verticalCenter
-            icon: "x"
-            tip: "Fechar painel"
-            onClicked: outlinerModel.closePanel()
-        }
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1; color: C.Theme.hairline
         }
     }
 
@@ -299,7 +264,7 @@ Rectangle {
             verticalAlignment: TextInput.AlignVCenter
             color: C.Theme.textPrimary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: 11
             selectByMouse: true
             selectionColor: C.Theme.accentBorder
             onTextEdited: outlinerModel.search = text
@@ -428,6 +393,7 @@ Rectangle {
                 readonly property bool isLight: kind === 2
                 readonly property bool isAsset: kind === 3
                 readonly property bool isMesh: kind === 4
+                readonly property bool isMore: kind === 5
                 readonly property bool isBranch: isGroup || isAsset
                 // O grupo Luzes troca a contagem pelos chips + POINT/+ SPOT: os dois na mesma
                 // margem direita se sobrepunham.
@@ -482,6 +448,7 @@ Rectangle {
 
                 LucideIcon {
                     id: rowIcon
+                    visible: !rowItem.isMore
                     x: 14 + rowItem.depth * 13 + (rowItem.isBranch ? 16 : 5)
                        + (rowItem.hasDot ? 13 : 0)
                     anchors.verticalCenter: parent.verticalCenter
@@ -499,15 +466,21 @@ Rectangle {
 
                 Text {
                     id: rowLabel
-                    x: rowIcon.x + rowIcon.width + 6
+                    x: rowItem.isMore ? 19 + rowItem.depth * 13
+                                      : rowIcon.x + rowIcon.width + 6
                     anchors.verticalCenter: parent.verticalCenter
                     width: Math.max(0, rightActions.x - x - 4)
-                    text: rowItem.name
-                    color: rowItem.dimmed ? C.Theme.textMuted
+                    text: rowItem.isMore
+                          ? "+ " + root.fmtCount(rowItem.count)
+                            + (rowItem.count === 1 ? " objeto…" : " objetos…")
+                          : rowItem.name
+                    color: rowItem.isMore
+                         ? (rowHover.hovered ? C.Theme.accentText : C.Theme.textMuted)
+                         : rowItem.dimmed ? C.Theme.textMuted
                          : rowItem.selected || rowItem.isGroup ? C.Theme.textPrimary
                          : C.Theme.textSecondary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
+                    font.family: rowItem.isMore ? C.Theme.fontMono : C.Theme.fontFamily
+                    font.pixelSize: rowItem.isMore ? 10 : 11
                     font.weight: rowItem.selected ? Font.DemiBold
                                : rowItem.isGroup ? Font.Medium
                                : Font.Normal
@@ -625,7 +598,8 @@ Rectangle {
 
                 HoverHandler {
                     id: rowHover
-                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1
+                    cursorShape: rowItem.isMore ? Qt.PointingHandCursor
+                               : rowItem.isEnv && rowItem.sceneIdx !== 1
                                  && rowItem.sceneIdx !== 2 && rowItem.sceneIdx !== 4
                                   ? Qt.ArrowCursor : Qt.PointingHandCursor
                 }
@@ -635,7 +609,8 @@ Rectangle {
                     onTapped: (ep) => {
                         if (ep.position.x >= rightActions.x) return
                         root.forceActiveFocus() // atalhos de teclado voltam pro painel
-                        if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
+                        if (rowItem.isMore)            outlinerModel.showMore(rowItem.index)
+                        else if (rowItem.isBranch)     outlinerModel.toggleExpand(rowItem.index)
                         else if (rowItem.isEnv &&
                                  (rowItem.sceneIdx === 1 || rowItem.sceneIdx === 2
                                   || rowItem.sceneIdx === 4))
