@@ -8,7 +8,7 @@ Rectangle {
     signal tapped()
     height: 24
     width: chipText.implicitWidth + 18
-    radius: 6
+    radius: Theme.radiusChip
     color: active ? Theme.accentBg : (chipHover.hovered ? Theme.controlHover : Theme.controlBg)
     border.color: active ? Theme.accentBorder : Theme.controlBorder
     border.width: 1

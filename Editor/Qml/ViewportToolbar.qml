@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
@@ -801,22 +803,23 @@ Rectangle {
                     }
                 }
                 Repeater {
-                    model: root.debugModel.debugTargetNames
-                    delegate: Rectangle {
-                        required property string modelData
-                        required property int index
+                     model: root.debugModel.debugTargetNames
+                     delegate: Rectangle {
+                         id: debugTargetOption
+                         required property string modelData
+                         required property int index
                         width: 220; height: 28; radius: 4
                         color: targetHover.hovered ? C.Theme.surfaceRaised : "transparent"
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: root.debugModel.debugTargetIndex === index
+                             checked: root.debugModel.debugTargetIndex === debugTargetOption.index
                         }
                         Text {
                             anchors.left: parent.left; anchors.leftMargin: 27
                             anchors.right: parent.right; anchors.rightMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
-                            text: modelData
+                             text: debugTargetOption.modelData
                             elide: Text.ElideRight
                             color: root.textNormal
                             font.family: C.Theme.fontFamily
@@ -825,7 +828,7 @@ Rectangle {
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
                             onTapped: {
-                                root.debugModel.SelectDebugTarget(index)
+                                 root.debugModel.SelectDebugTarget(debugTargetOption.index)
                                 debugTargetPopup.close()
                                 viewModesPopup.close()
                             }

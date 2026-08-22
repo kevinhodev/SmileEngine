@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
@@ -12,8 +14,8 @@ Rectangle {
     required property var todModel
     required property var todWindow
 
-    color: "#141511"
-    border.color: "#2e2f28"
+    color: C.Theme.shell
+    border.color: C.Theme.hairlineStrong
     border.width: 1
     implicitWidth: 840
     implicitHeight: 672
@@ -95,89 +97,32 @@ Rectangle {
     }
 
     // ---- Componentes compartilhados (Editor/Qml/components) ----
-    component WindowButton: C.WindowButton {}
     component Toggle: C.Toggle {}
     component Card: C.Card { contentSpacing: 10 }
     component SliderRow: C.SliderRow {}
     component Chip: C.Chip { height: 26 }
 
-    // ---- Barra de titulo (janela frameless: arrasto + botoes via WindowBridge) ----
-    Rectangle {
+    C.FramelessTitleBar {
         id: titleBar
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 1
         height: 40
-        color: "#10110f"
-
-        LucideIcon {
-            x: 16
-            anchors.verticalCenter: parent.verticalCenter
-            name: "sun"; size: 15
-            color: todModel.enabled ? root.sunColor : root.textMuted
-        }
-        Text {
-            id: titleText
-            x: 40
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Time of Day"
-            color: root.textPrimary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 13
-            font.weight: Font.Medium
-        }
-        Text {
-            anchors.left: titleText.right
-            anchors.leftMargin: 12
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.doyLabel(todModel.dayOfYear) + " · " +
-                  Math.abs(Math.round(todModel.latitudeDeg)) + "° " +
-                  (todModel.latitudeDeg >= 0 ? "N" : "S") +
-                  (root.sunsetH >= 0 ? " · pôr do sol " + root.timeLabel(root.sunsetH) : "")
-            color: root.textMuted
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-        }
-
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: masterToggle.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            property bool moving: false
-            onPressed: moving = false
-            onPositionChanged: {
-                if (pressed && !moving) {
-                    moving = true
-                    todWindow.startSystemMove()
-                }
+        windowBridge: root.todWindow
+        title: "Time of Day"
+        subtitle: root.doyLabel(root.todModel.dayOfYear) + " · "
+            + Math.abs(Math.round(root.todModel.latitudeDeg)) + "° "
+            + (root.todModel.latitudeDeg >= 0 ? "N" : "S")
+            + (root.sunsetH >= 0 ? " · pôr do sol " + root.timeLabel(root.sunsetH) : "")
+        iconName: "sun"
+        iconColor: root.todModel.enabled ? root.sunColor : root.textMuted
+        showMaximize: false
+        actions: Component {
+            Toggle {
+                checked: root.todModel.enabled
+                onToggled: root.todModel.enabled = !checked
             }
-            onReleased: moving = false
-        }
-
-        Toggle {
-            id: masterToggle
-            anchors.right: windowButtons.left
-            anchors.rightMargin: 12
-            anchors.verticalCenter: parent.verticalCenter
-            checked: todModel.enabled
-            onToggled: todModel.enabled = !checked
-        }
-        Row {
-            id: windowButtons
-            anchors.right: parent.right
-            anchors.top: parent.top
-            WindowButton { glyph: "−"; onTapped: todWindow.minimize() }
-            WindowButton { glyph: "×"; danger: true; onTapped: todWindow.close() }
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: root.divider
         }
     }
 
@@ -197,7 +142,7 @@ Rectangle {
             id: contentCol
             width: parent.width
             spacing: 10
-            opacity: todModel.available ? 1.0 : 0.45
+            opacity: root.todModel.available ? 1.0 : 0.45
 
             // ---- Arco do ceu (hero interativo: arrastar na horizontal escruba a hora) ----
             Rectangle {
@@ -226,8 +171,8 @@ Rectangle {
                         ctx.reset()
 
                         var horizonY = elToY(0)
-                        var sunEl = todModel.sunElevationDeg
-                        var nowX = (todModel.timeHours / 24) * w
+                        var sunEl = root.todModel.sunElevationDeg
+                        var nowX = (root.todModel.timeHours / 24) * w
 
                         // ceu (gradiente vertical sutil) / chao
                         var sky = ctx.createLinearGradient(0, 0, 0, horizonY)
@@ -259,7 +204,7 @@ Rectangle {
                             fy -= Math.floor(fy)
                             var sx = fx * w
                             var syy = 6 + fy * (horizonY - 26)
-                            var elS = todModel.sunElevationAt(24 * sx / w)
+                            var elS = root.todModel.sunElevationAt(24 * sx / w)
                             var a = Math.max(0, Math.min(1, -elS / 12)) *
                                     (0.2 + 0.35 * ((s * 7) % 10) / 10)
                             if (a > 0.02) {
@@ -288,7 +233,7 @@ Rectangle {
                         ctx.beginPath()
                         for (var i = 0; i <= 96; ++i) {
                             var hM = i / 4.0
-                            var yM = elToY(todModel.moonElevationAt(hM))
+                            var yM = elToY(root.todModel.moonElevationAt(hM))
                             if (i === 0) ctx.moveTo((hM / 24) * w, yM)
                             else         ctx.lineTo((hM / 24) * w, yM)
                         }
@@ -301,7 +246,7 @@ Rectangle {
                         ctx.beginPath()
                         for (var j = 0; j <= 96; ++j) {
                             var hS = j / 4.0
-                            var yS = elToY(todModel.sunElevationAt(hS))
+                            var yS = elToY(root.todModel.sunElevationAt(hS))
                             if (j === 0) ctx.moveTo((hS / 24) * w, yS)
                             else         ctx.lineTo((hS / 24) * w, yS)
                         }
@@ -327,7 +272,7 @@ Rectangle {
                         ctx.beginPath(); ctx.moveTo(nowX, 0); ctx.lineTo(nowX, h - 18); ctx.stroke()
 
                         // marcador da lua (anel sutil em volta)
-                        var moonEl = todModel.moonElevationDeg
+                        var moonEl = root.todModel.moonElevationDeg
                         var my = elToY(moonEl)
                         ctx.globalAlpha = moonEl > -8 ? 1.0 : 0.35
                         ctx.strokeStyle = "rgba(207,216,234,0.25)"
@@ -366,7 +311,7 @@ Rectangle {
                     }
 
                     Connections {
-                        target: todModel
+                        target: root.todModel
                         function onTimeChanged()  { arc.requestPaint() }
                         function onStateChanged() {
                             root.recomputeSunTimes()
@@ -380,24 +325,24 @@ Rectangle {
                     // briga com o mouse).
                     MouseArea {
                         anchors.fill: parent
-                        enabled: todModel.enabled
+                        enabled: root.todModel.enabled
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                         property bool wasRunning: false
                         function scrub(mx) {
                             var x = Math.max(0, Math.min(width, mx))
-                            todModel.timeHours = 24 * x / width
+                            root.todModel.timeHours = 24 * x / width
                         }
                         onPressed: (mouse) => {
-                            wasRunning = todModel.running
-                            todModel.running = false
+                            wasRunning = root.todModel.running
+                            root.todModel.running = false
                             scrub(mouse.x)
                         }
                         onPositionChanged: (mouse) => { if (pressed) scrub(mouse.x) }
-                        onReleased: todModel.running = wasRunning
-                        onCanceled: todModel.running = wasRunning
+                        onReleased: root.todModel.running = wasRunning
+                        onCanceled: root.todModel.running = wasRunning
                         // scroll = nudge fino de ±15 min (SetTimeHours faz o wrap)
                         onWheel: (wheel) => {
-                            todModel.timeHours = todModel.timeHours +
+                            root.todModel.timeHours = root.todModel.timeHours +
                                                  (wheel.angleDelta.y > 0 ? 0.25 : -0.25)
                         }
                     }
@@ -406,7 +351,7 @@ Rectangle {
                 // chip da hora corrente sobre a linha do agora
                 Rectangle {
                     x: Math.max(60, Math.min(parent.width - 106,
-                       (todModel.timeHours / 24) * parent.width - 23))
+                       (root.todModel.timeHours / 24) * parent.width - 23))
                     y: 6
                     width: 46; height: 18
                     radius: 4
@@ -415,7 +360,7 @@ Rectangle {
                     border.width: 1
                     Text {
                         anchors.centerIn: parent
-                        text: root.timeLabel(todModel.timeHours)
+                        text: root.timeLabel(root.todModel.timeHours)
                         color: root.blue
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 10
@@ -426,15 +371,15 @@ Rectangle {
                 // leitura rapida sol/lua nos cantos
                 Text {
                     x: 8; y: 6
-                    text: "sol " + Math.round(todModel.sunElevationDeg) + "°  ·  az " +
-                          Math.round(todModel.sunAzimuthDeg) + "°"
+                    text: "sol " + Math.round(root.todModel.sunElevationDeg) + "°  ·  az " +
+                          Math.round(root.todModel.sunAzimuthDeg) + "°"
                     color: root.textSecondary
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 9
                 }
                 Text {
                     anchors.right: parent.right; anchors.rightMargin: 8; y: 6
-                    text: "lua " + Math.round(todModel.moonElevationDeg) + "°"
+                    text: "lua " + Math.round(root.todModel.moonElevationDeg) + "°"
                     color: Qt.alpha(root.moonColor, 0.8)
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 9
@@ -445,24 +390,25 @@ Rectangle {
             Item {
                 width: parent.width
                 height: 36
-                enabled: todModel.enabled
-                opacity: todModel.enabled ? 1.0 : 0.45
+                enabled: root.todModel.enabled
+                opacity: root.todModel.enabled ? 1.0 : 0.45
 
                 Rectangle {
                     id: playBtn
                     width: 30; height: 30; radius: 15
                     anchors.verticalCenter: parent.verticalCenter
-                    color: todModel.running ? root.blueBg : "#23241d"
-                    border.color: todModel.running ? root.blueBorder : "#33342c"
+                    color: root.todModel.running ? C.Theme.accentBg : C.Theme.surfaceRaised
+                    border.color: root.todModel.running ? C.Theme.accentBorder
+                                                   : C.Theme.hairlineStrong
                     border.width: 1
                     LucideIcon {
                         anchors.centerIn: parent
-                        name: todModel.running ? "pause" : "play"
+                        name: root.todModel.running ? "pause" : "play"
                         size: 13
-                        color: todModel.running ? root.blue : root.textNormal
+                        color: root.todModel.running ? root.blue : root.textNormal
                     }
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    TapHandler { onTapped: todModel.running = !todModel.running }
+                    TapHandler { onTapped: root.todModel.running = !root.todModel.running }
                 }
 
                 // Hora digitavel: fora de foco segue o relogio; clicar, digitar HH:MM e
@@ -478,19 +424,19 @@ Rectangle {
                     horizontalAlignment: TextInput.AlignRight
                     selectByMouse: true
                     selectionColor: root.blue
-                    selectedTextColor: "#10110f"
+                    selectedTextColor: C.Theme.shell
                     validator: RegularExpressionValidator {
                         regularExpression: /^\d{1,2}:\d{2}$/
                     }
                     Binding {
                         target: bigTime; property: "text"
-                        value: root.timeLabel(todModel.timeHours)
+                        value: root.timeLabel(root.todModel.timeHours)
                         when: !bigTime.activeFocus
                         restoreMode: Binding.RestoreBinding
                     }
                     onAccepted: {
                         var p = text.split(":")
-                        todModel.timeHours = Math.min(23, parseInt(p[0])) +
+                        root.todModel.timeHours = Math.min(23, parseInt(p[0])) +
                                              Math.min(59, parseInt(p[1])) / 60
                         focus = false
                     }
@@ -502,7 +448,7 @@ Rectangle {
                     anchors.right: bigTime.left
                     anchors.rightMargin: 10
                     anchors.verticalCenter: parent.verticalCenter
-                    text: root.dayPhase(todModel.timeHours, todModel.sunElevationDeg)
+                    text: root.dayPhase(root.todModel.timeHours, root.todModel.sunElevationDeg)
                     color: root.textMuted
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 10
@@ -517,10 +463,10 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     height: 18
                     from: 0; to: 24
-                    onMoved: todModel.timeHours = value
+                    onMoved: root.todModel.timeHours = value
                     Binding {
                         target: hourSlider; property: "value"
-                        value: todModel.timeHours
+                        value: root.todModel.timeHours
                         when: !hourSlider.pressed
                         restoreMode: Binding.RestoreBinding
                     }
@@ -567,7 +513,7 @@ Rectangle {
                     Card {
                         title: "Relógio"
                         iconName: "clock"
-                        visible: todModel.enabled
+                        visible: root.todModel.enabled
 
                         // Presets pulam p/ momentos-chave; amanhecer/entardecer vem dos
                         // cruzamentos reais do horizonte na config corrente.
@@ -578,43 +524,43 @@ Rectangle {
                                 width: (parent.width - 18) / 4
                                 label: "Amanhecer"
                                 readonly property real t: root.sunriseH >= 0 ? root.sunriseH : 6
-                                active: root.hourDist(todModel.timeHours, t) < 0.13
-                                onTapped: todModel.timeHours = t
+                                active: root.hourDist(root.todModel.timeHours, t) < 0.13
+                                onTapped: root.todModel.timeHours = t
                             }
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Meio-dia"
-                                active: root.hourDist(todModel.timeHours, 12) < 0.13
-                                onTapped: todModel.timeHours = 12
+                                active: root.hourDist(root.todModel.timeHours, 12) < 0.13
+                                onTapped: root.todModel.timeHours = 12
                             }
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Entardecer"
                                 readonly property real t: root.sunsetH >= 0 ? root.sunsetH : 18
-                                active: root.hourDist(todModel.timeHours, t) < 0.13
-                                onTapped: todModel.timeHours = t
+                                active: root.hourDist(root.todModel.timeHours, t) < 0.13
+                                onTapped: root.todModel.timeHours = t
                             }
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Meia-noite"
-                                active: root.hourDist(todModel.timeHours, 0) < 0.13
-                                onTapped: todModel.timeHours = 0
+                                active: root.hourDist(root.todModel.timeHours, 0) < 0.13
+                                onTapped: root.todModel.timeHours = 0
                             }
                         }
 
                         SliderRow {
                             label: "Duração do dia"
-                            valueText: root.fmt(todModel.dayLengthSec / 60) + " min"
+                            valueText: root.fmt(root.todModel.dayLengthSec / 60) + " min"
                             from: 0.5; to: 30; stepSize: 0.5
-                            boundValue: todModel.dayLengthSec / 60
-                            onMoved: v => todModel.dayLengthSec = v * 60
+                            boundValue: root.todModel.dayLengthSec / 60
+                            onMoved: v => root.todModel.dayLengthSec = v * 60
                         }
                     }
 
                     Card {
                         title: "Sol manual"
                         iconName: "sun"
-                        visible: !todModel.enabled
+                        visible: !root.todModel.enabled
 
                         Text {
                             width: parent.width
@@ -626,17 +572,17 @@ Rectangle {
                         }
                         SliderRow {
                             label: "Elevação"
-                            valueText: Math.round(todModel.manualElevationDeg) + "°"
+                            valueText: Math.round(root.todModel.manualElevationDeg) + "°"
                             from: -20; to: 90
-                            boundValue: todModel.manualElevationDeg
-                            onMoved: v => todModel.manualElevationDeg = v
+                            boundValue: root.todModel.manualElevationDeg
+                            onMoved: v => root.todModel.manualElevationDeg = v
                         }
                         SliderRow {
                             label: "Azimute"
-                            valueText: Math.round(todModel.manualAzimuthDeg) + "°"
+                            valueText: Math.round(root.todModel.manualAzimuthDeg) + "°"
                             from: 0; to: 360
-                            boundValue: todModel.manualAzimuthDeg
-                            onMoved: v => todModel.manualAzimuthDeg = v
+                            boundValue: root.todModel.manualAzimuthDeg
+                            onMoved: v => root.todModel.manualAzimuthDeg = v
                         }
                     }
 
@@ -652,46 +598,46 @@ Rectangle {
                             Chip {
                                 width: (parent.width - 12) / 3
                                 label: "Verão"
-                                readonly property int t: todModel.latitudeDeg >= 0 ? 172 : 355
-                                active: root.dayDist(todModel.dayOfYear, t) <= 3
-                                onTapped: todModel.dayOfYear = t
+                                readonly property int t: root.todModel.latitudeDeg >= 0 ? 172 : 355
+                                active: root.dayDist(root.todModel.dayOfYear, t) <= 3
+                                onTapped: root.todModel.dayOfYear = t
                             }
                             Chip {
                                 width: (parent.width - 12) / 3
                                 label: "Equinócio"
-                                active: root.dayDist(todModel.dayOfYear, 80) <= 3
-                                onTapped: todModel.dayOfYear = 80
+                                active: root.dayDist(root.todModel.dayOfYear, 80) <= 3
+                                onTapped: root.todModel.dayOfYear = 80
                             }
                             Chip {
                                 width: (parent.width - 12) / 3
                                 label: "Inverno"
-                                readonly property int t: todModel.latitudeDeg >= 0 ? 355 : 172
-                                active: root.dayDist(todModel.dayOfYear, t) <= 3
-                                onTapped: todModel.dayOfYear = t
+                                readonly property int t: root.todModel.latitudeDeg >= 0 ? 355 : 172
+                                active: root.dayDist(root.todModel.dayOfYear, t) <= 3
+                                onTapped: root.todModel.dayOfYear = t
                             }
                         }
 
                         SliderRow {
                             label: "Latitude"
-                            valueText: Math.abs(Math.round(todModel.latitudeDeg)) + "° " +
-                                       (todModel.latitudeDeg >= 0 ? "N" : "S")
+                            valueText: Math.abs(Math.round(root.todModel.latitudeDeg)) + "° " +
+                                       (root.todModel.latitudeDeg >= 0 ? "N" : "S")
                             from: -66; to: 66
-                            boundValue: todModel.latitudeDeg
-                            onMoved: v => todModel.latitudeDeg = v
+                            boundValue: root.todModel.latitudeDeg
+                            onMoved: v => root.todModel.latitudeDeg = v
                         }
                         SliderRow {
                             label: "Dia do ano"
-                            valueText: root.doyLabel(todModel.dayOfYear)
+                            valueText: root.doyLabel(root.todModel.dayOfYear)
                             from: 1; to: 365; stepSize: 1
-                            boundValue: todModel.dayOfYear
-                            onMoved: v => todModel.dayOfYear = Math.round(v)
+                            boundValue: root.todModel.dayOfYear
+                            onMoved: v => root.todModel.dayOfYear = Math.round(v)
                         }
                         SliderRow {
                             label: "Norte da cena"
-                            valueText: Math.round(todModel.northOffsetDeg) + "°"
+                            valueText: Math.round(root.todModel.northOffsetDeg) + "°"
                             from: 0; to: 360
-                            boundValue: todModel.northOffsetDeg
-                            onMoved: v => todModel.northOffsetDeg = v
+                            boundValue: root.todModel.northOffsetDeg
+                            onMoved: v => root.todModel.northOffsetDeg = v
                         }
                     }
 
@@ -708,8 +654,8 @@ Rectangle {
                         iconName: "moon"
                         headerItem: [
                             Toggle {
-                                checked: todModel.moonEnabled
-                                onToggled: todModel.moonEnabled = !checked
+                                checked: root.todModel.moonEnabled
+                                onToggled: root.todModel.moonEnabled = !checked
                             }
                         ]
 
@@ -718,70 +664,70 @@ Rectangle {
                         Row {
                             width: parent.width
                             spacing: 6
-                            enabled: todModel.moonEnabled
-                            opacity: todModel.moonEnabled ? 1.0 : 0.4
+                            enabled: root.todModel.moonEnabled
+                            opacity: root.todModel.moonEnabled ? 1.0 : 0.4
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Nova"
-                                active: root.hourDist(todModel.moonPhaseOffsetHours, 0) < 1
-                                onTapped: todModel.moonPhaseOffsetHours = 0
+                                active: root.hourDist(root.todModel.moonPhaseOffsetHours, 0) < 1
+                                onTapped: root.todModel.moonPhaseOffsetHours = 0
                             }
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Crescente"
-                                active: root.hourDist(todModel.moonPhaseOffsetHours, 6) < 1
-                                onTapped: todModel.moonPhaseOffsetHours = 6
+                                active: root.hourDist(root.todModel.moonPhaseOffsetHours, 6) < 1
+                                onTapped: root.todModel.moonPhaseOffsetHours = 6
                             }
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Cheia"
-                                active: root.hourDist(todModel.moonPhaseOffsetHours, 12) < 1
-                                onTapped: todModel.moonPhaseOffsetHours = 12
+                                active: root.hourDist(root.todModel.moonPhaseOffsetHours, 12) < 1
+                                onTapped: root.todModel.moonPhaseOffsetHours = 12
                             }
                             Chip {
                                 width: (parent.width - 18) / 4
                                 label: "Minguante"
-                                active: root.hourDist(todModel.moonPhaseOffsetHours, 18) < 1
-                                onTapped: todModel.moonPhaseOffsetHours = 18
+                                active: root.hourDist(root.todModel.moonPhaseOffsetHours, 18) < 1
+                                onTapped: root.todModel.moonPhaseOffsetHours = 18
                             }
                         }
 
                         SliderRow {
-                            enabled: todModel.moonEnabled
-                            opacity: todModel.moonEnabled ? 1.0 : 0.4
+                            enabled: root.todModel.moonEnabled
+                            opacity: root.todModel.moonEnabled ? 1.0 : 0.4
                             label: "Ajuste fino da fase"
-                            valueText: root.phaseName(todModel.moonPhaseOffsetHours) + " · " +
-                                       Math.round(todModel.moonPhaseFraction * 100) + "%"
+                            valueText: root.phaseName(root.todModel.moonPhaseOffsetHours) + " · " +
+                                       Math.round(root.todModel.moonPhaseFraction * 100) + "%"
                             from: 0; to: 24
-                            boundValue: todModel.moonPhaseOffsetHours
-                            onMoved: v => todModel.moonPhaseOffsetHours = v
+                            boundValue: root.todModel.moonPhaseOffsetHours
+                            onMoved: v => root.todModel.moonPhaseOffsetHours = v
                         }
                         SliderRow {
-                            enabled: todModel.moonEnabled
-                            opacity: todModel.moonEnabled ? 1.0 : 0.4
+                            enabled: root.todModel.moonEnabled
+                            opacity: root.todModel.moonEnabled ? 1.0 : 0.4
                             label: "Intensidade do luar"
-                            valueText: root.fmt(todModel.moonIntensity, 2)
+                            valueText: root.fmt(root.todModel.moonIntensity, 2)
                             from: 0; to: 1
-                            boundValue: todModel.moonIntensity
-                            onMoved: v => todModel.moonIntensity = v
+                            boundValue: root.todModel.moonIntensity
+                            onMoved: v => root.todModel.moonIntensity = v
                         }
                         SliderRow {
-                            enabled: todModel.moonEnabled
-                            opacity: todModel.moonEnabled ? 1.0 : 0.4
+                            enabled: root.todModel.moonEnabled
+                            opacity: root.todModel.moonEnabled ? 1.0 : 0.4
                             label: "Tamanho do disco"
-                            valueText: root.fmt(todModel.moonDiskSize) + "×"
+                            valueText: root.fmt(root.todModel.moonDiskSize) + "×"
                             from: 0.5; to: 4
-                            boundValue: todModel.moonDiskSize
-                            onMoved: v => todModel.moonDiskSize = v
+                            boundValue: root.todModel.moonDiskSize
+                            onMoved: v => root.todModel.moonDiskSize = v
                         }
                         SliderRow {
-                            enabled: todModel.moonEnabled
-                            opacity: todModel.moonEnabled ? 1.0 : 0.4
+                            enabled: root.todModel.moonEnabled
+                            opacity: root.todModel.moonEnabled ? 1.0 : 0.4
                             label: "Brilho do disco"
-                            valueText: root.fmt(todModel.moonDiskBrightness)
+                            valueText: root.fmt(root.todModel.moonDiskBrightness)
                             from: 0.1; to: 3
-                            boundValue: todModel.moonDiskBrightness
-                            onMoved: v => todModel.moonDiskBrightness = v
+                            boundValue: root.todModel.moonDiskBrightness
+                            onMoved: v => root.todModel.moonDiskBrightness = v
                         }
                     }
 
@@ -791,10 +737,10 @@ Rectangle {
 
                         SliderRow {
                             label: "Intensidade"
-                            valueText: root.fmt(todModel.starIntensity)
+                            valueText: root.fmt(root.todModel.starIntensity)
                             from: 0; to: 3
-                            boundValue: todModel.starIntensity
-                            onMoved: v => todModel.starIntensity = v
+                            boundValue: root.todModel.starIntensity
+                            onMoved: v => root.todModel.starIntensity = v
                         }
 
                         Item {
@@ -812,7 +758,7 @@ Rectangle {
                             Text {
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: root.timeLabel(todModel.siderealTimeHours)
+                                text: root.timeLabel(root.todModel.siderealTimeHours)
                                 color: root.textNormal
                                 font.family: C.Theme.fontFamily
                                 font.pixelSize: 10

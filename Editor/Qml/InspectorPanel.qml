@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
@@ -31,7 +33,6 @@ Rectangle {
     readonly property bool hasEnv: hasClouds || hasWeather || hasOcean
     readonly property bool hasAny: hasLight || hasMesh || hasEnv
 
-    function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
     function fmtCount(n) { return n.toLocaleString(Qt.locale("pt-BR"), 'f', 0) }
 
     // "1.24M TRI" — a contagem exata mora na secao de estatisticas; aqui e so a ordem de
@@ -94,7 +95,7 @@ Rectangle {
                 size: 16
                 color: C.Theme.accent
                 name: root.hasMesh ? "box"
-                    : root.hasLight ? (lightsModel.lightType === 1 ? "cone" : "lightbulb")
+                    : root.hasLight ? (root.lightsModel.lightType === 1 ? "cone" : "lightbulb")
                     : root.hasClouds ? "cloud"
                     : root.hasWeather ? "cloud-rain"
                     : "waves"
@@ -107,8 +108,8 @@ Rectangle {
             anchors.right: identityToggle.left
             anchors.rightMargin: 8
             y: 12
-            text: root.hasMesh ? outlinerModel.meshName
-                : root.hasLight ? lightsModel.name
+            text: root.hasMesh ? root.outlinerModel.meshName
+                : root.hasLight ? root.lightsModel.name
                 : root.hasClouds ? "Nuvens Volumétricas"
                 : root.hasWeather ? "Clima"
                 : "Oceano FFT"
@@ -127,10 +128,10 @@ Rectangle {
             anchors.rightMargin: 8
             y: 32
             text: root.hasMesh
-                    ? (outlinerModel.meshDynamic ? "MESH DINÂMICA · " : "STATIC MESH · ")
-                      + root.shortTris(outlinerModel.meshTris)
+                    ? (root.outlinerModel.meshDynamic ? "MESH DINÂMICA · " : "STATIC MESH · ")
+                      + root.shortTris(root.outlinerModel.meshTris)
                 : root.hasLight
-                    ? (lightsModel.lightType === 1 ? "LUZ SPOT" : "LUZ POINT")
+                    ? (root.lightsModel.lightType === 1 ? "LUZ SPOT" : "LUZ POINT")
                 : "AMBIENTE · TEMPO REAL"
             color: C.Theme.textMuted
             font.family: C.Theme.fontMono
@@ -147,12 +148,12 @@ Rectangle {
             anchors.rightMargin: 12
             anchors.verticalCenter: parent.verticalCenter
             visible: root.hasLight || root.hasClouds
-            checked: root.hasLight ? lightsModel.lightEnabled
-                   : root.hasClouds ? cloudsModel.enabled
+            checked: root.hasLight ? root.lightsModel.lightEnabled
+                   : root.hasClouds ? root.cloudsModel.enabled
                    : false
             onToggled: {
-                if (root.hasLight) lightsModel.lightEnabled = !checked
-                else if (root.hasClouds) cloudsModel.SetEnabled(!cloudsModel.enabled)
+                if (root.hasLight) root.lightsModel.lightEnabled = !checked
+                else if (root.hasClouds) root.cloudsModel.SetEnabled(!root.cloudsModel.enabled)
             }
         }
     }
@@ -200,23 +201,23 @@ Rectangle {
                 visible: root.hasMesh
                 label: "Posição"
                 decimals: 3
-                xValue: outlinerModel.meshPosX
-                yValue: outlinerModel.meshPosY
-                zValue: outlinerModel.meshPosZ
-                onXCommitted: (v) => outlinerModel.meshPosX = v
-                onYCommitted: (v) => outlinerModel.meshPosY = v
-                onZCommitted: (v) => outlinerModel.meshPosZ = v
+                xValue: root.outlinerModel.meshPosX
+                yValue: root.outlinerModel.meshPosY
+                zValue: root.outlinerModel.meshPosZ
+                onXCommitted: (v) => root.outlinerModel.meshPosX = v
+                onYCommitted: (v) => root.outlinerModel.meshPosY = v
+                onZCommitted: (v) => root.outlinerModel.meshPosZ = v
             }
             VectorRow {
                 visible: root.hasMesh
                 label: "Rotação"
                 decimals: 1
-                xValue: outlinerModel.meshRotX
-                yValue: outlinerModel.meshRotY
-                zValue: outlinerModel.meshRotZ
-                onXCommitted: (v) => outlinerModel.meshRotX = v
-                onYCommitted: (v) => outlinerModel.meshRotY = v
-                onZCommitted: (v) => outlinerModel.meshRotZ = v
+                xValue: root.outlinerModel.meshRotX
+                yValue: root.outlinerModel.meshRotY
+                zValue: root.outlinerModel.meshRotZ
+                onXCommitted: (v) => root.outlinerModel.meshRotX = v
+                onYCommitted: (v) => root.outlinerModel.meshRotY = v
+                onZCommitted: (v) => root.outlinerModel.meshRotZ = v
             }
             VectorRow {
                 visible: root.hasMesh
@@ -224,29 +225,29 @@ Rectangle {
                 decimals: 2
                 tinted: false        // escala nao tem convencao de cor por eixo
                 showLink: true
-                linked: outlinerModel.meshScaleLocked
-                xValue: outlinerModel.meshScaleX
-                yValue: outlinerModel.meshScaleY
-                zValue: outlinerModel.meshScaleZ
-                onLinkToggled: outlinerModel.meshScaleLocked = !outlinerModel.meshScaleLocked
-                onXCommitted: (v) => outlinerModel.meshScaleX = v
-                onYCommitted: (v) => outlinerModel.meshScaleY = v
-                onZCommitted: (v) => outlinerModel.meshScaleZ = v
+                linked: root.outlinerModel.meshScaleLocked
+                xValue: root.outlinerModel.meshScaleX
+                yValue: root.outlinerModel.meshScaleY
+                zValue: root.outlinerModel.meshScaleZ
+                onLinkToggled: root.outlinerModel.meshScaleLocked = !root.outlinerModel.meshScaleLocked
+                onXCommitted: (v) => root.outlinerModel.meshScaleX = v
+                onYCommitted: (v) => root.outlinerModel.meshScaleY = v
+                onZCommitted: (v) => root.outlinerModel.meshScaleZ = v
             }
 
             SectionHeader {
-                visible: root.hasMesh && outlinerModel.meshMaterial !== ""
+                visible: root.hasMesh && root.outlinerModel.meshMaterial !== ""
                 label: "MATERIAL"
             }
             Item {
-                visible: root.hasMesh && outlinerModel.meshMaterial !== ""
+                visible: root.hasMesh && root.outlinerModel.meshMaterial !== ""
                 width: parent.width
                 height: 26
                 Text {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    text: outlinerModel.meshMaterial
+                    text: root.outlinerModel.meshMaterial
                     color: C.Theme.textPrimary
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 12
@@ -255,15 +256,16 @@ Rectangle {
             }
             // Flags do material (folhagem/two-sided/masked/translucido) em chips mono.
             Flow {
-                visible: root.hasMesh && outlinerModel.meshFlags.length > 0
+                visible: root.hasMesh && root.outlinerModel.meshFlags.length > 0
                 width: parent.width
                 topPadding: 4
                 bottomPadding: 4
                 spacing: 5
                 Repeater {
-                    model: root.hasMesh ? outlinerModel.meshFlags : []
-                    delegate: Rectangle {
-                        required property string modelData
+                     model: root.hasMesh ? root.outlinerModel.meshFlags : []
+                     delegate: Rectangle {
+                         id: flagChip
+                         required property string modelData
                         width: flagText.implicitWidth + 14
                         height: 18
                         radius: C.Theme.radiusChip
@@ -273,7 +275,7 @@ Rectangle {
                         Text {
                             id: flagText
                             anchors.centerIn: parent
-                            text: modelData
+                             text: flagChip.modelData
                             color: C.Theme.textSecondary
                             font.family: C.Theme.fontMono
                             font.pixelSize: 9
@@ -290,32 +292,32 @@ Rectangle {
             SwitchRow {
                 visible: root.hasMesh
                 label: "Dinâmico"
-                hint: outlinerModel.meshDynamic ? "sombra redesenhada" : "sombra cacheada"
-                checked: outlinerModel.meshDynamic
-                onToggled: outlinerModel.meshDynamic = !outlinerModel.meshDynamic
+                hint: root.outlinerModel.meshDynamic ? "sombra redesenhada" : "sombra cacheada"
+                checked: root.outlinerModel.meshDynamic
+                onToggled: root.outlinerModel.meshDynamic = !root.outlinerModel.meshDynamic
             }
             SwitchRow {
                 visible: root.hasMesh
                 label: "Visível"
-                checked: outlinerModel.meshVisible
+                checked: root.outlinerModel.meshVisible
                 onToggled: {
-                    var r = outlinerModel.selectedRowIndex()
-                    if (r >= 0) outlinerModel.toggleEye(r)
+                    var r = root.outlinerModel.selectedRowIndex()
+                    if (r >= 0) root.outlinerModel.toggleEye(r)
                 }
             }
 
             SectionHeader { visible: root.hasMesh; label: "ESTATÍSTICAS" }
             StatRow {
                 visible: root.hasMesh
-                label: "Triângulos"; value: root.fmtCount(outlinerModel.meshTris)
+                label: "Triângulos"; value: root.fmtCount(root.outlinerModel.meshTris)
             }
             StatRow {
                 visible: root.hasMesh
-                label: "Vértices"; value: root.fmtCount(outlinerModel.meshVerts)
+                label: "Vértices"; value: root.fmtCount(root.outlinerModel.meshVerts)
             }
             StatRow {
                 visible: root.hasMesh
-                label: "VRAM geometria"; value: outlinerModel.meshVramText
+                label: "VRAM geometria"; value: root.outlinerModel.meshVramText
             }
 
             Text {

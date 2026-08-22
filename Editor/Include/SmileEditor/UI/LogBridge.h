@@ -53,6 +53,7 @@ namespace SmileEditor {
         QHash<int, QByteArray> roleNames() const override;
 
         // Acoes do menu (⋮) do console, chamadas pelo QML.
+        Q_INVOKABLE int MatchCount(const QString& level, const QString& search) const;
         Q_INVOKABLE void CopyAll() const;  // copia todo o log (texto plano) pro clipboard
         Q_INVOKABLE void RequestClose();   // pede o fechamento do dock (emite CloseRequested)
 

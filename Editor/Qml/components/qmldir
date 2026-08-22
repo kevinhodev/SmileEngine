@@ -14,6 +14,8 @@ PairedScrubRow 1.0 PairedScrubRow.qml
 StepperRow 1.0 StepperRow.qml
 Chip 1.0 Chip.qml
 ColorRow 1.0 ColorRow.qml
+HsvColorPicker 1.0 HsvColorPicker.qml
+FramelessTitleBar 1.0 FramelessTitleBar.qml
 ToolTip 1.0 ToolTip.qml
 ToolbarIcon 1.0 ToolbarIcon.qml
 ToolbarButton 1.0 ToolbarButton.qml

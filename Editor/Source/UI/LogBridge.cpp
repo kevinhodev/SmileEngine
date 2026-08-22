@@ -161,6 +161,19 @@ namespace SmileEditor {
         }
     }
 
+    int LogBridge::MatchCount(const QString& _Level, const QString& _Search) const {
+        const QString Search = _Search.trimmed();
+        int Matches = 0;
+        for (const Entry& E : Entries) {
+            if (!_Level.isEmpty() && E.Tag != _Level) continue;
+            if (!Search.isEmpty()
+                && !E.Tag.contains(Search, Qt::CaseInsensitive)
+                && !E.Message.contains(Search, Qt::CaseInsensitive)) continue;
+            ++Matches;
+        }
+        return Matches;
+    }
+
     void LogBridge::Clear() {
         Q_ASSERT(QThread::currentThread() == thread());
 

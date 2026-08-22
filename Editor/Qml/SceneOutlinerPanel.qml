@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
@@ -120,7 +122,7 @@ Rectangle {
         id: chip
         property string label
         property int value: 0
-        readonly property bool active: outlinerModel.filter === value
+        readonly property bool active: root.outlinerModel.filter === value
         width: chipText.implicitWidth + 22
         height: 22
         radius: C.Theme.radiusChip
@@ -140,7 +142,7 @@ Rectangle {
             renderTypeQuality: Text.HighRenderTypeQuality
         }
         HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: outlinerModel.filter = chip.value }
+        TapHandler { onTapped: root.outlinerModel.filter = chip.value }
     }
 
     // Botao "+ POINT" / "+ SPOT" do header do grupo Luzes: rotulo em mono e caixa alta,
@@ -182,7 +184,7 @@ Rectangle {
         id: header
         anchors.left: parent.left; anchors.right: parent.right
         title: "CENA"
-        detail: outlinerModel.totalCount > 0 ? root.fmtCount(outlinerModel.totalCount) : ""
+        detail: root.outlinerModel.totalCount > 0 ? root.fmtCount(root.outlinerModel.totalCount) : ""
         actions: Component {
             Row {
                 spacing: 2
@@ -190,20 +192,20 @@ Rectangle {
                 Item {
                     id: saveBtn
                     width: 24; height: 24
-                    opacity: lightsModel.hasSceneFile ? 1.0 : 0.35
+                    opacity: root.lightsModel.hasSceneFile ? 1.0 : 0.35
                     Rectangle {
                         anchors.fill: parent; radius: C.Theme.radiusChip
-                        color: saveHover.hovered && lightsModel.hasSceneFile
+                        color: saveHover.hovered && root.lightsModel.hasSceneFile
                                ? C.Theme.surfaceRaised : "transparent"
                     }
                     LucideIcon {
                         anchors.centerIn: parent
                         name: "save"; size: 14
-                        color: saveHover.hovered && lightsModel.hasSceneFile
+                        color: saveHover.hovered && root.lightsModel.hasSceneFile
                                ? C.Theme.textPrimary : C.Theme.textSecondary
                     }
                     Rectangle {
-                        visible: lightsModel.dirty || outlinerModel.dirty
+                        visible: root.sceneDoc.dirty || root.lightsModel.dirty || root.outlinerModel.dirty
                         x: 15; y: 2
                         width: 7; height: 7; radius: 3.5
                         color: C.Theme.accent
@@ -212,27 +214,27 @@ Rectangle {
                     }
                     HoverHandler {
                         id: saveHover
-                        cursorShape: lightsModel.hasSceneFile ? Qt.PointingHandCursor
+                        cursorShape: root.lightsModel.hasSceneFile ? Qt.PointingHandCursor
                                                               : Qt.ArrowCursor
                     }
                     TapHandler {
-                        enabled: lightsModel.hasSceneFile
+                        enabled: root.lightsModel.hasSceneFile
                         onTapped: {
-                            lightsModel.saveLights()
-                            outlinerModel.saveVisibility()
-                            sceneDoc.save()
+                            root.lightsModel.saveLights()
+                            root.outlinerModel.saveVisibility()
+                            root.sceneDoc.save()
                         }
                     }
                     ToolTip.visible: saveHover.hovered
                     ToolTip.delay: 600
-                    ToolTip.text: lightsModel.hasSceneFile
+                    ToolTip.text: root.lightsModel.hasSceneFile
                                   ? "Salvar cena (<cena>.smap) + luzes"
                                   : "Carregue uma cena para salvar"
                 }
                 IconButton {
                     icon: "x"
                     tip: "Fechar painel"
-                    onClicked: outlinerModel.closePanel()
+                    onClicked: root.outlinerModel.closePanel()
                 }
             }
         }
@@ -267,7 +269,7 @@ Rectangle {
             font.pixelSize: 11
             selectByMouse: true
             selectionColor: C.Theme.accentBorder
-            onTextEdited: outlinerModel.search = text
+            onTextEdited: root.outlinerModel.search = text
             Text {
                 anchors.fill: parent
                 verticalAlignment: Text.AlignVCenter
@@ -298,7 +300,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             visible: searchInput.text !== ""
             icon: "x"
-            onClicked: { searchInput.text = ""; outlinerModel.search = "" }
+            onClicked: { searchInput.text = ""; root.outlinerModel.search = "" }
         }
     }
 
@@ -331,14 +333,14 @@ Rectangle {
         anchors.left: parent.left; anchors.right: parent.right
         anchors.bottom: footer.top
         anchors.topMargin: 14
-        opacity: outlinerModel.available ? 1.0 : 0.45
+        opacity: root.outlinerModel.available ? 1.0 : 0.45
 
         // estado vazio
         Text {
             anchors.centerIn: parent
             width: parent.width - 48
             visible: tree.count === 0
-            text: outlinerModel.search !== ""
+            text: root.outlinerModel.search !== ""
                   ? "Nada na cena casa com a busca."
                   : "Carregue uma cena (Ctrl+O) para povoar o outliner."
             color: C.Theme.textMuted
@@ -353,7 +355,7 @@ Rectangle {
             id: tree
             anchors.fill: parent
             clip: true
-            model: outlinerModel
+            model: root.outlinerModel
             boundsBehavior: Flickable.StopAtBounds
             reuseItems: true
             ScrollBar.vertical: ThinScrollBar {}
@@ -370,7 +372,7 @@ Rectangle {
                     tree.positionViewAtIndex(row, ListView.Contain)
                 })
             }
-            Component.onCompleted: outlinerModel.ScrollToRequested.connect(tree.scrollToRow)
+            Component.onCompleted: root.outlinerModel.ScrollToRequested.connect(tree.scrollToRow)
 
             delegate: Rectangle {
                 id: rowItem
@@ -400,9 +402,9 @@ Rectangle {
                 readonly property bool isSelectedLightsGroup: isGroup && sceneIdx === 1
                 // olho: ambiente liga nos toggles reais (bindings vivos); luz/mesh/pasta
                 // usam o estado da linha (Enabled da luz / Visible do renderable)
-                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? cloudsModel.enabled
-                                                     : sceneIdx === 2 ? outlinerModel.oceanVisible
-                                                     : sceneIdx === 3 ? outlinerModel.terrainVisible
+                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? root.cloudsModel.enabled
+                                                     : sceneIdx === 2 ? root.outlinerModel.oceanVisible
+                                                     : sceneIdx === 3 ? root.outlinerModel.terrainVisible
                                                      : true)
                                             : rowEnabled
                 readonly property bool dimmed: hasEye && !eyeOn
@@ -523,13 +525,13 @@ Rectangle {
                         visible: rowItem.isGroup && rowItem.sceneIdx === 1
                         anchors.verticalCenter: parent.verticalCenter
                         label: "+ POINT"
-                        onClicked: lightsModel.addLight(0)
+                        onClicked: root.lightsModel.addLight(0)
                     }
                     AddLightChip {
                         visible: rowItem.isGroup && rowItem.sceneIdx === 1
                         anchors.verticalCenter: parent.verticalCenter
                         label: "+ SPOT"
-                        onClicked: lightsModel.addLight(1)
+                        onClicked: root.lightsModel.addLight(1)
                     }
 
                     // acoes de luz no hover
@@ -537,14 +539,14 @@ Rectangle {
                         visible: rowItem.isLight && rowHover.hovered
                         anchors.verticalCenter: parent.verticalCenter
                         icon: "copy"; tip: "Duplicar"
-                        onClicked: lightsModel.duplicateLight(rowItem.sceneIdx)
+                        onClicked: root.lightsModel.duplicateLight(rowItem.sceneIdx)
                     }
                     IconButton {
                         visible: rowItem.isLight && rowHover.hovered
                         anchors.verticalCenter: parent.verticalCenter
                         icon: "trash-2"; tip: "Remover"
                         hoverTint: C.Theme.error
-                        onClicked: lightsModel.removeLight(rowItem.sceneIdx)
+                        onClicked: root.lightsModel.removeLight(rowItem.sceneIdx)
                     }
 
                     // acoes de mesh no hover. Selecionam a linha antes de agir: as duas acoes
@@ -555,8 +557,8 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         icon: "copy"; tip: "Duplicar"
                         onClicked: {
-                            outlinerModel.selectRow(rowItem.index)
-                            outlinerModel.duplicateSelectedMesh()
+                            root.outlinerModel.selectRow(rowItem.index)
+                            root.outlinerModel.duplicateSelectedMesh()
                         }
                     }
                     IconButton {
@@ -565,8 +567,8 @@ Rectangle {
                         icon: "trash-2"; tip: "Remover"
                         hoverTint: C.Theme.error
                         onClicked: {
-                            outlinerModel.selectRow(rowItem.index)
-                            outlinerModel.deleteSelectedMesh()
+                            root.outlinerModel.selectRow(rowItem.index)
+                            root.outlinerModel.deleteSelectedMesh()
                         }
                     }
 
@@ -583,15 +585,15 @@ Rectangle {
                            : "Mostrar/ocultar o terreno"
                         onClicked: {
                             if (rowItem.isLight)
-                                lightsModel.toggleLightEnabled(rowItem.sceneIdx)
+                                root.lightsModel.toggleLightEnabled(rowItem.sceneIdx)
                             else if (rowItem.isMesh || rowItem.isAsset)
-                                outlinerModel.toggleEye(rowItem.index)
+                                root.outlinerModel.toggleEye(rowItem.index)
                             else if (rowItem.sceneIdx === 1)
-                                cloudsModel.SetEnabled(!cloudsModel.enabled)
+                                root.cloudsModel.SetEnabled(!root.cloudsModel.enabled)
                             else if (rowItem.sceneIdx === 2)
-                                outlinerModel.oceanVisible = !outlinerModel.oceanVisible
+                                root.outlinerModel.oceanVisible = !root.outlinerModel.oceanVisible
                             else if (rowItem.sceneIdx === 3)
-                                outlinerModel.terrainVisible = !outlinerModel.terrainVisible
+                                root.outlinerModel.terrainVisible = !root.outlinerModel.terrainVisible
                         }
                     }
                 }
@@ -609,20 +611,20 @@ Rectangle {
                     onTapped: (ep) => {
                         if (ep.position.x >= rightActions.x) return
                         root.forceActiveFocus() // atalhos de teclado voltam pro painel
-                        if (rowItem.isMore)            outlinerModel.showMore(rowItem.index)
-                        else if (rowItem.isBranch)     outlinerModel.toggleExpand(rowItem.index)
+                        if (rowItem.isMore)            root.outlinerModel.showMore(rowItem.index)
+                        else if (rowItem.isBranch)     root.outlinerModel.toggleExpand(rowItem.index)
                         else if (rowItem.isEnv &&
                                  (rowItem.sceneIdx === 1 || rowItem.sceneIdx === 2
                                   || rowItem.sceneIdx === 4))
-                                                         outlinerModel.selectRow(rowItem.index)
-                        else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
-                        else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
+                                                         root.outlinerModel.selectRow(rowItem.index)
+                        else if (rowItem.isLight)      root.lightsModel.selectLight(rowItem.sceneIdx)
+                        else if (rowItem.isMesh)       root.outlinerModel.selectRow(rowItem.index)
                     }
                     // duplo-clique enquadra a camera no objeto (estilo tecla F da UE)
                     onDoubleTapped: (ep) => {
                         if (ep.position.x >= rightActions.x) return
                         if (rowItem.isLight || rowItem.isMesh)
-                            outlinerModel.focusRow(rowItem.index)
+                            root.outlinerModel.focusRow(rowItem.index)
                     }
                 }
             }
@@ -644,11 +646,11 @@ Rectangle {
             x: 16
             anchors.verticalCenter: parent.verticalCenter
             text: {
-                var t = root.fmtCount(outlinerModel.totalCount) + " objetos"
-                if (outlinerModel.selectedCount > 0)
-                    t += " · " + outlinerModel.selectedCount + " selecionado"
-                if (outlinerModel.hiddenCount > 0)
-                    t += " · " + outlinerModel.hiddenCount + " ocultos"
+                var t = root.fmtCount(root.outlinerModel.totalCount) + " objetos"
+                if (root.outlinerModel.selectedCount > 0)
+                    t += " · " + root.outlinerModel.selectedCount + " selecionado"
+                if (root.outlinerModel.hiddenCount > 0)
+                    t += " · " + root.outlinerModel.hiddenCount + " ocultos"
                 return t
             }
             color: C.Theme.textMuted

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import ".." as UI
@@ -50,158 +52,13 @@ Column {
     // ---- Cor ----
     C.SectionHeader { label: "COR" }
 
-    // Picker HSV: quadrado SV + barra de matiz + presets.
-    Item {
-        id: picker
+    C.HsvColorPicker {
         width: parent.width
-        height: 146
-
-        property real hue: 0
-        property real sat: 0
-        property real val: 1
-        property bool syncing: false
-
-        function syncFromModel() {
-            var c = root.lightsModel.color
-            syncing = true
-            hue = c.hsvHue >= 0 ? c.hsvHue : hue // -1 = acromatico: preserva o matiz
-            sat = c.hsvSaturation
-            val = c.hsvValue
-            syncing = false
-        }
-        function push() {
-            if (!syncing) root.lightsModel.color = Qt.hsva(hue, sat, val, 1.0)
-        }
-        // Conexoes imperativas: os sinais SelectionChanged/LightChanged (maiuscula) nao casam
-        // com handlers declarativos de Connections — sem isto o picker nao re-sincroniza ao
-        // trocar de luz (bug latente herdado do LightsPanel).
-        Component.onCompleted: {
-            syncFromModel()
-            root.lightsModel.SelectionChanged.connect(picker.syncFromModel)
-            root.lightsModel.LightChanged.connect(function() {
-                if (!svDrag.active && !hueDrag.active) picker.syncFromModel()
-            })
-        }
-
-        // quadrado SV
-        Rectangle {
-            id: svBox
-            x: 0; y: 0
-            width: parent.width - 32
-            height: 108
-            radius: C.Theme.radiusControl
-            clip: true
-            border.color: C.Theme.hairline
-            border.width: 1
-            gradient: Gradient {
-                orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: "#ffffff" }
-                GradientStop { position: 1.0; color: Qt.hsva(picker.hue, 1, 1, 1) }
-            }
-            Rectangle {
-                anchors.fill: parent
-                radius: C.Theme.radiusControl
-                gradient: Gradient {
-                    GradientStop { position: 0.0; color: "transparent" }
-                    GradientStop { position: 1.0; color: "#000000" }
-                }
-            }
-            // cursor S/V
-            Rectangle {
-                x: picker.sat * (svBox.width - 1) - width / 2
-                y: (1 - picker.val) * (svBox.height - 1) - height / 2
-                width: 13; height: 13; radius: 6.5
-                color: "transparent"
-                border.color: picker.val > 0.55 && picker.sat < 0.5 ? "#00000090" : "#ffffffd0"
-                border.width: 2
-            }
-            MouseArea {
-                id: svDrag
-                property bool active: pressed
-                anchors.fill: parent
-                cursorShape: Qt.CrossCursor
-                function apply(mx, my) {
-                    picker.sat = Math.max(0, Math.min(1, mx / (width - 1)))
-                    picker.val = 1 - Math.max(0, Math.min(1, my / (height - 1)))
-                    picker.push()
-                }
-                onPressed: (e) => apply(e.x, e.y)
-                onPositionChanged: (e) => { if (pressed) apply(e.x, e.y) }
-            }
-        }
-
-        // barra de matiz (vertical, ao lado do quadrado)
-        Rectangle {
-            id: hueBar
-            anchors.right: parent.right
-            y: 0
-            width: 22
-            height: 108
-            radius: C.Theme.radiusControl
-            clip: true
-            border.color: C.Theme.hairline
-            border.width: 1
-            gradient: Gradient {
-                GradientStop { position: 0.000; color: "#ff0000" }
-                GradientStop { position: 0.167; color: "#ffff00" }
-                GradientStop { position: 0.333; color: "#00ff00" }
-                GradientStop { position: 0.500; color: "#00ffff" }
-                GradientStop { position: 0.667; color: "#0000ff" }
-                GradientStop { position: 0.833; color: "#ff00ff" }
-                GradientStop { position: 1.000; color: "#ff0000" }
-            }
-            Rectangle {
-                x: 1
-                y: picker.hue * (hueBar.height - 5) + 1
-                width: parent.width - 2
-                height: 4
-                radius: 2
-                color: "transparent"
-                border.color: "#ffffffd0"
-                border.width: 1.5
-            }
-            MouseArea {
-                id: hueDrag
-                property bool active: pressed
-                anchors.fill: parent
-                function apply(my) {
-                    picker.hue = Math.max(0, Math.min(1, my / (height - 1)))
-                    picker.push()
-                }
-                onPressed: (e) => apply(e.y)
-                onPositionChanged: (e) => { if (pressed) apply(e.y) }
-            }
-        }
-
-        // preview + presets
-        Row {
-            y: 118
-            spacing: 6
-            Rectangle {
-                width: 40; height: 20; radius: C.Theme.radiusChip
-                color: Qt.hsva(picker.hue, picker.sat, picker.val, 1)
-                border.color: C.Theme.hairlineStrong
-                border.width: 1
-            }
-            Repeater {
-                model: ["#ffffff", "#ffd9a0", "#ffb066", "#ff6a4d",
-                        "#cfe0ff", "#8fd0ff", "#8dff9c", "#d08bff"]
-                delegate: Rectangle {
-                    required property string modelData
-                    width: 20; height: 20; radius: C.Theme.radiusChip
-                    color: modelData
-                    border.color: Qt.darker(color, 1.5)
-                    border.width: 1
-                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    TapHandler {
-                        onTapped: {
-                            root.lightsModel.color = modelData
-                            picker.syncFromModel()
-                        }
-                    }
-                }
-            }
-        }
+        fieldHeight: 108
+        value: root.lightsModel.color
+        presets: ["#ffffff", "#ffd9a0", "#ffb066", "#ff6a4d",
+                  "#cfe0ff", "#8fd0ff", "#8dff9c", "#d08bff"]
+        onPushed: value => root.lightsModel.color = value
     }
 
     // ---- Emissao ----

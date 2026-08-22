@@ -96,10 +96,8 @@ Rectangle {
         return green
     }
 
-    component WindowButton: C.WindowButton {}
-
     component Card: Rectangle {
-        radius: 9
+        radius: C.Theme.radiusCard
         color: root.cardBg
         border.color: root.borderColor
         border.width: 1
@@ -120,99 +118,18 @@ Rectangle {
         }
     }
 
-    // Barra de titulo: arraste do sistema + controles da janela sem moldura.
-    Item {
+    C.FramelessTitleBar {
         id: titleBar
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         height: 48
-
-        Rectangle {
-            x: 18
-            anchors.verticalCenter: parent.verticalCenter
-            width: 12
-            height: 12
-            radius: 3
-            color: "#24344d"
-            border.color: root.blue
-            border.width: 1
-
-            Rectangle {
-                x: 2.25; y: 5
-                width: 1.5; height: 4
-                radius: 0.75
-                color: "#79adff"
-            }
-            Rectangle {
-                x: 5.25; y: 2
-                width: 1.5; height: 7
-                radius: 0.75
-                color: "#79adff"
-            }
-            Rectangle {
-                x: 8.25; y: 7
-                width: 1.5; height: 2
-                radius: 0.75
-                color: "#79adff"
-            }
-        }
-
-        Text {
-            id: titleText
-            x: 42
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Mini Profiler"
-            color: root.textPrimary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 14
-            font.weight: Font.DemiBold
-        }
-
-        Text {
-            anchors.right: windowButtons.left
-            anchors.rightMargin: 14
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.min(250, implicitWidth)
-            text: statsModel.gpuName
-            horizontalAlignment: Text.AlignRight
-            elide: Text.ElideRight
-            color: root.textMuted
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-        }
-
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: windowButtons.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            property bool moving: false
-            onPressed: moving = false
-            onPositionChanged: {
-                if (pressed && !moving) {
-                    moving = true
-                    statsWindow.startSystemMove()
-                }
-            }
-            onReleased: moving = false
-        }
-
-        Row {
-            id: windowButtons
-            anchors.right: parent.right
-            anchors.top: parent.top
-            WindowButton { glyph: "−"; onTapped: statsWindow.minimize() }
-            WindowButton { glyph: "×"; danger: true; onTapped: statsWindow.close() }
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: root.divider
-        }
+        windowBridge: root.statsWindow
+        title: "Mini Profiler"
+        subtitle: root.statsModel.gpuName
+        iconName: "stats"
+        iconColor: root.blue
+        showMaximize: false
     }
 
     Flickable {
@@ -260,7 +177,7 @@ Rectangle {
                     }
                     Text {
                         x: 16; y: 37
-                        text: statsModel.gpuFrameText
+                        text: root.statsModel.gpuFrameText
                         color: root.textPrimary
                         font.family: C.Theme.fontMono
                         font.pixelSize: 26
@@ -270,22 +187,22 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 16
                         y: 46
-                        text: statsModel.gpuFrameMs > 0
-                              ? (1000.0 / statsModel.gpuFrameMs).toFixed(0) + " FPS GPU"
+                        text: root.statsModel.gpuFrameMs > 0
+                              ? (1000.0 / root.statsModel.gpuFrameMs).toFixed(0) + " FPS GPU"
                               : "— FPS GPU"
-                        color: statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
+                        color: root.statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
                         font.family: C.Theme.fontMono
                         font.pixelSize: 11
                     }
                     MicroBar {
                         x: 16; y: 82
                         width: parent.width - 32
-                        value: statsModel.gpuFrameMs / 16.67
-                        fillColor: statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
+                        value: root.statsModel.gpuFrameMs / 16.67
+                        fillColor: root.statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
                     }
                     Text {
                         x: 16; y: 99
-                        text: "CPU  " + root.formatMs(statsModel.frameTimeMs)
+                        text: "CPU  " + root.formatMs(root.statsModel.frameTimeMs)
                         color: root.textSecondary
                         font.family: C.Theme.fontMono
                         font.pixelSize: 10
@@ -294,10 +211,10 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 16
                         y: 99
-                        text: statsModel.gpuFrameMs <= 16.67
-                              ? "+" + root.formatMs(16.67 - statsModel.gpuFrameMs) + " livres"
-                              : root.formatMs(statsModel.gpuFrameMs - 16.67) + " acima"
-                        color: statsModel.gpuFrameMs <= 16.67 ? root.textMuted : root.warn
+                        text: root.statsModel.gpuFrameMs <= 16.67
+                              ? "+" + root.formatMs(16.67 - root.statsModel.gpuFrameMs) + " livres"
+                              : root.formatMs(root.statsModel.gpuFrameMs - 16.67) + " acima"
+                        color: root.statsModel.gpuFrameMs <= 16.67 ? root.textMuted : root.warn
                         font.family: C.Theme.fontMono
                         font.pixelSize: 10
                     }
@@ -318,8 +235,8 @@ Rectangle {
                     }
                     Text {
                         x: 16; y: 37
-                        text: statsModel.vramUsageText
-                        color: statsModel.vramOverBudget ? root.warn : root.blue
+                        text: root.statsModel.vramUsageText
+                        color: root.statsModel.vramOverBudget ? root.warn : root.blue
                         font.family: C.Theme.fontMono
                         font.pixelSize: 24
                         font.weight: Font.DemiBold
@@ -331,13 +248,13 @@ Rectangle {
                         width: budgetLabel.implicitWidth + 16
                         height: 22
                         radius: 11
-                        color: statsModel.vramOverBudget ? "#36251d" : C.Theme.blueBg
-                        border.color: statsModel.vramOverBudget ? root.warn : C.Theme.blueBorder
+                        color: root.statsModel.vramOverBudget ? "#36251d" : C.Theme.blueBg
+                        border.color: root.statsModel.vramOverBudget ? root.warn : C.Theme.blueBorder
                         Text {
                             id: budgetLabel
                             anchors.centerIn: parent
-                            text: Math.round(statsModel.vramBudgetFrac * 100) + "% DO BUDGET"
-                            color: statsModel.vramOverBudget ? root.warn : root.blue
+                            text: Math.round(root.statsModel.vramBudgetFrac * 100) + "% DO BUDGET"
+                            color: root.statsModel.vramOverBudget ? root.warn : root.blue
                             font.family: C.Theme.fontMono
                             font.pixelSize: 9
                             font.weight: Font.DemiBold
@@ -346,18 +263,18 @@ Rectangle {
                     MicroBar {
                         x: 16; y: 82
                         width: parent.width - 32
-                        value: statsModel.vramBudgetFrac
-                        fillColor: statsModel.vramOverBudget || statsModel.vramBudgetFrac > 0.85
+                        value: root.statsModel.vramBudgetFrac
+                        fillColor: root.statsModel.vramOverBudget || root.statsModel.vramBudgetFrac > 0.85
                                    ? root.warn : root.blue
                     }
                     Text {
                         x: 16; y: 101
                         width: parent.width - 32
-                        text: statsModel.vramOverBudget
+                        text: root.statsModel.vramOverBudget
                               ? "Acima do budget do OS — possível paginação para RAM"
-                              : "Budget dinâmico do OS  ·  GPU com " + statsModel.vramText + " dedicados"
+                              : "Budget dinâmico do OS  ·  GPU com " + root.statsModel.vramText + " dedicados"
                         elide: Text.ElideRight
-                        color: statsModel.vramOverBudget ? root.warn : root.textMuted
+                        color: root.statsModel.vramOverBudget ? root.warn : root.textMuted
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 10
                     }
@@ -395,7 +312,7 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 16
                         y: 17
-                        text: statsModel.gpuFrameText
+                        text: root.statsModel.gpuFrameText
                         color: root.textSecondary
                         font.family: C.Theme.fontMono
                         font.pixelSize: 10
@@ -632,7 +549,7 @@ Rectangle {
                             spacing: 8
 
                             Repeater {
-                                model: statsModel.vramBreakdown
+                                model: root.statsModel.vramBreakdown
                                 delegate: Item {
                                     id: vramRow
                                     required property var modelData
@@ -760,7 +677,7 @@ Rectangle {
                             }
 
                             Text {
-                                visible: statsModel.vramBreakdown.length === 0
+                                visible: root.statsModel.vramBreakdown.length === 0
                                 height: visible ? 28 : 0
                                 text: "Sem dados — carregue uma cena."
                                 color: root.textMuted
@@ -790,20 +707,21 @@ Rectangle {
 
                             Repeater {
                                 model: [
-                                    { label: "Render interno", value: statsModel.internalResolution },
-                                    { label: "Saída", value: statsModel.outputResolution },
-                                    { label: "Draws visíveis", value: statsModel.visibleDrawCount + " / " + statsModel.totalDrawCount },
-                                    { label: "Ocultados (HZB)", value: statsModel.occludedDrawCount },
-                                    { label: "RAM compartilhada", value: statsModel.vramNonLocalText }
-                                ]
-                                delegate: Item {
-                                    required property var modelData
+                                    { label: "Render interno", value: root.statsModel.internalResolution },
+                                    { label: "Saída", value: root.statsModel.outputResolution },
+                                    { label: "Draws visíveis", value: root.statsModel.visibleDrawCount + " / " + root.statsModel.totalDrawCount },
+                                    { label: "Ocultados (HZB)", value: root.statsModel.occludedDrawCount },
+                                    { label: "RAM compartilhada", value: root.statsModel.vramNonLocalText }
+                                 ]
+                                 delegate: Item {
+                                     id: summaryRow
+                                     required property var modelData
                                     width: parent.width
                                     height: 27
                                     Text {
                                         anchors.left: parent.left
                                         anchors.verticalCenter: parent.verticalCenter
-                                        text: modelData.label
+                                         text: summaryRow.modelData.label
                                         color: root.textMuted
                                         font.family: C.Theme.fontFamily
                                         font.pixelSize: 9
@@ -811,7 +729,7 @@ Rectangle {
                                     Text {
                                         anchors.right: parent.right
                                         anchors.verticalCenter: parent.verticalCenter
-                                        text: modelData.value
+                                         text: summaryRow.modelData.value
                                         color: root.textNormal
                                         font.family: C.Theme.fontMono
                                         font.pixelSize: 9
@@ -834,7 +752,7 @@ Rectangle {
                     Card {
                         width: parent.width
                         height: 270
-                        visible: statsModel.shadowCascades.length > 0
+                        visible: root.statsModel.shadowCascades.length > 0
 
                         Text {
                             x: 16; y: 15
@@ -860,7 +778,7 @@ Rectangle {
                             spacing: 0
 
                             Repeater {
-                                model: statsModel.shadowCascades
+                                model: root.statsModel.shadowCascades
                                 // Duas linhas por cascata: a de cima é a medida (quanto desenha,
                                 // com que frequência), a de baixo é o diagnóstico (o que cada
                                 // filtro cortou e quanto o fit andou). Numa linha só o

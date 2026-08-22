@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
 // Scrollbar fina e arredondada do editor, estados conforme a folha de referencia.
 // Reaproveitavel em qualquer painel QML: `ScrollBar.vertical: ThinScrollBar { revealed: ... }`.
@@ -22,17 +23,17 @@ ScrollBar {
         implicitWidth: control.thickness
         implicitHeight: control.thickness
         radius: width / 2 // pill (~4px na espessura padrao)
-        color: !control.enabled ? "#2E3136"
-             :  control.pressed  ? "#4A4E55"
-             :  control.hovered  ? "#7A808A"
-             :                     "#5C5F66"
+        color: !control.enabled ? C.Theme.textDisabled
+             :  control.pressed  ? C.Theme.textNormal
+             :  control.hovered  ? C.Theme.textSecondary
+             :                     C.Theme.textMuted
         opacity: control.shown ? 1.0 : 0.0
         Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutQuad } }
         Behavior on color   { ColorAnimation  { duration: 120 } }
     }
 
     background: Rectangle {
-        color: "#1A1A1D"
+        color: C.Theme.surface
         radius: width / 2
         opacity: control.shown ? 0.9 : 0.0
         Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutQuad } }

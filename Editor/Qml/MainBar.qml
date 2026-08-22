@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import QtQuick.Controls
 import "components" as C
 
 // Barra superior unificada (titulo + janela) 100% QML, no conceito Signal Graphite:
@@ -12,7 +13,7 @@ import "components" as C
 //  - `menuBridge`   (MenuBridge):    acoes dos menus.
 //  - `sceneDoc`     (SceneDocument): nome da cena e dirty state do breadcrumb.
 //  - `mcpModel`     (McpBridge):     estado do canal do SmileMCP.
-//  - `statusModel`  (StatusBridge):  FPS do chip de telemetria.
+//  - `statusModel`  (StatusBridge):  mensagem transiente do editor.
 // `image://smilelogo/<px>` e o logo.
 //
 // A barra reporta ao bridge a sua altura e os retangulos interativos (menus e botoes) -> o
@@ -140,56 +141,79 @@ Rectangle {
         property bool moving: false
         onPressed: moving = false
         onPositionChanged: {
-            if (pressed && !moving) { moving = true; windowBridge.startSystemMove() }
+            if (pressed && !moving) { moving = true; bar.windowBridge.startSystemMove() }
         }
         onReleased: moving = false
-        onDoubleClicked: windowBridge.toggleMaximize()
+        onDoubleClicked: bar.windowBridge.toggleMaximize()
     }
 
     // ---- Breadcrumb da cena (centro) ----
     // O ponto accent e o dirty state: mesma linguagem do ponto no botao de salvar do outliner.
     Rectangle {
         id: breadcrumb
-        anchors.centerIn: parent
-        visible: sceneDoc.available
-        width: Math.min(breadcrumbRow.implicitWidth + 32, bar.width * 0.34)
+        readonly property real availableWidth: Math.max(
+            0, rightChips.x - (menuBar.x + menuBar.width) - 24)
+        readonly property real naturalWidth: 6 + folderLabel.implicitWidth
+            + sceneLabel.implicitWidth + (dirtyLabel.visible ? dirtyLabel.implicitWidth + 8 : 0)
+            + 24 + 16
+
+        x: Math.max(
+            menuBar.x + menuBar.width + 12,
+            Math.min((bar.width - width) / 2, rightChips.x - width - 12))
+        anchors.verticalCenter: parent.verticalCenter
+        visible: bar.sceneDoc.available && availableWidth >= 120
+        width: Math.min(naturalWidth, bar.width * 0.34, availableWidth)
         height: 26
         radius: C.Theme.radiusControl
         color: C.Theme.surface
         border.color: C.Theme.hairline
         border.width: 1
+        clip: true
 
         Row {
             id: breadcrumbRow
-            anchors.centerIn: parent
+            anchors.fill: parent
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
             spacing: 8
+
+            readonly property real textWidth: Math.max(
+                0, width - (dirtyLabel.visible ? dirtyLabel.width : 0)
+                   - 6 - spacing * (dirtyLabel.visible ? 3 : 2))
 
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 6; height: 6; radius: 3
-                color: sceneDoc.dirty ? C.Theme.accent : C.Theme.textMuted
+                color: bar.sceneDoc.dirty ? C.Theme.accent : C.Theme.textMuted
             }
             Text {
+                id: folderLabel
                 anchors.verticalCenter: parent.verticalCenter
-                text: sceneDoc.sceneFolder + " /"
+                width: breadcrumbRow.textWidth * 0.45
+                text: bar.sceneDoc.sceneFolder + " /"
                 color: C.Theme.textMuted
                 font.family: C.Theme.fontMono
                 font.pixelSize: 11
+                elide: Text.ElideMiddle
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
             }
             Text {
+                id: sceneLabel
                 anchors.verticalCenter: parent.verticalCenter
-                text: sceneDoc.sceneName
+                width: breadcrumbRow.textWidth * 0.55
+                text: bar.sceneDoc.sceneName
                 color: C.Theme.textPrimary
                 font.family: C.Theme.fontMono
                 font.pixelSize: 11
+                elide: Text.ElideMiddle
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
             }
             Text {
+                id: dirtyLabel
                 anchors.verticalCenter: parent.verticalCenter
-                visible: sceneDoc.dirty
+                visible: bar.sceneDoc.dirty
                 text: "modificado"
                 color: C.Theme.textMuted
                 font.family: C.Theme.fontMono
@@ -208,9 +232,9 @@ Rectangle {
 
         DataChip {
             anchors.verticalCenter: parent.verticalCenter
-            visible: statusModel.message !== ""
+            visible: bar.statusModel.message !== ""
             dotColor: C.Theme.amber
-            text: statusModel.message
+            text: bar.statusModel.message
             textColor: C.Theme.textSecondary
             maxTextWidth: 220
         }
@@ -219,8 +243,8 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             // Verde = agente conectado, ambar = ouvindo sem cliente, muted = pipe nao subiu.
             // Papel semantico fixo: o accent nunca entra aqui, ele e so selecao/ativo/dirty.
-            dotColor: !mcpModel.listening ? C.Theme.textMuted
-                    : mcpModel.clientCount > 0 ? C.Theme.green
+            dotColor: !bar.mcpModel.listening ? C.Theme.textMuted
+                    : bar.mcpModel.clientCount > 0 ? C.Theme.green
                     : C.Theme.amber
             text: "MCP"
         }
@@ -229,14 +253,14 @@ Rectangle {
     Row {
         id: winButtons
         anchors { right: parent.right; top: parent.top }
-        WinButton { icon: "minus"; onClicked: windowBridge.minimize() }
+        WinButton { icon: "minus"; onClicked: bar.windowBridge.minimize() }
         WinButton {
-            icon: windowBridge.maximized ? "restore" : "square"
-            onClicked: windowBridge.toggleMaximize()
+            icon: bar.windowBridge.maximized ? "restore" : "square"
+            onClicked: bar.windowBridge.toggleMaximize()
         }
         WinButton {
             icon: "x"; hoverColor: "#C42B1C"
-            onClicked: windowBridge.close()
+            onClicked: bar.windowBridge.close()
         }
     }
 

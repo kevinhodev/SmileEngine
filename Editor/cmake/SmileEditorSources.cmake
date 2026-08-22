@@ -164,6 +164,8 @@ smile_editor_assets("UI\\QML\\Shared"
     Qml/components/BipolarSliderRow.qml
     Qml/components/Chip.qml
     Qml/components/ColorRow.qml
+    Qml/components/HsvColorPicker.qml
+    Qml/components/FramelessTitleBar.qml
     Qml/components/DockPanelHeader.qml
     Qml/components/InspectorSectionHeader.qml
     Qml/components/PairedScrubRow.qml

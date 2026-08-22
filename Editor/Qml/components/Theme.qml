@@ -1,33 +1,16 @@
 pragma Singleton
 import QtQuick
 
-// Paleta unica do editor — conceito "Signal Graphite" (Docs/Design/EditorRedesign).
-// Fonte de verdade dos componentes compartilhados e dos paines/janelas: antes cada .qml
-// carregava a propria copia e elas ja tinham divergido. Mudou aqui, mudou em todo lugar.
-//
-// A direcao e grafite NEUTRO (sem tint quente), hairline de 1 px como elemento de identidade
-// e um unico accent vivo — laranja-sinal — reservado a selecao, estado ativo e dirty state.
+// Tokens do conceito Signal Graphite (Docs/Design/EditorRedesign): grafite neutro,
+// hairlines de 1 px e accent laranja reservado a selecao, estado ativo e dirty.
 // Cores semanticas tem papel FIXO e nunca usam o accent: ambar = luz, azul = info/GPU,
 // verde = pronto/ok, vermelho = erro.
 QtObject {
     // ---- Tipografia ----
-    // Familia unica da UI. Inter (SIL OFL) vem empacotada em Editor/Fonts e e registrada no
-    // boot pelo main.cpp; se o registro falhar, o Qt cai na familia do sistema sozinho.
+    // Inter e registrada no boot a partir de Editor/Fonts.
     readonly property string fontFamily: "Inter"
 
-    // Mono e identidade do conceito, nao so "digito de largura fixa": vale para TODO dado —
-    // numeros, coordenadas, timestamps, metricas, atalhos e contadores.
-    //
-    // A resolucao e feita AQUI, uma vez, e nao por fallback do Qt: o value type `font` do QML
-    // expoe `family` (string unica) e nao `families`, entao nao ha como declarar uma cadeia de
-    // preferencia no ponto de uso — uma familia ausente cairia direto na sans do sistema, que
-    // e o pior resultado possivel para uma coluna de numeros. `Qt.fontFamilies()` lista o que
-    // esta instalado; pegamos a primeira da nossa ordem que exista.
-    //
-    // A JetBrains Mono e a preferida do conceito mas nao vem com o Windows nem esta empacotada
-    // em Editor/Fonts; hoje isto resolve para a Cascadia Mono. Basta soltar o .ttf da JetBrains
-    // em Editor/Fonts (o main.cpp registra tudo que estiver la no boot) para o editor passar a
-    // usa-la sem tocar em nenhum call site.
+    // Dados numericos, coordenadas, atalhos e metricas usam a primeira mono disponivel.
     readonly property var monoFamilies: ["JetBrains Mono", "Cascadia Mono", "Consolas"]
     readonly property string fontMono: {
         const Available = Qt.fontFamilies()
@@ -47,15 +30,10 @@ QtObject {
     readonly property color hairlineStrong: "#333338"  // fio de separacao forte
 
     // ---- Texto ----
-    // O conceito trabalha com tres tiers (principal/secundario/muted). `textNormal` fica no
-    // meio deles porque a base de codigo ja distingue quatro niveis; remove-lo achataria a
-    // hierarquia das janelas que ainda nao passaram pelo redesign.
-    // Tres papeis fixos no Inspector, e e a distancia entre eles que faz a secao se ler:
+    // Papeis fixos no Inspector:
     //   textSecondary -> CABECALHO de secao (mono, caixa alta, 10 px)
     //   textMuted     -> ROTULO de propriedade (sans, 11 px)
     //   textPrimary   -> VALOR (mono nos numeros, sans nos nomes)
-    // Rotulo e cabecalho no mesmo tier empatam e a secao perde o inicio — foi o que
-    // aconteceu com ESTATISTICAS antes de os rotulos descerem para textMuted.
     readonly property color textPrimary: "#F2F2F0"
     readonly property color textNormal: "#C9C9CF"
     readonly property color textSecondary: "#A0A0A8"
@@ -90,8 +68,7 @@ QtObject {
     readonly property color axisY: "#46D68C"
     readonly property color axisZ: "#6FA8FF"
 
-    // ---- Compatibilidade ----
-    // Nomes herdados, ainda usados pelas janelas que nao passaram pelo redesign.
+    // ---- Aliases de superficie ----
     readonly property color bg: shell
     readonly property color windowBorder: hairlineStrong
     readonly property color cardBg: surface

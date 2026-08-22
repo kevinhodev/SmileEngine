@@ -1,27 +1,21 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Janela de configuracoes do editor. A pagina de Renderizacao esta funcional; as demais
-// categorias preservam a estrutura da referencia e recebem conteudo nas proximas iteracoes.
+// Janela de configuracoes do editor. Renderizacao, iluminacao global e sombras/ceu usam
+// RenderSettingsBridge; as demais categorias preservam a estrutura para conexao posterior.
 Rectangle {
     id: root
     required property var viewportModel
-    // Knobs de render (RenderSettingsBridge). Separado do viewportModel, que segue dono do
-    // view mode, do visualizador de debug e da telemetria.
     required property var renderModel
-    // Bookmarks de camera (CameraBookmarksBridge). Como as demais, TEM de ser declarada aqui: a
-    // propriedade injetada pelo CreateQmlPanel so chega ao QML por esta porta. Sem a declaracao
-    // ela fica undefined, e todo binding e todo clique falham em silencio — sem erro visivel,
-    // porque um handler que chama metodo de undefined so aborta aquele handler.
     required property var cameraBookmarks
-    // Captura determinística (CaptureBridge). Mesma regra da de cima — sem esta linha o botão de
-    // capturar não faz nada e não diz nada.
     required property var capture
     required property var settingsWindow
 
-    color: "#141511"
-    border.color: "#2e2f28"
+    color: C.Theme.shell
+    border.color: C.Theme.hairlineStrong
     border.width: 1
     implicitWidth: 960
     implicitHeight: 640
@@ -30,9 +24,9 @@ Rectangle {
     property string searchText: ""
 
     readonly property color bg: C.Theme.bg
-    readonly property color sidebarBg: "#10110f"
+    readonly property color sidebarBg: C.Theme.shell
     readonly property color cardBg: C.Theme.cardBg
-    readonly property color hoverBg: "#22231c"
+    readonly property color hoverBg: C.Theme.surfaceRaised
     readonly property color borderColor: C.Theme.borderColor
     readonly property color divider: C.Theme.divider
     readonly property color textPrimary: C.Theme.textPrimary
@@ -42,6 +36,9 @@ Rectangle {
     readonly property color blue: C.Theme.blue
     readonly property color blueBg: C.Theme.blueBg
     readonly property color blueBorder: C.Theme.blueBorder
+    readonly property color accent: C.Theme.accent
+    readonly property color accentBg: C.Theme.accentBg
+    readonly property color accentBorder: C.Theme.accentBorder
     readonly property color green: C.Theme.green
     // Cores de acento dos vendors, usadas so nas marcas tipograficas dos upscalers.
     readonly property color amdRed: "#e8483c"
@@ -71,7 +68,6 @@ Rectangle {
     }
 
     // ---- Componentes compartilhados (Editor/Qml/components) ----
-    component WindowButton: C.WindowButton {}
     component Toggle: C.Toggle {}
     // Segmentado por chips. Escolhido em vez de um ShadowSlider com rótulo por posição, que é o
     // padrão desta página para os outros enums: primário e fallback NÃO são escala de qualidade —
@@ -105,7 +101,7 @@ Rectangle {
             anchors.right: parent.right
             y: -2
             width: 62; height: 20; radius: 4
-            color: "#23241d"
+            color: C.Theme.surfaceRaised
             border.color: root.borderColor
             Text {
                 anchors.centerIn: parent
@@ -137,7 +133,7 @@ Rectangle {
                 width: sctl.availableWidth
                 height: 4
                 radius: 2
-                color: "#23241d"
+                color: C.Theme.surfaceRaised
                 Rectangle {
                     width: sctl.visualPosition * parent.width
                     height: parent.height
@@ -173,23 +169,24 @@ Rectangle {
 
         width: 216
         height: 30
-        radius: 6
+        radius: C.Theme.radiusControl
         visible: root.matchesSearch(label)
-        color: root.selectedPage === page ? root.blueBg : (navHover.hovered ? "#1a1b15" : "transparent")
-        border.color: root.selectedPage === page ? root.blueBorder : "transparent"
+        color: root.selectedPage === page ? root.accentBg
+                                          : (navHover.hovered ? C.Theme.surface : "transparent")
+        border.color: root.selectedPage === page ? root.accentBorder : "transparent"
         border.width: 1
 
         Rectangle {
             visible: root.selectedPage === nav.page
             x: 0; y: 4
             width: 3; height: 22; radius: 1.5
-            color: root.blue
+            color: root.accent
         }
         Text {
             x: 12
             anchors.verticalCenter: parent.verticalCenter
             text: nav.glyph
-            color: root.selectedPage === nav.page ? root.blue : "#8f8a7d"
+            color: root.selectedPage === nav.page ? root.accent : root.textMuted
             font.family: "Segoe UI Symbol"
             font.pixelSize: 14
         }
@@ -198,7 +195,7 @@ Rectangle {
             x: 34
             anchors.verticalCenter: parent.verticalCenter
             text: nav.label
-            color: root.selectedPage === nav.page ? root.textPrimary : "#b9b5aa"
+            color: root.selectedPage === nav.page ? root.textPrimary : root.textSecondary
             font.family: C.Theme.fontFamily
             font.pixelSize: 12
         }
@@ -229,8 +226,8 @@ Rectangle {
         width: abtnText.implicitWidth + 26
         height: 26
         radius: 6
-        color: abtnHover.hovered ? "#23241d" : "transparent"
-        border.color: "#33342c"
+        color: abtnHover.hovered ? C.Theme.surfaceRaised : "transparent"
+        border.color: C.Theme.hairlineStrong
         border.width: 1
         Text {
             id: abtnText
@@ -255,19 +252,19 @@ Rectangle {
         signal chosen()
 
         height: 48
-        radius: 6
-        color: option.selected ? root.blueBg
+        radius: C.Theme.radiusCard
+        color: option.selected ? root.accentBg
                                : (optionHover.hovered && option.available ? root.hoverBg : "transparent")
-        border.color: option.selected ? root.blueBorder : "transparent"
+        border.color: option.selected ? root.accentBorder : "transparent"
         border.width: 1
         opacity: option.available ? 1.0 : 0.46
 
         Rectangle {
             x: 8
             anchors.verticalCenter: parent.verticalCenter
-            width: 30; height: 30; radius: 7
-            color: option.selected ? "#243651" : "#292b24"
-            border.color: option.selected ? "#345681" : "#36382f"
+            width: 30; height: 30; radius: C.Theme.radiusControl
+            color: option.selected ? C.Theme.accentBgStrong : C.Theme.surfaceRaised
+            border.color: option.selected ? C.Theme.accentBorder : C.Theme.hairlineStrong
             clip: true
             Text {
                 anchors.centerIn: parent
@@ -291,7 +288,7 @@ Rectangle {
                 anchors.centerIn: parent
                 visible: option.mode === 0
                 text: "1:1"
-                color: option.selected ? root.blue : root.textNormal
+                color: option.selected ? root.accent : root.textNormal
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
@@ -340,7 +337,7 @@ Rectangle {
             anchors.rightMargin: 13
             anchors.verticalCenter: parent.verticalCenter
             text: option.selected ? "✓" : ""
-            color: root.blue
+            color: root.accent
             font.family: "Segoe UI Symbol"
             font.pixelSize: 13
         }
@@ -367,19 +364,19 @@ Rectangle {
         signal chosen()
 
         height: 48
-        radius: 6
-        color: dopt.selected ? root.blueBg
+        radius: C.Theme.radiusCard
+        color: dopt.selected ? root.accentBg
                              : (doptHover.hovered && dopt.available ? root.hoverBg : "transparent")
-        border.color: dopt.selected ? root.blueBorder : "transparent"
+        border.color: dopt.selected ? root.accentBorder : "transparent"
         border.width: 1
         opacity: dopt.available ? 1.0 : 0.46
 
         Rectangle {
             x: 8
             anchors.verticalCenter: parent.verticalCenter
-            width: 30; height: 30; radius: 7
-            color: dopt.selected ? "#243651" : "#292b24"
-            border.color: dopt.selected ? "#345681" : "#36382f"
+            width: 30; height: 30; radius: C.Theme.radiusControl
+            color: dopt.selected ? C.Theme.accentBgStrong : C.Theme.surfaceRaised
+            border.color: dopt.selected ? C.Theme.accentBorder : C.Theme.hairlineStrong
             clip: true
             Text {
                 anchors.centerIn: parent
@@ -413,7 +410,7 @@ Rectangle {
             anchors.rightMargin: 13
             anchors.verticalCenter: parent.verticalCenter
             text: dopt.selected ? "✓" : ""
-            color: root.blue
+            color: root.accent
             font.family: "Segoe UI Symbol"
             font.pixelSize: 13
         }
@@ -433,7 +430,7 @@ Rectangle {
         property string title
         readonly property int headerHeight: 40
         readonly property int contentPadding: 16
-        radius: 8
+        radius: C.Theme.radiusCard
         color: root.cardBg
         border.color: root.borderColor
         border.width: 1
@@ -493,69 +490,15 @@ Rectangle {
         }
     }
 
-    // Barra de titulo.
-    Rectangle {
+    C.FramelessTitleBar {
         id: titleBar
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         height: 40
-        color: root.bg
-
-        Image {
-            x: 16
-            anchors.verticalCenter: parent.verticalCenter
-            source: "image://smilelogo/32"
-            sourceSize: Qt.size(32, 32)
-            width: 20; height: 20
-            fillMode: Image.PreserveAspectFit
-            smooth: true
-        }
-        Text {
-            x: 42
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Configurações — SmileEngine"
-            color: root.textNormal
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 12
-        }
-
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: windowButtons.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            property bool moving: false
-            onPressed: moving = false
-            onPositionChanged: {
-                if (pressed && !moving) {
-                    moving = true
-                    settingsWindow.startSystemMove()
-                }
-            }
-            onReleased: moving = false
-            onDoubleClicked: settingsWindow.toggleMaximize()
-        }
-
-        Row {
-            id: windowButtons
-            anchors.right: parent.right
-            anchors.top: parent.top
-            WindowButton { glyph: "−"; onTapped: settingsWindow.minimize() }
-            WindowButton {
-                glyph: settingsWindow.maximized ? "❐" : "□"
-                onTapped: settingsWindow.toggleMaximize()
-            }
-            WindowButton { glyph: "×"; danger: true; onTapped: settingsWindow.close() }
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: root.divider
-        }
+        windowBridge: root.settingsWindow
+        title: "Configurações — SmileEngine"
+        iconSource: "image://smilelogo/32"
     }
 
     // Sidebar.
@@ -570,7 +513,7 @@ Rectangle {
         Rectangle {
             x: 12; y: 16
             width: 216; height: 30; radius: 6
-            color: "#1a1b15"
+            color: C.Theme.surface
             border.color: root.borderColor
             border.width: 1
             Text {
@@ -591,7 +534,7 @@ Rectangle {
                 placeholderTextColor: root.textMuted
                 color: root.textNormal
                 selectionColor: root.blue
-                selectedTextColor: "#10110f"
+                selectedTextColor: C.Theme.shell
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
                 background: null
@@ -637,7 +580,7 @@ Rectangle {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 12
             width: 216; height: 52; radius: 8
-            color: "#1a1b15"
+            color: C.Theme.surface
             border.color: root.borderColor
             border.width: 1
             Text {
@@ -704,14 +647,14 @@ Rectangle {
             width: Math.min(220, gpuLabel.implicitWidth + 28)
             height: 22
             radius: 11
-            color: "#1a1b15"
+            color: C.Theme.surface
             border.color: root.borderColor
             border.width: 1
             Text {
                 id: gpuLabel
                 anchors.centerIn: parent
                 width: parent.width - 20
-                text: viewportModel.gpuName + " · DX12"
+                text: root.viewportModel.gpuName + " · DX12"
                 color: root.textSecondary
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignHCenter
@@ -723,16 +666,20 @@ Rectangle {
         // Duas colunas empilhadas por Column (mesmo padrao dos paineis graficos, adaptado
         // p/ 2 colunas): nenhum card sabe seu proprio y, entao mudar/ocultar conteudo reflui tudo
         // sozinho. O contentHeight segue a coluna mais alta, entao o scroll sempre alcanca o fim.
-        Flickable {
-            id: renderingPage
-            visible: root.selectedPage === 0
+        Loader {
+            id: renderingLoader
             anchors.fill: parent
             anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: Math.max(renderingLeftCol.height, renderingRightCol.height) + 40
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: renderingPageHover.hovered }
-            HoverHandler { id: renderingPageHover }
+            active: root.selectedPage === 0
+            sourceComponent: Component {
+                Flickable {
+                    id: renderingPage
+                    anchors.fill: parent
+                    contentWidth: width
+                    contentHeight: Math.max(renderingLeftCol.height, renderingRightCol.height) + 40
+                    clip: true
+                    ScrollBar.vertical: ThinScrollBar { revealed: renderingPageHover.hovered }
+                    HoverHandler { id: renderingPageHover }
 
             readonly property int rightW: 180
             readonly property int gap: 16
@@ -776,7 +723,7 @@ Rectangle {
                     width: parent.width - 40
                     height: 44
                     radius: 7
-                    color: "#23241d"
+                    color: C.Theme.surfaceRaised
                     border.color: upscalerPopup.opened || upscalerHover.hovered
                                   ? root.blueBorder : root.borderColor
                     border.width: 1
@@ -792,7 +739,7 @@ Rectangle {
                         // corta (o banner do FSR era 300 KB recortado por sourceClipRect).
                         Text {
                             anchors.centerIn: parent
-                            visible: renderModel.upscalerMode === 1
+                            visible: root.renderModel.upscalerMode === 1
                             text: "FSR"
                             color: root.amdRed
                             font.family: C.Theme.fontFamily
@@ -801,7 +748,7 @@ Rectangle {
                         }
                         Text {
                             anchors.centerIn: parent
-                            visible: renderModel.upscalerMode === 2
+                            visible: root.renderModel.upscalerMode === 2
                             text: "DLSS"
                             color: root.nvidiaGreen
                             font.family: C.Theme.fontFamily
@@ -810,7 +757,7 @@ Rectangle {
                         }
                         Text {
                             anchors.centerIn: parent
-                            visible: renderModel.upscalerMode === 0
+                            visible: root.renderModel.upscalerMode === 0
                             text: "1:1"
                             color: root.textNormal
                             font.family: C.Theme.fontFamily
@@ -820,9 +767,9 @@ Rectangle {
                     }
                     Text {
                         x: 49; y: 7
-                        text: renderModel.upscalerMode === 2
+                        text: root.renderModel.upscalerMode === 2
                               ? "NVIDIA DLSS"
-                              : renderModel.upscalerMode === 1
+                              : root.renderModel.upscalerMode === 1
                                 ? "AMD FidelityFX Super Resolution"
                                 : "Sem upscaling"
                         color: root.textPrimary
@@ -833,9 +780,9 @@ Rectangle {
                     Text {
                         x: 49; y: 24
                         width: parent.width - 174
-                        text: renderModel.upscalerMode === 2
+                        text: root.renderModel.upscalerMode === 2
                               ? "DLSS · Reconstrução por IA (Super Resolution)"
-                              : renderModel.upscalerMode === 1
+                              : root.renderModel.upscalerMode === 1
                                 ? "FSR 3.1 · Reconstrução Temporal"
                                 : "TAA · Escala Manual de Renderização"
                         color: root.textMuted
@@ -844,7 +791,7 @@ Rectangle {
                         font.pixelSize: 10
                     }
                     Rectangle {
-                        visible: renderModel.upscalerMode === renderModel.recommendedUpscalerMode
+                        visible: root.renderModel.upscalerMode === root.renderModel.recommendedUpscalerMode
                         anchors.right: dropdownArrow.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
@@ -901,7 +848,7 @@ Rectangle {
                     id: techHelper
                     x: 20
                     y: upscalerField.y + upscalerField.height + upscalingCard.gapLabel
-                    text: renderModel.fsrAvailable
+                    text: root.renderModel.fsrAvailable
                           ? "O recomendado é escolhido conforme o hardware e os backends disponíveis."
                           : "FSR 3.1 indisponível; usando o caminho nativo com TAA."
                     color: root.textMuted
@@ -911,7 +858,7 @@ Rectangle {
 
                 Item {
                     id: fsrControls
-                    visible: renderModel.upscalerMode === 1 || renderModel.upscalerMode === 2
+                    visible: root.renderModel.upscalerMode === 1 || root.renderModel.upscalerMode === 2
                     x: 20
                     y: techHelper.y + techHelper.height + upscalingCard.gapSection
                     width: parent.width - 40
@@ -928,7 +875,7 @@ Rectangle {
                         anchors.right: parent.right
                         y: 1
                         // O backend selecionado e quem dita a escala interna — nao e sempre o FSR.
-                        text: (renderModel.upscalerMode === 2 ? "DLSS" : "FSR") +
+                        text: (root.renderModel.upscalerMode === 2 ? "DLSS" : "FSR") +
                               " controla a escala interna"
                         color: root.textMuted
                         font.family: C.Theme.fontFamily
@@ -940,7 +887,7 @@ Rectangle {
                         width: parent.width
                         height: 36
                         radius: 6
-                        color: "#23241d"
+                        color: C.Theme.surfaceRaised
                         border.color: root.borderColor
                         border.width: 1
 
@@ -958,31 +905,33 @@ Rectangle {
                                     { name: "Ultra Perf.", scale: "33%"    }
                                 ]
                                 delegate: Rectangle {
+                                    id: qualityOption
                                     required property var modelData
                                     required property int index
-                                    readonly property bool isCurrent: renderModel.upscalerQuality === index
+                                    readonly property bool isCurrent: root.renderModel.upscalerQuality === index
                                     width: qualitySelector.width / 5
                                     height: qualitySelector.height
                                     radius: 6
-                                    color: isCurrent ? root.blueBg
-                                                     : (qualityHover.hovered ? "#2a2b24" : "transparent")
-                                    border.color: isCurrent ? root.blueBorder : "transparent"
+                                    color: isCurrent ? root.accentBg
+                                                     : (qualityHover.hovered
+                                                        ? C.Theme.surfaceRaised : "transparent")
+                                    border.color: isCurrent ? root.accentBorder : "transparent"
                                     border.width: 1
                                     Column {
                                         anchors.centerIn: parent
                                         spacing: 1
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            text: modelData.name
-                                            color: isCurrent ? root.blue : root.textSecondary
+                                            text: qualityOption.modelData.name
+                                            color: qualityOption.isCurrent ? root.accent : root.textSecondary
                                             font.family: C.Theme.fontFamily
                                             font.pixelSize: 10
                                         }
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            text: modelData.scale
-                                            color: isCurrent ? root.blue : root.textMuted
-                                            opacity: isCurrent ? 0.85 : 1.0
+                                            text: qualityOption.modelData.scale
+                                            color: qualityOption.isCurrent ? C.Theme.accentText : root.textMuted
+                                            opacity: qualityOption.isCurrent ? 0.85 : 1.0
                                             font.family: C.Theme.fontFamily
                                             font.pixelSize: 9
                                         }
@@ -992,7 +941,7 @@ Rectangle {
                                         cursorShape: Qt.PointingHandCursor
                                     }
                                     TapHandler {
-                                        onTapped: renderModel.SetUpscalerQuality(index)
+                                        onTapped: root.renderModel.SetUpscalerQuality(qualityOption.index)
                                     }
                                 }
                             }
@@ -1020,7 +969,7 @@ Rectangle {
                         }
                         Text {
                             x: 29; y: 25
-                            text: viewportModel.internalResolution + "  →  " + viewportModel.outputResolution
+                            text: root.viewportModel.internalResolution + "  →  " + root.viewportModel.outputResolution
                             color: root.textPrimary
                             font.family: C.Theme.fontMono
                             font.pixelSize: 10
@@ -1036,9 +985,9 @@ Rectangle {
                             Text {
                                 id: reductionText
                                 anchors.centerIn: parent
-                                text: renderModel.renderScale < 0.999
-                                      ? "−" + Math.round((1.0 - renderModel.renderScale *
-                                                         renderModel.renderScale) * 100) + "% Pixels"
+                                text: root.renderModel.renderScale < 0.999
+                                      ? "−" + Math.round((1.0 - root.renderModel.renderScale *
+                                                         root.renderModel.renderScale) * 100) + "% Pixels"
                                       : "Resolução Integral"
                                 color: root.green
                                 font.family: C.Theme.fontFamily
@@ -1050,7 +999,7 @@ Rectangle {
 
                 Item {
                     id: nativeControls
-                    visible: renderModel.upscalerMode === 0
+                    visible: root.renderModel.upscalerMode === 0
                     x: 20
                     y: techHelper.y + techHelper.height + upscalingCard.gapSection
                     width: parent.width - 40
@@ -1066,8 +1015,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right
                         y: -3
-                        checked: renderModel.taaEnabled
-                        onToggled: renderModel.SetTAAEnabled(!checked)
+                        checked: root.renderModel.taaEnabled
+                        onToggled: root.renderModel.SetTAAEnabled(!checked)
                     }
                     Rectangle { x: 0; y: 29; width: parent.width; height: 1; color: root.divider }
                     Text {
@@ -1081,11 +1030,11 @@ Rectangle {
                         anchors.right: parent.right
                         y: 33
                         width: 54; height: 22; radius: 4
-                        color: "#23241d"
+                        color: C.Theme.surfaceRaised
                         border.color: root.borderColor
                         Text {
                             anchors.centerIn: parent
-                            text: renderModel.renderScale.toFixed(2).replace(".", ",") + "×"
+                            text: root.renderModel.renderScale.toFixed(2).replace(".", ",") + "×"
                             color: root.textPrimary
                             font.family: C.Theme.fontFamily
                             font.pixelSize: 10
@@ -1099,16 +1048,16 @@ Rectangle {
                         from: 1.0
                         to: 2.0
                         stepSize: 0.05
-                        value: renderModel.renderScale
+                        value: root.renderModel.renderScale
                         onPressedChanged: {
-                            if (!pressed) renderModel.SetRenderScale(value)
+                            if (!pressed) root.renderModel.SetRenderScale(value)
                         }
                         background: Rectangle {
                             x: renderScaleSlider.leftPadding
                             y: renderScaleSlider.topPadding + renderScaleSlider.availableHeight / 2 - height / 2
                             width: renderScaleSlider.availableWidth
                             height: 4; radius: 2
-                            color: "#23241d"
+                            color: C.Theme.surfaceRaised
                             Rectangle {
                                 width: renderScaleSlider.visualPosition * parent.width
                                 height: parent.height
@@ -1150,7 +1099,7 @@ Rectangle {
                     x: 20
                     y: fsrControls.y + fsrControls.height + upscalingCard.gapLabel
                     spacing: 5
-                    visible: renderModel.upscalerMode !== renderModel.recommendedUpscalerMode
+                    visible: root.renderModel.upscalerMode !== root.renderModel.recommendedUpscalerMode
                     Text {
                         text: "Recomendado para esta GPU:"
                         color: root.textMuted
@@ -1159,7 +1108,7 @@ Rectangle {
                     }
                     Text {
                         id: useRecommendedLink
-                        text: "Usar " + renderModel.recommendedUpscalerName
+                        text: "Usar " + root.renderModel.recommendedUpscalerName
                         color: root.blue
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 10
@@ -1169,7 +1118,7 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                         }
                         TapHandler {
-                            onTapped: renderModel.SetUpscalerMode(renderModel.recommendedUpscalerMode)
+                            onTapped: root.renderModel.SetUpscalerMode(root.renderModel.recommendedUpscalerMode)
                         }
                     }
                 }
@@ -1199,10 +1148,10 @@ Rectangle {
                             mode: 0
                             label: "Sem upscaling"
                             detail: "TAA · Escala Manual de 100% a 200% (SSAA)"
-                            selected: renderModel.upscalerMode === 0
-                            badge: renderModel.recommendedUpscalerMode === 0 ? "RECOMENDADO" : ""
+                            selected: root.renderModel.upscalerMode === 0
+                            badge: root.renderModel.recommendedUpscalerMode === 0 ? "RECOMENDADO" : ""
                             onChosen: {
-                                renderModel.SetUpscalerMode(0)
+                                root.renderModel.SetUpscalerMode(0)
                                 upscalerPopup.close()
                             }
                         }
@@ -1213,11 +1162,11 @@ Rectangle {
                             detail: available
                                     ? "FSR 3.1 · Temporal · Compatível com esta GPU"
                                     : "FSR 3.1 não foi Inicializado Neste Dispositivo"
-                            selected: renderModel.upscalerMode === 1
-                            available: renderModel.fsrAvailable
-                            badge: renderModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
+                            selected: root.renderModel.upscalerMode === 1
+                            available: root.renderModel.fsrAvailable
+                            badge: root.renderModel.recommendedUpscalerMode === 1 ? "RECOMENDADO" : ""
                             onChosen: {
-                                renderModel.SetUpscalerMode(1)
+                                root.renderModel.SetUpscalerMode(1)
                                 upscalerPopup.close()
                             }
                         }
@@ -1228,11 +1177,11 @@ Rectangle {
                             detail: available
                                     ? "DLSS · Reconstrução por IA · Requer GPU NVIDIA RTX"
                                     : "DLSS Indisponível (requer GPU NVIDIA RTX)"
-                            selected: renderModel.upscalerMode === 2
-                            available: renderModel.dlssAvailable
-                            badge: renderModel.recommendedUpscalerMode === 2 ? "RECOMENDADO" : ""
+                            selected: root.renderModel.upscalerMode === 2
+                            available: root.renderModel.dlssAvailable
+                            badge: root.renderModel.recommendedUpscalerMode === 2 ? "RECOMENDADO" : ""
                             onChosen: {
-                                renderModel.SetUpscalerMode(2)
+                                root.renderModel.SetUpscalerMode(2)
                                 upscalerPopup.close()
                             }
                         }
@@ -1266,7 +1215,7 @@ Rectangle {
                     width: parent.width - 40
                     height: 44
                     radius: 7
-                    color: "#23241d"
+                    color: C.Theme.surfaceRaised
                     border.color: denoiserPopup.opened || denoiserHover.hovered
                                   ? root.blueBorder : root.borderColor
                     border.width: 1
@@ -1280,19 +1229,19 @@ Rectangle {
                         clip: true
                         Text {
                             anchors.centerIn: parent
-                            text: renderModel.denoiserMode === 2 ? "RR"
-                                  : (renderModel.denoiserMode === 1 ? "NRD" : "OFF")
-                            color: renderModel.denoiserMode === 2 ? root.nvidiaGreen
-                                   : (renderModel.denoiserMode === 1 ? root.textNormal : root.textMuted)
+                            text: root.renderModel.denoiserMode === 2 ? "RR"
+                                  : (root.renderModel.denoiserMode === 1 ? "NRD" : "OFF")
+                            color: root.renderModel.denoiserMode === 2 ? root.nvidiaGreen
+                                   : (root.renderModel.denoiserMode === 1 ? root.textNormal : root.textMuted)
                             font.family: C.Theme.fontFamily
-                            font.pixelSize: renderModel.denoiserMode === 1 ? 8 : 9
+                            font.pixelSize: root.renderModel.denoiserMode === 1 ? 8 : 9
                             font.weight: Font.Bold
                         }
                     }
                     Text {
                         x: 49; y: 7
-                        text: renderModel.denoiserMode === 2 ? "DLSS Ray Reconstruction"
-                              : (renderModel.denoiserMode === 1 ? "NRD RELAX" : "Nenhum")
+                        text: root.renderModel.denoiserMode === 2 ? "DLSS Ray Reconstruction"
+                              : (root.renderModel.denoiserMode === 1 ? "NRD RELAX" : "Nenhum")
                         color: root.textPrimary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 12
@@ -1301,9 +1250,9 @@ Rectangle {
                     Text {
                         x: 49; y: 24
                         width: parent.width - 80
-                        text: renderModel.denoiserMode === 2
+                        text: root.renderModel.denoiserMode === 2
                               ? "Denoiser neural (NVIDIA) · substitui NRD + upscaler"
-                              : (renderModel.denoiserMode === 1
+                              : (root.renderModel.denoiserMode === 1
                                  ? "RELAX · difuso (GI) + especular (reflexão)"
                                  : "GI e reflexão sem denoise (ruidoso)")
                         color: root.textMuted
@@ -1347,7 +1296,7 @@ Rectangle {
                     y: denoiserField.y + denoiserField.height + denoiserCard.gapLabel
                     width: parent.width - 40
                     wrapMode: Text.WordWrap
-                    text: renderModel.rrAvailable
+                    text: root.renderModel.rrAvailable
                           ? "Ray Reconstruction faz denoise e upscale num passo só — ao selecioná-lo, o upscaling fica travado em NVIDIA DLSS."
                           : "DLSS Ray Reconstruction requer GPU NVIDIA RTX; nesta máquina só NRD está disponível."
                     color: root.textMuted
@@ -1376,16 +1325,16 @@ Rectangle {
                             mode: 0
                             label: "Nenhum"
                             detail: "GI e reflexão ruidosos (sem denoise)"
-                            selected: renderModel.denoiserMode === 0
-                            onChosen: { renderModel.SetDenoiserMode(0); denoiserPopup.close() }
+                            selected: root.renderModel.denoiserMode === 0
+                            onChosen: { root.renderModel.SetDenoiserMode(0); denoiserPopup.close() }
                         }
                         DenoiserOption {
                             width: denoiserPopup.availableWidth
                             mode: 1
                             label: "NRD RELAX"
                             detail: "A-trous · difuso (GI) + especular (reflexão)"
-                            selected: renderModel.denoiserMode === 1
-                            onChosen: { renderModel.SetDenoiserMode(1); denoiserPopup.close() }
+                            selected: root.renderModel.denoiserMode === 1
+                            onChosen: { root.renderModel.SetDenoiserMode(1); denoiserPopup.close() }
                         }
                         DenoiserOption {
                             width: denoiserPopup.availableWidth
@@ -1393,9 +1342,9 @@ Rectangle {
                             label: "DLSS Ray Reconstruction"
                             detail: available ? "IA · substitui NRD + upscaler (trava DLSS)"
                                               : "Indisponível (requer GPU NVIDIA RTX)"
-                            selected: renderModel.denoiserMode === 2
-                            available: renderModel.rrAvailable
-                            onChosen: { renderModel.SetDenoiserMode(2); denoiserPopup.close() }
+                            selected: root.renderModel.denoiserMode === 2
+                            available: root.renderModel.rrAvailable
+                            onChosen: { root.renderModel.SetDenoiserMode(2); denoiserPopup.close() }
                         }
                     }
                 }
@@ -1430,8 +1379,8 @@ Rectangle {
                 Toggle {
                     id: prepassToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 50
-                    checked: renderModel.depthPrepassEnabled
-                    onToggled: renderModel.SetDepthPrepassEnabled(!checked)
+                    checked: root.renderModel.depthPrepassEnabled
+                    onToggled: root.renderModel.SetDepthPrepassEnabled(!checked)
                 }
             }
 
@@ -1474,8 +1423,8 @@ Rectangle {
                 Toggle {
                     id: frustumToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 86
-                    checked: renderModel.frustumCullingEnabled
-                    onToggled: renderModel.SetFrustumCullingEnabled(!checked)
+                    checked: root.renderModel.frustumCullingEnabled
+                    onToggled: root.renderModel.SetFrustumCullingEnabled(!checked)
                 }
 
                 Text {
@@ -1498,8 +1447,8 @@ Rectangle {
                 Toggle {
                     id: occlusionToggle
                     anchors.right: parent.right; anchors.rightMargin: 20; y: 114
-                    checked: renderModel.occlusionCullingEnabled
-                    onToggled: renderModel.SetOcclusionCullingEnabled(!checked)
+                    checked: root.renderModel.occlusionCullingEnabled
+                    onToggled: root.renderModel.SetOcclusionCullingEnabled(!checked)
                 }
             }
 
@@ -1518,7 +1467,7 @@ Rectangle {
 
                 Text {
                     x: 16; y: 54
-                    text: Math.round(viewportModel.fps)
+                    text: Math.round(root.viewportModel.fps)
                     color: root.blue
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 28
@@ -1533,39 +1482,39 @@ Rectangle {
                 }
                 Text {
                     x: 16; y: 90
-                    text: viewportModel.frameTimeMs.toFixed(1).replace(".", ",") + " ms por frame"
+                    text: root.viewportModel.frameTimeMs.toFixed(1).replace(".", ",") + " ms por frame"
                     color: root.textSecondary
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Rectangle { x: 0; y: 112; width: parent.width; height: 1; color: root.divider }
-                // So o que reage a ESTA pagina: trocar o preset muda a resolucao interna e o
-                // fps/ms na hora. Saiu a VRAM (era o total ESTATICO do adapter, alem de estar
-                // sob um cabecalho de Ray tracing — a StatsWindow ja mostra a do processo) e
-                // saiu a contagem de draws, que e telemetria geral e nao reage a esta pagina.
-                // NOTA: draws hoje nao aparecem em lugar nenhum; o bridge ainda expoe
-                // visibleDrawCount/occludedDrawCount/totalDrawCount p/ quem for reexibir
-                // (a StatsWindow e o lugar natural — ela so tem VRAM e custo por passe).
+                // Mantem aqui apenas a telemetria que reage aos controles desta pagina.
                 StatusRow {
                     x: 16; y: 121; width: parent.width - 32
                     label: "Res. interna"
-                    value: viewportModel.internalResolution
+                    value: root.viewportModel.internalResolution
                 }
             }
 
             } // renderingRightCol
+                }
+            }
         }
 
-        Flickable {
-            id: shadowsPage
-            visible: root.selectedPage === 5
+        Loader {
+            id: shadowsLoader
             anchors.fill: parent
             anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: shadowsCol.height + 40
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: shadowsPageHover.hovered }
-            HoverHandler { id: shadowsPageHover }
+            active: root.selectedPage === 5
+            sourceComponent: Component {
+                Flickable {
+                    id: shadowsPage
+                    anchors.fill: parent
+                    contentWidth: width
+                    contentHeight: shadowsCol.height + 40
+                    clip: true
+                    ScrollBar.vertical: ThinScrollBar { revealed: shadowsPageHover.hovered }
+                    HoverHandler { id: shadowsPageHover }
 
             // Coluna unica: contentHeight segue a Column.
             // e o scroll sempre alcança o último card
@@ -1598,8 +1547,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: renderModel.sunShadowsEnabled
-                    onToggled: renderModel.SetSunShadowsEnabled(!checked)
+                    checked: root.renderModel.sunShadowsEnabled
+                    onToggled: root.renderModel.SetSunShadowsEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1607,18 +1556,18 @@ Rectangle {
                     width: parent.width - 40
                     label: "Distância máxima"
                     from: 100; to: 3000; step: 50
-                    value: renderModel.shadowMaxDistance
-                    valueText: Math.round(renderModel.shadowMaxDistance) + " m"
-                    onCommitted: (v) => renderModel.SetShadowMaxDistance(v)
+                    value: root.renderModel.shadowMaxDistance
+                    valueText: Math.round(root.renderModel.shadowMaxDistance) + " m"
+                    onCommitted: (v) => root.renderModel.SetShadowMaxDistance(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Bias de profundidade"
                     from: 0; to: 8; step: 0.1
-                    value: renderModel.shadowDepthBias
-                    valueText: renderModel.shadowDepthBias.toFixed(1).replace(".", ",") + " tx"
-                    onCommitted: (v) => renderModel.SetShadowDepthBias(v)
+                    value: root.renderModel.shadowDepthBias
+                    valueText: root.renderModel.shadowDepthBias.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => root.renderModel.SetShadowDepthBias(v)
                 }
                 // Em texels, como o bias — e portanto também 4× maior em metros a cada
                 // cascata. Junto com o bias é o que apaga sombra de contato nas cascatas
@@ -1628,20 +1577,20 @@ Rectangle {
                     width: parent.width - 40
                     label: "Normal offset"
                     from: 0; to: 6; step: 0.1
-                    value: renderModel.shadowNormalOffset
-                    valueText: renderModel.shadowNormalOffset.toFixed(1).replace(".", ",") + " tx"
-                    onCommitted: (v) => renderModel.SetShadowNormalOffset(v)
+                    value: root.renderModel.shadowNormalOffset
+                    valueText: root.renderModel.shadowNormalOffset.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => root.renderModel.SetShadowNormalOffset(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Tamanho angular do sol (PCSS)"
                     from: 0; to: 2.0; step: 0.01
-                    value: renderModel.shadowSunAngle
-                    valueText: renderModel.shadowSunAngle < 0.005
+                    value: root.renderModel.shadowSunAngle
+                    valueText: root.renderModel.shadowSunAngle < 0.005
                                ? "off"
-                               : renderModel.shadowSunAngle.toFixed(2).replace(".", ",") + "°"
-                    onCommitted: (v) => renderModel.SetShadowSunAngle(v)
+                               : root.renderModel.shadowSunAngle.toFixed(2).replace(".", ",") + "°"
+                    onCommitted: (v) => root.renderModel.SetShadowSunAngle(v)
                 }
 
                 Text {
@@ -1662,8 +1611,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 318
-                    checked: renderModel.shadowDebugCascades
-                    onToggled: renderModel.SetShadowDebugCascades(!checked)
+                    checked: root.renderModel.shadowDebugCascades
+                    onToggled: root.renderModel.SetShadowDebugCascades(!checked)
                 }
             }
 
@@ -1690,8 +1639,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: renderModel.sunShaftsEnabled
-                    onToggled: renderModel.SetSunShaftsEnabled(!checked)
+                    checked: root.renderModel.sunShaftsEnabled
+                    onToggled: root.renderModel.SetSunShaftsEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1699,45 +1648,45 @@ Rectangle {
                     width: parent.width - 40
                     label: "Intensidade"
                     from: 0; to: 5.0; step: 0.1
-                    value: renderModel.sunShaftsIntensity
-                    valueText: renderModel.sunShaftsIntensity.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetSunShaftsIntensity(v)
+                    value: root.renderModel.sunShaftsIntensity
+                    valueText: root.renderModel.sunShaftsIntensity.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetSunShaftsIntensity(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Poeira — densidade do feixe"
                     from: 1; to: 64; step: 1
-                    value: renderModel.sunShaftsDust
-                    valueText: "×" + Math.round(renderModel.sunShaftsDust)
-                    onCommitted: (v) => renderModel.SetSunShaftsDust(v)
+                    value: root.renderModel.sunShaftsDust
+                    valueText: "×" + Math.round(root.renderModel.sunShaftsDust)
+                    onCommitted: (v) => root.renderModel.SetSunShaftsDust(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Fase HG (g) — lobo contra a luz"
                     from: 0; to: 0.95; step: 0.01
-                    value: renderModel.sunShaftsPhaseG
-                    valueText: renderModel.sunShaftsPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetSunShaftsPhaseG(v)
+                    value: root.renderModel.sunShaftsPhaseG
+                    valueText: root.renderModel.sunShaftsPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetSunShaftsPhaseG(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Passos do raymarch"
                     from: 8; to: 64; step: 4
-                    value: renderModel.sunShaftsSteps
-                    valueText: renderModel.sunShaftsSteps + ""
-                    onCommitted: (v) => renderModel.SetSunShaftsSteps(v)
+                    value: root.renderModel.sunShaftsSteps
+                    valueText: root.renderModel.sunShaftsSteps + ""
+                    onCommitted: (v) => root.renderModel.SetSunShaftsSteps(v)
                 }
                 ShadowSlider {
                     x: 20; y: 316
                     width: parent.width - 40
                     label: "Alcance da marcha (m)"
                     from: 32; to: 400; step: 8
-                    value: renderModel.sunShaftsRange
-                    valueText: Math.round(renderModel.sunShaftsRange) + " m"
-                    onCommitted: (v) => renderModel.SetSunShaftsRange(v)
+                    value: root.renderModel.sunShaftsRange
+                    valueText: Math.round(root.renderModel.sunShaftsRange) + " m"
+                    onCommitted: (v) => root.renderModel.SetSunShaftsRange(v)
                 }
 
                 Rectangle { x: 20; y: 372; width: parent.width - 40; height: 1; color: root.divider }
@@ -1760,8 +1709,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 389
-                    checked: renderModel.sunShaftsTemporal
-                    onToggled: renderModel.SetSunShaftsTemporal(!checked)
+                    checked: root.renderModel.sunShaftsTemporal
+                    onToggled: root.renderModel.SetSunShaftsTemporal(!checked)
                 }
             }
 
@@ -1788,8 +1737,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: renderModel.volFogEnabled
-                    onToggled: renderModel.SetVolFogEnabled(!checked)
+                    checked: root.renderModel.volFogEnabled
+                    onToggled: root.renderModel.SetVolFogEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1797,45 +1746,45 @@ Rectangle {
                     width: parent.width - 40
                     label: "Alcance do volume (m)"
                     from: 30; to: 300; step: 10
-                    value: renderModel.volFogDistance
-                    valueText: Math.round(renderModel.volFogDistance) + " m"
-                    onCommitted: (v) => renderModel.SetVolFogDistance(v)
+                    value: root.renderModel.volFogDistance
+                    valueText: Math.round(root.renderModel.volFogDistance) + " m"
+                    onCommitted: (v) => root.renderModel.SetVolFogDistance(v)
                 }
                 ShadowSlider {
                     x: 20; y: 160
                     width: parent.width - 40
                     label: "Densidade do volume"
                     from: 0.25; to: 8.0; step: 0.25
-                    value: renderModel.volFogDensity
-                    valueText: "×" + renderModel.volFogDensity.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetVolFogDensity(v)
+                    value: root.renderModel.volFogDensity
+                    valueText: "×" + root.renderModel.volFogDensity.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetVolFogDensity(v)
                 }
                 ShadowSlider {
                     x: 20; y: 212
                     width: parent.width - 40
                     label: "Fase HG (g) — lobo contra a luz"
                     from: 0; to: 0.9; step: 0.05
-                    value: renderModel.volFogPhaseG
-                    valueText: renderModel.volFogPhaseG.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetVolFogPhaseG(v)
+                    value: root.renderModel.volFogPhaseG
+                    valueText: root.renderModel.volFogPhaseG.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetVolFogPhaseG(v)
                 }
                 ShadowSlider {
                     x: 20; y: 264
                     width: parent.width - 40
                     label: "Ambiente (DDGI/céu)"
                     from: 0; to: 4.0; step: 0.1
-                    value: renderModel.volFogAmbient
-                    valueText: "×" + renderModel.volFogAmbient.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetVolFogAmbient(v)
+                    value: root.renderModel.volFogAmbient
+                    valueText: "×" + root.renderModel.volFogAmbient.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetVolFogAmbient(v)
                 }
                 ShadowSlider {
                     x: 20; y: 316
                     width: parent.width - 40
                     label: "Luzes no ar (halo de point/spot)"
                     from: 0; to: 4.0; step: 0.1
-                    value: renderModel.volFogLights
-                    valueText: "×" + renderModel.volFogLights.toFixed(1).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetVolFogLights(v)
+                    value: root.renderModel.volFogLights
+                    valueText: "×" + root.renderModel.volFogLights.toFixed(1).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetVolFogLights(v)
                 }
 
                 Rectangle { x: 20; y: 380; width: parent.width - 40; height: 1; color: root.divider }
@@ -1858,8 +1807,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 397
-                    checked: renderModel.volFogTemporal
-                    onToggled: renderModel.SetVolFogTemporal(!checked)
+                    checked: root.renderModel.volFogTemporal
+                    onToggled: root.renderModel.SetVolFogTemporal(!checked)
                 }
 
                 Text {
@@ -1880,8 +1829,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 447
-                    checked: renderModel.volFogConsDepth
-                    onToggled: renderModel.SetVolFogConsDepth(!checked)
+                    checked: root.renderModel.volFogConsDepth
+                    onToggled: root.renderModel.SetVolFogConsDepth(!checked)
                 }
 
                 Rectangle { x: 20; y: 498; width: parent.width - 40; height: 1; color: root.divider }
@@ -1898,9 +1847,9 @@ Rectangle {
                     width: parent.width - 40
                     label: "0 = cor chapada (antigo) · 1 = cor do céu naquela direção"
                     from: 0; to: 1.0; step: 0.05
-                    value: renderModel.heightFogSkyContribution
-                    valueText: renderModel.heightFogSkyContribution.toFixed(2).replace(".", ",")
-                    onCommitted: (v) => renderModel.SetHeightFogSkyContribution(v)
+                    value: root.renderModel.heightFogSkyContribution
+                    valueText: root.renderModel.heightFogSkyContribution.toFixed(2).replace(".", ",")
+                    onCommitted: (v) => root.renderModel.SetHeightFogSkyContribution(v)
                 }
 
                 Text {
@@ -1921,8 +1870,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 605
-                    checked: renderModel.perPixelAtmoTransmittance
-                    onToggled: renderModel.SetPerPixelAtmoTransmittance(!checked)
+                    checked: root.renderModel.perPixelAtmoTransmittance
+                    onToggled: root.renderModel.SetPerPixelAtmoTransmittance(!checked)
                 }
 
                 Text {
@@ -1943,8 +1892,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 655
-                    checked: renderModel.skyAmbientSH
-                    onToggled: renderModel.SetSkyAmbientSH(!checked)
+                    checked: root.renderModel.skyAmbientSH
+                    onToggled: root.renderModel.SetSkyAmbientSH(!checked)
                 }
             }
 
@@ -1971,8 +1920,8 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.rightMargin: 20
                     y: 54
-                    checked: renderModel.shadowCacheEnabled
-                    onToggled: renderModel.SetShadowCacheEnabled(!checked)
+                    checked: root.renderModel.shadowCacheEnabled
+                    onToggled: root.renderModel.SetShadowCacheEnabled(!checked)
                 }
 
                 ShadowSlider {
@@ -1980,9 +1929,9 @@ Rectangle {
                     width: parent.width - 40
                     label: "Caster mínimo (texels da cascata)"
                     from: 0; to: 8; step: 0.5
-                    value: renderModel.shadowMinCasterTexels
-                    valueText: renderModel.shadowMinCasterTexels.toFixed(1).replace(".", ",") + " tx"
-                    onCommitted: (v) => renderModel.SetShadowMinCasterTexels(v)
+                    value: root.renderModel.shadowMinCasterTexels
+                    valueText: root.renderModel.shadowMinCasterTexels.toFixed(1).replace(".", ",") + " tx"
+                    onCommitted: (v) => root.renderModel.SetShadowMinCasterTexels(v)
                 }
 
                 Text {
@@ -2004,30 +1953,36 @@ Rectangle {
                             width: parent.width
                             label: modelData
                             from: 0.25; to: 4.0; step: 0.05
-                            value: Number(renderModel.shadowCascadeBias[index])
-                            valueText: "×" + Number(renderModel.shadowCascadeBias[index]).toFixed(2).replace(".", ",")
-                            onCommitted: (v) => renderModel.SetShadowCascadeBiasScale(index, v)
+                            value: Number(root.renderModel.shadowCascadeBias[index])
+                            valueText: "×" + Number(root.renderModel.shadowCascadeBias[index]).toFixed(2).replace(".", ",")
+                            onCommitted: (v) => root.renderModel.SetShadowCascadeBiasScale(index, v)
                         }
                     }
                 }
             }
+                }
             }
+        }
         }
 
         // ---- Pagina 1: Iluminacao global ----------------------------------------------------
         // A visão normal mostra só a política operacional. Calibração, diagnóstico e protocolo
         // de captura ficam no laboratório recolhível; continuam na mesma Column para que abrir ou
         // fechar o grupo reflua a página sem coordenadas manuais.
-        Flickable {
-            id: giPage
-            visible: root.selectedPage === 1
+        Loader {
+            id: giLoader
             anchors.fill: parent
             anchors.topMargin: 84
-            contentWidth: width
-            contentHeight: giCol.height + 40
-            clip: true
-            ScrollBar.vertical: ThinScrollBar { revealed: giPageHover.hovered }
-            HoverHandler { id: giPageHover }
+            active: root.selectedPage === 1
+            sourceComponent: Component {
+                Flickable {
+                    id: giPage
+                    anchors.fill: parent
+                    contentWidth: width
+                    contentHeight: giCol.height + 40
+                    clip: true
+                    ScrollBar.vertical: ThinScrollBar { revealed: giPageHover.hovered }
+                    HoverHandler { id: giPageHover }
 
             // SNAPSHOT do model, nao binding direto em renderModel.rayEpsilons. Escrever um
             // epsilon emite GISettingsChanged, o que re-le a propriedade e trocaria a lista do
@@ -2039,12 +1994,11 @@ Rectangle {
             // laboratório em opções que parecem necessárias para configurar uma cena.
             property bool labVisible: false
             function reloadEps() {
-                epsModel = renderModel.rayEpsilons
-                biasMaxSlider.uiValue = renderModel.giSurfaceBiasMax
-                fadeSlider.uiValue    = renderModel.giVolumeFadeProbes
+                epsModel = root.renderModel.rayEpsilons
+                biasMaxSlider.uiValue = root.renderModel.giSurfaceBiasMax
+                fadeSlider.uiValue    = root.renderModel.giVolumeFadeProbes
             }
             Component.onCompleted: reloadEps()
-            onVisibleChanged: if (visible) reloadEps()
 
             Column {
                 id: giCol
@@ -2064,7 +2018,7 @@ Rectangle {
                         y: giOverviewCard.headerHeight + giOverviewCard.contentPadding
                         width: parent.width - 40
                         wrapMode: Text.WordWrap
-                        text: renderModel.indirectPolicySummary
+                        text: root.renderModel.indirectPolicySummary
                         color: root.textNormal
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 12
@@ -2086,18 +2040,18 @@ Rectangle {
                         spacing: 6
                         Chip {
                             label: "ReSTIR + SHaRC"
-                            active: renderModel.indirectPrimary === 0
-                            onTapped: renderModel.SetIndirectPrimary(0)
+                            active: root.renderModel.indirectPrimary === 0
+                            onTapped: root.renderModel.SetIndirectPrimary(0)
                         }
                         Chip {
                             label: "DDGI"
-                            active: renderModel.indirectPrimary === 1
-                            onTapped: renderModel.SetIndirectPrimary(1)
+                            active: root.renderModel.indirectPrimary === 1
+                            onTapped: root.renderModel.SetIndirectPrimary(1)
                         }
                         Chip {
                             label: "Off"
-                            active: renderModel.indirectPrimary === 2
-                            onTapped: renderModel.SetIndirectPrimary(2)
+                            active: root.renderModel.indirectPrimary === 2
+                            onTapped: root.renderModel.SetIndirectPrimary(2)
                         }
                     }
 
@@ -2123,8 +2077,8 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 20
                         y: giDdgiLabel.y - 3
-                        checked: renderModel.ddgiEnabled
-                        onToggled: renderModel.ToggleDDGI()
+                        checked: root.renderModel.ddgiEnabled
+                        onToggled: root.renderModel.ToggleDDGI()
                     }
 
                     Text {
@@ -2149,8 +2103,8 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 20
                         y: giRestirLabel.y - 3
-                        checked: renderModel.restirGIEnabled
-                        onToggled: renderModel.ToggleReSTIRGI()
+                        checked: root.renderModel.restirGIEnabled
+                        onToggled: root.renderModel.ToggleReSTIRGI()
                     }
 
                     Text {
@@ -2158,7 +2112,7 @@ Rectangle {
                         x: 20
                         y: giRestirHint.y + giRestirHint.height + 16
                         text: "ReSTIR GI meia-res"
-                        color: renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
+                        color: root.renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
@@ -2175,9 +2129,9 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 20
                         y: giRestirHalfLabel.y - 3
-                        enabled: renderModel.restirGIEnabled
-                        checked: renderModel.restirGIHalfRes
-                        onToggled: renderModel.ToggleReSTIRGIHalfRes()
+                        enabled: root.renderModel.restirGIEnabled
+                        checked: root.renderModel.restirGIHalfRes
+                        onToggled: root.renderModel.ToggleReSTIRGIHalfRes()
                     }
 
                     StatusRow {
@@ -2186,9 +2140,9 @@ Rectangle {
                         y: giRestirHalfHint.y + giRestirHalfHint.height + 16
                         width: parent.width - 40
                         label: "World radiance cache"
-                        value: !renderModel.radianceCacheEnabled ? "desligado"
-                               : (renderModel.radianceCacheQuery &&
-                                  renderModel.radianceCacheAutoWarmup ? "automático"
+                        value: !root.renderModel.radianceCacheEnabled ? "desligado"
+                               : (root.renderModel.radianceCacheQuery &&
+                                  root.renderModel.radianceCacheAutoWarmup ? "automático"
                                                                      : "configuração manual")
                     }
 
@@ -2261,7 +2215,7 @@ Rectangle {
                                     onCommitted: (v) => knobRow.uiValue = v
                                     onReleased: (v) => {
                                         knobRow.uiValue = v
-                                        renderModel.SetRayEpsilon(knobRow.modelData.key, v)
+                                        root.renderModel.SetRayEpsilon(knobRow.modelData.key, v)
                                     }
                                 }
                                 Text {
@@ -2281,7 +2235,7 @@ Rectangle {
                         Rectangle {
                             id: epsReset
                             width: 148; height: 30; radius: 7
-                            color: epsResetHover.hovered ? "#23241d" : "transparent"
+                            color: epsResetHover.hovered ? C.Theme.surfaceRaised : "transparent"
                             border.color: root.borderColor
                             border.width: 1
                             Text {
@@ -2294,7 +2248,7 @@ Rectangle {
                             HoverHandler { id: epsResetHover }
                             TapHandler {
                                 onTapped: {
-                                    renderModel.ResetRayEpsilons()
+                                    root.renderModel.ResetRayEpsilons()
                                     giPage.reloadEps() // o snapshot nao se atualiza sozinho
                                 }
                             }
@@ -2346,8 +2300,8 @@ Rectangle {
                         id: cullToggle
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: cullLabel.y - 6
-                        checked: renderModel.reflectionsCullBackface
-                        onToggled: renderModel.ToggleReflectionsCullBackface()
+                        checked: root.renderModel.reflectionsCullBackface
+                        onToggled: root.renderModel.ToggleReflectionsCullBackface()
                     }
                 }
 
@@ -2394,8 +2348,8 @@ Rectangle {
                         id: bfToggle
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: bfLabel.y - 6
-                        checked: renderModel.giBackfacePolicy
-                        onToggled: renderModel.ToggleGIBackfacePolicy()
+                        checked: root.renderModel.giBackfacePolicy
+                        onToggled: root.renderModel.ToggleGIBackfacePolicy()
                     }
                 }
 
@@ -2439,8 +2393,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: regirLabel.y - 6
-                        checked: renderModel.reGIREnabled
-                        onToggled: renderModel.ToggleReGIR()
+                        checked: root.renderModel.reGIREnabled
+                        onToggled: root.renderModel.ToggleReGIR()
                     }
                 }
 
@@ -2467,8 +2421,8 @@ Rectangle {
                         spacing: 6
                         Chip {
                             label: "DDGI"
-                            active: renderModel.indirectFallback === 0
-                            onTapped: renderModel.SetIndirectFallback(0)
+                            active: root.renderModel.indirectFallback === 0
+                            onTapped: root.renderModel.SetIndirectFallback(0)
                         }
                         Chip {
                             // `Environment` existe no enum e NÃO tem chip: não há cor de ambiente
@@ -2476,8 +2430,8 @@ Rectangle {
                             // que não muda pixel nenhum seria um controle morto na tela; a intenção
                             // fica nomeada no IndirectPolicy.h, que é onde ela pode ser cumprida.
                             label: "Preto"
-                            active: renderModel.indirectFallback === 2
-                            onTapped: renderModel.SetIndirectFallback(2)
+                            active: root.renderModel.indirectFallback === 2
+                            onTapped: root.renderModel.SetIndirectFallback(2)
                         }
                     }
 
@@ -2558,8 +2512,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcEnabledLabel.y - 6
-                        checked: renderModel.radianceCacheEnabled
-                        onToggled: renderModel.ToggleRadianceCache()
+                        checked: root.renderModel.radianceCacheEnabled
+                        onToggled: root.renderModel.ToggleRadianceCache()
                     }
 
                     Text {
@@ -2567,16 +2521,16 @@ Rectangle {
                         x: 20
                         y: rcEnabledLabel.y + 30
                         text: "Leitura (consulta no hit)"
-                        color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
+                        color: root.renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcQueryLabel.y - 6
-                        enabled: renderModel.radianceCacheEnabled
-                        checked: renderModel.radianceCacheQuery
-                        onToggled: renderModel.ToggleRadianceCacheQuery()
+                        enabled: root.renderModel.radianceCacheEnabled
+                        checked: root.renderModel.radianceCacheQuery
+                        onToggled: root.renderModel.ToggleRadianceCacheQuery()
                     }
 
                     Text {
@@ -2584,16 +2538,16 @@ Rectangle {
                         x: 20
                         y: rcQueryLabel.y + 30
                         text: "Aquecimento automático"
-                        color: renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
+                        color: root.renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcWarmupLabel.y - 6
-                        enabled: renderModel.radianceCacheQuery
-                        checked: renderModel.radianceCacheAutoWarmup
-                        onToggled: renderModel.ToggleRadianceCacheAutoWarmup()
+                        enabled: root.renderModel.radianceCacheQuery
+                        checked: root.renderModel.radianceCacheAutoWarmup
+                        onToggled: root.renderModel.ToggleRadianceCacheAutoWarmup()
                     }
 
                     Text {
@@ -2601,16 +2555,16 @@ Rectangle {
                         x: 20
                         y: rcWarmupLabel.y + 30
                         text: "Instrumentar acerto/erro"
-                        color: renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
+                        color: root.renderModel.radianceCacheQuery ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcStatsLabel.y - 6
-                        enabled: renderModel.radianceCacheQuery
-                        checked: renderModel.radianceCacheStats
-                        onToggled: renderModel.ToggleRadianceCacheStats()
+                        enabled: root.renderModel.radianceCacheQuery
+                        checked: root.renderModel.radianceCacheStats
+                        onToggled: root.renderModel.ToggleRadianceCacheStats()
                     }
 
                     Text {
@@ -2618,16 +2572,16 @@ Rectangle {
                         x: 20
                         y: rcStatsLabel.y + 30
                         text: "Detalhar erros e inserção"
-                        color: renderModel.radianceCacheStats ? root.textNormal : root.textSecondary
+                        color: root.renderModel.radianceCacheStats ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcDetailLabel.y - 6
-                        enabled: renderModel.radianceCacheStats
-                        checked: renderModel.radianceCacheStatsDetail
-                        onToggled: renderModel.ToggleRadianceCacheStatsDetail()
+                        enabled: root.renderModel.radianceCacheStats
+                        checked: root.renderModel.radianceCacheStatsDetail
+                        onToggled: root.renderModel.ToggleRadianceCacheStatsDetail()
                     }
 
                     Text {
@@ -2635,16 +2589,16 @@ Rectangle {
                         x: 20
                         y: rcDetailLabel.y + 30
                         text: "Telemetria de fonte (cache × DDGI)"
-                        color: renderModel.radianceCacheStats ? root.textNormal : root.textSecondary
+                        color: root.renderModel.radianceCacheStats ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcSourceLabel.y - 6
-                        enabled: renderModel.radianceCacheStats
-                        checked: renderModel.radianceCacheStatsSource
-                        onToggled: renderModel.ToggleRadianceCacheStatsSource()
+                        enabled: root.renderModel.radianceCacheStats
+                        checked: root.renderModel.radianceCacheStatsSource
+                        onToggled: root.renderModel.ToggleRadianceCacheStatsSource()
                     }
 
                     Text {
@@ -2656,16 +2610,16 @@ Rectangle {
                         // `UseGI` global) NÃO entra — ele governa o volume DDGI, e o trace roda sem
                         // ele. O engine recusa a ativação pelo mesmo critério; isto aqui é não
                         // oferecer um botão que não faria nada.
-                        color: renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
+                        color: root.renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcSourceVizLabel.y - 6
-                        enabled: renderModel.restirGIEnabled
-                        checked: renderModel.giSourceDebug
-                        onToggled: renderModel.ToggleGISourceDebug()
+                        enabled: root.renderModel.restirGIEnabled
+                        checked: root.renderModel.giSourceDebug
+                        onToggled: root.renderModel.ToggleGISourceDebug()
                     }
 
                     Text {
@@ -2673,16 +2627,16 @@ Rectangle {
                         x: 20
                         y: rcSourceVizLabel.y + 30
                         text: "Produtor dedicado (path tracer esparso)"
-                        color: renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
+                        color: root.renderModel.radianceCacheEnabled ? root.textNormal : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcDedicatedLabel.y - 6
-                        enabled: renderModel.radianceCacheEnabled
-                        checked: renderModel.radianceCacheDedicatedUpdate
-                        onToggled: renderModel.ToggleRadianceCacheDedicatedUpdate()
+                        enabled: root.renderModel.radianceCacheEnabled
+                        checked: root.renderModel.radianceCacheDedicatedUpdate
+                        onToggled: root.renderModel.ToggleRadianceCacheDedicatedUpdate()
                     }
 
                     Text {
@@ -2690,7 +2644,7 @@ Rectangle {
                         x: 20
                         y: rcDedicatedLabel.y + 30
                         text: "Dispatch compacto (tile 5×5)"
-                        color: renderModel.radianceCacheDedicatedUpdate ? root.textNormal
+                        color: root.renderModel.radianceCacheDedicatedUpdate ? root.textNormal
                                                                         : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
@@ -2698,9 +2652,9 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcCompactLabel.y - 6
-                        enabled: renderModel.radianceCacheDedicatedUpdate
-                        checked: renderModel.radianceCacheCompactUpdate
-                        onToggled: renderModel.ToggleRadianceCacheCompactUpdate()
+                        enabled: root.renderModel.radianceCacheDedicatedUpdate
+                        checked: root.renderModel.radianceCacheCompactUpdate
+                        onToggled: root.renderModel.ToggleRadianceCacheCompactUpdate()
                     }
 
                     Text {
@@ -2708,7 +2662,7 @@ Rectangle {
                         x: 20
                         y: rcCompactLabel.y + 30
                         text: "Terminal no cache anterior (multi-bounce)"
-                        color: renderModel.radianceCacheDedicatedUpdate ? root.textNormal
+                        color: root.renderModel.radianceCacheDedicatedUpdate ? root.textNormal
                                                                         : root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 13
@@ -2716,9 +2670,9 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: rcTerminalLabel.y - 6
-                        enabled: renderModel.radianceCacheDedicatedUpdate
-                        checked: renderModel.radianceCachePrevTerminal
-                        onToggled: renderModel.ToggleRadianceCachePrevTerminal()
+                        enabled: root.renderModel.radianceCacheDedicatedUpdate
+                        checked: root.renderModel.radianceCachePrevTerminal
+                        onToggled: root.renderModel.ToggleRadianceCachePrevTerminal()
                     }
 
                     ShadowSlider {
@@ -2729,17 +2683,17 @@ Rectangle {
                         // Sem produtor dedicado a fração não controla nada. O ShadowSlider não
                         // tem estado desabilitado próprio (o label dele é sempre textNormal),
                         // então a opacidade é o que dá o sinal visual junto do enabled.
-                        enabled: renderModel.radianceCacheDedicatedUpdate
-                        opacity: renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
+                        enabled: root.renderModel.radianceCacheDedicatedUpdate
+                        opacity: root.renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
                         label: "Pixels que lançam caminho por quadro"
                         // Passo de 1/25: a seleção é uma permutação sobre o tile 5x5, então
                         // valores intermediários arredondam para a mesma contagem de células.
                         from: 0.04; to: 0.40; step: 0.04
-                        value: renderModel.radianceCacheUpdateFraction
-                        valueText: (renderModel.radianceCacheUpdateFraction * 100).toFixed(0) + "%"
+                        value: root.renderModel.radianceCacheUpdateFraction
+                        valueText: (root.renderModel.radianceCacheUpdateFraction * 100).toFixed(0) + "%"
                         // committed, e nao released: mudar a fração não invalida a tabela —
                         // muda só a taxa de amostragem, e o que já está guardado continua valendo.
-                        onCommitted: (v) => renderModel.SetRadianceCacheUpdateFraction(v)
+                        onCommitted: (v) => root.renderModel.SetRadianceCacheUpdateFraction(v)
                     }
 
                     ShadowSlider {
@@ -2747,17 +2701,17 @@ Rectangle {
                         x: 20
                         y: rcFractionSlider.y + 50
                         width: parent.width - 40
-                        enabled: renderModel.radianceCacheDedicatedUpdate
-                        opacity: renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
+                        enabled: root.renderModel.radianceCacheDedicatedUpdate
+                        opacity: root.renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
                         label: "Vértices por caminho (custo = V+1 raios)"
                         from: 1; to: 4; step: 1
-                        value: renderModel.radianceCacheMaxVertices
-                        valueText: renderModel.radianceCacheMaxVertices + (
-                                   renderModel.radianceCacheMaxVertices === 1 ? " vért." : " vért.")
+                        value: root.renderModel.radianceCacheMaxVertices
+                        valueText: root.renderModel.radianceCacheMaxVertices + (
+                                   root.renderModel.radianceCacheMaxVertices === 1 ? " vért." : " vért.")
                         // released, e nao committed: trocar o número de vértices limpa a tabela
                         // (a célula guarda energias diferentes em cada regime). Fazer isso a cada
                         // passo de um arraste limparia o cache quatro vezes seguidas.
-                        onReleased: (v) => renderModel.SetRadianceCacheMaxVertices(v)
+                        onReleased: (v) => root.renderModel.SetRadianceCacheMaxVertices(v)
                     }
 
                     ShadowSlider {
@@ -2765,13 +2719,13 @@ Rectangle {
                         x: 20
                         y: rcVertsSlider.y + 50
                         width: parent.width - 40
-                        enabled: renderModel.radianceCacheDedicatedUpdate
-                        opacity: renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
+                        enabled: root.renderModel.radianceCacheDedicatedUpdate
+                        opacity: root.renderModel.radianceCacheDedicatedUpdate ? 1.0 : 0.45
                         label: "Roughness mínima do lobo que chega"
                         from: 0.0; to: 1.0; step: 0.05
-                        value: renderModel.radianceCacheMinRoughness
-                        valueText: renderModel.radianceCacheMinRoughness.toFixed(2).replace(".", ",")
-                        onCommitted: (v) => renderModel.SetRadianceCacheMinRoughness(v)
+                        value: root.renderModel.radianceCacheMinRoughness
+                        valueText: root.renderModel.radianceCacheMinRoughness.toFixed(2).replace(".", ",")
+                        onCommitted: (v) => root.renderModel.SetRadianceCacheMinRoughness(v)
                     }
 
                     ShadowSlider {
@@ -2782,18 +2736,18 @@ Rectangle {
                         // NÃO segue o produtor dedicado: este piso governa a CONSULTA, e ela
                         // acontece com qualquer produtor. Ele vale também para o terminal do
                         // updater, mas não nasce dele.
-                        enabled: renderModel.radianceCacheEnabled
-                        opacity: renderModel.radianceCacheEnabled ? 1.0 : 0.45
+                        enabled: root.renderModel.radianceCacheEnabled
+                        opacity: root.renderModel.radianceCacheEnabled ? 1.0 : 0.45
                         label: "Amostras mínimas para encerrar um caminho"
                         from: 1; to: 16; step: 1
-                        value: renderModel.radianceCacheMinSamples
-                        valueText: renderModel.radianceCacheMinSamples +
-                                   (renderModel.radianceCacheMinSamples === 1 ? " amostra"
+                        value: root.renderModel.radianceCacheMinSamples
+                        valueText: root.renderModel.radianceCacheMinSamples +
+                                   (root.renderModel.radianceCacheMinSamples === 1 ? " amostra"
                                                                               : " amostras")
                         // released, e não committed: o piso muda o que o terminal do updater grava,
                         // então trocá-lo limpa a tabela. Arrastar com commit contínuo limparia o
                         // cache a cada passo.
-                        onReleased: (v) => renderModel.SetRadianceCacheMinSamples(v)
+                        onReleased: (v) => root.renderModel.SetRadianceCacheMinSamples(v)
                     }
 
                     ShadowSlider {
@@ -2803,12 +2757,12 @@ Rectangle {
                         width: parent.width - 40
                         label: "Aresta da célula (nível 0)"
                         from: 0.05; to: 2.0; step: 0.05
-                        value: renderModel.radianceCacheCellSize
-                        valueText: renderModel.radianceCacheCellSize.toFixed(2).replace(".", ",") + " m"
+                        value: root.renderModel.radianceCacheCellSize
+                        valueText: root.renderModel.radianceCacheCellSize.toFixed(2).replace(".", ",") + " m"
                         // released, e nao committed: trocar a aresta muda a CHAVE do hash e
                         // invalida a tabela inteira. Fazer isso a cada passo de um arraste
                         // limparia o cache dezenas de vezes por segundo.
-                        onReleased: (v) => renderModel.SetRadianceCacheCellSize(v)
+                        onReleased: (v) => root.renderModel.SetRadianceCacheCellSize(v)
                     }
 
                     ShadowSlider {
@@ -2818,9 +2772,9 @@ Rectangle {
                         width: parent.width - 40
                         label: "Distância do primeiro nível"
                         from: 2.0; to: 60.0; step: 1.0
-                        value: renderModel.radianceCacheLodDistance
-                        valueText: renderModel.radianceCacheLodDistance.toFixed(0) + " m"
-                        onReleased: (v) => renderModel.SetRadianceCacheLodDistance(v)
+                        value: root.renderModel.radianceCacheLodDistance
+                        valueText: root.renderModel.radianceCacheLodDistance.toFixed(0) + " m"
+                        onReleased: (v) => root.renderModel.SetRadianceCacheLodDistance(v)
                     }
 
                     ShadowSlider {
@@ -2830,11 +2784,11 @@ Rectangle {
                         width: parent.width - 40
                         label: "Visualizador (janela de debug: \"radiance\")"
                         from: 0; to: 5; step: 1
-                        value: renderModel.radianceCacheDebugMode
+                        value: root.renderModel.radianceCacheDebugMode
                         valueText: ["células", "cobertura", "nível", "convergência",
-                                    "idade", "confiança"][renderModel.radianceCacheDebugMode]
+                                    "idade", "confiança"][root.renderModel.radianceCacheDebugMode]
                         // Só troca o modo do visualizador: não invalida nada, então commit contínuo.
-                        onCommitted: (v) => renderModel.SetRadianceCacheDebugMode(v)
+                        onCommitted: (v) => root.renderModel.SetRadianceCacheDebugMode(v)
                     }
 
                     Text {
@@ -2850,9 +2804,9 @@ Rectangle {
                         // A memória FICA, e a diferença é o critério: ela é do recurso, vale
                         // enquanto o cache existir e não depende de medição nenhuma. Uma casa
                         // decimal porque em 2^17 o cache inteiro cabe em 4,5 MB.
-                        text: renderModel.radianceCacheSummary + "  ·  " +
-                              renderModel.radianceCacheMemoryMB.toFixed(1).replace(".", ",") +
-                              " MB  ·  " + renderModel.radianceCacheWarmup
+                        text: root.renderModel.radianceCacheSummary + "  ·  " +
+                              root.renderModel.radianceCacheMemoryMB.toFixed(1).replace(".", ",") +
+                              " MB  ·  " + root.renderModel.radianceCacheWarmup
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2871,7 +2825,7 @@ Rectangle {
                         visible: text.length > 0
                         height: visible ? implicitHeight : 0
                         wrapMode: Text.WordWrap
-                        text: renderModel.radianceCacheSourceBreakdown
+                        text: root.renderModel.radianceCacheSourceBreakdown
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2889,7 +2843,7 @@ Rectangle {
                         visible: text.length > 0
                         height: visible ? implicitHeight : 0
                         wrapMode: Text.WordWrap
-                        text: renderModel.radianceCacheMissBreakdown
+                        text: root.renderModel.radianceCacheMissBreakdown
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2901,8 +2855,8 @@ Rectangle {
                     Timer {
                         interval: 200
                         repeat: true
-                        running: radianceCacheCard.visible && renderModel.radianceCacheEnabled
-                        onTriggered: renderModel.RefreshRadianceCacheStats()
+                        running: radianceCacheCard.visible && root.renderModel.radianceCacheEnabled
+                        onTriggered: root.renderModel.RefreshRadianceCacheStats()
                     }
                 }
 
@@ -2945,9 +2899,9 @@ Rectangle {
                         y: camHelper.y + camHelper.height + 12
                         width: parent.width - 40
                         wrapMode: Text.WordWrap
-                        visible: cameraBookmarks.sidecarWarning !== ""
+                        visible: root.cameraBookmarks.sidecarWarning !== ""
                         height: visible ? implicitHeight : 0
-                        text: "⚠ " + cameraBookmarks.sidecarWarning
+                        text: "⚠ " + root.cameraBookmarks.sidecarWarning
                         color: root.textNormal
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 11
@@ -2963,18 +2917,19 @@ Rectangle {
 
                         Repeater {
                             model: 4
-                            delegate: Item {
-                                id: camSlotRow
-                                width: camSlotsColumn.width
+                             delegate: Item {
+                                 id: camSlotRow
+                                 required property int index
+                                 width: camSlotsColumn.width
                                 height: 26
                                 readonly property bool filled:
-                                    cameraBookmarks.slotsFilled.length > index
-                                    && cameraBookmarks.slotsFilled[index]
+                                     root.cameraBookmarks.slotsFilled.length > camSlotRow.index
+                                     && root.cameraBookmarks.slotsFilled[camSlotRow.index]
 
                                 Text {
                                     id: camSlotName
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "Câmera " + (index + 1)
+                                     text: "Câmera " + (camSlotRow.index + 1)
                                     color: parent.filled ? root.textNormal : root.textSecondary
                                     font.family: C.Theme.fontFamily
                                     font.pixelSize: 13
@@ -2984,17 +2939,11 @@ Rectangle {
                                     x: 90
                                     width: parent.width - 90 - 150
                                     elide: Text.ElideRight
-                                    // Pose legível: é o que permite conferir num diff do sidecar
-                                    // que a captura de ontem e a de hoje partiram do mesmo lugar.
-                                    //
-                                    // Lê da PROPRIEDADE slotLabels, não do invocável SlotLabel():
-                                    // uma chamada é avaliada uma vez e não reavalia, então
-                                    // regravar um slot já preenchido deixaria a pose ANTIGA na
-                                    // tela — justo a operação em que o usuário acabou de decidir
-                                    // que a referência mudou.
-                                    text: cameraBookmarks.slotLabels.length > index
-                                          && cameraBookmarks.slotLabels[index] !== ""
-                                          ? cameraBookmarks.slotLabels[index] : "vazia"
+                                     // A propriedade notifica quando um slot e regravado; o
+                                     // invocavel SlotLabel() nao criaria essa dependencia.
+                                     text: root.cameraBookmarks.slotLabels.length > camSlotRow.index
+                                           && root.cameraBookmarks.slotLabels[camSlotRow.index] !== ""
+                                           ? root.cameraBookmarks.slotLabels[camSlotRow.index] : "vazia"
                                     color: root.textSecondary
                                     font.family: C.Theme.fontFamily
                                     font.pixelSize: 11
@@ -3005,25 +2954,20 @@ Rectangle {
                                     spacing: 6
                                     ActionButton {
                                         label: "Gravar"
-                                        onTapped: cameraBookmarks.Save(index)
+                                         onTapped: root.cameraBookmarks.Save(camSlotRow.index)
                                     }
                                     ActionButton {
                                         label: "Ir"
-                                        onTapped: cameraBookmarks.Restore(index)
+                                         onTapped: root.cameraBookmarks.Restore(camSlotRow.index)
                                     }
-                                    // Restaurar E capturar, nesta ordem, num clique só. A ordem
-                                    // do protocolo é preset → câmera → reset, e o reset acontece
-                                    // dentro do motor no frame seguinte: as duas chamadas abaixo
-                                    // terminam antes dele. Fazer isso em dois cliques deixaria
-                                    // espaço para capturar da pose errada, que é o erro que os
-                                    // slots existem para eliminar.
+                                     // A captura deve partir da pose restaurada no mesmo handler.
                                     ActionButton {
                                         label: "Capturar"
-                                        opacity: camSlotRow.filled && !capture.busy ? 1.0 : 0.45
+                                        opacity: camSlotRow.filled && !root.capture.busy ? 1.0 : 0.45
                                         onTapped: {
-                                            if (capture.busy) return
-                                            if (!cameraBookmarks.Restore(index)) return
-                                            capture.Shoot(index, captureCard.warmupFrames,
+                                            if (root.capture.busy) return
+                                             if (!root.cameraBookmarks.Restore(camSlotRow.index)) return
+                                             root.capture.Shoot(camSlotRow.index, captureCard.warmupFrames,
                                                           captureCard.scientific,
                                                           captureCard.pinnedHours)
                                         }
@@ -3102,7 +3046,7 @@ Rectangle {
                             label: "Preset científico"
                             hint: "nativo, sem upscaler e sem TAA"
                             checked: captureCard.scientific
-                            interactive: !capture.busy
+                            interactive: !root.capture.busy
                             onToggled: captureCard.scientific = !captureCard.scientific
                         }
 
@@ -3113,7 +3057,7 @@ Rectangle {
                             to: 512
                             stepSize: 8
                             boundValue: captureCard.warmupFrames
-                            interactive: !capture.busy
+                            interactive: !root.capture.busy
                             onMoved: (v) => captureCard.warmupFrames = Math.round(v)
                         }
 
@@ -3123,7 +3067,7 @@ Rectangle {
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: "Hora do dia fixada"
-                                color: capture.busy ? root.textMuted : root.textNormal
+                                color: root.capture.busy ? root.textMuted : root.textNormal
                                 font.family: C.Theme.fontFamily
                                 font.pixelSize: 11
                             }
@@ -3140,10 +3084,10 @@ Rectangle {
                                 }
                                 ActionButton {
                                     label: "Usar hora atual"
-                                    opacity: capture.busy ? 0.45 : 1.0
+                                    opacity: root.capture.busy ? 0.45 : 1.0
                                     onTapped: {
-                                        if (capture.busy) return
-                                        var h = capture.CurrentTimeOfDayHours()
+                                        if (root.capture.busy) return
+                                        var h = root.capture.CurrentTimeOfDayHours()
                                         if (h >= 0) captureCard.pinnedHours = h
                                     }
                                 }
@@ -3158,11 +3102,11 @@ Rectangle {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: parent.width - 130
                                 elide: Text.ElideMiddle
-                                text: capture.busy
-                                      ? "aquecendo — faltam " + capture.warmupRemaining + " frames"
-                                      : (capture.lastResult !== "" ? capture.lastResult
+                                text: root.capture.busy
+                                      ? "aquecendo — faltam " + root.capture.warmupRemaining + " frames"
+                                      : (root.capture.lastResult !== "" ? root.capture.lastResult
                                                                    : "nenhuma captura nesta sessão")
-                                color: capture.busy ? root.blue : root.textSecondary
+                                color: root.capture.busy ? root.blue : root.textSecondary
                                 font.family: C.Theme.fontFamily
                                 font.pixelSize: 11
                             }
@@ -3170,12 +3114,12 @@ Rectangle {
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
                                 label: "Capturar aqui"
-                                opacity: capture.busy ? 0.45 : 1.0
+                                opacity: root.capture.busy ? 0.45 : 1.0
                                 // Sem restaurar pose: captura da câmera livre, para inspecionar um
                                 // ponto que ainda não virou bookmark. O manifesto grava slot -1.
                                 onTapped: {
-                                    if (!capture.busy)
-                                        capture.Shoot(-1, captureCard.warmupFrames,
+                                    if (!root.capture.busy)
+                                        root.capture.Shoot(-1, captureCard.warmupFrames,
                                                       captureCard.scientific,
                                                       captureCard.pinnedHours)
                                 }
@@ -3189,14 +3133,14 @@ Rectangle {
                     Timer {
                         interval: 200
                         repeat: true
-                        running: captureCard.visible || capture.busy
+                        running: captureCard.visible || root.capture.busy
                         onTriggered: {
-                            capture.Poll()
+                            root.capture.Poll()
                             // Semeia a hora fixada uma única vez, com o relógio do mundo. Depois
                             // disso ela é do operador: puxá-la do mundo a cada tique faria
                             // exatamente o que a fixação existe para impedir.
                             if (captureCard.pinnedHours < 0) {
-                                var h = capture.CurrentTimeOfDayHours()
+                                var h = root.capture.CurrentTimeOfDayHours()
                                 if (h >= 0) captureCard.pinnedHours = h
                             }
                         }
@@ -3240,8 +3184,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: restirDILabel.y - 6
-                        checked: renderModel.reSTIRDI
-                        onToggled: renderModel.ToggleReSTIRDI()
+                        checked: root.renderModel.reSTIRDI
+                        onToggled: root.renderModel.ToggleReSTIRDI()
                     }
                 }
 
@@ -3302,7 +3246,7 @@ Rectangle {
                         onCommitted: (v) => biasMaxSlider.uiValue = v
                         onReleased: (v) => {
                             biasMaxSlider.uiValue = v
-                            renderModel.SetGISurfaceBiasMax(v)
+                            root.renderModel.SetGISurfaceBiasMax(v)
                         }
                     }
 
@@ -3367,8 +3311,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: adaptiveHystLabel.y - 6
-                        checked: renderModel.giAdaptiveHysteresis
-                        onToggled: renderModel.ToggleGIAdaptiveHysteresis()
+                        checked: root.renderModel.giAdaptiveHysteresis
+                        onToggled: root.renderModel.ToggleGIAdaptiveHysteresis()
                     }
                 }
 
@@ -3435,24 +3379,26 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                         }
                         Repeater {
-                            model: [1, 2]
-                            delegate: Rectangle {
-                                width: 44; height: 26; radius: 4
-                                color: renderModel.giCascadeCount === modelData
+                             model: [1, 2]
+                             delegate: Rectangle {
+                                 id: cascadeOption
+                                 required property int modelData
+                                 width: 44; height: 26; radius: 4
+                                 color: root.renderModel.giCascadeCount === cascadeOption.modelData
                                        ? C.Theme.accent : "transparent"
                                 border.color: root.textSecondary
                                 border.width: 1
                                 Text {
                                     anchors.centerIn: parent
-                                    text: modelData
-                                    color: renderModel.giCascadeCount === modelData
+                                     text: cascadeOption.modelData
+                                     color: root.renderModel.giCascadeCount === cascadeOption.modelData
                                            ? "#ffffff" : root.textNormal
                                     font.family: C.Theme.fontFamily
                                     font.pixelSize: 13
                                 }
                                 MouseArea {
                                     anchors.fill: parent
-                                    onClicked: renderModel.SetGICascadeCount(modelData)
+                                     onClicked: root.renderModel.SetGICascadeCount(cascadeOption.modelData)
                                 }
                             }
                         }
@@ -3516,8 +3462,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: adaptiveRaysLabel.y - 6
-                        checked: renderModel.giAdaptiveRays
-                        onToggled: renderModel.ToggleGIAdaptiveRays()
+                        checked: root.renderModel.giAdaptiveRays
+                        onToggled: root.renderModel.ToggleGIAdaptiveRays()
                     }
                 }
 
@@ -3570,8 +3516,8 @@ Rectangle {
                     Toggle {
                         anchors.right: parent.right; anchors.rightMargin: 20
                         y: measureTermLabel.y - 6
-                        checked: renderModel.giMeasureTerminatorOff
-                        onToggled: renderModel.ToggleGIMeasureTerminatorOff()
+                        checked: root.renderModel.giMeasureTerminatorOff
+                        onToggled: root.renderModel.ToggleGIMeasureTerminatorOff()
                     }
                 }
 
@@ -3629,9 +3575,11 @@ Rectangle {
                         onCommitted: (v) => fadeSlider.uiValue = v
                         onReleased: (v) => {
                             fadeSlider.uiValue = v
-                            renderModel.SetGIVolumeFadeProbes(v)
+                            root.renderModel.SetGIVolumeFadeProbes(v)
                         }
                     }
+                }
+            }
                 }
             }
         }
@@ -3700,8 +3648,8 @@ Rectangle {
             anchors.rightMargin: 10
             anchors.verticalCenter: parent.verticalCenter
             width: 140; height: 28; radius: 6
-            color: resetHover.hovered ? "#23241d" : "transparent"
-            border.color: "#33342c"
+            color: resetHover.hovered ? C.Theme.surfaceRaised : "transparent"
+            border.color: C.Theme.hairlineStrong
             border.width: 1
             Text {
                 anchors.centerIn: parent
@@ -3711,7 +3659,7 @@ Rectangle {
                 font.pixelSize: 12
             }
             HoverHandler { id: resetHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: renderModel.ResetRenderSettings() }
+            TapHandler { onTapped: root.renderModel.ResetRenderSettings() }
         }
         Rectangle {
             id: applyButton
@@ -3723,13 +3671,13 @@ Rectangle {
             Text {
                 anchors.centerIn: parent
                 text: "Aplicar"
-                color: "#10110f"
+                color: C.Theme.shell
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 12
                 font.weight: Font.Medium
             }
             HoverHandler { id: applyHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: settingsWindow.close() }
+            TapHandler { onTapped: root.settingsWindow.close() }
         }
     }
 }

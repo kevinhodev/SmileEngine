@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
@@ -13,8 +15,8 @@ Rectangle {
     required property var materialsModel
     required property var materialsWindow
 
-    color: "#141511"
-    border.color: "#2e2f28"
+    color: C.Theme.shell
+    border.color: C.Theme.hairlineStrong
     border.width: 1
     implicitWidth: 1460
     implicitHeight: 800
@@ -51,7 +53,7 @@ Rectangle {
     Shortcut {
         sequence: "Ctrl+S"
         context: Qt.WindowShortcut
-        onActivated: materialsModel.saveMaterials()
+        onActivated: root.materialsModel.saveMaterials()
     }
     Shortcut {
         sequence: "Ctrl+F"
@@ -60,7 +62,6 @@ Rectangle {
     }
 
     // ---- Componentes compartilhados (Editor/Qml/components) + regras locais de busca ----
-    component WindowButton: C.WindowButton {}
     component Toggle: C.Toggle {}
     component ToggleRow: C.ToggleRow { visible: root.matchParam(label) }
     component Card: C.Card {
@@ -71,75 +72,21 @@ Rectangle {
     component Chip: C.Chip {}
     component ColorRow: C.ColorRow { visible: root.matchParam(label) }
 
-    // ---- Barra de titulo ----
-    Rectangle {
+    C.FramelessTitleBar {
         id: titleBar
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 1
         height: 40
-        color: "#10110f"
-
-        LucideIcon {
-            x: 16
-            anchors.verticalCenter: parent.verticalCenter
-            name: "palette"; size: 15
-            color: root.blue
-        }
-        Text {
-            id: titleText
-            x: 40
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Materiais"
-            color: root.textPrimary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 13
-            font.weight: Font.Medium
-        }
-        Text {
-            anchors.left: titleText.right
-            anchors.leftMargin: 12
-            anchors.verticalCenter: parent.verticalCenter
-            text: materialsModel.available
-                  ? materialsModel.totalCount + " materiais · edição ao vivo na cena"
-                  : "aguardando o renderer…"
-            color: root.textMuted
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-        }
-
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: windowButtons.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            property bool moving: false
-            onPressed: moving = false
-            onPositionChanged: {
-                if (pressed && !moving) {
-                    moving = true
-                    materialsWindow.startSystemMove()
-                }
-            }
-            onReleased: moving = false
-        }
-
-        Row {
-            id: windowButtons
-            anchors.right: parent.right
-            anchors.top: parent.top
-            WindowButton { glyph: "−"; onTapped: materialsWindow.minimize() }
-            WindowButton { glyph: "×"; danger: true; onTapped: materialsWindow.close() }
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: root.divider
-        }
+        windowBridge: root.materialsWindow
+        title: "Materiais"
+        subtitle: root.materialsModel.available
+            ? root.materialsModel.totalCount + " materiais · edição ao vivo na cena"
+            : "aguardando o renderer…"
+        iconName: "palette"
+        iconColor: root.blue
+        showMaximize: false
     }
 
     // ---- Toolbar (Salvar / Reverter) ----
@@ -157,9 +104,11 @@ Rectangle {
             y: 7
             width: saveRow.implicitWidth + 24
             height: 28
-            radius: 6
-            color: materialsModel.dirty ? root.blue : (saveHover.hovered ? "#2a2b23" : "#23241d")
-            border.color: materialsModel.dirty ? root.blue : "#33342c"
+            radius: C.Theme.radiusControl
+            color: root.materialsModel.dirty ? C.Theme.accentBgStrong
+                                        : (saveHover.hovered ? C.Theme.surfaceRaised
+                                                             : C.Theme.surface)
+            border.color: root.materialsModel.dirty ? C.Theme.accentBorder : C.Theme.hairlineStrong
             border.width: 1
             Row {
                 id: saveRow
@@ -168,19 +117,19 @@ Rectangle {
                 LucideIcon {
                     name: "save"; size: 13
                     anchors.verticalCenter: parent.verticalCenter
-                    color: materialsModel.dirty ? "#10151d" : root.textSecondary
+                    color: root.materialsModel.dirty ? C.Theme.accent : root.textSecondary
                 }
                 Text {
                     text: "Salvar"
                     anchors.verticalCenter: parent.verticalCenter
-                    color: materialsModel.dirty ? "#10151d" : root.textNormal
+                    color: root.materialsModel.dirty ? C.Theme.accentText : root.textNormal
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 11
-                    font.weight: materialsModel.dirty ? Font.DemiBold : Font.Normal
+                    font.weight: root.materialsModel.dirty ? Font.DemiBold : Font.Normal
                 }
             }
             HoverHandler { id: saveHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: materialsModel.saveMaterials() }
+            TapHandler { onTapped: root.materialsModel.saveMaterials() }
         }
 
         Rectangle {
@@ -190,11 +139,12 @@ Rectangle {
             y: 7
             width: revertRow.implicitWidth + 24
             height: 28
-            radius: 6
-            visible: materialsModel.hasSelection
-            opacity: materialsModel.selectedModified ? 1.0 : 0.45
-            color: revHover.hovered && materialsModel.selectedModified ? "#2a2b23" : "#23241d"
-            border.color: "#33342c"
+            radius: C.Theme.radiusControl
+            visible: root.materialsModel.hasSelection
+            opacity: root.materialsModel.selectedModified ? 1.0 : 0.45
+            color: revHover.hovered && root.materialsModel.selectedModified
+                ? C.Theme.surfaceRaised : C.Theme.surface
+            border.color: C.Theme.hairlineStrong
             border.width: 1
             Row {
                 id: revertRow
@@ -213,8 +163,8 @@ Rectangle {
                     font.pixelSize: 11
                 }
             }
-            HoverHandler { id: revHover; cursorShape: materialsModel.selectedModified ? Qt.PointingHandCursor : Qt.ArrowCursor }
-            TapHandler { enabled: materialsModel.selectedModified; onTapped: materialsModel.resetSelected() }
+            HoverHandler { id: revHover; cursorShape: root.materialsModel.selectedModified ? Qt.PointingHandCursor : Qt.ArrowCursor }
+            TapHandler { enabled: root.materialsModel.selectedModified; onTapped: root.materialsModel.resetSelected() }
         }
 
         // Busca de parametro (Ctrl+F): filtra os cards/linhas de propriedade da direita.
@@ -226,8 +176,9 @@ Rectangle {
             width: 210
             height: 28
             radius: 6
-            color: "#1a1b15"
-            border.color: paramSearchInput.activeFocus ? root.blueBorder : "#33342c"
+            color: C.Theme.surface
+            border.color: paramSearchInput.activeFocus ? C.Theme.accentBorder
+                                                        : C.Theme.hairlineStrong
             border.width: 1
             LucideIcon {
                 x: 9
@@ -277,7 +228,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.verticalCenter: saveBtn.verticalCenter
             spacing: 6
-            visible: materialsModel.dirty
+            visible: root.materialsModel.dirty
             Rectangle {
                 width: 7; height: 7; radius: 3.5
                 anchors.verticalCenter: parent.verticalCenter
@@ -314,7 +265,7 @@ Rectangle {
             width: parent.width - 24
             height: 28
             radius: 6
-            color: "#141511"
+            color: C.Theme.shell
             border.color: searchInput.activeFocus ? root.blueBorder : root.borderColor
             border.width: 1
             LucideIcon {
@@ -335,7 +286,7 @@ Rectangle {
                 clip: true
                 selectByMouse: true
                 selectionColor: root.blue
-                onTextEdited: materialsModel.search = text
+                onTextEdited: root.materialsModel.search = text
                 Text {
                     anchors.fill: parent
                     verticalAlignment: Text.AlignVCenter
@@ -355,7 +306,7 @@ Rectangle {
                 color: root.textSecondary
                 font.pixelSize: 13
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: { searchInput.text = ""; materialsModel.search = "" } }
+                TapHandler { onTapped: { searchInput.text = ""; root.materialsModel.search = "" } }
             }
         }
 
@@ -364,11 +315,11 @@ Rectangle {
             id: filterChips
             x: 12; y: 48
             spacing: 6
-            Chip { label: "Todos";   active: materialsModel.filter === 0; onTapped: materialsModel.filter = 0 }
-            Chip { label: "Opacos";  active: materialsModel.filter === 1; onTapped: materialsModel.filter = 1 }
-            Chip { label: "Blend";   active: materialsModel.filter === 2; onTapped: materialsModel.filter = 2 }
-            Chip { label: "Foliage"; active: materialsModel.filter === 3; onTapped: materialsModel.filter = 3 }
-            Chip { label: "POM";     active: materialsModel.filter === 4; onTapped: materialsModel.filter = 4 }
+            Chip { label: "Todos";   active: root.materialsModel.filter === 0; onTapped: root.materialsModel.filter = 0 }
+            Chip { label: "Opacos";  active: root.materialsModel.filter === 1; onTapped: root.materialsModel.filter = 1 }
+            Chip { label: "Blend";   active: root.materialsModel.filter === 2; onTapped: root.materialsModel.filter = 2 }
+            Chip { label: "Foliage"; active: root.materialsModel.filter === 3; onTapped: root.materialsModel.filter = 3 }
+            Chip { label: "POM";     active: root.materialsModel.filter === 4; onTapped: root.materialsModel.filter = 4 }
         }
 
         ListView {
@@ -381,14 +332,14 @@ Rectangle {
             anchors.leftMargin: 6
             anchors.rightMargin: 4
             clip: true
-            model: materialsModel
+            model: root.materialsModel
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ThinScrollBar {}
 
             Component.onCompleted: {
                 // Sinal maiusculo da bridge: handler declarativo de Connections nao dispara
                 // (gotcha conhecido) — conexao imperativa.
-                materialsModel.ScrollToRequested.connect(function(row) {
+                root.materialsModel.ScrollToRequested.connect(function(row) {
                     matList.positionViewAtIndex(row, ListView.Contain)
                 })
             }
@@ -407,15 +358,16 @@ Rectangle {
 
                 width: matList.width
                 height: 50
-                radius: 6
-                color: selected ? "#20261f" : (rowHover.hovered ? "#1e1f18" : "transparent")
+                radius: C.Theme.radiusCard
+                color: matRow.selected ? C.Theme.accentBg
+                                       : (rowHover.hovered ? C.Theme.surface : "transparent")
 
                 Rectangle {
                     visible: matRow.selected
                     x: 0; y: 5
                     width: 3; height: parent.height - 10
                     radius: 1.5
-                    color: root.blue
+                    color: C.Theme.accent
                 }
                 // thumbnail real (esfera renderizada com o material + HDRI); fallback =
                 // swatch com "luz" fake enquanto a fila nao chega nesse material.
@@ -474,7 +426,7 @@ Rectangle {
                             width: bLabel.implicitWidth + 10
                             height: 15
                             radius: 7
-                            color: "#141511"
+                            color: C.Theme.shell
                             border.color: root.borderColor
                             border.width: 1
                             Text {
@@ -490,7 +442,7 @@ Rectangle {
                     }
                 }
                 HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: materialsModel.selectRow(matRow.index) }
+                TapHandler { onTapped: root.materialsModel.selectRow(matRow.index) }
             }
         }
 
@@ -510,9 +462,9 @@ Rectangle {
             Text {
                 x: 14
                 anchors.verticalCenter: parent.verticalCenter
-                text: matList.count === materialsModel.totalCount
-                      ? materialsModel.totalCount + " materiais na cena"
-                      : matList.count + " de " + materialsModel.totalCount + " materiais"
+                text: matList.count === root.materialsModel.totalCount
+                      ? root.materialsModel.totalCount + " materiais na cena"
+                      : matList.count + " de " + root.materialsModel.totalCount + " materiais"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 10
@@ -540,18 +492,18 @@ Rectangle {
             id: previewChips
             x: 12; y: 10
             spacing: 6
-            Chip { label: "Esfera";   active: materialsModel.previewPrimitive === 0; onTapped: materialsModel.previewPrimitive = 0 }
-            Chip { label: "Cubo";     active: materialsModel.previewPrimitive === 1; onTapped: materialsModel.previewPrimitive = 1 }
-            Chip { label: "Plano";    active: materialsModel.previewPrimitive === 2; onTapped: materialsModel.previewPrimitive = 2 }
-            Chip { label: "Cilindro"; active: materialsModel.previewPrimitive === 3; onTapped: materialsModel.previewPrimitive = 3 }
-            Chip { label: "Mesh da cena"; active: materialsModel.previewPrimitive === 4; onTapped: materialsModel.previewPrimitive = 4 }
+            Chip { label: "Esfera";   active: root.materialsModel.previewPrimitive === 0; onTapped: root.materialsModel.previewPrimitive = 0 }
+            Chip { label: "Cubo";     active: root.materialsModel.previewPrimitive === 1; onTapped: root.materialsModel.previewPrimitive = 1 }
+            Chip { label: "Plano";    active: root.materialsModel.previewPrimitive === 2; onTapped: root.materialsModel.previewPrimitive = 2 }
+            Chip { label: "Cilindro"; active: root.materialsModel.previewPrimitive === 3; onTapped: root.materialsModel.previewPrimitive = 3 }
+            Chip { label: "Mesh da cena"; active: root.materialsModel.previewPrimitive === 4; onTapped: root.materialsModel.previewPrimitive = 4 }
         }
         Chip {
             anchors.right: parent.right
             anchors.rightMargin: 12
             y: 10
             label: "HDRI…"
-            onTapped: materialsModel.browsePreviewHdri()
+            onTapped: root.materialsModel.browsePreviewHdri()
         }
         Rectangle {
             anchors.left: parent.left; anchors.right: parent.right
@@ -570,14 +522,14 @@ Rectangle {
             anchors.bottom: previewHint.top
             anchors.margins: 12
             radius: 6
-            color: "#101110"
+            color: C.Theme.shell
             clip: true
 
             Image {
                 id: previewImage
                 anchors.fill: parent
-                visible: materialsModel.hasSelection && materialsModel.previewSeq > 0
-                source: "image://materialpreview/p" + materialsModel.previewSeq
+                visible: root.materialsModel.hasSelection && root.materialsModel.previewSeq > 0
+                source: "image://materialpreview/p" + root.materialsModel.previewSeq
                 cache: false
                 fillMode: Image.PreserveAspectFit
                 smooth: true
@@ -595,7 +547,7 @@ Rectangle {
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: !materialsModel.hasSelection ? "selecione um material"
+                    text: !root.materialsModel.hasSelection ? "selecione um material"
                         : "preparando o preview (HDRI + IBL)…"
                     color: root.textMuted
                     font.family: C.Theme.fontFamily
@@ -615,11 +567,11 @@ Rectangle {
                     var dy = e.y - lastY
                     lastX = e.x; lastY = e.y
                     if (e.modifiers & Qt.ShiftModifier)
-                        materialsModel.rotatePreviewEnv(dx)
+                        root.materialsModel.rotatePreviewEnv(dx)
                     else
-                        materialsModel.orbitPreview(dx, dy)
+                        root.materialsModel.orbitPreview(dx, dy)
                 }
-                onWheel: (w) => materialsModel.zoomPreview(w.angleDelta.y / 120.0)
+                onWheel: (w) => root.materialsModel.zoomPreview(w.angleDelta.y / 120.0)
                 cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
             }
         }
@@ -650,7 +602,7 @@ Rectangle {
         Column {
             anchors.centerIn: parent
             spacing: 8
-            visible: !materialsModel.hasSelection
+            visible: !root.materialsModel.hasSelection
             LucideIcon {
                 anchors.horizontalCenter: parent.horizontalCenter
                 name: "palette"; size: 28
@@ -674,7 +626,7 @@ Rectangle {
 
         Flickable {
             anchors.fill: parent
-            visible: materialsModel.hasSelection
+            visible: root.materialsModel.hasSelection
             contentHeight: propsCol.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
@@ -696,15 +648,15 @@ Rectangle {
                     Rectangle {
                         x: 14; y: 13
                         width: 30; height: 30; radius: 15
-                        color: materialsModel.baseColor
-                        border.color: Qt.darker(materialsModel.baseColor, 1.6)
+                        color: root.materialsModel.baseColor
+                        border.color: Qt.darker(root.materialsModel.baseColor, 1.6)
                         border.width: 1
                         Rectangle { x: 6; y: 5; width: 9; height: 9; radius: 4.5; color: "#ffffff"; opacity: 0.35 }
                     }
                     Text {
                         x: 56; y: 10
                         width: parent.width - 56 - 220 // deixa espaco pros chips de acao
-                        text: materialsModel.name + (materialsModel.selectedModified ? "  ●" : "")
+                        text: root.materialsModel.name + (root.materialsModel.selectedModified ? "  ●" : "")
                         color: root.textPrimary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 12
@@ -714,9 +666,9 @@ Rectangle {
                     Text {
                         x: 56; y: 30
                         width: parent.width - 56 - 220
-                        text: "usado por " + materialsModel.meshCount +
-                              (materialsModel.meshCount === 1 ? " mesh · " : " meshes · ") +
-                              materialsModel.vramText + " em texturas"
+                        text: "usado por " + root.materialsModel.meshCount +
+                              (root.materialsModel.meshCount === 1 ? " mesh · " : " meshes · ") +
+                              root.materialsModel.vramText + " em texturas"
                         color: root.textSecondary
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 10
@@ -730,12 +682,12 @@ Rectangle {
                         spacing: 6
                         Chip {
                             label: "Selecionar na cena"
-                            onTapped: materialsModel.selectInScene()
+                            onTapped: root.materialsModel.selectInScene()
                         }
                         Chip {
-                            label: materialsModel.isolating ? "Isolando ●" : "Isolar"
-                            active: materialsModel.isolating
-                            onTapped: materialsModel.setIsolate(!materialsModel.isolating)
+                            label: root.materialsModel.isolating ? "Isolando ●" : "Isolar"
+                            active: root.materialsModel.isolating
+                            onTapped: root.materialsModel.setIsolate(!root.materialsModel.isolating)
                         }
                     }
                 }
@@ -747,37 +699,37 @@ Rectangle {
                     keywords: "cor base metálico rugosidade força do ao emissivo"
                     ColorRow {
                         label: "Cor base"
-                        value: materialsModel.baseColor
-                        onPushed: (c) => materialsModel.baseColor = c
+                        value: root.materialsModel.baseColor
+                        onPushed: (c) => root.materialsModel.baseColor = c
                     }
                     SliderRow {
                         label: "Metálico"
                         from: 0; to: 1
-                        boundValue: materialsModel.metallic
-                        valueText: root.fmt(materialsModel.metallic)
-                        onMoved: (v) => materialsModel.metallic = v
+                        boundValue: root.materialsModel.metallic
+                        valueText: root.fmt(root.materialsModel.metallic)
+                        onMoved: (v) => root.materialsModel.metallic = v
                     }
                     SliderRow {
                         label: "Rugosidade"
                         from: 0; to: 1
-                        boundValue: materialsModel.roughness
-                        valueText: root.fmt(materialsModel.roughness)
-                        onMoved: (v) => materialsModel.roughness = v
+                        boundValue: root.materialsModel.roughness
+                        valueText: root.fmt(root.materialsModel.roughness)
+                        onMoved: (v) => root.materialsModel.roughness = v
                     }
                     // Sem "Força do AO": o SceneLoader força AOStrength = 0 em todo material
                     // cozido de propósito, porque somar o AO da textura por cima de GTAO + DDGI +
                     // oclusão por raio escurece a cena inteira. O slider existia e não fazia nada.
                     ColorRow {
                         label: "Emissivo"
-                        value: materialsModel.emissiveColor
-                        onPushed: (c) => materialsModel.emissiveColor = c
+                        value: root.materialsModel.emissiveColor
+                        onPushed: (c) => root.materialsModel.emissiveColor = c
                     }
                     SliderRow {
                         label: "Força do emissivo"
                         from: 0; to: 20
-                        boundValue: materialsModel.emissiveStrength
-                        valueText: "× " + root.fmt(materialsModel.emissiveStrength, 1)
-                        onMoved: (v) => materialsModel.emissiveStrength = v
+                        boundValue: root.materialsModel.emissiveStrength
+                        valueText: "× " + root.fmt(root.materialsModel.emissiveStrength, 1)
+                        onMoved: (v) => root.materialsModel.emissiveStrength = v
                     }
                     // Separa "brilha na tela" de "ilumina o ambiente": sem ray tracing, marcar
                     // texel como emissivo era efeito local de destaque, sem consequência. Com RT
@@ -789,11 +741,11 @@ Rectangle {
                     SliderRow {
                         label: "Emissivo no indireto"
                         from: 0; to: 1
-                        boundValue: materialsModel.rtEmissiveScale
-                        valueText: materialsModel.rtEmissiveScale <= 0.001
+                        boundValue: root.materialsModel.rtEmissiveScale
+                        valueText: root.materialsModel.rtEmissiveScale <= 0.001
                                      ? "não ilumina"
-                                     : "× " + root.fmt(materialsModel.rtEmissiveScale, 2)
-                        onMoved: (v) => materialsModel.rtEmissiveScale = v
+                                     : "× " + root.fmt(root.materialsModel.rtEmissiveScale, 2)
+                        onMoved: (v) => root.materialsModel.rtEmissiveScale = v
                     }
                 }
 
@@ -808,7 +760,7 @@ Rectangle {
                         columnSpacing: 8
                         rowSpacing: 6
                         Repeater {
-                            model: materialsModel.textureSlots
+                            model: root.materialsModel.textureSlots
                             delegate: Rectangle {
                                 id: slotCell
                                 required property var modelData
@@ -816,7 +768,7 @@ Rectangle {
                                 width: (propsCol.width - 28 - 8) / 2
                                 height: 40
                                 radius: 6
-                                color: slotHover.hovered ? "#1c1d16" : "#141511"
+                                color: slotHover.hovered ? C.Theme.surface : C.Theme.shell
                                 border.color: slotHover.hovered ? root.blueBorder
                                             : modelData.has ? root.borderColor : "#20211b"
                                 border.width: 1
@@ -824,8 +776,9 @@ Rectangle {
                                 Rectangle {
                                     x: 10; y: 13
                                     width: 14; height: 14; radius: 3
-                                    color: modelData.has ? root.blueBg : "transparent"
-                                    border.color: modelData.has ? root.blueBorder : "#33342c"
+                                    color: slotCell.modelData.has ? root.blueBg : "transparent"
+                                    border.color: slotCell.modelData.has ? root.blueBorder
+                                                                : C.Theme.hairlineStrong
                                     border.width: 1
                                     // dot ambar: slot com override do editor
                                     Rectangle {
@@ -833,7 +786,7 @@ Rectangle {
                                         x: 9; y: -3
                                         width: 8; height: 8; radius: 4
                                         color: root.amber
-                                        border.color: "#141511"
+                                        border.color: C.Theme.shell
                                         border.width: 1
                                     }
                                 }
@@ -865,14 +818,14 @@ Rectangle {
                                     color: clearHover.hovered ? "#e0885a" : root.textSecondary
                                     font.pixelSize: 13
                                     HoverHandler { id: clearHover; cursorShape: Qt.PointingHandCursor }
-                                    TapHandler { onTapped: materialsModel.clearSlot(slotCell.index) }
+                                    TapHandler { onTapped: root.materialsModel.clearSlot(slotCell.index) }
                                 }
                                 HoverHandler { id: slotHover; cursorShape: Qt.PointingHandCursor }
                                 TapHandler {
                                     onTapped: {
                                         // clique no × nao deve abrir o dialogo
                                         if (!clearHover.hovered)
-                                            materialsModel.browseSlotTexture(slotCell.index)
+                                            root.materialsModel.browseSlotTexture(slotCell.index)
                                     }
                                 }
                             }
@@ -892,27 +845,27 @@ Rectangle {
                     title: "Normal"
                     iconName: "mountain"
                     keywords: "normal força flip y directx bc5 reconstruir z"
-                    dimmed: !materialsModel.hasNormalMap
+                    dimmed: !root.materialsModel.hasNormalMap
                     SliderRow {
                         label: "Força"
                         from: 0; to: 3
-                        interactive: materialsModel.hasNormalMap
-                        boundValue: materialsModel.normalStrength
-                        valueText: root.fmt(materialsModel.normalStrength)
-                        onMoved: (v) => materialsModel.normalStrength = v
+                        interactive: root.materialsModel.hasNormalMap
+                        boundValue: root.materialsModel.normalStrength
+                        valueText: root.fmt(root.materialsModel.normalStrength)
+                        onMoved: (v) => root.materialsModel.normalStrength = v
                     }
                     ToggleRow {
                         label: "Flip Y (mapa DirectX)"
-                        interactive: materialsModel.hasNormalMap
-                        checked: materialsModel.normalFlipY
-                        onToggled: materialsModel.normalFlipY = !materialsModel.normalFlipY
+                        interactive: root.materialsModel.hasNormalMap
+                        checked: root.materialsModel.normalFlipY
+                        onToggled: root.materialsModel.normalFlipY = !root.materialsModel.normalFlipY
                     }
                     ToggleRow {
                         label: "BC5 → reconstruir Z"
                         hint: "mapa só RG"
-                        interactive: materialsModel.hasNormalMap
-                        checked: materialsModel.normalReconstructZ
-                        onToggled: materialsModel.normalReconstructZ = !materialsModel.normalReconstructZ
+                        interactive: root.materialsModel.hasNormalMap
+                        checked: root.materialsModel.normalReconstructZ
+                        onToggled: root.materialsModel.normalReconstructZ = !root.materialsModel.normalReconstructZ
                     }
                 }
 
@@ -921,9 +874,9 @@ Rectangle {
                     title: "Parallax (POM)"
                     iconName: "box"
                     keywords: "parallax pom altura passos de frente rasante auto-sombra refino binário relevo"
-                    dimmed: !materialsModel.hasHeightMap
+                    dimmed: !root.materialsModel.hasHeightMap
                     headerItem: Text {
-                        visible: !materialsModel.hasHeightMap
+                        visible: !root.materialsModel.hasHeightMap
                         text: "sem height map"
                         color: root.textMuted
                         font.family: C.Theme.fontFamily
@@ -932,40 +885,40 @@ Rectangle {
                     SliderRow {
                         label: "Altura"
                         from: 0; to: 0.2; stepSize: 0.005
-                        interactive: materialsModel.hasHeightMap
-                        boundValue: materialsModel.heightScale
-                        valueText: root.fmt(materialsModel.heightScale, 3)
-                        onMoved: (v) => materialsModel.heightScale = v
+                        interactive: root.materialsModel.hasHeightMap
+                        boundValue: root.materialsModel.heightScale
+                        valueText: root.fmt(root.materialsModel.heightScale, 3)
+                        onMoved: (v) => root.materialsModel.heightScale = v
                     }
                     SliderRow {
                         label: "Passos (de frente)"
                         from: 1; to: 32; stepSize: 1
-                        interactive: materialsModel.hasHeightMap
-                        boundValue: materialsModel.parallaxMinSteps
-                        valueText: materialsModel.parallaxMinSteps.toString()
-                        onMoved: (v) => materialsModel.parallaxMinSteps = v
+                        interactive: root.materialsModel.hasHeightMap
+                        boundValue: root.materialsModel.parallaxMinSteps
+                        valueText: root.materialsModel.parallaxMinSteps.toString()
+                        onMoved: (v) => root.materialsModel.parallaxMinSteps = v
                     }
                     SliderRow {
                         label: "Passos (rasante)"
                         from: 4; to: 64; stepSize: 1
-                        interactive: materialsModel.hasHeightMap
-                        boundValue: materialsModel.parallaxMaxSteps
-                        valueText: materialsModel.parallaxMaxSteps.toString()
-                        onMoved: (v) => materialsModel.parallaxMaxSteps = v
+                        interactive: root.materialsModel.hasHeightMap
+                        boundValue: root.materialsModel.parallaxMaxSteps
+                        valueText: root.materialsModel.parallaxMaxSteps.toString()
+                        onMoved: (v) => root.materialsModel.parallaxMaxSteps = v
                     }
                     ToggleRow {
                         label: "Auto-sombra"
                         hint: "sombra suave do próprio relevo"
-                        interactive: materialsModel.hasHeightMap
-                        checked: materialsModel.parallaxSelfShadow
-                        onToggled: materialsModel.parallaxSelfShadow = !materialsModel.parallaxSelfShadow
+                        interactive: root.materialsModel.hasHeightMap
+                        checked: root.materialsModel.parallaxSelfShadow
+                        onToggled: root.materialsModel.parallaxSelfShadow = !root.materialsModel.parallaxSelfShadow
                     }
                     ToggleRow {
                         label: "Refino binário"
                         hint: "interseção mais nítida"
-                        interactive: materialsModel.hasHeightMap
-                        checked: materialsModel.parallaxRefine
-                        onToggled: materialsModel.parallaxRefine = !materialsModel.parallaxRefine
+                        interactive: root.materialsModel.hasHeightMap
+                        checked: root.materialsModel.parallaxRefine
+                        onToggled: root.materialsModel.parallaxRefine = !root.materialsModel.parallaxRefine
                     }
                 }
 
@@ -977,22 +930,22 @@ Rectangle {
                     ToggleRow {
                         label: "Alpha test (masked)"
                         hint: "clip pelo alpha do albedo"
-                        checked: materialsModel.alphaTest
-                        onToggled: materialsModel.alphaTest = !materialsModel.alphaTest
+                        checked: root.materialsModel.alphaTest
+                        onToggled: root.materialsModel.alphaTest = !root.materialsModel.alphaTest
                     }
                     SliderRow {
                         label: "Corte de alpha"
                         from: 0; to: 1
-                        interactive: materialsModel.alphaTest
-                        boundValue: materialsModel.alphaCutoff
-                        valueText: root.fmt(materialsModel.alphaCutoff)
-                        onMoved: (v) => materialsModel.alphaCutoff = v
+                        interactive: root.materialsModel.alphaTest
+                        boundValue: root.materialsModel.alphaCutoff
+                        valueText: root.fmt(root.materialsModel.alphaCutoff)
+                        onMoved: (v) => root.materialsModel.alphaCutoff = v
                     }
                     ToggleRow {
                         label: "Translúcido (blend)"
                         hint: "sai do G-buffer → passe forward"
-                        checked: materialsModel.blend
-                        onToggled: materialsModel.blend = !materialsModel.blend
+                        checked: root.materialsModel.blend
+                        onToggled: root.materialsModel.blend = !root.materialsModel.blend
                     }
                 }
 
@@ -1006,41 +959,41 @@ Rectangle {
                         visible: root.matchParam("shading defaultlit folhagem subsurface")
                         Chip {
                             label: "DefaultLit"
-                            active: materialsModel.shadingModel === 0
-                            onTapped: materialsModel.shadingModel = 0
+                            active: root.materialsModel.shadingModel === 0
+                            onTapped: root.materialsModel.shadingModel = 0
                         }
                         Chip {
                             label: "Folhagem"
-                            active: materialsModel.shadingModel === 1
-                            onTapped: materialsModel.shadingModel = 1
+                            active: root.materialsModel.shadingModel === 1
+                            onTapped: root.materialsModel.shadingModel = 1
                         }
                         // Sólido translúcido (vela/cortina/cera): transmissão direta + brilho
                         // de trás no GI; mantém GTAO/ReSTIR (folhagem não).
                         Chip {
                             label: "Subsurface"
-                            active: materialsModel.shadingModel === 2
-                            onTapped: materialsModel.shadingModel = 2
+                            active: root.materialsModel.shadingModel === 2
+                            onTapped: root.materialsModel.shadingModel = 2
                         }
                     }
                     ToggleRow {
                         label: "Two-sided"
                         hint: "desenha as costas (cull off)"
-                        checked: materialsModel.twoSided
-                        onToggled: materialsModel.twoSided = !materialsModel.twoSided
+                        checked: root.materialsModel.twoSided
+                        onToggled: root.materialsModel.twoSided = !root.materialsModel.twoSided
                     }
                     ColorRow {
-                        visible: materialsModel.shadingModel >= 1 && root.matchParam("cor de subsurface")
+                        visible: root.materialsModel.shadingModel >= 1 && root.matchParam("cor de subsurface")
                         label: "Cor de subsurface"
-                        value: materialsModel.subsurfaceColor
-                        onPushed: (c) => materialsModel.subsurfaceColor = c
+                        value: root.materialsModel.subsurfaceColor
+                        onPushed: (c) => root.materialsModel.subsurfaceColor = c
                     }
                     SliderRow {
-                        visible: materialsModel.shadingModel >= 1 && root.matchParam("transmissão")
+                        visible: root.materialsModel.shadingModel >= 1 && root.matchParam("transmissão")
                         label: "Transmissão"
                         from: 0; to: 1
-                        boundValue: materialsModel.subsurfaceIntensity
-                        valueText: root.fmt(materialsModel.subsurfaceIntensity)
-                        onMoved: (v) => materialsModel.subsurfaceIntensity = v
+                        boundValue: root.materialsModel.subsurfaceIntensity
+                        valueText: root.fmt(root.materialsModel.subsurfaceIntensity)
+                        onMoved: (v) => root.materialsModel.subsurfaceIntensity = v
                     }
                 }
 

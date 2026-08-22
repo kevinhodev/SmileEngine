@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import "components" as C
@@ -9,8 +11,8 @@ Rectangle {
     required property var debugModel
     required property var debugWindow
 
-    color: "#10110f"
-    border.color: "#2e2f28"
+    color: C.Theme.shell
+    border.color: C.Theme.hairlineStrong
     border.width: 1
     implicitWidth: 1180
     implicitHeight: 720
@@ -64,14 +66,13 @@ Rectangle {
                name.toLowerCase().indexOf(filterText.toLowerCase()) !== -1
     }
 
-    component WindowButton: C.WindowButton {}
     component ProbeButton: Rectangle {
         property string label: ""
         signal tapped()
         width: 34
         height: 24
         radius: 5
-        color: probeButtonHover.hovered ? "#242720" : "#181a15"
+        color: probeButtonHover.hovered ? C.Theme.surfaceRaised : C.Theme.surface
         border.color: probeButtonHover.hovered ? root.blueBorder : root.borderColor
         Text {
             anchors.centerIn: parent
@@ -84,90 +85,21 @@ Rectangle {
         TapHandler { onTapped: parent.tapped() }
     }
 
-    Item {
+    C.FramelessTitleBar {
         id: titleBar
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         height: 42
-
-        Rectangle {
-            x: 16
-            anchors.verticalCenter: parent.verticalCenter
-            width: 18
-            height: 18
-            radius: 4
-            color: root.blueBg
-            border.color: root.blueBorder
-            Text {
-                anchors.centerIn: parent
-                text: "▦"
-                color: root.blue
-                font.pixelSize: 12
-            }
-        }
-
-        Text {
-            id: titleText
-            x: 44
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Render targets"
-            color: root.textPrimary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 13
-            font.weight: Font.Medium
-        }
-
-        Text {
-            anchors.left: titleText.right
-            anchors.leftMargin: 12
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.selectedCount === 0
-                  ? "nenhum target selecionado"
-                  : root.selectedCount + (root.selectedCount === 1
-                      ? " target exibido"
-                      : " targets exibidos simultaneamente")
-            color: root.selectedCount === 0 ? root.textMuted : root.green
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-        }
-
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: windowButtons.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            property bool moving: false
-            onPressed: moving = false
-            onPositionChanged: {
-                if (pressed && !moving) {
-                    moving = true
-                    debugWindow.startSystemMove()
-                }
-            }
-            onReleased: moving = false
-            onDoubleClicked: debugWindow.toggleMaximize()
-        }
-
-        Row {
-            id: windowButtons
-            anchors.right: parent.right
-            anchors.top: parent.top
-            WindowButton { glyph: "−"; onTapped: debugWindow.minimize() }
-            WindowButton {
-                glyph: debugWindow.maximized ? "❐" : "□"
-                onTapped: debugWindow.toggleMaximize()
-            }
-            WindowButton { glyph: "×"; danger: true; onTapped: debugWindow.close() }
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: root.divider
-        }
+        windowBridge: root.debugWindow
+        title: "Render targets"
+        subtitle: root.selectedCount === 0
+            ? "nenhum target selecionado"
+            : root.selectedCount + (root.selectedCount === 1
+                ? " target exibido" : " targets exibidos simultaneamente")
+        subtitleColor: root.selectedCount === 0 ? root.textMuted : root.green
+        iconName: "grid"
+        iconColor: root.blue
     }
 
     Rectangle {
@@ -176,7 +108,7 @@ Rectangle {
         anchors.top: titleBar.bottom
         anchors.bottom: parent.bottom
         width: 296
-        color: "#141511"
+        color: C.Theme.surface
 
         Rectangle {
             id: searchBox
@@ -188,7 +120,7 @@ Rectangle {
             anchors.topMargin: 14
             height: 32
             radius: 6
-            color: "#1a1b15"
+            color: C.Theme.surface
             border.color: searchInput.activeFocus ? root.blueBorder : root.borderColor
 
             Text {
@@ -256,7 +188,7 @@ Rectangle {
                 spacing: 3
 
                 Repeater {
-                    model: debugModel.debugTargetNames
+                    model: root.debugModel.debugTargetNames
                     delegate: Rectangle {
                         id: targetDelegate
                         required property string modelData
@@ -279,12 +211,12 @@ Rectangle {
                             width: 20
                             height: 20
                             radius: 5
-                            color: targetDelegate.selected ? root.blue : "#23241d"
+                            color: targetDelegate.selected ? root.blue : C.Theme.surfaceRaised
                             border.color: targetDelegate.selected ? root.blue : root.borderColor
                             Text {
                                 anchors.centerIn: parent
                                 text: targetDelegate.selected ? targetDelegate.slot : "+"
-                                color: targetDelegate.selected ? "#10110f" : root.textMuted
+                                color: targetDelegate.selected ? C.Theme.shell : root.textMuted
                                 font.family: C.Theme.fontFamily
                                 font.pixelSize: targetDelegate.selected ? 11 : 13
                                 font.weight: Font.DemiBold
@@ -306,14 +238,14 @@ Rectangle {
 
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: debugModel.ToggleDebugSelection(targetDelegate.index)
+                            onTapped: root.debugModel.ToggleDebugSelection(targetDelegate.index)
                         }
                     }
                 }
 
                 Text {
                     width: listColumn.width
-                    visible: debugModel.debugTargetNames.length === 0
+                    visible: root.debugModel.debugTargetNames.length === 0
                     topPadding: 24
                     horizontalAlignment: Text.AlignHCenter
                     text: "Nenhum target publicado.\nCarregue uma cena."
@@ -348,7 +280,7 @@ Rectangle {
             Text {
                 y: 14
                 text: "Timer de RT"
-                color: debugModel.rtShaderTimerAvailable ? root.textNormal : root.textMuted
+                color: root.debugModel.rtShaderTimerAvailable ? root.textNormal : root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
@@ -360,10 +292,11 @@ Rectangle {
                 width: 46
                 height: 22
                 radius: 5
-                enabled: debugModel.rtShaderTimerAvailable
+                enabled: root.debugModel.rtShaderTimerAvailable
                 opacity: enabled ? 1.0 : 0.42
-                readonly property bool on: debugModel.rtShaderTimerEnabled
-                color: on ? root.blueBg : (timerHover.hovered ? "#23241d" : "transparent")
+                readonly property bool on: root.debugModel.rtShaderTimerEnabled
+                color: on ? root.blueBg
+                          : (timerHover.hovered ? C.Theme.surfaceRaised : "transparent")
                 border.color: on ? root.blueBorder : root.borderColor
                 Text {
                     anchors.centerIn: parent
@@ -374,7 +307,7 @@ Rectangle {
                 }
                 HoverHandler { id: timerHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                    onTapped: if (timerToggle.enabled) debugModel.ToggleRtShaderTimer()
+                    onTapped: if (timerToggle.enabled) root.debugModel.ToggleRtShaderTimer()
                 }
             }
 
@@ -384,7 +317,7 @@ Rectangle {
             Text {
                 y: 42
                 text: "BVH"
-                color: debugModel.bvhDebugAvailable ? root.textNormal : root.textMuted
+                color: root.debugModel.bvhDebugAvailable ? root.textNormal : root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
@@ -399,30 +332,34 @@ Rectangle {
                         { label: "Cat", value: 0, tip: "Categoria na TLAS: opaco / alpha-test / translucido" },
                         { label: "Inst", value: 1, tip: "Cor por instancia: acha duplicata e sobreposicao" },
                         { label: "Cplx", value: 2, tip: "Triangulos testados por raio" }
-                    ]
-                    Rectangle {
-                        required property var modelData
+                     ]
+                     Rectangle {
+                         id: bvhModeOption
+                         required property var modelData
                         width: 34
                         height: 22
                         radius: 5
-                        enabled: debugModel.bvhDebugAvailable && debugModel.bvhDebugEnabled
+                        enabled: root.debugModel.bvhDebugAvailable && root.debugModel.bvhDebugEnabled
                         opacity: enabled ? 1.0 : 0.42
-                        readonly property bool on: debugModel.bvhDebugMode === modelData.value
-                        color: on ? root.blueBg : (modeHover.hovered ? "#23241d" : "transparent")
+                         readonly property bool on:
+                             root.debugModel.bvhDebugMode === bvhModeOption.modelData.value
+                        color: on ? root.blueBg
+                                  : (modeHover.hovered ? C.Theme.surfaceRaised : "transparent")
                         border.color: on ? root.blueBorder : root.borderColor
                         Text {
                             anchors.centerIn: parent
-                            text: modelData.label
+                             text: bvhModeOption.modelData.label
                             color: parent.on ? root.blue : root.textSecondary
                             font.family: C.Theme.fontFamily
                             font.pixelSize: 10
                         }
                         ToolTip.visible: modeHover.hovered
-                        ToolTip.text: modelData.tip
+                         ToolTip.text: bvhModeOption.modelData.tip
                         ToolTip.delay: 400
                         HoverHandler { id: modeHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: if (parent.enabled) debugModel.SetBvhDebugMode(modelData.value)
+                            onTapped: if (parent.enabled)
+                                root.debugModel.SetBvhDebugMode(bvhModeOption.modelData.value)
                         }
                     }
                 }
@@ -432,10 +369,11 @@ Rectangle {
                     width: 46
                     height: 22
                     radius: 5
-                    enabled: debugModel.bvhDebugAvailable
+                    enabled: root.debugModel.bvhDebugAvailable
                     opacity: enabled ? 1.0 : 0.42
-                    readonly property bool on: debugModel.bvhDebugEnabled
-                    color: on ? root.blueBg : (bvhHover.hovered ? "#23241d" : "transparent")
+                    readonly property bool on: root.debugModel.bvhDebugEnabled
+                    color: on ? root.blueBg
+                              : (bvhHover.hovered ? C.Theme.surfaceRaised : "transparent")
                     border.color: on ? root.blueBorder : root.borderColor
                     Text {
                         anchors.centerIn: parent
@@ -446,7 +384,7 @@ Rectangle {
                     }
                     HoverHandler { id: bvhHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
-                        onTapped: if (bvhToggle.enabled) debugModel.ToggleBvhDebug()
+                        onTapped: if (bvhToggle.enabled) root.debugModel.ToggleBvhDebug()
                     }
                 }
             }
@@ -475,12 +413,13 @@ Rectangle {
                         id: columnDelegate
                         required property var modelData
                         readonly property bool current:
-                            debugModel.debugColumns === columnDelegate.modelData.value
+                            root.debugModel.debugColumns === columnDelegate.modelData.value
                         width: modelData.label === "Auto" ? 38 : 24
                         height: 22
                         radius: 5
                         color: current ? root.blueBg
-                                       : (columnHover.hovered ? "#23241d" : "transparent")
+                                       : (columnHover.hovered ? C.Theme.surfaceRaised
+                                                              : "transparent")
                         border.color: current ? root.blueBorder : root.borderColor
                         Text {
                             anchors.centerIn: parent
@@ -491,7 +430,7 @@ Rectangle {
                         }
                         HoverHandler { id: columnHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: debugModel.SetDebugColumns(
+                            onTapped: root.debugModel.SetDebugColumns(
                                 columnDelegate.modelData.value)
                         }
                     }
@@ -509,7 +448,7 @@ Rectangle {
             Text {
                 anchors.right: parent.right
                 y: 107
-                text: debugModel.debugExposure.toFixed(2).replace(".", ",") + "×"
+                text: root.debugModel.debugExposure.toFixed(2).replace(".", ",") + "×"
                 color: root.blue
                 font.family: C.Theme.fontMono
                 font.pixelSize: 11
@@ -523,8 +462,8 @@ Rectangle {
                 height: 20
                 from: 0.05
                 to: 8.0
-                value: debugModel.debugExposure
-                onMoved: debugModel.SetDebugExposure(value)
+                value: root.debugModel.debugExposure
+                onMoved: root.debugModel.SetDebugExposure(value)
             }
 
             Rectangle {
@@ -536,7 +475,8 @@ Rectangle {
                 radius: 6
                 enabled: root.selectedCount > 0
                 opacity: enabled ? 1.0 : 0.42
-                color: clearButtonHover.hovered && enabled ? "#23241d" : "transparent"
+                color: clearButtonHover.hovered && enabled
+                    ? C.Theme.surfaceRaised : "transparent"
                 border.color: root.borderColor
                 Text {
                     anchors.centerIn: parent
@@ -547,7 +487,7 @@ Rectangle {
                 }
                 HoverHandler { id: clearButtonHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                    onTapped: if (clearButton.enabled) debugModel.ClearDebugSelection()
+                    onTapped: if (clearButton.enabled) root.debugModel.ClearDebugSelection()
                 }
             }
 
@@ -579,14 +519,14 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: titleBar.bottom
         anchors.bottom: parent.bottom
-        color: "#0c0d0b"
+        color: C.Theme.canvas
 
         Text {
             anchors.left: parent.left
             anchors.leftMargin: 18
             anchors.top: parent.top
             anchors.topMargin: 14
-            visible: !debugModel.debugProbeInspecting
+            visible: !root.debugModel.debugProbeInspecting
             text: root.selectedCount === 0 ? "PREVIEW" :
                   "PREVIEW  •  " + root.gridColumns + " × " + root.gridRows
             color: root.textMuted
@@ -602,16 +542,16 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 18
             anchors.top: parent.top
-            height: debugModel.debugProbeContributors.length > 0 ? 248
-                  : debugModel.debugProbePointSummary !== "" ? 112 : 88
-            visible: debugModel.debugProbeInspecting
+            height: root.debugModel.debugProbeContributors.length > 0 ? 248
+                  : root.debugModel.debugProbePointSummary !== "" ? 112 : 88
+            visible: root.debugModel.debugProbeInspecting
 
             Text {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.topMargin: 9
-                text: "PROBE #" + debugModel.debugProbeIndex + "  •  " +
-                      debugModel.debugProbeCoord
+                text: "PROBE #" + root.debugModel.debugProbeIndex + "  •  " +
+                      root.debugModel.debugProbeCoord
                 color: root.textPrimary
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 12
@@ -622,7 +562,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.topMargin: 29
-                text: debugModel.debugProbeWorld + "  •  " + debugModel.debugProbeGrid
+                text: root.debugModel.debugProbeWorld + "  •  " + root.debugModel.debugProbeGrid
                 color: root.textMuted
                 font.family: C.Theme.fontMono
                 font.pixelSize: 9
@@ -634,10 +574,10 @@ Rectangle {
                 anchors.rightMargin: 8
                 anchors.top: parent.top
                 anchors.topMargin: 48
-                text: debugModel.debugProbeDirection === ""
+                text: root.debugModel.debugProbeDirection === ""
                       ? "passe o mouse sobre um oct-map para ler a direção"
-                      : debugModel.debugProbeDirection
-                color: debugModel.debugProbeDirection === "" ? root.textMuted : root.blue
+                      : root.debugModel.debugProbeDirection
+                color: root.debugModel.debugProbeDirection === "" ? root.textMuted : root.blue
                 font.family: C.Theme.fontMono
                 font.pixelSize: 9
             }
@@ -648,11 +588,11 @@ Rectangle {
                 anchors.rightMargin: 8
                 anchors.top: parent.top
                 anchors.topMargin: 64
-                visible: debugModel.debugProbeDirection !== ""
-                text: debugModel.debugProbeSample === ""
+                visible: root.debugModel.debugProbeDirection !== ""
+                text: root.debugModel.debugProbeSample === ""
                       ? "lendo valores do texel..."
-                      : debugModel.debugProbeSample
-                color: debugModel.debugProbeSample === "" ? root.textMuted : root.green
+                      : root.debugModel.debugProbeSample
+                color: root.debugModel.debugProbeSample === "" ? root.textMuted : root.green
                 font.family: C.Theme.fontMono
                 font.pixelSize: 9
             }
@@ -663,12 +603,12 @@ Rectangle {
                 anchors.top: parent.top
                 anchors.topMargin: 9
                 spacing: 4
-                ProbeButton { label: "X−"; onTapped: debugModel.StepDebugProbe(-1, 0, 0) }
-                ProbeButton { label: "X+"; onTapped: debugModel.StepDebugProbe( 1, 0, 0) }
-                ProbeButton { label: "Y−"; onTapped: debugModel.StepDebugProbe(0, -1, 0) }
-                ProbeButton { label: "Y+"; onTapped: debugModel.StepDebugProbe(0,  1, 0) }
-                ProbeButton { label: "Z−"; onTapped: debugModel.StepDebugProbe(0, 0, -1) }
-                ProbeButton { label: "Z+"; onTapped: debugModel.StepDebugProbe(0, 0,  1) }
+                ProbeButton { label: "X−"; onTapped: root.debugModel.StepDebugProbe(-1, 0, 0) }
+                ProbeButton { label: "X+"; onTapped: root.debugModel.StepDebugProbe( 1, 0, 0) }
+                ProbeButton { label: "Y−"; onTapped: root.debugModel.StepDebugProbe(0, -1, 0) }
+                ProbeButton { label: "Y+"; onTapped: root.debugModel.StepDebugProbe(0,  1, 0) }
+                ProbeButton { label: "Z−"; onTapped: root.debugModel.StepDebugProbe(0, 0, -1) }
+                ProbeButton { label: "Z+"; onTapped: root.debugModel.StepDebugProbe(0, 0,  1) }
             }
 
             Rectangle {
@@ -679,7 +619,7 @@ Rectangle {
                 width: 94
                 height: 24
                 radius: 5
-                color: backHover.hovered ? root.blueBg : "#181a15"
+                color: backHover.hovered ? root.blueBg : C.Theme.surface
                 border.color: backHover.hovered ? root.blueBorder : root.borderColor
                 Text {
                     anchors.centerIn: parent
@@ -689,7 +629,7 @@ Rectangle {
                     font.pixelSize: 9
                 }
                 HoverHandler { id: backHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: debugModel.ClearDebugProbeInspection() }
+                TapHandler { onTapped: root.debugModel.ClearDebugProbeInspection() }
             }
 
             Rectangle {
@@ -700,19 +640,19 @@ Rectangle {
                 width: 132
                 height: 25
                 radius: 5
-                color: debugModel.debugProbePointPickArmed
+                color: root.debugModel.debugProbePointPickArmed
                        ? "#302a18"
-                       : pointDiagnosticHover.hovered ? root.blueBg : "#181a15"
-                border.color: debugModel.debugProbePointPickArmed
+                       : pointDiagnosticHover.hovered ? root.blueBg : C.Theme.surface
+                border.color: root.debugModel.debugProbePointPickArmed
                               ? "#8f762d"
                               : pointDiagnosticHover.hovered
                                 ? root.blueBorder : root.borderColor
                 Text {
                     anchors.centerIn: parent
-                    text: debugModel.debugProbePointPickArmed
+                    text: root.debugModel.debugProbePointPickArmed
                           ? "Cancelar captura"
                           : "Diagnosticar ponto"
-                    color: debugModel.debugProbePointPickArmed
+                    color: root.debugModel.debugProbePointPickArmed
                            ? "#e7c65c"
                            : pointDiagnosticHover.hovered
                              ? root.blue : root.textSecondary
@@ -724,7 +664,7 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                 }
                 TapHandler {
-                    onTapped: debugModel.ArmDebugProbePointPick()
+                    onTapped: root.debugModel.ArmDebugProbePointPick()
                 }
             }
 
@@ -733,10 +673,10 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.topMargin: 91
-                visible: debugModel.debugProbePointSummary !== ""
-                text: debugModel.debugProbePointSummary
+                visible: root.debugModel.debugProbePointSummary !== ""
+                text: root.debugModel.debugProbePointSummary
                 elide: Text.ElideRight
-                color: debugModel.debugProbePointPickArmed
+                color: root.debugModel.debugProbePointPickArmed
                        ? "#e7c65c" : root.textSecondary
                 font.family: C.Theme.fontMono
                 font.pixelSize: 10
@@ -751,10 +691,10 @@ Rectangle {
                 columns: 4
                 columnSpacing: 6
                 rowSpacing: 6
-                visible: debugModel.debugProbeContributors.length > 0
+                visible: root.debugModel.debugProbeContributors.length > 0
 
                 Repeater {
-                    model: debugModel.debugProbeContributors
+                    model: root.debugModel.debugProbeContributors
 
                     delegate: Rectangle {
                         required property var modelData
@@ -765,7 +705,7 @@ Rectangle {
                         readonly property bool contributorDominant:
                             Boolean(modelData.dominant)
                         readonly property bool contributorSelected:
-                            debugModel.debugProbeIndex ===
+                            root.debugModel.debugProbeIndex ===
                             Number(modelData.probeIndex)
                         width: (contributorsGrid.width -
                                 contributorsGrid.columnSpacing * 3) / 4
@@ -844,7 +784,7 @@ Rectangle {
                         }
                         TapHandler {
                             enabled: parent.contributorActive
-                            onTapped: debugModel.SelectDebugProbeContributor(
+                            onTapped: root.debugModel.SelectDebugProbeContributor(
                                 Number(parent.modelData.probeIndex))
                         }
                     }
@@ -859,12 +799,12 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 18
             anchors.top: parent.top
-            anchors.topMargin: debugModel.debugProbeInspecting
+            anchors.topMargin: root.debugModel.debugProbeInspecting
                                ? probeInspectorHeader.height + 4 : 42
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 18
             radius: 7
-            color: "#080907"
+            color: C.Theme.canvas
             border.color: root.borderColor
             clip: true
 
@@ -877,26 +817,26 @@ Rectangle {
                 Image {
                     id: previewImage
                     anchors.fill: parent
-                    visible: root.selectedCount > 0 && debugModel.debugPreviewReady
+                    visible: root.selectedCount > 0 && root.debugModel.debugPreviewReady
                     source: visible
-                        ? "image://debugtargetpreview/frame_" + debugModel.debugPreviewSeq
+                        ? "image://debugtargetpreview/frame_" + root.debugModel.debugPreviewSeq
                         : ""
                     cache: false
                     asynchronous: false
                     fillMode: Image.Stretch
-                    smooth: !debugModel.debugProbeInspecting
+                    smooth: !root.debugModel.debugProbeInspecting
                 }
 
                 Repeater {
-                    model: debugModel.debugSelection
+                    model: root.debugModel.debugSelection
                     delegate: Item {
                         id: previewTile
                         required property var modelData
                         required property int index
                         readonly property int targetIndex: Number(modelData)
                         readonly property string targetName:
-                            targetIndex >= 0 && targetIndex < debugModel.debugTargetNames.length
-                            ? debugModel.debugTargetNames[targetIndex] : ""
+                            targetIndex >= 0 && targetIndex < root.debugModel.debugTargetNames.length
+                            ? root.debugModel.debugTargetNames[targetIndex] : ""
                         readonly property bool ddgiTarget:
                             targetName.toLowerCase().indexOf("ddgi") === 0
                         readonly property bool distanceTarget:
@@ -943,8 +883,8 @@ Rectangle {
                                 anchors.rightMargin: 7
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: previewTile.targetIndex >= 0 &&
-                                      previewTile.targetIndex < debugModel.debugTargetNames.length
-                                      ? debugModel.debugTargetNames[previewTile.targetIndex]
+                                      previewTile.targetIndex < root.debugModel.debugTargetNames.length
+                                      ? root.debugModel.debugTargetNames[previewTile.targetIndex]
                                       : ""
                                 elide: Text.ElideRight
                                 color: root.textPrimary
@@ -963,7 +903,7 @@ Rectangle {
                             height: previewTile.distanceTarget ? 28 : 19
                             radius: 4
                             color: "#c6080907"
-                            visible: debugModel.debugProbeInspecting && previewTile.ddgiTarget
+                            visible: root.debugModel.debugProbeInspecting && previewTile.ddgiTarget
 
                             Text {
                                 anchors.centerIn: parent
@@ -979,7 +919,7 @@ Rectangle {
                                 anchors.leftMargin: 8
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: previewTile.distanceTarget
-                                text: debugModel.debugProbeDistanceRange
+                                text: root.debugModel.debugProbeDistanceRange
                                 color: root.textSecondary
                                 font.family: C.Theme.fontMono
                                 font.pixelSize: 8
@@ -1006,32 +946,32 @@ Rectangle {
 
                         MouseArea {
                             anchors.fill: parent
-                            hoverEnabled: debugModel.debugProbeInspecting
-                            cursorShape: !debugModel.debugProbeInspecting &&
+                            hoverEnabled: root.debugModel.debugProbeInspecting
+                            cursorShape: !root.debugModel.debugProbeInspecting &&
                                          previewTile.ddgiTarget
                                          ? Qt.PointingHandCursor : Qt.ArrowCursor
                             onClicked: (mouse) => {
-                                if (!debugModel.debugProbeInspecting &&
+                                if (!root.debugModel.debugProbeInspecting &&
                                     previewTile.ddgiTarget) {
-                                    debugModel.InspectDDGIProbe(
+                                    root.debugModel.InspectDDGIProbe(
                                         previewTile.targetIndex,
                                         mouse.x / width, mouse.y / height,
                                         width / Math.max(height, 1))
                                 }
                             }
                             onPositionChanged: (mouse) => {
-                                if (!debugModel.debugProbeInspecting ||
+                                if (!root.debugModel.debugProbeInspecting ||
                                     !previewTile.ddgiTarget) return
                                 const side = Math.min(width, height)
                                 const ox = (width - side) * 0.5
                                 const oy = (height - side) * 0.5
-                                debugModel.UpdateDebugProbeDirection(
+                                root.debugModel.UpdateDebugProbeDirection(
                                     (mouse.x - ox) / side,
                                     (mouse.y - oy) / side)
                             }
                             onExited: {
-                                if (debugModel.debugProbeInspecting)
-                                    debugModel.UpdateDebugProbeDirection(-1, -1)
+                                if (root.debugModel.debugProbeInspecting)
+                                    root.debugModel.UpdateDebugProbeDirection(-1, -1)
                             }
                         }
                     }
@@ -1041,7 +981,7 @@ Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 10
-                    visible: !debugModel.debugProbeInspecting &&
+                    visible: !root.debugModel.debugProbeInspecting &&
                              root.selectedCount > 0 && root.hasSelectedDDGI &&
                              previewImage.visible
                     height: 24
@@ -1088,7 +1028,7 @@ Rectangle {
 
             Text {
                 anchors.centerIn: parent
-                visible: root.selectedCount > 0 && !debugModel.debugPreviewReady
+                visible: root.selectedCount > 0 && !root.debugModel.debugPreviewReady
                 text: "Preparando preview..."
                 color: root.textMuted
                 font.family: C.Theme.fontFamily

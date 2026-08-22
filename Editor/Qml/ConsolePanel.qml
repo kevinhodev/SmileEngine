@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -33,6 +35,10 @@ Rectangle {
     property string levelFilter: ""
     readonly property string searchText: searchInput.text.trim().toLowerCase()
     readonly property bool compact: width < 980
+    readonly property int filteredCount: {
+        const revision = logModel.count
+        return revision >= 0 ? logModel.MatchCount(levelFilter, searchText) : 0
+    }
 
     function rowMatches(tag, message) {
         const levelMatches = root.levelFilter === "" || tag === root.levelFilter
@@ -57,7 +63,7 @@ Rectangle {
     }
 
     Connections {
-        target: logModel
+        target: root.logModel
         function onRowsAppended() { root.requestScrollToEnd() }
     }
 
@@ -292,9 +298,9 @@ Rectangle {
                 spacing: 8
 
                 FilterChip { label: "Todos" }
-                FilterChip { label: "Info";   level: "INFO"; badge: logModel.infoCount }
-                FilterChip { label: "Avisos"; level: "WARN"; badge: logModel.warnCount }
-                FilterChip { label: "Erros";  level: "ERR";  badge: logModel.errorCount }
+                FilterChip { label: "Info";   level: "INFO"; badge: root.logModel.infoCount }
+                FilterChip { label: "Avisos"; level: "WARN"; badge: root.logModel.warnCount }
+                FilterChip { label: "Erros";  level: "ERR";  badge: root.logModel.errorCount }
             }
 
             Item { Layout.fillWidth: true }
@@ -395,8 +401,8 @@ Rectangle {
             Text {
                 Layout.alignment: Qt.AlignVCenter
                 Layout.rightMargin: 6
-                text: logModel.count + "/" + logModel.maxLines
-                color: logModel.droppedCount > 0 ? C.Theme.amber : C.Theme.textMuted
+                text: root.logModel.count + "/" + root.logModel.maxLines
+                color: root.logModel.droppedCount > 0 ? C.Theme.amber : C.Theme.textMuted
                 font.family: C.Theme.fontMono
                 font.pixelSize: 10
                 renderType: Text.QtRendering
@@ -405,8 +411,8 @@ Rectangle {
                 C.ToolTip {
                     active: countHover.hovered
                     above: true
-                    text: logModel.evictedCount + " antigas removidas · "
-                        + logModel.droppedCount + " mensagens perdidas"
+                    text: root.logModel.evictedCount + " antigas removidas · "
+                        + root.logModel.droppedCount + " mensagens perdidas"
                 }
                 HoverHandler { id: countHover }
             }
@@ -414,8 +420,8 @@ Rectangle {
             ConsoleIconButton {
                 iconName: "eraser"
                 tip: "Limpar console"
-                enabledVisual: logModel.count > 0
-                onTapped: logModel.Clear()
+                enabledVisual: root.logModel.count > 0
+                onTapped: root.logModel.Clear()
             }
 
             ConsoleIconButton {
@@ -438,7 +444,7 @@ Rectangle {
             ConsoleIconButton {
                 iconName: "chevron-down"
                 tip: "Recolher console"
-                onTapped: logModel.RequestClose()
+                onTapped: root.logModel.RequestClose()
             }
         }
 
@@ -461,7 +467,7 @@ Rectangle {
             radius: C.Theme.radiusCard
             implicitWidth: 184
         }
-        DarkMenuItem { text: "Copiar tudo"; onTriggered: logModel.CopyAll() }
+        DarkMenuItem { text: "Copiar tudo"; onTriggered: root.logModel.CopyAll() }
         DarkMenuItem {
             text: "Rolar para o topo"
             onTriggered: {
@@ -479,7 +485,7 @@ Rectangle {
         MenuSeparator {
             contentItem: Rectangle { implicitHeight: 1; color: C.Theme.hairline }
         }
-        DarkMenuItem { text: "Fechar console"; onTriggered: logModel.RequestClose() }
+        DarkMenuItem { text: "Fechar console"; onTriggered: root.logModel.RequestClose() }
     }
 
     Item {
@@ -508,8 +514,10 @@ Rectangle {
 
         Text {
             anchors.centerIn: parent
-            visible: logModel.count === 0
-            text: "Nenhuma mensagem nesta sessão"
+            visible: root.filteredCount === 0
+            text: root.logModel.count === 0
+                ? "Nenhuma mensagem nesta sessão"
+                : "Nenhuma mensagem para este filtro"
             color: C.Theme.textMuted
             font.family: C.Theme.fontFamily
             font.pixelSize: 11
@@ -523,7 +531,7 @@ Rectangle {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             clip: true
-            model: logModel
+            model: root.logModel
             spacing: 0
             boundsBehavior: Flickable.StopAtBounds
             reuseItems: true
@@ -540,8 +548,6 @@ Rectangle {
                 required property string time
                 required property string tag
                 required property string message
-                required property color levelColor
-
                 readonly property bool accepted: root.rowMatches(tag, message)
                 // Azul e info/GPU, ambar e atencao, vermelho e erro — mesma tabela semantica
                 // do resto do editor, e nenhum deles e o accent.
@@ -714,16 +720,16 @@ Rectangle {
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 6; height: 6; radius: 3
-                color: statusModel.message !== "" ? C.Theme.amber : C.Theme.green
+                color: root.statusModel.message !== "" ? C.Theme.amber : C.Theme.green
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.max(0, statusRow.width - 16)
-                text: statusModel.message !== "" ? statusModel.message : "PRONTO"
-                color: statusModel.message !== "" ? C.Theme.textSecondary : C.Theme.green
+                text: root.statusModel.message !== "" ? root.statusModel.message : "PRONTO"
+                color: root.statusModel.message !== "" ? C.Theme.textSecondary : C.Theme.green
                 font.family: C.Theme.fontMono
                 font.pixelSize: 10
-                font.letterSpacing: statusModel.message !== "" ? 0 : 1
+                font.letterSpacing: root.statusModel.message !== "" ? 0 : 1
                 elide: Text.ElideRight
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
@@ -741,26 +747,26 @@ Rectangle {
             // formatados pelo C++, e um toFixed aqui misturaria ponto e virgula na mesma linha.
             Metric {
                 label: "FPS"
-                value: statsModel.fps.toLocaleString(Qt.locale(), 'f', 1)
+                value: root.statsModel.fps.toLocaleString(Qt.locale(), 'f', 1)
             }
             Metric {
                 label: "FRAME"
-                value: statsModel.frameTimeMs.toLocaleString(Qt.locale(), 'f', 2) + " ms"
+                value: root.statsModel.frameTimeMs.toLocaleString(Qt.locale(), 'f', 2) + " ms"
             }
             Metric {
-                visible: root.width > 1100 && statsModel.gpuFrameText !== ""
+                visible: root.width > 1100 && root.statsModel.gpuFrameText !== ""
                 label: "GPU"
-                value: statsModel.gpuFrameText
+                value: root.statsModel.gpuFrameText
             }
             Metric {
                 visible: root.width > 1280
                 label: "MESHES"
-                value: statsModel.visibleDrawCount + "/" + statsModel.totalDrawCount
+                value: root.statsModel.visibleDrawCount + "/" + root.statsModel.totalDrawCount
             }
             Metric {
                 visible: root.width > 1440
                 label: "MEM"
-                value: statsModel.vramUsageText
+                value: root.statsModel.vramUsageText
             }
         }
     }
