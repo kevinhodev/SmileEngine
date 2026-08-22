@@ -21,6 +21,13 @@ Rectangle {
     readonly property bool compact: width < 1040
     readonly property bool narrow: width < 760
 
+    // Metrica UNICA da faixa. Botao de icone e chip tinham alturas diferentes (28 x 24) e a
+    // Row alinha pelo topo: os chips ficavam 2 px acima do centro. Com um valor so nao ha
+    // como divergir de novo, e cada controle novo herda o alinhamento de graca.
+    readonly property int controlH: 24
+    readonly property int iconPx: 14
+    readonly property int dividerH: 16
+
     // "Este preset é o valor vigente?" — com TOLERÂNCIA, e não com ===.
     //
     // O passo é guardado como float no C++ e chega aqui promovido a double, então 0.10f vira
@@ -37,6 +44,19 @@ Rectangle {
     // plausível. A escolha aqui é por não precisar revisitar isto quando a lista crescer.
     function samePreset(a, b) { return Math.abs(a - b) <= Math.abs(b) * 1e-5 }
 
+    // Separador de grupo. A caixa e mais larga que o fio de proposito: e ela que cria o
+    // respiro entre grupos de controle, que o spacing de 3 px da Row nao dava.
+    component Divider: Item {
+        width: 11
+        height: root.controlH
+        anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+        Rectangle {
+            anchors.centerIn: parent
+            width: 1; height: root.dividerH
+            color: C.Theme.hairline
+        }
+    }
+
     component IconToolButton: Rectangle {
         id: iconButton
         property string iconName
@@ -45,8 +65,8 @@ Rectangle {
         property bool enabledVisual: true
         property string tipShortcut: ""
         signal tapped()
-        implicitWidth: 28
-        implicitHeight: 28
+        implicitWidth: root.controlH
+        implicitHeight: root.controlH
         radius: C.Theme.radiusControl
         opacity: enabledVisual ? 1.0 : 0.38
         color: active ? C.Theme.accentBg
@@ -56,7 +76,7 @@ Rectangle {
         border.width: 1
         C.ToolbarIcon {
             anchors.centerIn: parent
-            width: 16; height: 16
+            width: root.iconPx; height: root.iconPx
             name: iconButton.iconName
             color: iconButton.active ? root.accent : C.Theme.textSecondary
         }
@@ -270,7 +290,7 @@ Rectangle {
             property string tip: ""
 
             implicitWidth: body.implicitWidth
-            implicitHeight: 28
+            implicitHeight: root.controlH
 
             C.ToolbarButton {
                 id: body
@@ -373,14 +393,10 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            width: 1; height: 20
-            anchors.verticalCenter: parent.verticalCenter
-            color: C.Theme.hairline
-        }
+        Divider {}
 
         Item {
-            width: 115; height: 28
+            width: root.controlH * 4 + 3; height: root.controlH
             anchors.verticalCenter: parent.verticalCenter
             Rectangle {
                 anchors.fill: parent
@@ -394,22 +410,22 @@ Rectangle {
                 anchors.fill: parent
                 spacing: 1
                 IconToolButton {
-                    width: 28; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q"
+                    width: root.controlH; iconName: "select"; tip: "Selecionar"; tipShortcut: "Q"
                     active: root.viewportModel.gizmoMode === 0
                     onTapped: root.viewportModel.SetGizmoMode(0)
                 }
                 IconToolButton {
-                    width: 28; iconName: "move"; tip: "Mover"; tipShortcut: "W"
+                    width: root.controlH; iconName: "move"; tip: "Mover"; tipShortcut: "W"
                     active: root.viewportModel.gizmoMode === 1
                     onTapped: root.viewportModel.SetGizmoMode(1)
                 }
                 IconToolButton {
-                    width: 28; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E"
+                    width: root.controlH; iconName: "rotate"; tip: "Rotacionar"; tipShortcut: "E"
                     active: root.viewportModel.gizmoMode === 2
                     onTapped: root.viewportModel.SetGizmoMode(2)
                 }
                 IconToolButton {
-                    width: 28; iconName: "scale"; tip: "Escalar"; tipShortcut: "R"
+                    width: root.controlH; iconName: "scale"; tip: "Escalar"; tipShortcut: "R"
                     active: root.viewportModel.gizmoMode === 3
                     onTapped: root.viewportModel.SetGizmoMode(3)
                 }
@@ -425,6 +441,7 @@ Rectangle {
         // em vez de serem deduzidas aqui: deduzir é o que fazia a luz operar em mundo enquanto o
         // botão dizia "Local".
         C.ToolbarButton {
+            anchors.verticalCenter: parent.verticalCenter
             // 0 = nenhuma · 1 = escala é sempre local · 2 = luz não tem base local
             readonly property int restriction: root.viewportModel.gizmoSpaceRestriction
             readonly property bool isLocal: root.viewportModel.gizmoSpaceEffective === 1
@@ -439,12 +456,7 @@ Rectangle {
             onTapped: root.viewportModel.ToggleGizmoSpace()
         }
 
-        Rectangle {
-            width: 1; height: 20
-            visible: !root.narrow
-            anchors.verticalCenter: parent.verticalCenter
-            color: C.Theme.hairline
-        }
+        Divider { visible: !root.narrow }
 
         SnapButton {
             anchors.verticalCenter: parent.verticalCenter
@@ -485,13 +497,10 @@ Rectangle {
                       { v: 0.25, t: "25%" }, { v: 0.50, t: "50%" }, { v: 1.0, t: "100%" }]
         }
 
-        Rectangle {
-            width: 1; height: 20
-            anchors.verticalCenter: parent.verticalCenter
-            color: C.Theme.hairline
-        }
+        Divider {}
 
         C.ToolbarButton {
+            anchors.verticalCenter: parent.verticalCenter
             visible: !root.compact
             flat: true
             label: "Perspectiva"
@@ -501,6 +510,7 @@ Rectangle {
         // O modo de visualizacao nao usa o accent: ele nao e "ativo", e o VALOR vigente de um
         // seletor. O ponto ambar carrega o sentido (luz) e o rotulo forte a enfase.
         C.ToolbarButton {
+            anchors.verticalCenter: parent.verticalCenter
             id: viewModeButton
             label: root.debugModel.viewModeLabel
             dotColor: C.Theme.amber
@@ -512,6 +522,7 @@ Rectangle {
             }
         }
         C.ToolbarButton {
+            anchors.verticalCenter: parent.verticalCenter
             visible: !root.narrow
             flat: true
             label: "Mostrar"
@@ -528,12 +539,14 @@ Rectangle {
         spacing: root.compact ? 2 : 4
 
         IconToolButton {
+            anchors.verticalCenter: parent.verticalCenter
             visible: !root.narrow
             iconName: "focus"
             tip: "Enquadrar seleção"
             tipShortcut: "F"
         }
         C.ToolbarButton {
+            anchors.verticalCenter: parent.verticalCenter
             flat: true
             label: "4.0×"
             monoLabel: true
@@ -541,24 +554,28 @@ Rectangle {
             tip: "Velocidade da câmera: 4,0×"
         }
 
-        Rectangle {
-            width: 1; height: 20
-            anchors.verticalCenter: parent.verticalCenter
-            color: C.Theme.hairline
-        }
+        Divider {}
 
         IconToolButton {
+            anchors.verticalCenter: parent.verticalCenter
             iconName: "grid"
             active: true
             tip: "Grade visível"
         }
         IconToolButton {
+            anchors.verticalCenter: parent.verticalCenter
             visible: !root.narrow
             iconName: "stats"
             tip: "Estatísticas de desempenho"
         }
-        IconToolButton { iconName: "maximize"; tip: "Maximizar viewport" }
-        IconToolButton { iconName: "more"; tip: "Mais opções" }
+        IconToolButton {
+            anchors.verticalCenter: parent.verticalCenter
+            iconName: "maximize"; tip: "Maximizar viewport"
+        }
+        IconToolButton {
+            anchors.verticalCenter: parent.verticalCenter
+            iconName: "more"; tip: "Mais opções"
+        }
     }
 
     Rectangle {

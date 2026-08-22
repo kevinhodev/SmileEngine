@@ -28,7 +28,7 @@ Rectangle {
 
     signal tapped()
 
-    implicitWidth: contents.implicitWidth + 14
+    implicitWidth: contents.implicitWidth + 13
     implicitHeight: 24
     radius: Theme.radiusControl
     opacity: enabledVisual ? 1.0 : 0.42
@@ -69,7 +69,7 @@ Rectangle {
                  : control.strongLabel ? Theme.textPrimary
                  : Theme.textSecondary
             font.family: control.monoLabel ? Theme.fontMono : Theme.fontFamily
-            font.pixelSize: control.monoLabel ? 11 : 12
+            font.pixelSize: control.monoLabel ? 10 : 11
             renderType: Text.NativeRendering
         }
 
