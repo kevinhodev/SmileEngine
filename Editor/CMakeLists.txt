@@ -1,84 +1,12 @@
-# Executavel Qt do editor - SmileEditor
-
-# Headers com Q_OBJECT precisam ser listados explicitamente para o AUTOMOC
-# por estarem em Include/ separado de Source/ (lição da estrutura SmileEngine)
-set(EDITOR_HEADERS
-    Include/SmileEditor/MainWindow.h
-    Include/SmileEditor/ViewportWidget.h
-    Include/SmileEditor/RenderThread.h
-    Include/SmileEditor/DarkTheme.h
-    Include/SmileEditor/SplashScreen.h
-    Include/SmileEditor/SmileLogo.h
-    Include/SmileEditor/LucideIcon.h
-    Include/SmileEditor/GizmoController.h
-    Include/SmileEditor/LogBridge.h
-    Include/SmileEditor/QmlHost.h
-    Include/SmileEditor/WindowBridge.h
-    Include/SmileEditor/NativeWindowFilter.h
-    Include/SmileEditor/SmileLogoImageProvider.h
-    Include/SmileEditor/MenuBridge.h
-    Include/SmileEditor/StatusBridge.h
-    Include/SmileEditor/TimeOfDayBridge.h
-    Include/SmileEditor/LightsBridge.h
-    Include/SmileEditor/SceneOutlinerBridge.h
-    Include/SmileEditor/SceneDocument.h
-    Include/SmileEditor/CameraBookmarksBridge.h
-    Include/SmileEditor/CaptureBridge.h
-    Include/SmileEditor/McpBridge.h
-    Include/SmileEditor/RenderSettingsController.h
-    Include/SmileEditor/MaterialsBridge.h
-    Include/SmileEditor/RenderSettingsBridge.h
-)
-
-set(EDITOR_SOURCES
-    Source/main.cpp
-    Source/MainWindow.cpp
-    Source/ViewportWidget.cpp
-    Source/RenderThread.cpp
-    Source/DarkTheme.cpp
-    Source/SplashScreen.cpp
-    Source/SmileLogo.cpp
-    Source/LucideIcon.cpp
-    Source/GizmoController.cpp
-    Source/JsonSidecar.cpp
-    Source/LogBridge.cpp
-    Source/QmlHost.cpp
-    Source/WindowBridge.cpp
-    Source/NativeWindowFilter.cpp
-    Source/MenuBridge.cpp
-    Source/StatusBridge.cpp
-    Source/TimeOfDayBridge.cpp
-    Source/LightsBridge.cpp
-    Source/SceneOutlinerBridge.cpp
-    Source/SceneDocument.cpp
-    Source/CameraBookmarksBridge.cpp
-    Source/CaptureBridge.cpp
-    Source/McpBridge.cpp
-    Source/RenderSettingsController.cpp
-    Source/MaterialsBridge.cpp
-    Source/RenderSettingsBridge.cpp
-)
-
-# Arquivos de interface aparecem no projeto do Visual Studio para edicao e navegacao.
-# Continuam carregados do disco pelo QmlHost (hot-reload) e copiados no pos-build.
-file(GLOB_RECURSE EDITOR_QML_FILES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.qml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/qmldir"
-)
-file(GLOB_RECURSE EDITOR_QML_ASSETS CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Qml/*.svg"
-)
-set_source_files_properties(${EDITOR_QML_FILES} ${EDITOR_QML_ASSETS}
-    PROPERTIES HEADER_FILE_ONLY TRUE
-)
+# Executável Qt e manifesto de fontes. Os domínios físicos são preservados, mas cada
+# par .h/.cpp aparece junto no Visual Studio.
+include(cmake/SmileEditorSources.cmake)
 
 # WIN32 = subsistema Windows (sem console preto atras)
 qt_add_executable(SmileEditor WIN32
-    ${EDITOR_HEADERS}
-    ${EDITOR_SOURCES}
-    ${EDITOR_QML_FILES}
-    ${EDITOR_QML_ASSETS}
+    ${SMILE_EDITOR_FILES}
 )
+set_target_properties(SmileEditor PROPERTIES FOLDER "Editor")
 
 target_include_directories(SmileEditor
     PRIVATE
@@ -117,12 +45,6 @@ target_compile_definitions(SmileEditor
 
 # O Editor depende do build dos shaders para que os .cso existam em runtime
 add_dependencies(SmileEditor Shaders)
-
-# Organizacao no Visual Studio
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${EDITOR_HEADERS} ${EDITOR_SOURCES})
-source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Qml" PREFIX "QML"
-    FILES ${EDITOR_QML_FILES} ${EDITOR_QML_ASSETS}
-)
 
 # Pos-build: copia DLLs do Qt para o lado do executavel via windeployqt
 # Necessario para o exe rodar standalone (Qt6Core.dll, Qt6Gui.dll, plataformas, estilos, etc.)

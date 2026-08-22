@@ -1,6 +1,6 @@
 {
   "name": "smile-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Servidor MCP local para inspecionar, compilar e executar a SmileEngine.",
   "type": "module",
@@ -12,7 +12,22 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
-    "smoke:capture": "npm run build && node scripts/capture-smoke.mjs"
+    "smoke:capture": "npm run build && node scripts/capture-smoke.mjs",
+    "validate:gi": "npm run build && node scripts/gi-validation.mjs",
+    "validate:gi:adaptive-visual": "npm run build && node scripts/gi-adaptive-visual.mjs",
+    "validate:gi:interleaved": "npm run build && node scripts/gi-interleaved.mjs",
+    "analyze:gi:interleaved": "python scripts/compare-gi-interleaved.py",
+    "validate:gi:probe-compaction": "npm run build && node scripts/gi-probe-compaction.mjs",
+    "smoke:gi:probe-compaction-default": "npm run build && node scripts/gi-probe-compaction.mjs --startup-smoke",
+    "analyze:gi:probe-compaction": "python scripts/compare-gi-probe-compaction.py",
+    "validate:gi:half-res": "npm run build && node scripts/gi-half-res.mjs",
+    "validate:gi:half-res:rr": "npm run build && node scripts/gi-half-res.mjs --gameplay-rr",
+    "validate:gi:half-res:motion": "npm run build && node scripts/gi-half-res-motion.mjs",
+    "smoke:gi:half-res": "npm run build && node scripts/gi-half-res.mjs --startup-smoke",
+    "analyze:gi:half-res": "python scripts/compare-gi-half-res.py",
+    "analyze:gi:half-res:motion": "python scripts/compare-gi-half-res-motion.py",
+    "benchmark:gi": "npm run build && node scripts/gi-benchmark.mjs",
+    "benchmark:gi:adaptive": "npm run build && node scripts/gi-benchmark.mjs --suite adaptive"
   },
   "engines": {
     "node": ">=20"

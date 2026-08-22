@@ -20,9 +20,7 @@ struct VSOut {
     nointerpolation float2 irrTile  : TEXCOORD0;
     nointerpolation float2 distTile : TEXCOORD1;
     nointerpolation float4 extra    : TEXCOORD2;
-    // Teto do heatmap de distancia, 2,6 x espacamento DA CASCATA desta sonda. Vem pelo
-    // interpolante porque o DistAtlasParams.w e um valor SO — com 2 m e 8 m, normalizar as
-    // grossas pelo teto da fina satura o heatmap inteiro e o modo deixa de discriminar.
+    // Teto do heatmap pela cascata desta sonda.
     nointerpolation float  distMax  : TEXCOORD3;
 };
 
@@ -61,13 +59,11 @@ float4 main(VSOut i) : SV_Target {
         else if (w > 0.20f)  color = float3(0.10f, 0.90f, 1.0f);
         else                 color = float3(1.0f, 0.55f, 0.0f);
     } else if (mode == 4) {
-        // ProbeData.w congela quando termina a fase de relocation. extra.y vem do passe de
-        // stats executado no frame deste modo e continua valido com adaptive rays.
+        // extra.y vem do passe de estatisticas deste frame.
         if (i.extra.w < 0.0f) color = float3(0.18f, 0.18f, 0.22f);
         else                  color = Heat(saturate(i.extra.y / max(DebugParams.w, 1e-3f)));
     } else {
-        // No diagnostico pontual, as oito probes ficam azuis com brilho proporcional ao peso.
-        // A de maior risco de leak vira laranja para ser localizada imediatamente no viewport.
+        // Brilho indica peso; laranja indica maior risco de vazamento.
         float strength = saturate(sqrt(max(i.extra.x, 0.0f) * 4.0f));
         color = i.extra.z > 0.5f
             ? float3(1.00f, 1.00f, 1.00f)

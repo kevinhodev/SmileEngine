@@ -1,7 +1,7 @@
 #include "RainCommon.hlsli"
 
-// Chuva F5a — gotas por PARTICULA no near-field (opcao de qualidade sobre o MESMO estado
-// de clima). Sem buffer persistente e sem compute: a posicao e 100% procedural por
+// Chuva F5a — gotas por PARTICULA no near-field sobre o mesmo estado de clima.
+// Sem buffer persistente e sem compute: a posicao e 100% procedural por
 // instancia (hash + tempo), num box de ~24 m preso na camera com wrap world-fixed — a
 // gota e fixa no mundo ate o box "dobrar a esquina". A COLISAO vem do occlusion map da
 // F2 usado como heightmap top-down: gota abaixo do teto local (telhado/marquise/chao)

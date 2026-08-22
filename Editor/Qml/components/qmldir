@@ -4,6 +4,13 @@ Toggle 1.0 Toggle.qml
 ToggleRow 1.0 ToggleRow.qml
 Card 1.0 Card.qml
 SliderRow 1.0 SliderRow.qml
+ScrubField 1.0 ScrubField.qml
+ScrubRow 1.0 ScrubRow.qml
+PrimarySliderRow 1.0 PrimarySliderRow.qml
+BipolarSliderRow 1.0 BipolarSliderRow.qml
+InspectorSectionHeader 1.0 InspectorSectionHeader.qml
+PairedScrubRow 1.0 PairedScrubRow.qml
+StepperRow 1.0 StepperRow.qml
 Chip 1.0 Chip.qml
 ColorRow 1.0 ColorRow.qml
 ToolTip 1.0 ToolTip.qml

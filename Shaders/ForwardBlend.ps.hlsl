@@ -43,9 +43,7 @@ cbuffer FrameCB : register(b0) {
                                // z = km/unidade de mundo, w = transmitancia POR PIXEL (0/1)
     float4 SunColorRaw;        // rgb = sol SEM transmitancia e SEM HorizonFade
     float4 MoonColorRaw;       // rgb = lua SEM transmitancia
-    float4 SkyAmbientSHR;      // SH-L1 do ceu, canal R: (c0, c1, c2, c3)
-    float4 SkyAmbientSHG;
-    float4 SkyAmbientSHB;
+    float4 SkyAmbientSH[9];    // SH-L2 do ceu: coeficientes 0..8, cada um em RGB
     float4 SkyAmbientSHParams; // x = usar SH (0 = 2 cores chapadas)
     // Cascatas do DDGI (append no fim do FrameConstants). O DDGIGridMin acima e a GROSSA.
     float4 DDGICascadeParams;          // x = nº de cascatas, y = sondas por cascata
@@ -61,7 +59,7 @@ cbuffer FrameCB : register(b0) {
 // Ver DeferredLighting.ps: com a SH ligada o ambiente ganha termo direcional.
 float3 SkyAmbientForNormal(float3 N) {
     if (SkyAmbientSHParams.x > 0.5f)
-        return EvalSkyAmbientSH(SkyAmbientSHR, SkyAmbientSHG, SkyAmbientSHB, N);
+        return EvalSkyAmbientSH(SkyAmbientSH, N);
     float hemi = saturate(N.y * 0.5f + 0.5f);
     return lerp(GroundAmbientColor.rgb, SkyAmbientColor.rgb, hemi);
 }

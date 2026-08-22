@@ -1,0 +1,160 @@
+#pragma once
+
+#include "Smile/Core/Types.h"
+#include "Smile/Math/Math.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
+#include "Smile/Graphics/Renderer/RenderPass.h"
+#include <d3d12.h>
+#include <wrl/client.h>
+
+namespace Smile {
+    struct alignas(256) FogConstants {
+        Vec4  ExponentialFogParameters;     // x=collapsed density1, y=falloff1, z=maxObserverHeight, w=startDistance
+        Vec4  ExponentialFogParameters2;    // x=collapsed density2, y=falloff2, z=density2, w=fogHeight2
+        Vec4  ExponentialFogParameters3;    // x=density1, y=fogHeight1, z=unused, w=cutoffDistance
+        Vec4  FogInscatteringColor;         // rgb=base color, w=1-maxOpacity
+        Vec4  DirectionalInscatteringColor; // rgb=color, w=exponent
+        Vec4  InscatteringLightDirection;   // xyz=dir TO sun, w=start distance (>=0 enables)
+        Mat44 InvViewProj;                  // FULL inverse view-proj
+        Vec4  CameraWorldPos;               // xyz=camera world pos, w=km per world unit
+        // y era um bool (useAP). Virou a CONTAGEM DE SLICES do volume, com 0 = desligado —
+        // superset semantico: todo teste `> 0.5` continua valendo, e o shader deixa de ter
+        // `const float Slices = 16.0f` hardcoded contra o kAerialSlices do CB da atmosfera.
+        Vec4  AerialParams;                 // x=AP depth (km), y=slices AP (0=off), z=useHeightFog, w=shafts volumetricos on
+        Vec4  ScreenParams;                 // x=w, y=h, z=1/w, w=1/h
+        Vec4  DepthParams;                  // x=near, y=far, z/w unused
+        Vec4  VolFogParams;                 // froxel fog: B, O, S, GridSizeZ
+        Vec4  VolFogParams2;                // x=alcance (m), y=ligado, zw unused
+        Vec4  CamForwardVF;                 // xyz=frente da camera, w unused
+        // Ancoragem do height fog na atmosfera (ver GetExponentialHeightFog). O CB e
+        // alignas(256) e ja estava com folga ate o proximo multiplo, entao crescer e de graca.
+        Vec4  SkyFogParams;                 // x=view height (km), y=raio do planeta (km),
+                                            // z=HeightFogSkyContribution (0 = cor chapada), w=-
+        Vec4  SkyFogSunDir;                 // xyz=direcao P/ o SOL (nao a key light), w=-
+        // Equivalente ao r.SupportExpFogMatchesVolumetricFog da UE: o trecho analitico
+        // alem do volume usa a mesma fase, albedo e radiancia do meio froxel.
+        Vec4  VolFogMatchMediumPhase;        // x=extinction scale do meio, w=phase G direcional
+        Vec4  VolFogMatchSun;                // rgb=radiancia solar*albedo*escala, w=match on
+        Vec4  VolFogMatchAmbient;            // rgb=ambiente*albedo na borda, w=fade p/ sky LUT
+    };
+
+    class FFogPass : public FRenderPass {
+    public:
+        // --- Contrato de passe (RenderPass.h) ---
+        const char* Name() const override { return "Fog (altura + aerial)"; }
+        FPassShaderStems ShaderStems() const override;
+        void OnRecreatePipelines(const FPassInitContext& Ctx) override;
+
+        struct FVolumetricMatchParams {
+            bool Enabled = false;
+            Vec3 Albedo{ 1.0f, 1.0f, 1.0f };
+            Vec3 AmbientRadiance{};
+            Vec3 SunRadiance{};
+            f32  ExtinctionScale = 1.0f;
+            f32  DirectionalPhaseG = 0.3f;
+            f32  DirectionalScatteringScale = 1.0f;
+            f32  AmbientTransitionDistance = 50.0f;
+        };
+
+        void Initialize(ID3D12Device* Device, DXGI_FORMAT RTFormat);
+
+        // VolumetricShafts: sun shafts volumetricos ligados — o shader soma o RT
+        // meia-res no inscatter (upsample bilateral). Com froxel, ele substitui o sol
+        // somente no range proximo; o analitico matched continua depois da fronteira.
+        // VolFog*: froxel volumetric fog (FVolumetricFogPass) — o shader amostra o volume
+        // integrado em t3 e exclui o height fog analitico no alcance coberto.
+        void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
+                            const Vec3& CameraWorldPos, f32 KmPerWorldUnit,
+                            const Vec3& DirToSun, f32 NearZ, f32 FarZ,
+                            u32 Width, u32 Height, bool UseAerial, bool UseHeightFog,
+                            f32 AerialDepthKm, f32 AerialSlices = 16.0f,
+                            bool VolumetricShafts = false,
+                            bool VolFogOn = false, f32 VolFogMaxDist = 100.0f,
+                            const Vec4& VolFogGridZ = Vec4{},
+                            const Vec3& CamForward = Vec3{ 0.0f, 0.0f, 1.0f },
+                            // Ancoragem na atmosfera. DirToSun aqui e o SOL de verdade: o
+                            // sky-view LUT e dobrado no azimute DELE, entao a key light (que
+                            // vira lua de noite) daria uv errado. SkyContribution 0 desliga.
+                            const Vec3& DirToSunTrue = Vec3{ 0.0f, 1.0f, 0.0f },
+                            f32 SkyViewHeightKm = 0.0f, f32 SkyBottomRKm = 0.0f,
+                            f32 SkyContribution = 0.0f,
+                            const FVolumetricMatchParams& VolumetricMatch = {});
+
+        void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
+                     u32 DepthSRVSlot, u32 AerialVolumeSRVSlot, u32 VolShaftsSRVSlot,
+                     u32 VolFogSRVSlot, u32 SkyViewSRVSlot);
+
+        // Densidades 2-exponenciais colapsadas na altura do observador (mesma conta do
+        // UpdatePerFrame) — o raymarch dos sun shafts reconstrói a densidade por altura.
+        // Retorna { collapsed1, falloff1, collapsed2, falloff2 }.
+        Vec4 CollapsedFogParams(f32 ObserverHeight) const;
+
+        void SetDensity(f32 V)        { Density = V; }
+        void SetHeightFalloff(f32 V)  { HeightFalloff = V; }
+        void SetFogHeight(f32 V)      { FogHeight = V; }
+        void SetFogColor(const Vec3& C){ FogColor = C; }
+        void SetMaxOpacity(f32 V)     { MaxOpacity = V; }
+        void SetStartDistance(f32 V)  { StartDistance = V; }
+        void SetCutoffDistance(f32 V) { CutoffDistance = V; }
+        void SetSecondFog(f32 Density2_, f32 Falloff2_, f32 Height2_) {
+            Density2 = Density2_; HeightFalloff2 = Falloff2_; FogHeight2 = Height2_;
+        }
+        void SetDirectionalInscattering(const Vec3& Color, f32 Exponent, f32 StartDist, bool Enabled) {
+            DirColor = Color; DirExponent = Exponent; DirStartDistance = StartDist; DirEnabled = Enabled;
+        }
+        f32  GetDensity() const        { return Density; }
+        f32  GetHeightFalloff() const  { return HeightFalloff; }
+        f32  GetFogHeight() const      { return FogHeight; }
+        Vec3 GetFogColor() const       { return FogColor; }
+        f32  GetMaxOpacity() const     { return MaxOpacity; }
+        // Quanto da cor do inscatter do height fog vem do ceu daquela direcao, em vez da cor
+        // chapada. Equivalente ao HeightFogContribution da UE. 1 = fisico (o fog converge para
+        // a cor do ceu no horizonte, que e o que mata a faixa clara na linha do oceano);
+        // 0 = comportamento historico, bit a bit. E o botao do A/B.
+        void SetHeightFogSkyContribution(f32 V) { HeightFogSkyContribution = V; }
+        f32  GetHeightFogSkyContribution() const { return HeightFogSkyContribution; }
+        bool IsInitialized() const override { return Initialized; }
+
+    private:
+        DXGI_FORMAT RTFormat = DXGI_FORMAT_UNKNOWN; // alvo com que as PSOs nasceram
+        void BuildRootSignature(ID3D12Device* Device);
+        void BuildPSOs(ID3D12Device* Device, DXGI_FORMAT RTFormat);
+        void CreateConstantBuffer(ID3D12Device* Device);
+
+        Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> PSO;
+
+        Microsoft::WRL::ComPtr<ID3D12Resource> ConstantBuffer;
+        u8*  MappedBase = nullptr;
+        u32  FrameSlot  = 0;
+
+        f32  Density        = 0.0002f;
+        f32  HeightFalloff  = 0.0005f;
+        f32  FogHeight      = 0.0f;
+        Vec3 FogColor       = { 0.42f, 0.55f, 0.70f };
+        f32  MaxOpacity     = 0.85f;
+        f32  StartDistance  = 0.0f;
+        f32  CutoffDistance = 0.0f;
+        f32  HeightFogSkyContribution = 1.0f;
+
+        f32  Density2       = 0.0f;
+        f32  HeightFalloff2 = 0.0005f;
+        f32  FogHeight2     = 0.0f;
+
+        Vec3 DirColor          = { 0.7f, 0.5f, 0.35f };
+        f32  DirExponent       = 4.0f;
+        f32  DirStartDistance  = 0.0f;
+        bool DirEnabled        = true;
+
+        bool Initialized = false;
+
+        D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const {
+            return ConstantBuffer->GetGPUVirtualAddress() +
+                   static_cast<UINT64>(FrameSlot) * sizeof(FogConstants);
+        }
+        FogConstants* Mapped() const {
+            return reinterpret_cast<FogConstants*>(
+                MappedBase + static_cast<size_t>(FrameSlot) * sizeof(FogConstants));
+        }
+    };
+}

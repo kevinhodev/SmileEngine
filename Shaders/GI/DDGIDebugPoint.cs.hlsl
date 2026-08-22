@@ -1,11 +1,7 @@
 #include "../GBuffer.hlsli"
 #include "DDGICommon.hlsli"
 
-// Diagnostico pontual do DDGI. Uma unica thread reconstrói o ponto clicado a partir do
-// depth e roda os mesmos oito taps do gather — literalmente a mesma funcao
-// (DDGI_EvaluateTapCheb, em DDGICommon.hlsli), nao uma copia dela. Diagnostico que
-// reimplementa o que audita passa a mentir no dia em que o original muda.
-//
+// Diagnostico pontual usando DDGI_EvaluateTapCheb, a mesma funcao do gather.
 // Saida:
 //   [0] ponto.xyz, valido
 //   [1] normal.xyz, soma dos pesos
@@ -23,11 +19,8 @@ cbuffer DDGIPointDebugCB : register(b0) {
     float4 PixelParams;         // xy = pixel interno; zw = tamanho interno
     float4 BiasParams;          // x = escala do bias, y = teto em metros (0 = sem teto),
                                 // z = largura do fade de borda em celulas (0 = desligado)
-    // Cascatas: o diagnostico roda a MESMA selecao do gather.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
-    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
-    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
     float4 GICascadeScrollOffset[4];
 };
 
@@ -39,11 +32,8 @@ Buffer<float4>    ProbeData       : register(t4);
 RWBuffer<float4>  DiagnosticOut   : register(u0);
 SamplerState      LinearClamp     : register(s0);
 
-// 16 = duas paginas de oito: a cascata primaria e, no blend, a proxima. Espelha
-// FDDGIDebug::kPointProbeCount.
+// Duas paginas de oito: cascata primaria e proxima durante o blend.
 static const uint DDGI_POINT_PROBES = 16u;
-// +1 no fim: peso do volume (fade de borda). Acrescentado no FIM de proposito — as linhas por
-// probe ficam nos mesmos indices e o parser do editor nao se desloca.
 static const uint DDGI_POINT_ROWS   = 3u + DDGI_POINT_PROBES * 3u;
 static const uint DDGI_POINT_ROW_VOLUME = 2u + DDGI_POINT_PROBES * 3u;
 
@@ -55,7 +45,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const uint2 sizePx = max((uint2)PixelParams.zw, uint2(1u, 1u));
     const uint2 px = min((uint2)PixelParams.xy, sizePx - 1u);
     const float depth = SceneDepth.Load(int3(px, 0));
-    if (depth <= 0.0f) return; // reverse-Z: zero = fundo
+    if (depth <= 0.0f) return; // reverse-Z
 
     const float2 uv  = (float2(px) + 0.5f) / float2(sizePx);
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
@@ -73,14 +63,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     const int3 count = (int3)GridCount.xyz;
 
-    // A MESMA selecao do gather, sobre a posicao CRUA. As 16 saidas sao DUAS paginas de oito: a
-    // cascata primaria e, durante o blend, a proxima. Publicar so os oito da primaria mostraria
-    // metade do que iluminou o pixel — e a metade que falta e justamente a que se contradiz com a
-    // outra na faixa de transicao, que e onde este painel e consultado.
     const DDGICascadeChoice choice =
         DDGI_SelectCascade(worldPos, GICascadeGridMinSpacing, (int)GICascadeParams.x, count);
-    // Fast path IDENTICO ao dos wrappers: sem blend, os oito de cima NAO participaram do gather e
-    // nao podem aparecer como contribuintes.
     const bool hasBlend = (choice.Next != choice.Primary) && (choice.PrimaryWeight < 0.999f);
 
     uint  probeIndices[DDGI_POINT_PROBES];
@@ -92,9 +76,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float visibilityWeights[DDGI_POINT_PROBES];
     float finalWeights[DDGI_POINT_PROBES];
     float3 irradiances[DDGI_POINT_PROBES];
-    // Soma dos pesos CRUS de cada pagina, separadas. O gather normaliza cada grupo de oito pelo
-    // proprio wsum e so DEPOIS mistura as cascatas; somar os 16 num denominador so produziria
-    // pesos que a imagem nunca usou.
+    // Cada cascata normaliza seus oito taps antes do blend.
     float pageWeightSum[2] = { 0.0f, 0.0f };
     float totalWeight = 0.0f;
 
@@ -103,12 +85,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const int    casc     = (page == 0u) ? choice.Primary : choice.Next;
     const bool   pageLive = (page == 0u) || hasBlend;
     const float4 cg       = GICascadeGridMinSpacing[casc];
-    // Scroll DA PAGINA, e nao um so: as duas paginas podem ser cascatas diferentes, e cada uma
-    // enderega o atlas com o proprio. Ler o da primaria nas duas mostraria a segunda pagina
-    // deslocada — e o painel existe justamente para nao mentir sobre qual sonda iluminou o pixel.
     const int3   cscroll  = (int3)GICascadeScrollOffset[casc].xyz;
-    // Bias POR CASCATA, como no wrapper: ele escala com o espacamento e a pagina de baixo tem
-    // outro. Reaproveitar um so daria a uma das duas um ponto de amostragem que ela nunca usou.
     const float3 biasVec = useChebyshev
         ? DDGI_SurfaceBias(N, V, cg.w, BiasParams.x, BiasParams.y) : 0.0f;
     const float3 biasPos  = worldPos + biasVec;
@@ -121,8 +98,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         const uint i = page * 8u + k;
         DDGITapCheb tap;
         if (useChebyshev) {
-            // A MESMA funcao que o SampleDDGIIrradianceCheb usa p/ pesar cada probe: e o
-            // que garante que o numero relatado aqui e o numero que iluminou o pixel.
             tap = DDGI_EvaluateTapCheb(
                 (int)k, base, fracPart, biasPos, worldPos, N,
                 cg.xyz, cg.w, count,
@@ -130,9 +105,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 1.0f / DistAtlasParams.yz, ProbeData, skipMode,
                 DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), casc, cscroll);
         } else {
-            // Com o Chebyshev desligado o consumidor e o SampleDDGIIrradiance: trilinear
-            // puro, sem bias, sem relocacao e sem skip de probe inativa. Os momentos ainda
-            // sao lidos p/ o painel mostrar o que o teste de visibilidade DIRIA se ligado.
+            // Sem Chebyshev, reproduz o caminho trilinear puro do gather.
             const int3 off = int3(k & 1u, (k >> 1u) & 1u, (k >> 2u) & 1u);
             const int3 c   = clamp(base + off, int3(0, 0, 0), count - 1);
             const float3 tri = lerp(1.0f - fracPart, fracPart, (float3)off);
@@ -140,8 +113,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 biasPos - DDGI_ProbeWorldPos(c, cg.xyz, cg.w);
 
             tap.Coord       = c;
-            // GLOBAL, como o ramo do Chebyshev (DDGI_EvaluateTapCheb): os dois publicam o mesmo
-            // campo e o diagnostico nao pode reportar indice local num e global no outro.
             tap.Index       = (uint)DDGI_GlobalProbeFromGeo(c, cscroll, casc, count);
             tap.Ignored     = false;
             tap.DistToProbe = length(probeToPoint);
@@ -165,8 +136,6 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                             DDGI_TilesPerRow(AtlasParams.y, (int)AtlasParams.x), casc),
             (int)AtlasParams.x, 1.0f / AtlasParams.yz, N);
 
-        // Pagina inativa (sem blend): os taps existem para o painel poder mostrar "nao
-        // participaram", nao como contribuintes. Peso zero e marca de ignorado.
         probeIndices[i]      = tap.Index;
         skipped[i]           = tap.Ignored || !pageLive;
         pointDistances[i]    = tap.DistToProbe;
@@ -183,27 +152,11 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 
     DiagnosticOut[0] = float4(worldPos, 1.0f);
     DiagnosticOut[1] = float4(N, totalWeight);
-    // Peso do volume no ponto: 1 = dentro (gather integral), <1 = mistura com o ambiente de
-    // fora, 0 = so ambiente. Os pesos por probe acima NAO mudam com o fade — sem publicar isto,
-    // mexer no slider reexecutaria o diagnostico e nada no painel se moveria, exatamente a
-    // impressao de "knob morto" que o re-disparo veio corrigir.
-    //
-    // O volume e medido na cascata GROSSA (GridMinSpacing), que e quem define "dentro da cena" —
-    // o mesmo campo que os cinco consumidores usam para o fade de borda.
-    //
-    // Escala de cada pagina no resultado final. Exatamente a composicao do wrapper: cada cascata
-    // normaliza pelo PROPRIO somatorio e so entao entra no lerp.
-    //
-    // No fast path a primaria vale 1.0, e NAO PrimaryWeight. Os wrappers retornam `primary` sem
-    // escala nenhuma quando nao ha blend, entao escalar por 0,999 aqui faria os pesos
-    // normalizados nao somarem 1 e o diagnostico deixaria de reproduzir o gather — de pouco, mas
-    // "de pouco" e o suficiente para alguem perseguir a diferenca errada.
+    // Sem blend, a primaria tem escala 1 como no fast path do gather.
     const float primaryScale = hasBlend ? choice.PrimaryWeight : 1.0f;
     const float pageScale[2] = { primaryScale,
                                  hasBlend ? (1.0f - choice.PrimaryWeight) : 0.0f };
-    // yzw = a escolha de cascata. Sem ela o painel mostraria 16 taps sem dizer de onde vem cada
-    // metade, nem com que peso as duas se misturaram. O peso publicado e o EFETIVO (ja com o
-    // fast path aplicado), que e o que o painel precisa para conferir a soma.
+    // x = peso do volume; yzw = escolha e peso efetivo da cascata.
     DiagnosticOut[DDGI_POINT_ROW_VOLUME] = float4(
         DDGI_VolumeWeight(worldPos, GridMinSpacing.xyz, GridMinSpacing.w, count, BiasParams.z),
         (float)choice.Primary, (float)(hasBlend ? choice.Next : choice.Primary),

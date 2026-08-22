@@ -1,0 +1,21 @@
+---
+description: Limites arquiteturais e convencoes de codigo da SmileEngine
+alwaysApply: true
+---
+
+# SmileEngine
+
+- Preserve alteracoes locais nao relacionadas; nunca reformate o repositorio inteiro junto de uma feature.
+- `Engine/` nao depende de Qt. `Editor/` pode depender da API publica da engine. Codigo novo de `Scene/` nao inclui `Renderer.h`.
+- Mantenha unidades `.cpp` explicitas no CMake. Headers publicos sao descobertos automaticamente apenas para navegacao da IDE.
+- Use C++20, quatro espacos, braces na mesma linha e o `.clang-format` da raiz nos arquivos C/C++ tocados.
+- Identificadores ficam em ingles; comentarios e documentacao podem ficar em PT-BR.
+- Tipos value/engine usam prefixo `F`; sistemas de alto nivel podem usar nome sem prefixo. Nao introduza sufixo `_` em membros.
+- Em definicoes, prefixe parametros com `_`; em declaracoes, use nomes descritivos sem `_`.
+- Comentarios explicam contratos, invariantes, ordem obrigatoria ou uma decisao nao evidente. Remova narracao do codigo e cronologia.
+- Historico de bugs, comparacoes com outras engines, metricas e planos pertencem a `Docs/`, nao a headers publicos.
+- `FPipelineOwner` participa de hot reload. `FRenderPass` acrescenta resize, debug e historico; a gravacao continua explicita no renderer.
+- Registre todo novo passe em `Renderer::RegisterPasses()` e declare seus stems no proprio dono do pipeline.
+- Estado temporal novo recebe um bit em `HistoryDomain.h` e testes para o dominio que o invalida.
+- Mudancas arquiteturais devem atualizar `Docs/ARCHITECTURE.md` e, quando couber, adicionar um teste CPU sem dependencia de GPU.
+- Antes de entregar, execute `cmake --build build --config Release` e `ctest --test-dir build -C Release --output-on-failure`.

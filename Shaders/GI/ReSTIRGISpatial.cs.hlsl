@@ -1,16 +1,6 @@
-// ReSTIR GI — Pass B: reuso ESPACIAL + resolve. Le o reservoir do Pass A (pos-temporal), funde k
-// vizinhos com o Jacobiano de reconexao (Ouyang 2021), rejeicao por normal/posicao, e resolve a
-// irradiancia -> GITexture. NAO realimenta o reservoir temporal (evita acumulo de bias).
-// Correcao de bias (M6 completo, estilo RTXDI): balance heuristic pi/piSum com os valores
-// CONTINUOS do pHat do vencedor no dominio de cada participante (nao mais o Z binario de
-// contagem); com visibility ON, vizinho ocluido do vencedor sai do denominador (a pdf de origem
-// dele e 0 — a amostragem inicial so gera pontos mutuamente visiveis).
-// Visibility ray opcional (x1->x2) com alpha-test (Instances/Vertices/Indices bindados).
-
-// Debug: pinta de VERMELHO (10,0,0) os pixels cuja conexao selecionada foi morta pelo visibility
-// ray, em vez de zerar W. Ligar = 1 + rebuild do target Shaders + reabrir o editor; testar com
-// "ReSTIR visibility" ON e NRD OFF (o denoiser borraria os pontos). Esperado: pontos
-// esparsos re-sorteados por frame em volta de oclusores finos (postes/cadeiras/quinas).
+// ReSTIR GI Pass B: reuso espacial, correção MIS e resolve.
+// Não realimenta o reservoir temporal. Referência: Ouyang et al. 2021.
+// Debug 1 pinta em vermelho conexões mortas pela visibilidade.
 #define RESTIR_DEBUG_VIS_KILLS 0
 
 #include "DDGICommon.hlsli"
@@ -38,35 +28,40 @@ cbuffer ReSTIRCB : register(b0) {
                                     // w=angularMinRatio
     float4 PolicyParams;            // x/y/z so o Pass A usa (backface, boiling, vies temporal);
                                     // w = kill de backface no Jacobiano, usado pelos DOIS
+    // Placeholders preservam o layout compartilhado do cbuffer.
+    float4 GIDistParams;
+    float4 GIBiasParams;
+    float4 ReGIRGridMinSlots;
+    float4 ReGIRInvCellEnabled;
+    float4 ReGIRGridCountSamples;
+    float4 ReGIRResources;
+    float4 SkyParams;
+    float4 DebugParams;
+    float4 HistoryParams;
+    float4 RadianceCacheCamCell;
+    float4 RadianceCacheLodCapFlags;
+    float4 RadianceCacheResources;
+    float4 GICascadeParams;
+    float4 GICascadeGridMinSpacing[4];
+    float4 GICascadeScrollOffset[4];
+    float4 TraceScreenParams;
+    float4 ResolutionParams;
 };
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
 
-// Comprimento minimo da conexao p/ valer a pena tracar o visibility ray. DERIVADO, nao literal:
-// TMin e a margem do TMax agora sao knobs de runtime, e o 0.15 fixo de antes deixaria de garantir
-// TMax > TMin (= comportamento indefinido no DXR) assim que alguem subisse os sliders. A folga
-// extra evita um segmento degenerado de comprimento ~0.
-//
-// Efeito colateral do valor: conexao mais curta que isto NAO e testada. Com os defaults atuais da
-// ~0.08 m, contra os 0.15 m arbitrarios de antes — ou seja, o dobro de alcance p/ oclusao de
-// contato nas conexoes reusadas espacialmente (o sample inicial ja carrega visibilidade do
-// proprio gather).
+// Garante TMax > TMin nos raios de visibilidade.
 float VisRayMinLength() {
     const float kGuard = 0.01f;
     return RayEpsB.y + RayEpsB.z + kGuard;
 }
 
 RaytracingAccelerationStructure Scene  : register(t0);
-// Reservoir em DUAS texturas (ver o cabecalho de empacotamento em ReSTIRReservoir.hlsli). t3/t4
-// seguem existindo como filler: a tabela deste passe tem 10 descritores e os tres ultimos ja eram
-// filler, entao encolher so moveria registrador sem economizar nada.
+// t3/t4 são fillers do layout de descriptors.
 Texture2D<float4>               Res0   : register(t1); // x2.xyz, W
 Texture2D<uint4>                Res1   : register(t2); // n2 | Lo | M+idade | n1
 Texture2D<float4>               GBuffer : register(t5);
 Texture2D<float>                Depth   : register(t6);
-// Alpha-test dos visibility rays (M6): sem eles o pass usava CULL_NON_OPAQUE (folhagem nao
-// ocluia e paredes atras de candidato masked eram perdidas). t8/t9 aposentados (VB/IB
-// bindless via InstanceGeo); a tabela CPU mantem o layout com filler.
 StructuredBuffer<InstanceGeo>   Instances : register(t7);
 
 RWTexture2D<float4>             GIOut   : register(u0); // rgb=gi, a=hitDist (preservado p/ o NRD)
@@ -77,9 +72,7 @@ SamplerState LinearWrap  : register(s1);
 #include "RTAlphaTest.hlsli"
 #include "ReSTIRReservoir.hlsli"
 
-// O ponto visivel deixou de morar no reservoir: aqui ele e reconstruido do depth, que este passe
-// ja carrega de todo jeito (teste de ceu do proprio pixel e dos vizinhos). Mesma conta e mesma
-// matriz do Pass A, entao o valor e identico ao que era gravado.
+// Reconstrói x1 do depth em vez de armazená-lo no reservoir.
 float3 WorldFromDepth(int2 p, float deviceZ) {
     const float2 uv  = (float2(p) + 0.5f) * ScreenParams.zw;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
@@ -87,29 +80,34 @@ float3 WorldFromDepth(int2 p, float deviceZ) {
     return wh.xyz / wh.w;
 }
 
+uint2 FullPixelFromTrace(uint2 tracePx) {
+    const uint scale = max((uint)ResolutionParams.x, 1u);
+    return min(tracePx * scale + uint2(ResolutionParams.yz), uint2(ScreenParams.xy) - 1u);
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
     uint2 px = dtid.xy;
-    if (px.x >= (uint)ScreenParams.x || px.y >= (uint)ScreenParams.y)
+    if (px.x >= (uint)TraceScreenParams.x || px.y >= (uint)TraceScreenParams.y)
         return;
 
-    float deviceZ = Depth.Load(int3(px, 0)).r;
+    const uint2 surfacePx = FullPixelFromTrace(px);
+
+    float deviceZ = Depth.Load(int3(surfacePx, 0)).r;
     if (deviceZ <= 0.0f) { GIOut[px] = float4(0.0f, 0.0f, 0.0f, 0.0f); return; }
 
     float hitDist = GIOut[px].a; // hitDist do Pass A — so fallback qdo o WRS espacial fica vazio
 
-    float4 gb = GBuffer.Load(int3(px, 0));
+    float4 gb = GBuffer.Load(int3(surfacePx, 0));
     float3 n1 = DDGI_OctDecode(gb.rg * 2.0f - 1.0f);
 
     float4 s0 = Res0.Load(int3(px, 0));
     uint4  s1 = Res1.Load(int3(px, 0));
-    float3 x1 = WorldFromDepth(px, deviceZ);
+    float3 x1 = WorldFromDepth(surfacePx, deviceZ);
 
-    uint rng = RngSeed(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_WRS);
+    uint rng = RngSeed(surfacePx, (uint)TraceParams.x, SMILE_RNG_SPATIAL_WRS);
 
-    // Participantes do WRS (self + ate K vizinhos aceitos), guardados p/ a correcao de bias:
-    // precisamos re-avaliar o sample VENCEDOR no dominio de cada um depois da selecao. selCand
-    // rastreia o dominio que GEROU o vencedor (numerador pi do peso MIS).
+    // Domínios participantes da correção MIS.
     const int kMaxCand = 9; // 1 self + K (default 4; folga p/ slider futuro)
     float3 candX1[kMaxCand];
     float3 candN1[kMaxCand];
@@ -117,7 +115,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     int    candCount = 0;
     int    selCand   = -1;
 
-    // Reservoir espacial: comeca com a propria amostra do pixel.
+    // Começa pela amostra do próprio pixel.
     Reservoir rs; ResInit(rs); rs.x1 = x1;
     {
         Reservoir self;
@@ -133,7 +131,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     float camDist   = length(CameraPos.xyz - x1);
     float posReject = ReuseParams.y * max(camDist, 1.0f);
-    float radius    = SpatialParams.x;
+    float radius    = SpatialParams.x / max(ResolutionParams.x, 1.0f);
     int   K         = min((int)SpatialParams.y, kMaxCand - 1);
     float normalRej = SpatialParams.w;
 
@@ -141,13 +139,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         float2 E   = GGX_Rand2E(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_TAP + (uint)i);
         float2 off = GGX_ConcentricDisk(E) * radius;
         int2   qpx = int2(px) + int2(round(off));
-        if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)ScreenParams.x || qpx.y >= (int)ScreenParams.y)
+        if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)TraceScreenParams.x ||
+            qpx.y >= (int)TraceScreenParams.y)
             continue;
         if (all(qpx == int2(px))) continue;
 
-        float qz = Depth.Load(int3(qpx, 0)).r;
+        const uint2 qSurfacePx = FullPixelFromTrace(uint2(qpx));
+        float qz = Depth.Load(int3(qSurfacePx, 0)).r;
         if (qz <= 0.0f) continue;
-        float4 qgb = GBuffer.Load(int3(qpx, 0));
+        float4 qgb = GBuffer.Load(int3(qSurfacePx, 0));
         float3 qn1 = DDGI_OctDecode(qgb.rg * 2.0f - 1.0f);
         if (dot(qn1, n1) < normalRej) continue; // rejeicao por normal
 
@@ -155,11 +155,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         float qM, qAge;
         ResUnpackMAge(q1.z, qM, qAge);
         if (qM <= 0.0f) continue;
-        // x1 do vizinho reconstruido do qz que ja foi carregado acima — era o unico motivo de o
-        // ponto visivel viver no reservoir.
-        float3 qx1 = WorldFromDepth(qpx, qz);
-        // So rejeicao RADIAL (config estavel do bisect 2026-07-12; a rejeicao de plano do fix 6
-        // saiu junto com o resto do pacote — re-introduzir so com A/B dedicado).
+        float3 qx1 = WorldFromDepth(qSurfacePx, qz);
         if (length(qx1 - x1) > posReject) continue; // rejeicao radial por posicao
 
         float4 q0 = Res0.Load(int3(qpx, 0));
@@ -169,10 +165,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         nb.n2 = ResUnpackNormal(q1.x);   nb.Lo = ResUnpackRadiance(q1.y);
         nb.M = qM; nb.W = q0.w; nb.wSum = 0.0f;
 
-        // dst=atual, src=vizinho; PolicyParams.w = saturate (RTXDI) vs abs() historico
         float J = ReconnectionJacobian(x1, nb.x1, nb.x2, nb.n2, PolicyParams.w > 0.5f);
-        // Rejeita (nao clampa) Jacobiano extremo: clampar mantem o sample com peso errado
-        // (firefly/escurecimento em quinas). RTXDI/kajiya descartam o vizinho nesse caso.
+        // Clamp manteria a amostra com peso incorreto.
         if (J < 0.1f || J > 10.0f) continue;
         float pHat = TargetPHat(x1, n1, nb.x2, nb.Lo);
         if (ResMerge(rs, nb, pHat, J, rng)) selCand = candCount;
@@ -180,20 +174,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         ++candCount;
     }
 
-    // Correcao de bias (M6 completo, estilo RTXDI): balance heuristic no lugar do Z binario.
-    // ps_c = pHat do sample VENCEDOR avaliado no dominio de cada participante (valor continuo);
-    // W = wSum * pi / (pHatSel * Σ ps_c·M_c), com pi = ps do dominio que gerou o vencedor.
-    // Vizinho que "mal" poderia gerar o sample (ps pequeno) vota pouco no denominador — menos
-    // variancia que o teste binario de hemisferio. Com visibility ON, vizinho OCLUIDO do
-    // vencedor tem ps zerado por ray: a pdf de origem real dele e 0 (a amostragem inicial so
-    // gera pontos mutuamente visiveis) — remove o escurecimento residual em bordas de oclusao.
+    // Balance heuristic: W = wSum*pi/(pHatSel*sum(ps_c*M_c)).
     {
         float pHatSel = TargetPHat(x1, n1, rs.x2, rs.Lo);
         float pi = 0.0f, piSum = 0.0f;
         for (int cd = 0; cd < candCount; ++cd) {
             float ps = TargetPHat(candX1[cd], candN1[cd], rs.x2, rs.Lo);
-            // Raio so p/ vizinhos (cd>0): o dominio do proprio pixel e coberto pela shading
-            // visibility abaixo (mesmo segmento; nao paga o raio 2x).
+            // O domínio próprio é testado pela shading visibility abaixo.
             if (ps > 0.0f && cd > 0 && ReuseParams.z > 0.5f) {
                 float3 mDir = SafeRayDir(rs.x2 - candX1[cd], candN1[cd]); // p/ o termo angular
                 float3 morg = OffsetRayGBuffer(candX1[cd], candN1[cd], mDir,
@@ -206,9 +193,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     mray.Direction = mToS / mLen;
                     mray.TMin      = RayEpsB.y;
                     mray.TMax      = mLen - RayEpsB.z;
-                    // SEM culling: isto e teste de OCLUSAO, e uma parede oclui a conexao seja qual
-                    // for o lado que o raio encontra. Cullar o verso faria a casca do comodo
-                    // deixar passar a conexao vista de dentro.
+                    // Teste de oclusão sem culling.
                     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> mq;
                     mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                                       SMILE_RT_MASK_GATHER, mray);
@@ -219,36 +204,21 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             piSum += ps * candM[cd];
             if (cd == selCand) pi = ps;
         }
-        // Helper compartilhado com o Pass A (o temporal passou a usar a mesma normalizacao):
-        // conta identica a que estava inline aqui, incluindo as tres guardas.
         ResFinalizeMIS(rs, pHatSel, pi, piSum);
     }
 
-    // Shading visibility (opcional): testa a conexao x1->x2 da amostra SELECIONADA. Se ocluida, o
-    // indireto deste pixel cai -> o NRD borra esse 0/1 estocastico num gradiente = sombra de contato
-    // SUAVE (estilo AO do bounce). Igual a shading visibility do RTXDI (DI). Sem reuso do resultado.
+    // Visibilidade opcional da conexão selecionada.
     if (ReuseParams.z > 0.5f && rs.W > 0.0f) {
-        // Direcao e comprimento medidos da origem efetiva (offset robusto anti self-hit). O
-        // x2 fica protegido pela folga do TMax (para 0.05 antes da superficie dele); a origem
-        // pelo TMin + offset.
         float3 sDir = SafeRayDir(rs.x2 - x1, n1); // aprox. p/ o termo angular do offset
         float3 org  = OffsetRayGBuffer(x1, n1, sDir, camDist);
         float3 toS  = rs.x2 - org;
         float  len  = length(toS);
-        // Pula conexoes curtas: garante TMax > TMin (senao = UB no DXR) e elas sao triviais.
         if (len > VisRayMinLength()) {
             RayDesc vray;
             vray.Origin    = org;
             vray.Direction = toS / len;
             vray.TMin      = RayEpsB.y;
             vray.TMax      = len - RayEpsB.z; // > TMin garantido; para antes do x2
-            // MESMAS flags do trace inicial, que agora e NONE. Teste de oclusao nao culla: a
-            // parede tem que bloquear a conexao pelo lado que o raio encontrar, e com culling a
-            // casca do comodo deixaria passar tudo que fosse visto de dentro. O receio antigo de
-            // "backface vira oclusor fantasma" nao se aplica a um segmento x1->x2 que ja para
-            // antes da superficie do x2 (margem no TMax). Alpha-test via SMILE_RT_PROCEED
-            // (Instances/Vertices/Indices bindados no M6): folhagem masked oclui correto e
-            // paredes atras de candidato masked nao sao mais perdidas.
             const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
             RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> vq;
             vq.TraceRayInline(Scene, VisFlags, SMILE_RT_MASK_GATHER, vray);
@@ -265,7 +235,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
 
     float3 gi = ResResolve(rs, x1, n1, ShadeParams.z);
-    // hitDist do NRD segue a amostra VENCEDORA (um vizinho pode ter trocado x2); ver Pass A.
+    // O NRD recebe a distância da amostra vencedora.
     float selDist = (rs.wSum > 0.0f) ? length(rs.x2 - x1) : hitDist;
     GIOut[px] = float4(gi, selDist);
 }

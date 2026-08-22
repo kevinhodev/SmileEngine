@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Smile/Math/Math.h"
-#include "Smile/Graphics/GpuMesh.h"
-#include "Smile/Graphics/Material.h"
+#include "Smile/Graphics/Resources/GpuMesh.h"
+#include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Scene/Light.h"
 #include <memory>
 #include <string>

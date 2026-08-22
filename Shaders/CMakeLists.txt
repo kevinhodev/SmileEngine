@@ -57,9 +57,12 @@ smile_compile_shader(GI/DDGITrace.cs.hlsl      cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIUpdate.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIUpdateDist.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIRelocate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGICompactBuild.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGICompactFinalize.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 # ReSTIR GI — final-gather difuso por pixel (reservoir espaciotemporal) sobre o DDGI (cache)
 smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReSTIRGISpatial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(GI/ReSTIRGIUpsample.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 if(SMILE_SHADER_TIMER_AVAILABLE)
     smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl cs_6_6 main SHADER_OUTPUTS
         OUTPUT_NAME ReSTIRGITraceTimed ${SMILE_TIMER_FLAGS})
@@ -258,4 +261,4 @@ add_custom_target(Shaders
 )
 
 # Mantem a pasta Shaders visivel no Visual Studio com seus .hlsl
-set_target_properties(Shaders PROPERTIES FOLDER "Build")
+set_target_properties(Shaders PROPERTIES FOLDER "Engine/Assets")

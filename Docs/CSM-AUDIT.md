@@ -181,9 +181,10 @@ cascatas voltam a ser redesenhadas todo frame.
 - `Shaders/Shadow/CSMCommon.hlsli` — tap central no blocker search do PCSS e queda no
   PCF de raio mínimo no lugar do retorno antecipado iluminado; `CSM_VolumeTap` sem bias
   de superfície, só um epsilon de precisão.
-- `Engine/Source/Graphics/SunShadows.cpp`, `LocalShadows.cpp`, `Terrain.cpp` —
+- `Engine/Source/Graphics/Lighting/SunShadows.cpp`, `Lighting/LocalShadows.cpp`,
+  `Scene/Terrain.cpp` —
   `DepthBiasClamp = 0.001f` como teto do slope bias.
-- `Engine/Source/Graphics/SunShafts.cpp` — `ADDRESS_MODE_BORDER` no sampler de
+- `Engine/Source/Graphics/Environment/SunShafts.cpp` — `ADDRESS_MODE_BORDER` no sampler de
   comparação, que faltava para a cor de borda branca deixar de ser código morto.
 - `Shaders/DeferredLighting.ps.hlsl`, `Shaders/ForwardBlend.ps.hlsl` — o CSM só é
   amostrado quando há luz direta a modular.

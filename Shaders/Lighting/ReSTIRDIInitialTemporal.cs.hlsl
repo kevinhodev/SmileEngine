@@ -25,7 +25,7 @@ cbuffer ReSTIRDICB : register(b0) {
     // Nao lido aqui. Declarado porque o cbuffer e posicional: sem ele o MeshSampling cairia no
     // offset do PrevViewProj e o orcamento de mesh viria de uma linha de matriz.
     row_major float4x4 PrevViewProj;
-    float4 MeshSampling; // x = candidatas de mesh light; yzw livres
+    float4 MeshSampling; // x=candidatas mesh; y=BRDF-ratio (consumido pelo Pass B); zw livres
 };
 
 #include "../RayOffset.hlsli"

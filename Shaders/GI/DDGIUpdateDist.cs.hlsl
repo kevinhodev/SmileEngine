@@ -4,9 +4,7 @@
 #define DDGI_DIST_TILE 14
 #define DDGI_DIST_SHARP 50.0f
 
-// Declarado ate o FIM do DDGICB (era so o prefixo ate o DistAtlasParams) porque a invalidacao
-// regional mora nos ultimos campos. Mesma razao do DDGIUpdate: prefixo truncado le por offset e
-// funciona, mas qualquer campo novo depois passa a exigir a cadeia inteira mesmo assim.
+// Layout completo espelhado por DDGIConstants.
 cbuffer DDGICB : register(b0) {
     float4 GridMinSpacing;
     float4 GridCountRays;
@@ -33,25 +31,21 @@ cbuffer DDGICB : register(b0) {
     float4 RadianceCacheResources;
     float4 MiscParams3;       // x = hysteresis regional DESTE atlas, y = 1 se a janela dele esta
                               // aberta (e mais longa que a da irradiancia — ver DDGI.h)
-    // Cascatas: a posicao da sonda no teste de invalidacao regional e o clamp dos momentos saem
-    // daqui, nao do GridMinSpacing (que e a GROSSA).
+    // z = prefixo atualizado; w = intervalo temporal da grossa.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
-    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
-    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
     float4 GICascadeScrollOffset[4];
-    // Quanto cada cascata ROLOU desde o ultimo update que rodou, em celulas (xyz), w = rolou.
-    // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
-    // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
     float4 GICascadeScrollDelta[4];
+    float4 ProbeCompactionParams; // x = Trace/Update usam a lista compacta desta passada
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
 Buffer<float4>      ProbeData   : register(t1); // w>=1 = probe recem-ativado/relocado
+Buffer<uint>        ActiveProbeIndices : register(t2);
+Buffer<uint>        ActiveProbeCount   : register(t3);
 RWTexture2D<float2> DistAtlas   : register(u0);
 
-// Tabela de copia da borda octaedrica (wrap com fold; do Wicked, mesma que o Flax usa):
-// uint4(srcX, srcY, dstX, dstY) em coords do tile COM borda (0..15 p/ interior 14).
+// uint4(srcX, srcY, dstX, dstY) para a borda octaedrica do tile.
 #define DDGI_BORDER_COUNT 60
 static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
     uint4(14,1, 1,0), uint4(13,1, 2,0), uint4(12,1, 3,0), uint4(11,1, 4,0), uint4(10,1, 5,0),
@@ -76,19 +70,17 @@ static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
 [numthreads(DDGI_DIST_TILE, DDGI_DIST_TILE, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int numProbes = (int)AtlasParams.w;
-    // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
-    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, numProbes);
-    if (probeIdx >= numProbes) return;
+    int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    const bool compact = ProbeCompactionParams.x > 0.5f;
+    const int workProbes = compact ? min((int)ActiveProbeCount[0], updateProbes) : updateProbes;
+    int workIdx = DDGI_ProbeFromGroup(Gid.xy, max(workProbes, 1));
+    if (workIdx >= workProbes) return;
+    int probeIdx = compact ? (int)ActiveProbeIndices[workIdx] : workIdx;
+    if (probeIdx >= updateProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
-    // Indice GLOBAL -> (cascata, indice local). A geometria da sonda e sempre LOCAL; so o atlas e
-    // os buffers falam em global. Com uma cascata os dois coincidem — e por isso a F6.1 nao muda
-    // pixel nenhum.
     int  cascade  = DDGI_CascadeOfProbe(probeIdx, count);
     int  localIdx = DDGI_LocalProbeIndex(probeIdx, count);
-    // ARMAZENAMENTO -> GEOMETRIA, igual ao DDGIUpdate — e tem de ser igual mesmo: os dois atlas
-    // compartilham o indice de tile, entao um desacordo aqui poria a visibilidade de uma sonda
-    // sobre a irradiancia de outra.
     int3 scroll = (int3)GICascadeScrollOffset[cascade].xyz;
     int3 pc     = DDGI_GeometricCoord(DDGI_ProbeCoord(localIdx, count), scroll, count);
     const bool newlyExposed =
@@ -101,12 +93,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     float2 octUV    = ((float2)local + 0.5f) / (float)tile;
     float3 texelDir = DDGI_OctDecode(octUV * 2.0f - 1.0f);
 
-    // Clamp na convencao do paper (G3D): 1.5 * ||spacing do grid|| = 1.5*sqrt(3)*spacing ~= 2.6.
-    // Cobre a diagonal da gaiola 2x2x2 (sqrt(3)*spacing) + bias/offset com folga; hits alem disso
-    // nao interessam ao Chebyshev (o ponto amostrado esta sempre dentro da gaiola) e so inflavam
-    // media/variancia, deixando o teste permissivo demais (leak atraves de parede) com 4.0.
-    // Da CASCATA: o clamp dos momentos e 2,6 espacamentos, e o da grossa deixaria a fina medindo
-    // visibilidade quatro vezes alem da propria gaiola.
+    // Limita os momentos à vizinhanca relevante do Chebyshev nesta cascata.
     float distMax = GICascadeGridMinSpacing[cascade].w * 2.6f;
 
     uint  frame = (uint)TraceParams.x;
@@ -130,46 +117,18 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
 
     int2   texel = tileOrigin + local;
     float2 prev  = DistAtlas[texel];
-    // Probe recem-ativado/relocado: distancias antigas sao de outra posicao — reset (hyst 0).
-    //
-    // Histerese PROPRIA (DistAtlasParams.w), mais alta que a da irradiancia e SEM o detector
-    // adaptativo do DDGIUpdate. Os dois motivos sao o mesmo fato: com o expoente 50 acima, o
-    // lobo de cada texel tem 9,5 graus a meio peso (cos^50 = 0.5 => 0.5^(1/50) = cos 9,51),
-    // ou 0,69% da esfera. Com 64 raios isso da ~0,44 raio esperado por texel por frame — o
-    // texel guarda, na pratica, a distancia do raio que por acaso caiu mais perto, e as
-    // direcoes giram todo frame.
-    //
-    // Ou seja: aqui a mistura temporal nao e atraso, e a RECONSTRUCAO do estimador, com ~1/(1-h)
-    // amostras efetivas. Descer junto com a irradiancia cortaria pela metade as amostras que
-    // formam os momentos que o Chebyshev consome, e a precisao deles ja e o gargalo. E um
-    // detector de mudanca por frame dispararia com o proprio ruido de reamostragem, nao com
-    // mudanca de cena.
-    //
-    // O corolario, agora implementado: sem detector, quem invalida este atlas e o EVENTO
-    // explicito — a mesma caixa que o DDGIUpdate consome, com a mesma posicao relocada da sonda
-    // (DDGI_RegionalHysteresis). Antes disso, criar ou remover geometria preservava ~99% dos
-    // momentos velhos por update: a iluminacao respondia e a visibilidade nao, e o que se via
-    // era mancha — luz nova pesada por uma visibilidade de uma cena que nao existe mais.
-    //
-    // A hysteresis regional daqui e a PROPRIA (MiscParams3.x), mais alta que a da irradiancia,
-    // pelo mesmo motivo da base: ~0,44 raio por texel por frame. A regional da irradiancia (0.90)
-    // deixaria 19 amostras efetivas de um estimador que e ordens de grandeza mais ruidoso — o
-    // flicker de iluminacao viraria flicker de VISIBILIDADE, que e pior (mancha de sombra
-    // piscando em vez de brilho piscando).
-    // Lamina nova: momentos zerados de fato, e nao "quase". Com media e 2o momento de outro lugar,
-    // o Chebyshev prende todo tap no piso de 0,05 e a sonda nova ocluiria tudo a volta dela.
-    float  hyst  = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : DistAtlasParams.w;
-    // Janela propria: a do dist e mais longa, entao o flag de "aberta" nao pode ser o da
-    // irradiancia. So o w do InvalidateMin e substituido; a CAIXA e a mesma.
+    // Momentos usam histerese propria; sonda nova/relocada descarta o historico espacial antigo.
+    const float temporalInterval = (cascade > 0) ? max(GICascadeParams.w, 1.0f) : 1.0f;
+    const float temporalHyst = pow(saturate(DistAtlasParams.w), temporalInterval);
+    float  hyst  = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : temporalHyst;
+    // A caixa e compartilhada, mas a janela e a histerese pertencem ao atlas de distancia.
     const float4 distInvMin = float4(InvalidateMin.xyz, MiscParams3.y);
-    // Grid da CASCATA da sonda: o teste compara a posicao de mundo dela contra a caixa, e
-    // reconstrui-la com a origem/espacamento da grossa poria a sonda da fina em outro lugar.
     hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GICascadeGridMinSpacing[cascade].xyz,
                                    GICascadeGridMinSpacing[cascade].w, distInvMin, InvalidateMaxHyst.xyz,
                                    MiscParams3.x, hyst);
     DistAtlas[texel] = lerp(result, prev, hyst);
 
-    // Copia a borda de 1px do tile (fold octaedrico) p/ o bilinear ser continuo na costura.
+    // Publica o interior antes de copiar a borda octaedrica.
     DeviceMemoryBarrierWithGroupSync();
     uint groupIdx  = GTid.y * DDGI_DIST_TILE + GTid.x;
     int2 padOrigin = tileOrigin - 1;

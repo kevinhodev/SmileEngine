@@ -2,13 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Toolbar do viewport e dropdown de view modes. Cada instancia recebe explicitamente o
-// ViewportWidget que controla; os atalhos globais sao roteados pelo MainWindow para a ativa.
+// Cada instância recebe a viewport ativa e os modelos de render/debug compostos pelo MainWindow.
 Rectangle {
     id: root
 
     required property var viewportModel
     required property var renderModel
+    required property var debugModel
 
     color: "#131410"
     implicitWidth: 900
@@ -20,6 +20,22 @@ Rectangle {
     readonly property color accent: C.Theme.green
     readonly property bool compact: width < 1040
     readonly property bool narrow: width < 760
+
+    // "Este preset é o valor vigente?" — com TOLERÂNCIA, e não com ===.
+    //
+    // O passo é guardado como float no C++ e chega aqui promovido a double, então 0.10f vira
+    // 0.10000000149…, que não é o double do literal 0.10 deste arquivo. A comparação estrita
+    // reprovava justamente os presets pequenos (1 cm, 5 cm, 10 cm, 1%, 5%, 10%) e a marca de
+    // seleção sumia neles; os de rotação escapavam por serem inteiros, exatos nos dois lados.
+    //
+    // Tolerância RELATIVA porque o erro do float ESCALA com a magnitude: ~1e-9 em 0,01 e ~1e-6
+    // em 10. Um epsilon fixo tem de cobrir o maior deles, e aí fica preso à maior entrada da
+    // lista — um preset de 1000 m (erro ~1e-4) passaria a reprovar sozinho. Relativo acompanha.
+    //
+    // Para a lista de HOJE um 1e-5 fixo também serviria: os presets vizinhos estão a 5× de
+    // distância (0,01 vs 0,05 = 0,04 de folga), ordens de grandeza acima de qualquer epsilon
+    // plausível. A escolha aqui é por não precisar revisitar isto quando a lista crescer.
+    function samePreset(a, b) { return Math.abs(a - b) <= Math.abs(b) * 1e-5 }
 
     component IconToolButton: Rectangle {
         id: iconButton
@@ -238,6 +254,105 @@ Rectangle {
         }
     }
 
+        // Os tres snaps. O botao inteiro abre a lista, e a lista tem "Desligado" no topo — mesmo
+        // padrao do popup de render targets logo abaixo neste arquivo. A alternativa (corpo
+        // alterna, seta abre) exigiria dois TapHandler disputando o mesmo item, e um deles
+        // ganharia o gesto de forma nao especificada.
+        //
+        // Os valores saem dos arrays default da UE (BaseEditorPerProjectUserSettings.ini),
+        // convertidos de cm para metros na translacao — a Smile trabalha em metros.
+        component SnapButton: Item {
+            id: snapButton
+            // 1 mover · 2 rotacionar · 3 escalar (mesmos numeros de gizmoMode)
+            required property int mode
+            required property string iconName
+            required property string label
+            required property bool on
+            required property var presets      // [{ v: número, t: "rótulo" }]
+            required property real currentValue // valor vigente; a lista marca o preset ativo
+            property string tip: ""
+
+            implicitWidth: body.implicitWidth
+            implicitHeight: 22
+
+            C.ToolbarButton {
+                id: body
+                anchors.fill: parent
+                iconName: snapButton.iconName
+                label: snapButton.label
+                dropDown: true
+                active: snapButton.on
+                tip: snapButton.tip
+                tipShortcut: "Ctrl inverte"
+                onTapped: snapPopup.opened ? snapPopup.close() : snapPopup.open()
+            }
+
+            Popup {
+                id: snapPopup
+                popupType: Popup.Window
+                y: snapButton.height + 4
+                width: 132
+                height: 8 + (snapButton.presets.length + 1) * 26
+                padding: 4
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                background: Rectangle {
+                    color: "#1b1c17"; border.color: "#33342c"; border.width: 1; radius: 7
+                }
+                contentItem: Column {
+                    SnapRow {
+                        text: "Desligado"
+                        muted: true
+                        checked: !snapButton.on
+                        onPicked: {
+                            if (snapButton.on) root.viewportModel.ToggleSnap(snapButton.mode)
+                            snapPopup.close()
+                        }
+                    }
+                    Repeater {
+                        model: snapButton.presets
+                        delegate: SnapRow {
+                            required property var modelData
+                            text: modelData.t
+                            checked: snapButton.on && root.samePreset(snapButton.currentValue, modelData.v)
+                            onPicked: {
+                                root.viewportModel.SetSnapValue(snapButton.mode, modelData.v)
+                                if (!snapButton.on) root.viewportModel.ToggleSnap(snapButton.mode)
+                                snapPopup.close()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Linha do popup de snap. Fora do SnapButton para o Repeater nao precisar alcancar ids de
+        // um componente externo — que e o que gera os avisos de acesso nao qualificado.
+        component SnapRow: Rectangle {
+            id: snapRow
+            property alias text: snapRowLabel.text
+            property bool checked: false
+            property bool muted: false
+            signal picked()
+            width: 124; height: 26; radius: 4
+            color: snapRowHover.hovered ? "#2a2b24" : "transparent"
+            RadioMark {
+                anchors.left: parent.left; anchors.leftMargin: 7
+                anchors.verticalCenter: parent.verticalCenter
+                checked: snapRow.checked
+            }
+            Text {
+                id: snapRowLabel
+                anchors.left: parent.left; anchors.leftMargin: 27
+                anchors.verticalCenter: parent.verticalCenter
+                color: snapRow.muted ? root.textMuted : root.textNormal
+                font.family: C.Theme.fontFamily
+                font.pixelSize: 12
+            }
+            HoverHandler { id: snapRowHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: snapRow.picked() }
+        }
+
+
     // Já ligados ao editor: o seletor Lit e o grupo Selecionar/Mover/Rotacionar/Escalar.
     // Ainda camada visual (conectados em etapas próprias): desfazer/refazer, Global/Local,
     // os três snaps, câmera, Mostrar, enquadrar, velocidade, stats, grade e maximizar.
@@ -302,12 +417,28 @@ Rectangle {
             }
         }
 
+        // Alternância de dois estados, não dropdown: só existem Global e Local, e um menu de dois
+        // itens custa dois cliques pelo que um resolve. Vira dropdown no dia em que houver um
+        // terceiro espaço (a Cry tem Parent, View e UserDefined).
+        //
+        // O botão mostra o espaço EFETIVO, não o escolhido, e quando os dois divergem ele aparece
+        // travado com o motivo no tooltip. As duas restrições vêm do C++ (gizmoSpaceRestriction)
+        // em vez de serem deduzidas aqui: deduzir é o que fazia a luz operar em mundo enquanto o
+        // botão dizia "Local".
         C.ToolbarButton {
+            // 0 = nenhuma · 1 = escala é sempre local · 2 = luz não tem base local
+            readonly property int restriction: root.viewportModel.gizmoSpaceRestriction
+            readonly property bool isLocal: root.viewportModel.gizmoSpaceEffective === 1
             visible: !root.narrow
-            iconName: "world"
-            label: root.compact ? "" : "Global"
-            dropDown: true
-            tip: "Espaço de transformação: Global"
+            iconName: isLocal ? "local" : "world"
+            label: root.compact ? "" : (isLocal ? "Local" : "Global")
+            enabledVisual: restriction === 0
+            tip: restriction === 1 ? "Escala é sempre no espaço local do objeto"
+               : restriction === 2 ? "Luz não tem espaço local: só tem direção, sem roll"
+               : (isLocal ? "Espaço de transformação: Local (eixos do objeto)"
+                          : "Espaço de transformação: Global (eixos do mundo)")
+            tipShortcut: restriction === 0 ? "Ctrl+`" : ""
+            onTapped: root.viewportModel.ToggleGizmoSpace()
         }
 
         Rectangle {
@@ -317,26 +448,43 @@ Rectangle {
             color: "#2d2f28"
         }
 
-        C.ToolbarButton {
+        SnapButton {
+            anchors.verticalCenter: parent.verticalCenter
+            mode: 1
+            currentValue: root.viewportModel.snapTranslateM
             iconName: "magnet"
-            label: "10 cm"
-            dropDown: true
-            active: true
-            tip: "Snap de movimento: 10 cm"
+            label: root.viewportModel.snapTranslateM < 1.0
+                       ? Math.round(root.viewportModel.snapTranslateM * 100) + " cm"
+                       : root.viewportModel.snapTranslateM + " m"
+            on: root.viewportModel.snapTranslateOn
+            tip: "Snap de movimento"
+            presets: [{ v: 0.01, t: "1 cm" }, { v: 0.05, t: "5 cm" }, { v: 0.10, t: "10 cm" },
+                      { v: 0.25, t: "25 cm" }, { v: 0.50, t: "50 cm" }, { v: 1.0, t: "1 m" },
+                      { v: 5.0, t: "5 m" }, { v: 10.0, t: "10 m" }]
         }
-        C.ToolbarButton {
+        SnapButton {
             visible: !root.compact
+            anchors.verticalCenter: parent.verticalCenter
+            mode: 2
+            currentValue: root.viewportModel.snapRotateDeg
             iconName: "angle"
-            label: "15°"
-            dropDown: true
-            tip: "Snap de rotação: 15°"
+            label: root.viewportModel.snapRotateDeg + "°"
+            on: root.viewportModel.snapRotateOn
+            tip: "Snap de rotação"
+            presets: [{ v: 5, t: "5°" }, { v: 10, t: "10°" }, { v: 15, t: "15°" },
+                      { v: 30, t: "30°" }, { v: 45, t: "45°" }, { v: 90, t: "90°" }]
         }
-        C.ToolbarButton {
+        SnapButton {
             visible: !root.compact
+            anchors.verticalCenter: parent.verticalCenter
+            mode: 3
+            currentValue: root.viewportModel.snapScaleStep
             iconName: "percent"
-            label: "10%"
-            dropDown: true
-            tip: "Snap de escala: 10%"
+            label: Math.round(root.viewportModel.snapScaleStep * 100) + "%"
+            on: root.viewportModel.snapScaleOn
+            tip: "Snap de escala"
+            presets: [{ v: 0.01, t: "1%" }, { v: 0.05, t: "5%" }, { v: 0.10, t: "10%" },
+                      { v: 0.25, t: "25%" }, { v: 0.50, t: "50%" }, { v: 1.0, t: "100%" }]
         }
 
         Rectangle {
@@ -354,7 +502,7 @@ Rectangle {
         C.ToolbarButton {
             id: viewModeButton
             iconName: "lit"
-            label: root.compact ? "" : root.viewportModel.viewModeLabel
+            label: root.compact ? "" : root.debugModel.viewModeLabel
             dropDown: true
             active: true
             onTapped: {
@@ -448,22 +596,19 @@ Rectangle {
             ModeRow {
                 x: 8; y: 30; width: 264; height: 26
                 label: "Lit"; shortcutText: "Alt+1"
-                selected: root.viewportModel.viewMode === 0 && root.viewportModel.debugTargetIndex < 0
+                selected: root.viewportModel.viewMode === 0 && root.debugModel.debugTargetIndex < 0
                 onTapped: { root.viewportModel.SelectLit(); viewModesPopup.close() }
             }
             ModeRow {
                 x: 8; y: 60; width: 264; height: 28
                 label: "Heatmap de reflexos"; shortcutText: "Alt+5"
-                selected: root.viewportModel.viewMode === 3 && root.viewportModel.debugTargetIndex < 0
+                selected: root.viewportModel.viewMode === 3 && root.debugModel.debugTargetIndex < 0
                 onTapped: { root.viewportModel.SelectReflectionHeatmap(); viewModesPopup.close() }
             }
-            // Visualizador generico: lista TODOS os alvos publicados em DebugTargets, incluindo
-            // os campos do G-buffer. A lista vem do bridge (debugTargetNames), entao passe novo
-            // que se registre aparece aqui sozinho.
             ModeRow {
                 x: 8; y: 90; width: 264; height: 28
                 label: "Render targets"; hasSubmenu: true
-                selected: root.viewportModel.debugTargetIndex >= 0
+                selected: root.debugModel.debugTargetIndex >= 0
                 onTapped: {
                     if (debugTargetPopup.opened) debugTargetPopup.close()
                     else debugTargetPopup.open()
@@ -592,7 +737,7 @@ Rectangle {
         y: root.height + 56
         width: 232
         // Cresce com a lista (+1 pela linha "Desligado"), com teto p/ nao estourar a tela.
-        height: Math.min(12 + (root.viewportModel.debugTargetNames.length + 1) * 28, 460)
+        height: Math.min(12 + (root.debugModel.debugTargetNames.length + 1) * 28, 460)
         padding: 6
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
@@ -612,7 +757,7 @@ Rectangle {
                     RadioMark {
                         anchors.left: parent.left; anchors.leftMargin: 7
                         anchors.verticalCenter: parent.verticalCenter
-                        checked: root.viewportModel.debugTargetIndex < 0
+                        checked: root.debugModel.debugTargetIndex < 0
                     }
                     Text {
                         anchors.left: parent.left; anchors.leftMargin: 27
@@ -625,14 +770,14 @@ Rectangle {
                     HoverHandler { id: offHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
                         onTapped: {
-                            root.viewportModel.SelectDebugTarget(-1)
+                            root.debugModel.SelectDebugTarget(-1)
                             debugTargetPopup.close()
                             viewModesPopup.close()
                         }
                     }
                 }
                 Repeater {
-                    model: root.viewportModel.debugTargetNames
+                    model: root.debugModel.debugTargetNames
                     delegate: Rectangle {
                         required property string modelData
                         required property int index
@@ -641,7 +786,7 @@ Rectangle {
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter
-                            checked: root.viewportModel.debugTargetIndex === index
+                            checked: root.debugModel.debugTargetIndex === index
                         }
                         Text {
                             anchors.left: parent.left; anchors.leftMargin: 27
@@ -656,7 +801,7 @@ Rectangle {
                         HoverHandler { id: targetHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
                             onTapped: {
-                                root.viewportModel.SelectDebugTarget(index)
+                                root.debugModel.SelectDebugTarget(index)
                                 debugTargetPopup.close()
                                 viewModesPopup.close()
                             }

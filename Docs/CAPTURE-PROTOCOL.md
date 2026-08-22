@@ -25,7 +25,7 @@ não da cena "mais ou menos igual".
 | Peça | Arquivo |
 |---|---|
 | Domínio de reset | `HistoryDomain::DeterministicCapture` → `FRenderSettings::NotifyDeterministicCapture` |
-| Máquina de estados, readback, PNG e manifesto | `Engine/{Include/Smile,Source}/Graphics/FrameCapture.*` |
+| Máquina de estados, readback, PNG e manifesto | `Engine/{Include/Smile,Source}/Graphics/Debug/FrameCapture.*` |
 | Preset, coleta de estado e os 3 call sites | `Renderer::UpdateFrameCapture` / `RecordPost` / `FinishFrameCapture` |
 | Disparo pela UI | `Editor/…/CaptureBridge.*` + card no `SettingsWindow.qml` |
 | Commit da build no manifesto | `cmake/StampVersion.cmake` → `SMILE_BUILD_COMMIT` |

@@ -3,6 +3,10 @@ cmake_minimum_required(VERSION 3.25)
 # Projeto base SmileEngine - Qt 6 + DirectX 12
 project(SmileEngine LANGUAGES C CXX)
 
+# Mantem targets auxiliares fora da raiz da solucao do Visual Studio.
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
+
 # Testes matematicos isolados (sem dependencia do runtime/DirectX).
 include(CTest)
 
@@ -71,3 +75,5 @@ add_subdirectory(Tools/AllocBench)
 if(BUILD_TESTING)
     add_subdirectory(Tests)
 endif()
+
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT SmileEditor)

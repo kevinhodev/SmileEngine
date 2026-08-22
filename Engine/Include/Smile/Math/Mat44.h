@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Math/Vec4.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -37,6 +38,22 @@ namespace Smile {
             m.M[0][0] =  c;  m.M[0][1] = s;
             m.M[1][0] = -s;  m.M[1][1] = c;
             return m;
+        }
+
+        static TMat44 RotationAxis(const TVec3<T>& axis, T angle) {
+            const T lenSq = axis.LengthSq();
+            if (lenSq <= T(1e-12)) return Identity();
+            const TVec3<T> a = axis / std::sqrt(lenSq);
+            const T c = std::cos(angle), s = std::sin(angle), k = T(1) - c;
+            TMat44 m = Identity();
+            m.M[0][0] = c + k*a.X*a.X;     m.M[0][1] = k*a.X*a.Y + s*a.Z; m.M[0][2] = k*a.X*a.Z - s*a.Y;
+            m.M[1][0] = k*a.Y*a.X - s*a.Z; m.M[1][1] = c + k*a.Y*a.Y;     m.M[1][2] = k*a.Y*a.Z + s*a.X;
+            m.M[2][0] = k*a.Z*a.X + s*a.Y; m.M[2][1] = k*a.Z*a.Y - s*a.X; m.M[2][2] = c + k*a.Z*a.Z;
+            return m;
+        }
+
+        static TMat44 RotationEulerXYZ(const TVec3<T>& euler) {
+            return RotationX(euler.X) * RotationY(euler.Y) * RotationZ(euler.Z);
         }
 
         static TMat44 Translation(const TVec3<T>& t) {
@@ -125,6 +142,26 @@ namespace Smile {
                 M[2][0]*v.X + M[2][1]*v.Y + M[2][2]*v.Z + M[2][3]*v.W,
                 M[3][0]*v.X + M[3][1]*v.Y + M[3][2]*v.Z + M[3][3]*v.W,
             };
+        }
+
+        // Multiplica vetor-linha pela parte 3x3.
+        TVec3<T> TransformVectorRow(const TVec3<T>& v) const {
+            return {v.X*M[0][0] + v.Y*M[1][0] + v.Z*M[2][0],
+                    v.X*M[0][1] + v.Y*M[1][1] + v.Z*M[2][1],
+                    v.X*M[0][2] + v.Y*M[1][2] + v.Z*M[2][2]};
+        }
+
+        TVec3<T> TransformVectorRowTransposed(const TVec3<T>& v) const {
+            return {v.Dot(GetRow3(0)), v.Dot(GetRow3(1)), v.Dot(GetRow3(2))};
+        }
+
+        // Decompõe uma rotação criada por RotationEulerXYZ.
+        TVec3<T> ToEulerXYZ() const {
+            const T ry = std::asin(std::clamp(M[0][2], T(-1), T(1)));
+            if (std::fabs(std::cos(ry)) > T(1e-6))
+                return {std::atan2(M[1][2], M[2][2]), ry,
+                        std::atan2(M[0][1], M[0][0])};
+            return {std::atan2(-M[2][1], M[1][1]), ry, T(0)};
         }
 
         TMat44 GetTransposed() const {

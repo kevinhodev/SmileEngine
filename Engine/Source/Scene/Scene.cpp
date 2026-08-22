@@ -1,15 +1,13 @@
 #include "Smile/Scene/Scene.h"
-#include "Smile/Graphics/GpuResources.h"
-#include "Smile/Graphics/UploadQueue.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
+#include "Smile/Graphics/Backend/D3D12/UploadQueue.h"
 #include "Smile/Core/HResultCheck.h"
 #include <cstring>
 
 namespace Smile {
     Mat44 FTransform::Matrix() const {
         const Mat44 S = Mat44::Scale(Scale);
-        const Mat44 R = Mat44::RotationX(RotationEuler.X)
-                      * Mat44::RotationY(RotationEuler.Y)
-                      * Mat44::RotationZ(RotationEuler.Z);
+        const Mat44 R = Mat44::RotationEulerXYZ(RotationEuler);
         const Mat44 T = Mat44::Translation(Position);
         return S * R * T;
     }

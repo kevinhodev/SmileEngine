@@ -15,7 +15,7 @@
 //   4. Escreve .smesh (geometria) e .sscene (materiais + renderaveis).
 
 #include "Smile/Scene/CookedFormat.h"
-#include "Smile/Graphics/Mesh.h" // Smile::Vertex (stride 32)
+#include "Smile/Graphics/Resources/Mesh.h" // Smile::Vertex (stride 32)
 
 #include "ufbx.h"
 

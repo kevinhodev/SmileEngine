@@ -1,41 +1,53 @@
 #ifndef SMILE_SKY_AMBIENT_SH_HLSLI
 #define SMILE_SKY_AMBIENT_SH_HLSLI
 
-// Avaliacao da irradiancia difusa de uma SH-L1 do ceu, projetada pelo IntegrateSkyAmbient.cs.
-// Sem cbuffer e sem recurso: o shader hospedeiro passa os 3 float4 (um por canal), cada um com
-// (c0, c1, c2, c3) na base real l=0/l=1.
+// Avaliacao da irradiancia difusa de uma SH-L2 do ceu, projetada pelo IntegrateSkyAmbient.cs.
+// Sem cbuffer e sem recurso: o shader hospedeiro passa 9 float4, um por coeficiente, em RGB.
 //
 // Convolucao de Ramamoorthi & Hanrahan 2001: irradiancia = radiancia convoluida com o cosseno,
-// cujos fatores por banda sao A0 = PI e A1 = 2*PI/3. Devolvemos E/PI porque e essa a convencao
-// que o consumidor ja usava com as 2 cores chapadas (multiplica direto pelo DiffuseColor):
+// cujos fatores por banda sao A0 = PI, A1 = 2*PI/3 e A2 = PI/4. Devolvemos E/PI porque e essa
+// a convencao que o consumidor ja usava com as 2 cores chapadas (multiplica direto pelo
+// DiffuseColor):
 //
-//   E/PI = 0.282095*c0 + (2/3)*0.488603*(c1*n.y + c2*n.z + c3*n.x)
+//   E/PI = Y0*c0 + (2/3)*sum(Y1*ci) + (1/4)*sum(Y2*ci)
 static const float kSHAmbientDC  = 0.282095f;
 static const float kSHAmbientLin = 0.325735f; // (2/3) * 0.488603
+static const float kSHAmbientQuadCross = 0.273137f; // (1/4) * 1.092548
+static const float kSHAmbientQuadZonal = 0.078848f; // (1/4) * 0.315392
+static const float kSHAmbientQuadDiff  = 0.136569f; // (1/4) * 0.546274
 
-float3 EvalSkyAmbientSH(float4 shR, float4 shG, float4 shB, float3 n) {
-    float3 dc = float3(shR.x, shG.x, shB.x) * kSHAmbientDC;
+float3 EvalSkyAmbientSH(float4 sh[9], float3 n) {
+    const float3 dc = max(sh[0].rgb * kSHAmbientDC, 0.0f);
 
-    // Termo linear por canal, ja no espaco da normal (x,y,z).
-    float3 lx = float3(shR.w, shG.w, shB.w) * kSHAmbientLin;
-    float3 ly = float3(shR.y, shG.y, shB.y) * kSHAmbientLin;
-    float3 lz = float3(shR.z, shG.z, shB.z) * kSHAmbientLin;
+    // Termos ja convoluidos e divididos por PI. Cada float3 carrega RGB, portanto toda a
+    // avaliacao e o windowing sao vetorizados por canal.
+    const float3 ly = sh[1].rgb * kSHAmbientLin;
+    const float3 lz = sh[2].rgb * kSHAmbientLin;
+    const float3 lx = sh[3].rgb * kSHAmbientLin;
+    const float3 qXY = sh[4].rgb * kSHAmbientQuadCross;
+    const float3 qYZ = sh[5].rgb * kSHAmbientQuadCross;
+    const float3 qZ  = sh[6].rgb * kSHAmbientQuadZonal;
+    const float3 qXZ = sh[7].rgb * kSHAmbientQuadCross;
+    const float3 qD  = sh[8].rgb * kSHAmbientQuadDiff;
 
-    // CLAMP DO LOBO NEGATIVO. E(n) = dc + dot(linear, n), entao o minimo sobre a esfera e
-    // dc - |linear|: com um sinal muito direcional (e um poente e exatamente isso) a L1 fica
-    // NEGATIVA nas direcoes opostas ao sol e aparecem manchas pretas em superficies viradas
-    // para o lado contrario. Limitar o comprimento do vetor linear a dc garante E >= 0 em
-    // qualquer direcao PRESERVANDO a direcao do lobo — melhor que um max(0) no fim, que
-    // achataria o gradiente inteiro perto do zero. E o mesmo espirito do windowing padrao.
-    float3 e = float3(0.0f, 0.0f, 0.0f);
-    [unroll] for (int c = 0; c < 3; ++c) {
-        float3 lin = float3(lx[c], ly[c], lz[c]);
-        float  len = length(lin);
-        float  cap = max(dc[c], 0.0f);
-        if (len > cap) lin *= cap / max(len, 1e-6f);
-        e[c] = cap + dot(lin, n);
-    }
-    return max(e, 0.0f);
+    const float3 linearTerm = lx * n.x + ly * n.y + lz * n.z;
+    const float3 quadratic =
+        qXY * (n.x * n.y) +
+        qYZ * (n.y * n.z) +
+        qZ  * (3.0f * n.z * n.z - 1.0f) +
+        qXZ * (n.x * n.z) +
+        qD  * (n.x * n.x - n.y * n.y);
+
+    // Window DC-preserving contra ringing negativo. Para L1 o bound abaixo vira exatamente
+    // |linear| e reproduz a protecao anterior. Para L2 usamos os maximos analiticos de cada
+    // base: |xy|<=1/2, |3z2-1|<=2 e |x2-y2|<=1. Escalar todo o AC junto preserva a forma do
+    // lobo e garante E>=0 sem o plateau grande que um clamp puro criaria.
+    const float3 linearBound = sqrt(lx * lx + ly * ly + lz * lz);
+    const float3 quadraticBound =
+        0.5f * (abs(qXY) + abs(qYZ) + abs(qXZ)) + 2.0f * abs(qZ) + abs(qD);
+    const float3 window = saturate(dc / max(linearBound + quadraticBound, 1e-6f));
+
+    return max(dc + window * (linearTerm + quadratic), 0.0f);
 }
 
 #endif

@@ -5,7 +5,7 @@
 //
 // Os nove que viraram knobs de calibracao (pagina "Iluminacao global") NAO estao mais aqui: vem
 // pelo constant buffer em RayEpsA/RayEpsB, definidos pelo FRayEpsilonProfile em
-// Engine/Include/Smile/Graphics/RayEpsilons.h. Sao eles: originFloorMin, originFloorPerMeter,
+// Engine/Include/Smile/Graphics/RayTracing/RayEpsilons.h. Sao eles: originFloorMin, originFloorPerMeter,
 // bias angular, hitShadowRayBias (via TraceParams.w), shadowRayBiasMin, shadowRayTMin,
 // visRayTMin, visRayEndMargin e maxAge (via JitterParams.w).
 //

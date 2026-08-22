@@ -6,19 +6,21 @@ Item {
     property bool checked: false
     property bool interactive: true
     signal toggled()
-    implicitWidth: 36
-    implicitHeight: 20
+    implicitWidth: 30
+    implicitHeight: 16
     opacity: interactive ? 1.0 : 0.48
     Rectangle {
         anchors.fill: parent
         radius: height / 2
-        color: toggle.checked ? Theme.blue : Theme.controlBg
-        border.color: toggle.checked ? Theme.blue : Theme.controlBorder
+        color: toggle.checked ? Theme.greenBorder : Theme.controlBg
+        border.color: toggle.checked ? Theme.green : Theme.controlBorder
         border.width: 1
         Rectangle {
-            width: 14; height: 14; radius: 7
-            y: 3
-            x: toggle.checked ? 19 : 3
+            width: 10
+            height: width
+            radius: width / 2
+            y: (parent.height - height) / 2
+            x: toggle.checked ? parent.width - width - y : y
             color: toggle.checked ? Theme.knob : Theme.textMuted
             Behavior on x { NumberAnimation { duration: 100 } }
         }

@@ -3,7 +3,7 @@
 #include <iostream>
 #include <string_view>
 
-#include "Smile/Graphics/TimeOfDay.h"
+#include "Smile/Graphics/Environment/TimeOfDay.h"
 
 namespace {
     constexpr double kPi = 3.14159265358979323846;

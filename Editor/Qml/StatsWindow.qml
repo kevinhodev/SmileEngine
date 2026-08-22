@@ -8,7 +8,7 @@ import "components" as C
 // cada linha principal e um escopo de frame e seus filhos sao timestamps de subpasses.
 Rectangle {
     id: root
-    required property var viewportModel
+    required property var statsModel
     required property var statsWindow
 
     color: C.Theme.bg
@@ -69,7 +69,7 @@ Rectangle {
 
     function refreshGpuTimingSnapshot() {
         if (!passInteractionActive)
-            gpuTimingSnapshot = viewportModel.gpuTimings
+            gpuTimingSnapshot = statsModel.gpuTimings
     }
 
     Component.onCompleted: refreshGpuTimingSnapshot()
@@ -174,7 +174,7 @@ Rectangle {
             anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
             width: Math.min(250, implicitWidth)
-            text: viewportModel.gpuName
+            text: statsModel.gpuName
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideRight
             color: root.textMuted
@@ -260,7 +260,7 @@ Rectangle {
                     }
                     Text {
                         x: 16; y: 37
-                        text: viewportModel.gpuFrameText
+                        text: statsModel.gpuFrameText
                         color: root.textPrimary
                         font.family: C.Theme.fontMono
                         font.pixelSize: 26
@@ -270,22 +270,22 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 16
                         y: 46
-                        text: viewportModel.gpuFrameMs > 0
-                              ? (1000.0 / viewportModel.gpuFrameMs).toFixed(0) + " FPS GPU"
+                        text: statsModel.gpuFrameMs > 0
+                              ? (1000.0 / statsModel.gpuFrameMs).toFixed(0) + " FPS GPU"
                               : "— FPS GPU"
-                        color: viewportModel.gpuFrameMs <= 16.67 ? root.green : root.warn
+                        color: statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
                         font.family: C.Theme.fontMono
                         font.pixelSize: 11
                     }
                     MicroBar {
                         x: 16; y: 82
                         width: parent.width - 32
-                        value: viewportModel.gpuFrameMs / 16.67
-                        fillColor: viewportModel.gpuFrameMs <= 16.67 ? root.green : root.warn
+                        value: statsModel.gpuFrameMs / 16.67
+                        fillColor: statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
                     }
                     Text {
                         x: 16; y: 99
-                        text: "CPU  " + root.formatMs(viewportModel.frameTimeMs)
+                        text: "CPU  " + root.formatMs(statsModel.frameTimeMs)
                         color: root.textSecondary
                         font.family: C.Theme.fontMono
                         font.pixelSize: 10
@@ -294,10 +294,10 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 16
                         y: 99
-                        text: viewportModel.gpuFrameMs <= 16.67
-                              ? "+" + root.formatMs(16.67 - viewportModel.gpuFrameMs) + " livres"
-                              : root.formatMs(viewportModel.gpuFrameMs - 16.67) + " acima"
-                        color: viewportModel.gpuFrameMs <= 16.67 ? root.textMuted : root.warn
+                        text: statsModel.gpuFrameMs <= 16.67
+                              ? "+" + root.formatMs(16.67 - statsModel.gpuFrameMs) + " livres"
+                              : root.formatMs(statsModel.gpuFrameMs - 16.67) + " acima"
+                        color: statsModel.gpuFrameMs <= 16.67 ? root.textMuted : root.warn
                         font.family: C.Theme.fontMono
                         font.pixelSize: 10
                     }
@@ -318,8 +318,8 @@ Rectangle {
                     }
                     Text {
                         x: 16; y: 37
-                        text: viewportModel.vramUsageText
-                        color: viewportModel.vramOverBudget ? root.warn : root.blue
+                        text: statsModel.vramUsageText
+                        color: statsModel.vramOverBudget ? root.warn : root.blue
                         font.family: C.Theme.fontMono
                         font.pixelSize: 24
                         font.weight: Font.DemiBold
@@ -331,13 +331,13 @@ Rectangle {
                         width: budgetLabel.implicitWidth + 16
                         height: 22
                         radius: 11
-                        color: viewportModel.vramOverBudget ? "#36251d" : C.Theme.blueBg
-                        border.color: viewportModel.vramOverBudget ? root.warn : C.Theme.blueBorder
+                        color: statsModel.vramOverBudget ? "#36251d" : C.Theme.blueBg
+                        border.color: statsModel.vramOverBudget ? root.warn : C.Theme.blueBorder
                         Text {
                             id: budgetLabel
                             anchors.centerIn: parent
-                            text: Math.round(viewportModel.vramBudgetFrac * 100) + "% DO BUDGET"
-                            color: viewportModel.vramOverBudget ? root.warn : root.blue
+                            text: Math.round(statsModel.vramBudgetFrac * 100) + "% DO BUDGET"
+                            color: statsModel.vramOverBudget ? root.warn : root.blue
                             font.family: C.Theme.fontMono
                             font.pixelSize: 9
                             font.weight: Font.DemiBold
@@ -346,18 +346,18 @@ Rectangle {
                     MicroBar {
                         x: 16; y: 82
                         width: parent.width - 32
-                        value: viewportModel.vramBudgetFrac
-                        fillColor: viewportModel.vramOverBudget || viewportModel.vramBudgetFrac > 0.85
+                        value: statsModel.vramBudgetFrac
+                        fillColor: statsModel.vramOverBudget || statsModel.vramBudgetFrac > 0.85
                                    ? root.warn : root.blue
                     }
                     Text {
                         x: 16; y: 101
                         width: parent.width - 32
-                        text: viewportModel.vramOverBudget
+                        text: statsModel.vramOverBudget
                               ? "Acima do budget do OS — possível paginação para RAM"
-                              : "Budget dinâmico do OS  ·  GPU com " + viewportModel.vramText + " dedicados"
+                              : "Budget dinâmico do OS  ·  GPU com " + statsModel.vramText + " dedicados"
                         elide: Text.ElideRight
-                        color: viewportModel.vramOverBudget ? root.warn : root.textMuted
+                        color: statsModel.vramOverBudget ? root.warn : root.textMuted
                         font.family: C.Theme.fontFamily
                         font.pixelSize: 10
                     }
@@ -395,7 +395,7 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 16
                         y: 17
-                        text: viewportModel.gpuFrameText
+                        text: statsModel.gpuFrameText
                         color: root.textSecondary
                         font.family: C.Theme.fontMono
                         font.pixelSize: 10
@@ -632,7 +632,7 @@ Rectangle {
                             spacing: 8
 
                             Repeater {
-                                model: viewportModel.vramBreakdown
+                                model: statsModel.vramBreakdown
                                 delegate: Item {
                                     id: vramRow
                                     required property var modelData
@@ -760,7 +760,7 @@ Rectangle {
                             }
 
                             Text {
-                                visible: viewportModel.vramBreakdown.length === 0
+                                visible: statsModel.vramBreakdown.length === 0
                                 height: visible ? 28 : 0
                                 text: "Sem dados — carregue uma cena."
                                 color: root.textMuted
@@ -790,11 +790,11 @@ Rectangle {
 
                             Repeater {
                                 model: [
-                                    { label: "Render interno", value: viewportModel.internalResolution },
-                                    { label: "Saída", value: viewportModel.outputResolution },
-                                    { label: "Draws visíveis", value: viewportModel.visibleDrawCount + " / " + viewportModel.totalDrawCount },
-                                    { label: "Ocultados (HZB)", value: viewportModel.occludedDrawCount },
-                                    { label: "RAM compartilhada", value: viewportModel.vramNonLocalText }
+                                    { label: "Render interno", value: statsModel.internalResolution },
+                                    { label: "Saída", value: statsModel.outputResolution },
+                                    { label: "Draws visíveis", value: statsModel.visibleDrawCount + " / " + statsModel.totalDrawCount },
+                                    { label: "Ocultados (HZB)", value: statsModel.occludedDrawCount },
+                                    { label: "RAM compartilhada", value: statsModel.vramNonLocalText }
                                 ]
                                 delegate: Item {
                                     required property var modelData
@@ -834,7 +834,7 @@ Rectangle {
                     Card {
                         width: parent.width
                         height: 270
-                        visible: viewportModel.shadowCascades.length > 0
+                        visible: statsModel.shadowCascades.length > 0
 
                         Text {
                             x: 16; y: 15
@@ -860,7 +860,7 @@ Rectangle {
                             spacing: 0
 
                             Repeater {
-                                model: viewportModel.shadowCascades
+                                model: statsModel.shadowCascades
                                 // Duas linhas por cascata: a de cima é a medida (quanto desenha,
                                 // com que frequência), a de baixo é o diagnóstico (o que cada
                                 // filtro cortou e quanto o fit andou). Numa linha só o

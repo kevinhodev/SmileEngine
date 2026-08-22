@@ -18,7 +18,7 @@ const transport = new StdioClientTransport({
   stderr: "pipe",
 });
 
-const client = new Client({ name: "smile-mcp-smoke", version: "0.3.0" });
+const client = new Client({ name: "smile-mcp-smoke", version: "0.4.0" });
 
 try {
   await client.connect(transport);
@@ -33,6 +33,10 @@ try {
     "smile_compile_shaders",
     "smile_cook_scene",
     "smile_editor_status",
+    "smile_camera_get",
+    "smile_camera_set",
+    "smile_gi_status",
+    "smile_gi_configure",
     "smile_profile_configure",
     "smile_profile_gpu",
     "smile_close_editor",

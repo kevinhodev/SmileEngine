@@ -11,7 +11,7 @@
 > **Rodou em sessão viva e passou** (2026-08-14), mas isso é *smoke*, não medida. A **matriz de
 > runtime está definida** e é o gate de saída da fase — seis testes, configuração fixa, ainda por
 > rodar. Ver `➜ FASE 6`.
-> O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/IndirectPolicy.h`; **leia esse
+> O contrato inteiro da fase mora em `Engine/Include/Smile/Graphics/GI/IndirectPolicy.h`; **leia esse
 > header antes de escrever qualquer linha da fase**. O bloco `➜ FASE 6` abaixo tem o que o seletor
 > decidiu e o que falta.
 >
@@ -1152,11 +1152,11 @@ Documentar o comportamento atual e criar modos que permitam provar de onde vem c
 
 ### Arquivos prováveis
 
-- `Engine/Include/Smile/Graphics/RenderSettings.h`
-- `Engine/Source/Graphics/RenderSettings.cpp`
-- `Editor/Source/RenderSettingsBridge.cpp`
+- `Engine/Include/Smile/Graphics/Renderer/RenderSettings.h`
+- `Engine/Source/Graphics/Renderer/RenderSettings.cpp`
+- `Editor/Source/Rendering/RenderSettingsBridge.cpp`
 - `Editor/Qml/SettingsWindow.qml`
-- `Engine/Source/Graphics/Renderer.cpp`
+- `Engine/Source/Graphics/Renderer/Renderer.cpp`
 - `Shaders/GI/HitShading.hlsli`
 
 ### Gate de saída
@@ -1200,17 +1200,17 @@ struct FGIFallbackBindings {
 
 ### Arquivos prováveis
 
-- `Engine/Include/Smile/Graphics/RaytracingScene.h`
-- `Engine/Source/Graphics/RaytracingScene.cpp`
-- `Engine/Include/Smile/Graphics/DDGI.h`
-- `Engine/Source/Graphics/DDGI.cpp`
-- `Engine/Include/Smile/Graphics/ReSTIRGI.h`
-- `Engine/Source/Graphics/ReSTIRGI.cpp`
-- `Engine/Include/Smile/Graphics/ReSTIRDI.h`
-- `Engine/Source/Graphics/ReSTIRDI.cpp`
-- `Engine/Include/Smile/Graphics/Reflections.h`
-- `Engine/Source/Graphics/Reflections.cpp`
-- `Engine/Source/Graphics/Renderer.cpp`
+- `Engine/Include/Smile/Graphics/RayTracing/RaytracingScene.h`
+- `Engine/Source/Graphics/RayTracing/RaytracingScene.cpp`
+- `Engine/Include/Smile/Graphics/GI/DDGI.h`
+- `Engine/Source/Graphics/GI/DDGI.cpp`
+- `Engine/Include/Smile/Graphics/GI/ReSTIRGI.h`
+- `Engine/Source/Graphics/GI/ReSTIRGI.cpp`
+- `Engine/Include/Smile/Graphics/Lighting/ReSTIRDI.h`
+- `Engine/Source/Graphics/Lighting/ReSTIRDI.cpp`
+- `Engine/Include/Smile/Graphics/GI/Reflections.h`
+- `Engine/Source/Graphics/GI/Reflections.cpp`
+- `Engine/Source/Graphics/Renderer/Renderer.cpp`
 
 ### Gate de saída
 
@@ -1341,9 +1341,9 @@ RC_Update(pos_i, normal_i, L_i) para cada vértice elegível
 
 ### Arquivos prováveis
 
-- `Engine/Include/Smile/Graphics/RadianceCache.h`
-- `Engine/Source/Graphics/RadianceCache.cpp`
-- `Engine/Source/Graphics/Renderer.cpp`
+- `Engine/Include/Smile/Graphics/GI/RadianceCache.h`
+- `Engine/Source/Graphics/GI/RadianceCache.cpp`
+- `Engine/Source/Graphics/Renderer/Renderer.cpp`
 - novo `Shaders/GI/RadianceCacheUpdate.cs.hlsl`
 - `Shaders/GI/RadianceCache.hlsli`
 - `Shaders/GI/PathTracingCommon.hlsli`

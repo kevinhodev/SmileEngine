@@ -22,6 +22,7 @@ Texture2D<float4> GBufferA    : register(t2);
 Texture2D<float4> GBufferB    : register(t3);
 Texture2D<float4> GBufferC    : register(t4);
 Texture2D<float>  Depth       : register(t5);
+Texture2D<float2> BrdfRatio   : register(t6);
 RWTexture2D<float4> OutDirect : register(u0);
 
 [numthreads(8, 8, 1)]
@@ -40,6 +41,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const float3 f0 = lerp(0.04f.xxx, g.BaseColor, g.Metallic);
     const float4 diff = NrdDiffuse.Load(int3(px, 0));
     const float4 spec = NrdSpecular.Load(int3(px, 0));
-    OutDirect[px] = float4(diff.rgb * diffuseAlbedo + spec.rgb * f0,
+    // O fator guarda so o residual espacial de alta frequencia da BRDF. Aplicar depois do RELAX
+    // preserva o sinal temporal limpo e devolve detalhe de normal sem alterar o hit distance.
+    const float2 brdfRatio = BrdfRatio.Load(int3(px, 0));
+    OutDirect[px] = float4(diff.rgb * diffuseAlbedo * brdfRatio.x +
+                           spec.rgb * f0 * brdfRatio.y,
                            max(diff.a, spec.a));
 }

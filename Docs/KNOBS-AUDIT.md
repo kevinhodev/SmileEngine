@@ -51,7 +51,7 @@ e deve continuar existindo.
 > greps do fim deste documento, senão subconta.
 
 O quarto é o pior: `FWeather` é um `struct` de campos públicos
-(`Engine/Include/Smile/Graphics/Weather.h:16`) que o editor escreve por atribuição direta.
+(`Engine/Include/Smile/Graphics/Environment/Weather.h:16`) que o editor escreve por atribuição direta.
 Não há setter onde pendurar invalidação, e nenhuma existe.
 
 Distribuição dos 58 knobs distintos por reach-through: `VolumetricClouds` 15,
@@ -96,7 +96,7 @@ obrigatória**, e ela tem que descer a cadeia inteira: quem acumula *sobre* o re
 | **SunShafts** | 6 | B | ✅ `VolTemporal` |
 | **Fog** — `HeightFogSkyContribution` | 1 | A | n/a |
 | **AO** — `HalfRes` | 1 | A | n/a (as duas cadeias ficam alocadas) |
-| **Weather** — `CurtainAmount`, `RainParticles` | 2 | A | n/a |
+| **Weather** — `CurtainAmount` | 1 | A | n/a |
 
 ## Divergências encontradas
 
@@ -258,7 +258,7 @@ de sete chamadas para lembrar.
    O `InvalidateGBufferGuides` é o primeiro esboço do passo 3: um domínio, uma lista, N knobs
    apontando para ela. Compila Debug + Release. **Muda imagem.**
 3. ~~**Tabela `EHistoryDomain`** como dado.~~ **FEITO em 2026-08-05**, bit a bit (nenhuma
-   mudança de imagem). Está em `Graphics/HistoryDomain.h`, no formato de `RTMasks.h`:
+   mudança de imagem). Está em `Graphics/Renderer/HistoryDomain.h`, no formato de `RTMasks.h`:
    14 `EHistoryTarget` (um bit por histórico que sobrevive ao frame) e 11 domínios nomeados
    **pelo motivo**, não pelos alvos. O executor único é `FRenderSettings::Invalidate(mask)`,
    uma linha por alvo.
@@ -266,7 +266,7 @@ de sete chamadas para lembrar.
    Invariante verificável — o mapeamento bit → chamada existe em **um** lugar:
 
    ```bash
-   grep -nE "R\.(Nrd|NrdDirect|ReSTIRGI|ReSTIRDI|Reflections|DDGI|ReGIR|VolumetricFog|VolumetricClouds|TemporalMotion|HiZ)\.(InvalidateHistory|ResetHistory|ResetHistoryOnce|InvalidateResults)\(\)|R\.RRResetPending|R\.TAARanLastFrame" Engine/Source/Graphics/RenderSettings.cpp
+   grep -nE "R\.(Nrd|NrdDirect|ReSTIRGI|ReSTIRDI|Reflections|DDGI|ReGIR|VolumetricFog|VolumetricClouds|TemporalMotion|HiZ)\.(InvalidateHistory|ResetHistory|ResetHistoryOnce|InvalidateResults)\(\)|R\.RRResetPending|R\.TAARanLastFrame" Engine/Source/Graphics/Renderer/RenderSettings.cpp
    ```
 
    Só pode casar dentro do corpo de `Invalidate()`. Qualquer outro hit é uma lista escrita à

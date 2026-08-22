@@ -1,6 +1,30 @@
+add_executable(SmileMathPrimitivesTests
+    MathPrimitivesTests.cpp
+)
+
+target_compile_features(SmileMathPrimitivesTests PRIVATE cxx_std_20)
+target_include_directories(SmileMathPrimitivesTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+set_target_properties(SmileMathPrimitivesTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.MathPrimitives
+    COMMAND SmileMathPrimitivesTests
+)
+
+set_tests_properties(Smile.MathPrimitives PROPERTIES
+    LABELS "math;geometry;matrix"
+)
+
 add_executable(SmileOceanMathBaselineTests
     OceanMathBaselineTests.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/OceanSpectrum.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Water/OceanSpectrum.cpp
 )
 
 target_compile_features(SmileOceanMathBaselineTests PRIVATE cxx_std_20)
@@ -11,6 +35,7 @@ set_target_properties(SmileOceanMathBaselineTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
+    FOLDER "Tests"
 )
 
 add_test(
@@ -34,6 +59,7 @@ set_target_properties(SmileTimeOfDayMoonTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
+    FOLDER "Tests"
 )
 
 add_test(
@@ -45,16 +71,39 @@ set_tests_properties(Smile.TimeOfDayMoon PROPERTIES
     LABELS "time-of-day;moon;stars;sidereal;math"
 )
 
+add_executable(SmileSkyAmbientSHTests
+    SkyAmbientSHTests.cpp
+)
+
+target_compile_features(SmileSkyAmbientSHTests PRIVATE cxx_std_20)
+set_target_properties(SmileSkyAmbientSHTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.SkyAmbientSH
+    COMMAND SmileSkyAmbientSHTests
+)
+
+set_tests_properties(Smile.SkyAmbientSH PROPERTIES
+    LABELS "atmosphere;sky;sh;math"
+)
+
 # Identidade estavel da FScene. Nao usa GPU, mas linka o Scene.cpp, e ele arrasta os dois
 # caminhos de upload de malha (que o teste nao chama) — dai GpuMesh/UploadQueue/VramTracker/
 # GpuResources e o d3d12.lib apenas para resolver simbolos.
 add_executable(SmileSceneIdentityTests
     SceneIdentityTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuMesh.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/GpuResources.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/UploadQueue.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/VramTracker.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/GpuMesh.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/Material.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/TextureSRVHeap.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/GpuResources.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/UploadQueue.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Debug/VramTracker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Logger.cpp
     ${PROJECT_SOURCE_DIR}/Engine/ThirdParty/D3D12MA/D3D12MemAlloc.cpp
 )
@@ -73,6 +122,7 @@ set_target_properties(SmileSceneIdentityTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
+    FOLDER "Tests"
 )
 
 add_test(
@@ -82,4 +132,26 @@ add_test(
 
 set_tests_properties(Smile.SceneIdentity PROPERTIES
     LABELS "scene;identity;editor"
+)
+
+add_executable(SmileRenderPassRegistryTests
+    RenderPassRegistryTests.cpp
+)
+
+target_compile_features(SmileRenderPassRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(SmileRenderPassRegistryTests PRIVATE SmileEngine)
+set_target_properties(SmileRenderPassRegistryTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.RenderPassRegistry
+    COMMAND SmileRenderPassRegistryTests
+)
+
+set_tests_properties(Smile.RenderPassRegistry PROPERTIES
+    LABELS "graphics;architecture;render-pass"
 )

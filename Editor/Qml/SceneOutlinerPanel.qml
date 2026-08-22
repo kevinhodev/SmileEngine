@@ -1,20 +1,25 @@
 import QtQuick
 import QtQuick.Controls
 import "components" as C
+import "Scene" as Scene
 
-// Scene Outliner (dock lateral, substitui o antigo painel de Luzes). Liga em tres bridges:
+// Scene Outliner (dock lateral, substitui o antigo painel de Luzes). Hierarquia e selecao
+// ficam no outlinerModel; cada tipo editavel conserva sua bridge de propriedades:
 //  - `outlinerModel` (SceneOutlinerBridge): arvore flat da cena (Ambiente/Luzes/Meshes por
 //    asset), busca, filtro, expand/colapso e selecao de luz/mesh sincronizada com o picking.
 //  - `lightsModel` (LightsBridge): acoes e propriedades de luz (add/duplicar/remover/toggle,
 //    cor HSV, sliders, sombras, posicao) — mesmo contrato do painel antigo.
-//  - `viewportModel` (ViewportWidget): toggle das nuvens (olho da linha de ambiente).
+//  - `cloudsModel` (CloudsBridge): estado e propriedades autorais das nuvens.
+//  - `weatherModel` (WeatherBridge): chuva, wetness e integracao meteorologica da cena.
+//  - `oceanModel` (OceanBridge): espectro, vento e geometria FFT do oceano.
 // Estilo do TimeOfDayPanel (dark, cards, accent azul).
 Rectangle {
     id: root
     required property var outlinerModel
     required property var lightsModel
-    required property var viewportModel
-    required property var renderModel
+    required property var cloudsModel
+    required property var weatherModel
+    required property var oceanModel
     // Camada autorada (.smap). As pontes chegam por setInitialProperties, entao TEM de estar
     // declarada aqui: passar a propriedade so do lado C++ deixa `sceneDoc` undefined e o
     // sceneDoc.save() vira ReferenceError — que aborta o handler em silencio.
@@ -67,6 +72,9 @@ Rectangle {
 
     readonly property bool hasLightSelection: lightsModel.selectedIndex >= 0
     readonly property bool hasMeshSelection: outlinerModel.meshSelected
+    readonly property bool hasCloudSelection: outlinerModel.selectedEnvironment === 1
+    readonly property bool hasWeatherSelection: outlinerModel.selectedEnvironment === 4
+    readonly property bool hasOceanSelection: outlinerModel.selectedEnvironment === 2
 
     function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
 
@@ -487,7 +495,7 @@ Rectangle {
                 readonly property bool isBranch: isGroup || isAsset
                 // olho: ambiente liga nos toggles reais (bindings vivos); luz/mesh/pasta
                 // usam o estado da linha (Enabled da luz / Visible do renderable)
-                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? renderModel.cloudsEnabled
+                readonly property bool eyeOn: isEnv ? (sceneIdx === 1 ? cloudsModel.enabled
                                                      : sceneIdx === 2 ? outlinerModel.oceanVisible
                                                      : sceneIdx === 3 ? outlinerModel.terrainVisible
                                                      : true)
@@ -699,7 +707,7 @@ Rectangle {
                             else if (rowItem.isMesh || rowItem.isAsset)
                                 outlinerModel.toggleEye(rowItem.index)
                             else if (rowItem.sceneIdx === 1)
-                                renderModel.SetCloudsEnabled(!renderModel.cloudsEnabled)
+                                cloudsModel.SetEnabled(!cloudsModel.enabled)
                             else if (rowItem.sceneIdx === 2)
                                 outlinerModel.oceanVisible = !outlinerModel.oceanVisible
                             else if (rowItem.sceneIdx === 3)
@@ -710,8 +718,9 @@ Rectangle {
 
                 HoverHandler {
                     id: rowHover
-                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1 && rowItem.sceneIdx !== 2
-                                 ? Qt.ArrowCursor : Qt.PointingHandCursor
+                    cursorShape: rowItem.isEnv && rowItem.sceneIdx !== 1
+                                 && rowItem.sceneIdx !== 2 && rowItem.sceneIdx !== 4
+                                  ? Qt.ArrowCursor : Qt.PointingHandCursor
                 }
                 TapHandler {
                     // os handlers dos botoes (olho/duplicar/lixeira) NAO tomam grab exclusivo,
@@ -720,6 +729,10 @@ Rectangle {
                         if (ep.position.x >= rightActions.x) return
                         root.forceActiveFocus() // atalhos de teclado voltam pro painel
                         if (rowItem.isBranch)          outlinerModel.toggleExpand(rowItem.index)
+                        else if (rowItem.isEnv &&
+                                 (rowItem.sceneIdx === 1 || rowItem.sceneIdx === 2
+                                  || rowItem.sceneIdx === 4))
+                                                         outlinerModel.selectRow(rowItem.index)
                         else if (rowItem.isLight)      lightsModel.selectLight(rowItem.sceneIdx)
                         else if (rowItem.isMesh)       outlinerModel.selectRow(rowItem.index)
                     }
@@ -782,11 +795,30 @@ Rectangle {
             spacing: 10
             opacity: outlinerModel.available ? 1.0 : 0.45
 
+            Scene.CloudsInspector {
+                width: parent.width
+                visible: root.hasCloudSelection
+                model: root.cloudsModel
+            }
+
+            Scene.WeatherInspector {
+                width: parent.width
+                visible: root.hasWeatherSelection
+                model: root.weatherModel
+            }
+
+            Scene.OceanInspector {
+                width: parent.width
+                visible: root.hasOceanSelection
+                model: root.oceanModel
+            }
+
             // ---- Luz selecionada (mesmo contrato do painel antigo) ----
             Card {
                 title: lightsModel.lightType === 1 ? "Propriedades — Spot" : "Propriedades — Point"
                 iconName: lightsModel.lightType === 1 ? "cone" : "lightbulb"
-                visible: root.hasLightSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection && !root.hasOceanSelection
+                         && root.hasLightSelection
                 headerItem: [
                     Toggle {
                         checked: lightsModel.lightEnabled
@@ -1120,7 +1152,8 @@ Rectangle {
             Card {
                 title: "Propriedades — Mesh"
                 iconName: "box"
-                visible: !root.hasLightSelection && root.hasMeshSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection && !root.hasOceanSelection
+                         && !root.hasLightSelection && root.hasMeshSelection
 
                 Text {
                     width: parent.width
@@ -1203,7 +1236,8 @@ Rectangle {
             Card {
                 title: "Propriedades"
                 iconName: "info"
-                visible: !root.hasLightSelection && !root.hasMeshSelection
+                visible: !root.hasCloudSelection && !root.hasWeatherSelection && !root.hasOceanSelection
+                         && !root.hasLightSelection && !root.hasMeshSelection
 
                 Text {
                     width: parent.width

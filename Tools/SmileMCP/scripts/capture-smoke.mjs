@@ -33,10 +33,38 @@ const transport = new StdioClientTransport({
   env: environment,
   stderr: "pipe",
 });
-const client = new Client({ name: "smile-capture-smoke", version: "0.3.0" });
+const client = new Client({ name: "smile-capture-smoke", version: "0.4.0" });
 
 try {
   await client.connect(transport);
+  const callJson = async (name, args) => {
+    const result = await client.callTool({ name, arguments: args });
+    if (result.isError) {
+      const message = result.content.find((part) => part.type === "text")?.text;
+      throw new Error(message || `${name} retornou erro`);
+    }
+    const text = result.content.find((part) => part.type === "text")?.text;
+    return JSON.parse(text || "{}");
+  };
+
+  const camera = await callJson("smile_camera_get", {});
+  const gi = await callJson("smile_gi_status", {});
+  if (!camera.position || !gi.policy || !Array.isArray(gi.ddgi?.cascades)) {
+    throw new Error("Camera/GI nao retornaram o estado estruturado obrigatorio.");
+  }
+  const cameraReadback = await callJson("smile_camera_set", {
+    x: camera.position.x,
+    y: camera.position.y,
+    z: camera.position.z,
+    pitchDegrees: camera.pitchDegrees,
+    yawDegrees: camera.yawDegrees,
+  });
+  if (!cameraReadback.position) throw new Error("smile_camera_set nao retornou readback.");
+  const giReadback = await callJson("smile_gi_configure", {});
+  if (!giReadback.policy || !giReadback.ddgi) {
+    throw new Error("smile_gi_configure nao retornou readback pedido/efetivo.");
+  }
+
   const result = await client.callTool({
     name: "smile_capture_frame",
     arguments: {

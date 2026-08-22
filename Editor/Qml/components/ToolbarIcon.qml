@@ -66,6 +66,11 @@ Canvas {
             ctx.beginPath(); ctx.moveTo(9, 2.7)
             ctx.bezierCurveTo(5.4, 5.2, 5.4, 12.8, 9, 15.3)
             ctx.bezierCurveTo(12.6, 12.8, 12.6, 5.2, 9, 2.7); ctx.stroke()
+        } else if (name === "local") {
+            // Cubo em perspectiva: o par visual do globo do "world". Le como "eixos do objeto"
+            // mesmo a 14px, que é o tamanho real deste ícone na toolbar.
+            poly([9, 2.4, 15.4, 5.9, 15.4, 12.1, 9, 15.6, 2.6, 12.1, 2.6, 5.9], true)
+            line(9, 2.4, 9, 9); line(9, 9, 15.4, 12.1); line(9, 9, 2.6, 12.1)
         } else if (name === "magnet") {
             ctx.beginPath(); ctx.moveTo(3.5, 3); ctx.lineTo(3.5, 10.2)
             ctx.bezierCurveTo(3.5, 16, 14.5, 16, 14.5, 10.2); ctx.lineTo(14.5, 3); ctx.stroke()
