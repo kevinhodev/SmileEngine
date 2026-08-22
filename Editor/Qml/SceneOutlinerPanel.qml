@@ -104,7 +104,7 @@ Rectangle {
         LucideIcon {
             anchors.centerIn: parent
             name: eye.on ? "eye" : "eye-off"
-            size: 13
+            size: 14
             color: eye.on ? (eyeHover.hovered ? C.Theme.textPrimary : C.Theme.textMuted)
                           : C.Theme.textDisabled
         }
@@ -459,7 +459,7 @@ Rectangle {
                 LucideIcon {
                     id: chevron
                     visible: rowItem.isBranch
-                    x: 12 + rowItem.depth * 16
+                    x: 12 + rowItem.depth * 13
                     anchors.verticalCenter: parent.verticalCenter
                     name: "chevron-right"
                     size: 13
@@ -471,7 +471,7 @@ Rectangle {
                 // dot da cor da luz
                 Rectangle {
                     visible: rowItem.hasDot
-                    x: 14 + rowItem.depth * 16 + 16
+                    x: 14 + rowItem.depth * 13 + 15
                     anchors.verticalCenter: parent.verticalCenter
                     width: 8; height: 8; radius: 4
                     color: rowItem.dotColor
@@ -482,7 +482,7 @@ Rectangle {
 
                 LucideIcon {
                     id: rowIcon
-                    x: 14 + rowItem.depth * 16 + (rowItem.isBranch ? 18 : 6)
+                    x: 14 + rowItem.depth * 13 + (rowItem.isBranch ? 16 : 5)
                        + (rowItem.hasDot ? 13 : 0)
                     anchors.verticalCenter: parent.verticalCenter
                     name: rowItem.icon
@@ -499,37 +499,26 @@ Rectangle {
 
                 Text {
                     id: rowLabel
-                    x: rowIcon.x + rowIcon.width + 8
+                    x: rowIcon.x + rowIcon.width + 6
                     anchors.verticalCenter: parent.verticalCenter
-                    width: rightActions.x - x - 4
+                    width: Math.max(0, rightActions.x - x - 4)
                     text: rowItem.name
                     color: rowItem.dimmed ? C.Theme.textMuted
                          : rowItem.selected || rowItem.isGroup ? C.Theme.textPrimary
                          : C.Theme.textSecondary
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 13
+                    font.pixelSize: 12
                     font.weight: rowItem.selected ? Font.DemiBold
                                : rowItem.isGroup ? Font.Medium
                                : Font.Normal
                     elide: Text.ElideRight
                     renderType: Text.QtRendering
                     renderTypeQuality: Text.HighRenderTypeQuality
-                }
-
-                // Contagem de grupos/pastas: numero cru em mono na margem direita, sem badge.
-                // O badge duplicava a moldura que a propria linha ja da.
-                Text {
-                    visible: rowItem.count >= 0 && rowItem.isBranch
-                             && !rowItem.isSelectedLightsGroup
-                    anchors.right: parent.right
-                    anchors.rightMargin: 14
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: root.fmtCount(rowItem.count)
-                    color: rowItem.selected ? C.Theme.accent : C.Theme.textMuted
-                    font.family: C.Theme.fontMono
-                    font.pixelSize: 10
-                    renderType: Text.QtRendering
-                    renderTypeQuality: Text.HighRenderTypeQuality
+                    // Nome de mesh cozida estoura a largura do dock com folga; o tooltip e o
+                    // unico jeito de ler o nome inteiro sem alargar o painel.
+                    ToolTip.visible: rowHover.hovered && rowLabel.truncated
+                    ToolTip.delay: 700
+                    ToolTip.text: rowItem.name
                 }
 
                 Row {
@@ -538,6 +527,23 @@ Rectangle {
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
+
+                    // Contagem de grupos/pastas: numero cru em mono, sem badge (o badge
+                    // duplicava a moldura que a propria linha ja da). Fica DENTRO da faixa de
+                    // acoes para o olho nao cair por cima dela e para o rotulo poder medir a
+                    // largura livre por rightActions.x.
+                    Text {
+                        visible: rowItem.count >= 0 && rowItem.isBranch
+                                 && !rowItem.isSelectedLightsGroup
+                        anchors.verticalCenter: parent.verticalCenter
+                        rightPadding: rowItem.hasEye ? 2 : 6
+                        text: root.fmtCount(rowItem.count)
+                        color: rowItem.selected ? C.Theme.accent : C.Theme.textMuted
+                        font.family: C.Theme.fontMono
+                        font.pixelSize: 10
+                        renderType: Text.QtRendering
+                        renderTypeQuality: Text.HighRenderTypeQuality
+                    }
 
                     // + POINT / + SPOT no header do grupo Luzes
                     AddLightChip {

@@ -223,7 +223,7 @@ Rectangle {
         anchors { right: parent.right; top: parent.top }
         WinButton { icon: "minus"; onClicked: windowBridge.minimize() }
         WinButton {
-            icon: windowBridge.maximized ? "copy" : "square"
+            icon: windowBridge.maximized ? "restore" : "square"
             onClicked: windowBridge.toggleMaximize()
         }
         WinButton {

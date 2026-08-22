@@ -18,7 +18,7 @@ MenuBar {
             text: mbi.text
             color: C.Theme.textSecondary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 13
+            font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             leftPadding: 10; rightPadding: 10

@@ -43,7 +43,6 @@ Rectangle {
         property string tip: ""
         property bool active: false
         property bool enabledVisual: true
-        property bool framed: false
         property string tipShortcut: ""
         signal tapped()
         implicitWidth: 28
@@ -52,14 +51,12 @@ Rectangle {
         opacity: enabledVisual ? 1.0 : 0.38
         color: active ? C.Theme.accentBg
                       : (iconHover.hovered && enabledVisual ? C.Theme.surfaceRaised
-                         : (framed ? C.Theme.surface : "transparent"))
-        border.color: active ? C.Theme.accentBorder
-                             : (iconHover.hovered && enabledVisual ? C.Theme.hairlineStrong
-                                : (framed ? C.Theme.hairline : "transparent"))
+                                                            : "transparent")
+        border.color: active ? C.Theme.accentBorder : "transparent"
         border.width: 1
         C.ToolbarIcon {
             anchors.centerIn: parent
-            width: 14; height: 14
+            width: 16; height: 16
             name: iconButton.iconName
             color: iconButton.active ? root.accent : C.Theme.textSecondary
         }
@@ -432,8 +429,7 @@ Rectangle {
             readonly property int restriction: root.viewportModel.gizmoSpaceRestriction
             readonly property bool isLocal: root.viewportModel.gizmoSpaceEffective === 1
             visible: !root.narrow
-            iconName: isLocal ? "local" : "world"
-            label: root.compact ? "" : (isLocal ? "Local" : "Global")
+            label: isLocal ? "Local" : "Global"
             enabledVisual: restriction === 0
             tip: restriction === 1 ? "Escala é sempre no espaço local do objeto"
                : restriction === 2 ? "Luz não tem espaço local: só tem direção, sem roll"
@@ -496,8 +492,9 @@ Rectangle {
         }
 
         C.ToolbarButton {
-            iconName: "camera"
-            label: root.compact ? "" : "Perspectiva"
+            visible: !root.compact
+            flat: true
+            label: "Perspectiva"
             dropDown: true
             tip: "Projeção e vistas da câmera"
         }
@@ -505,8 +502,7 @@ Rectangle {
         // seletor. O ponto ambar carrega o sentido (luz) e o rotulo forte a enfase.
         C.ToolbarButton {
             id: viewModeButton
-            iconName: "lit"
-            label: root.compact ? "" : root.debugModel.viewModeLabel
+            label: root.debugModel.viewModeLabel
             dotColor: C.Theme.amber
             strongLabel: true
             dropDown: true
@@ -517,7 +513,7 @@ Rectangle {
         }
         C.ToolbarButton {
             visible: !root.narrow
-            iconName: "eye"
+            flat: true
             label: "Mostrar"
             dropDown: true
             tip: "Filtros de visibilidade"
@@ -538,23 +534,28 @@ Rectangle {
             tipShortcut: "F"
         }
         C.ToolbarButton {
-            iconName: "speed"
-            label: root.compact ? "" : "4.0×"
+            flat: true
+            label: "4.0×"
             monoLabel: true
             dropDown: true
             tip: "Velocidade da câmera: 4,0×"
         }
-        C.ToolbarButton {
-            visible: !root.narrow
-            iconName: "stats"
-            label: root.compact ? "" : "Stats"
-            tip: "Estatísticas de desempenho"
+
+        Rectangle {
+            width: 1; height: 20
+            anchors.verticalCenter: parent.verticalCenter
+            color: C.Theme.hairline
         }
+
         IconToolButton {
             iconName: "grid"
             active: true
-            framed: true
             tip: "Grade visível"
+        }
+        IconToolButton {
+            visible: !root.narrow
+            iconName: "stats"
+            tip: "Estatísticas de desempenho"
         }
         IconToolButton { iconName: "maximize"; tip: "Maximizar viewport" }
         IconToolButton { iconName: "more"; tip: "Mais opções" }

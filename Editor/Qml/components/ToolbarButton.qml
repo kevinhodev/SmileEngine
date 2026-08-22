@@ -18,6 +18,10 @@ Rectangle {
     // Rotulo em texto principal: o controle esta "cheio" (carrega um valor escolhido) sem
     // estar no estado ativo do accent.
     property bool strongLabel: false
+    // Sem chip: so texto e chevron, com o hover marcando a area clicavel. A referencia usa
+    // isto nos controles que abrem MENU (Perspectiva, Mostrar) e reserva a moldura para os
+    // que exibem um VALOR vigente (Local, snaps, Lit).
+    property bool flat: false
     property bool enabledVisual: true
     property string tip: ""
     property string tipShortcut: ""
@@ -29,9 +33,12 @@ Rectangle {
     radius: Theme.radiusControl
     opacity: enabledVisual ? 1.0 : 0.42
     color: active ? Theme.accentBg
-                  : (hover.hovered && enabledVisual ? Theme.surfaceRaised : Theme.surface)
+         : hover.hovered && enabledVisual ? Theme.surfaceRaised
+         : flat ? "transparent"
+         : Theme.surface
     border.color: active ? Theme.accentBorder
-                         : (hover.hovered && enabledVisual ? Theme.hairlineStrong : Theme.hairline)
+                : flat ? "transparent"
+                : (hover.hovered && enabledVisual ? Theme.hairlineStrong : Theme.hairline)
     border.width: 1
 
     Row {
