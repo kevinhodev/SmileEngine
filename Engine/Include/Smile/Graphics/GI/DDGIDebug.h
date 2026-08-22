@@ -3,7 +3,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
-#include "Smile/Graphics/GI/DDGI.h" // FDDGICascadeConstants
+#include "Smile/Graphics/GI/DDGI.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -13,9 +13,7 @@ namespace Smile {
     class FTextureSRVHeap;
     class FDDGI;
 
-    // 16 = os 8 taps da cascata PRIMARIA mais os 8 da PROXIMA durante o blend. Fora do blend os
-    // oito de cima ficam inativos. Em escopo de namespace porque o struct de saida precisa dele
-    // antes de a classe existir; FDDGIDebug::kPointProbeCount e o mesmo numero.
+    // O diagnostico cobre oito taps por cascata durante o blend.
     inline constexpr u32 kDDGIPointProbeCount = 16;
 
     struct FDDGIPointProbeDiagnostic {
@@ -38,28 +36,22 @@ namespace Smile {
         Vec3 WorldNormal{};
         f32  TotalWeight = 0.0f;
         std::array<FDDGIPointProbeDiagnostic, kDDGIPointProbeCount> Probes{};
-        // Escolha de cascata que o gather fez neste ponto — sem isto o painel mostraria 16 taps
-        // sem dizer de onde vem cada metade.
         i32 PrimaryCascade = 0;
         i32 NextCascade    = 0;
         f32 PrimaryWeight  = 1.0f;
         i32 DominantSlot = -1;
         i32 RiskSlot = -1;
-        // Peso do volume de sondas no ponto: 1 = dentro, <1 = mistura com o ambiente de fora,
-        // 0 = so ambiente. Os pesos por probe nao dependem dele — por isso e reportado a parte.
+        // 1 = dentro; valores menores misturam com o ambiente externo.
         f32 VolumeWeight = 1.0f;
     };
 
     class FDDGIDebug : public FRenderPass {
     public:
-        // --- Contrato de passe (RenderPass.h) ---
         const char* Name() const override { return "DDGI (debug de sondas)"; }
         bool IsInitialized() const override { return ProbePSO != nullptr; }
         FPassShaderStems ShaderStems() const override;
         void OnRecreatePipelines(const FPassInitContext& Ctx) override;
 
-        // 16 = os 8 taps da cascata PRIMARIA mais os 8 da PROXIMA durante o blend. O painel
-        // promete rodar a mesma funcao do gather; com 8 ele mostraria metade dela.
         static constexpr u32 kPointProbeCount = kDDGIPointProbeCount;
 
         enum class EMode : u32 {
@@ -80,8 +72,6 @@ namespace Smile {
         void Render(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                     FDDGI& DDGI, const Mat44& ViewProj, const Vec3& CameraPos, u32 FrameIndex);
         bool RequestPointDiagnostic(u32 X, u32 Y);
-        // Re-executa o ultimo ponto (ver .cpp): knob que muda o peso das probes tem que
-        // reexecutar o diagnostico, senao o painel mostra o snapshot do estado anterior.
         bool RepeatPointDiagnostic();
         void CancelPointDiagnostic();
         void RecordPointDiagnostic(u32 FrameSlot, ID3D12GraphicsCommandList* CommandList,
@@ -120,25 +110,13 @@ namespace Smile {
             Vec4  DebugParams;     // x = mode, y = probeRadius, z = relocMaxOffset, w = deactivThreshold
             Vec4  CameraPos;       // xyz = camera, w = probe focada
             Vec4  RayParams;       // x = frameIndex, y = rayRadius (world), z = -, w = -
-            // 4 vetores de 4 = os 16 slots do diagnostico (era 2+2 = 8).
             Vec4  SelectedIndices[4];
             Vec4  SelectedWeights[4];
-            // Cascatas: o visualizador precisa da grade da cascata de CADA sonda, senao desenha
-            // as finas nas posicoes da grossa. Nao cabia nos 16 bytes de cauda que sobravam, e o
-            // cbuffer passou a ocupar dois blocos de 256. Todos os sitios dimensionam por
-            // sizeof(), entao o crescimento e local a esta declaracao.
-            // O bloco cresceu de 80 para 144 bytes na 6.2b-ii (o scroll toroidal por cascata) e a
-            // cauda absorveu a diferenca — os 512 continuam de pe, agora com 64 bytes a menos de
-            // padding. Quem avisou foi este static_assert de tamanho, que e o unico guarda que
-            // existe para o bloco crescer: o compilador de shader acha call site esquecido, mas
-            // um cbuffer que so ficou maior compila dos dois lados e desalinha em silencio.
+            // O cbuffer usa dois blocos de 256 bytes; o layout e espelhado pelos shaders de debug.
             FDDGICascadeConstants Cascades;
             u8    _Tail[512 - 64 - 15 * 16 - 144] = {};
         };
         static_assert(sizeof(DDGIDebugConstants) == 512, "DDGIDebugConstants must be 512 bytes");
-        // Offset preso como nos outros cinco cbuffers: o tamanho sozinho nao pega campo
-        // acrescentado ANTES do bloco, que foi exatamente o defeito do RayParams no
-        // DDGIDebugStats — a cauda inteira deslizou 16 bytes e o build passou.
         static_assert(offsetof(DDGIDebugConstants, Cascades) == 304,
                       "bloco de cascatas anexado ao fim do DDGIDebugConstants");
 
@@ -151,10 +129,6 @@ namespace Smile {
             Vec4  CameraPositionFlags;
             Vec4  PixelParams;
             Vec4  BiasParams; // x = escala do self-shadow bias, y = teto em metros (0 = sem teto)
-            // O diagnostico roda a MESMA selecao do gather, entao precisa do mesmo bloco. Cabia
-            // exato em 256 (64 + 7*16 + 80) ate o bloco crescer para 144 com o scroll: agora sao
-            // 64 + 112 + 144 = 320, ou seja dois blocos de 256 com cauda. Todos os sitios
-            // dimensionam por sizeof(), entao o crescimento e local a esta declaracao.
             FDDGICascadeConstants Cascades;
             u8    _Tail[512 - 64 - 7 * 16 - 144] = {};
         };
@@ -184,7 +158,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCBBase = nullptr;
 
-        // +1 no fim = peso do volume; espelha DDGI_POINT_ROWS no DDGIDebugPoint.cs.hlsl.
+        // Inclui a linha final de peso do volume; espelhado por DDGI_POINT_ROWS.
         static constexpr u32 kPointOutputRows    = 3 + kPointProbeCount * 3;
         static constexpr u32 kPointRowVolumeIdx  = 2 + kPointProbeCount * 3;
         Microsoft::WRL::ComPtr<ID3D12Resource> PointDiagnosticCB;
@@ -198,7 +172,7 @@ namespace Smile {
         u32 PointOutputUAVSlot = kInvalidSlot;
         bool PointInputsReady = false;
         bool PointRequestPending = false;
-        bool PointHasLastRequest = false; // ja houve um clique: habilita o RepeatPointDiagnostic
+        bool PointHasLastRequest = false;
         u32 PointRequestX = 0;
         u32 PointRequestY = 0;
         u64 PointRequestVersion = 1;

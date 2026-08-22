@@ -1,9 +1,6 @@
 #include "DDGICommon.hlsli"
 
-// Este passe precisa somente do prefixo agendado e da geometria das cascatas, mas recebe o mesmo
-// CBV dos demais. Os 24 float4 iniciais terminam em MiscParams3; o static_assert no C++ prende
-// GICascadeParams em 384 bytes. Declarar o prefixo como array evita copiar 24 nomes sem criar um
-// segundo layout que pudesse deslocar a cauda em silencio.
+// Os 24 float4 preservam o offset de GICascadeParams no DDGICB compartilhado.
 cbuffer DDGICompactCB : register(b0) {
     float4 DDGIPrefix[24];
     float4 GICascadeParams;
@@ -30,8 +27,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const bool newlyExposed =
         DDGI_NewlyExposed(pc, (int3)GICascadeScrollDelta[cascade].xyz, count);
 
-    // Uma marca inativa pertence ao ponto de mundo ANTIGO do slot. A lamina nova entra sempre;
-    // Trace/Update zeram o historico dela e Relocate publica a classificacao nova no fim.
+    // Lamina nova entra mesmo se o slot antigo estava inativo.
     if (ProbeData[probeIdx].w < 0.0f && !newlyExposed) return;
 
     uint dst;

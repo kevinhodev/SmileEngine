@@ -12,14 +12,11 @@ cbuffer DDGIDebugCB : register(b0) {
     float4 DebugParams;
     float4 CameraPos;
     float4 RayParams;       // z = selected count, w = risk slot
-    // 4+4: os 16 slots do diagnostico (era 2+2 = 8). Espelha FDDGIDebug::DDGIDebugConstants.
+    // 4+4 vetores cobrem os 16 slots do diagnostico.
     float4 SelectedIndices[4];
     float4 SelectedWeights[4];
-    // Cascatas: a grade de CADA sonda vem daqui. O GridMinSpacing acima e o da GROSSA.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
-    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
-    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
     float4 GICascadeScrollOffset[4];
 };
 
@@ -32,9 +29,7 @@ struct VSOut {
     nointerpolation float2 irrTile  : TEXCOORD0;
     nointerpolation float2 distTile : TEXCOORD1;
     nointerpolation float4 extra    : TEXCOORD2;
-    // Teto do heatmap de distancia, 2,6 x espacamento DA CASCATA desta sonda. Vem pelo
-    // interpolante porque o DistAtlasParams.w e um valor SO — com 2 m e 8 m, normalizar as
-    // grossas pelo teto da fina satura o heatmap inteiro e o modo deixa de discriminar.
+    // Teto do heatmap pela cascata desta sonda.
     nointerpolation float  distMax  : TEXCOORD3;
 };
 
@@ -44,10 +39,6 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float selectedRisk = 0.0f;
     float selectedFocus = 0.0f;
     if ((uint)DebugParams.x == 5u && iid < (uint)RayParams.z) {
-        // O `iid < RayParams.z` acima ja limita a contagem publicada (<= 16), entao o par
-        // (vetor, componente) cobre os 16 slots sem um segundo teste. A versao anterior tinha um
-        // `iid < 4u` que virou teto de OITO quando os vetores eram dois — com quatro, ele
-        // silenciaria os slots de 4 em diante.
         probeIid       = (uint)SelectedIndices[iid >> 2u][iid & 3u];
         selectedWeight = SelectedWeights[iid >> 2u][iid & 3u];
         selectedRisk = RayParams.w >= 0.0f && iid == (uint)RayParams.w ? 1.0f : 0.0f;
@@ -55,14 +46,8 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     selectedFocus = CameraPos.w >= 0.0f &&
                     probeIid == (uint)CameraPos.w ? 1.0f : 0.0f;
 
-    // Indice GLOBAL -> (cascata, local): o buffer e global, a GEOMETRIA e da cascata. Sem isto
-    // as sondas das cascatas finas apareceriam empilhadas nas posicoes da grossa.
     int3 count    = (int3)GridCount.xyz;
     int  cascade  = DDGI_CascadeOfProbe((int)probeIid, count);
-    // ARMAZENAMENTO -> GEOMETRIA: o buffer e indexado por SLOT, e e a posicao de MUNDO que o
-    // visualizador desenha. Sem desfazer o scroll, as sondas da fina apareceriam deslocadas de
-    // `scroll` celulas em relacao a onde elas realmente sao amostradas — e o visualizador estaria
-    // desmentindo o gather em vez de explica-lo.
     int3 scroll   = (int3)GICascadeScrollOffset[cascade].xyz;
     int3 pc       = DDGI_GeometricCoord(DDGI_ProbeCoord(DDGI_LocalProbeIndex((int)probeIid, count),
                                                         count), scroll, count);
@@ -87,9 +72,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float st = sin(theta), ct = cos(theta);
     float3 sphereN = float3(st * cos(phi), ct, st * sin(phi));
 
-    // O foco e maior para continuar identificavel sem depender de cor.
-    // Raio da esfera proporcional ao espacamento DA CASCATA: com o da grossa, as sondas da fina
-    // sairiam quatro vezes maiores que a celula delas e cobririam a vizinha.
+    // Raio proporcional ao espacamento da cascata; foco maior independe de cor.
     float radius   = casc.w * DebugParams.y *
                      (selectedFocus > 0.5f ? 1.35f : 1.0f);
     float3 worldPos = probePos + sphereN * radius;
@@ -103,10 +86,7 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     o.distTile = (float2)DDGI_TileOrigin(pc, scroll, count, (int)DistAtlasParams.x,
                                          DDGI_TilesPerRow(DistAtlasParams.y, (int)DistAtlasParams.x), cascade);
 
-    // Normalizado pelo teto de relocacao DA CASCATA (0,45 espacamento, o maxOff do
-    // DDGIRelocate), e nao pelo DebugParams.z, que vem da grossa: uma sonda da fina relocada ao
-    // maximo apareceria com ~25% da intensidade — o modo de visualizacao diria "quase nao se
-    // moveu" exatamente onde ela se moveu o quanto podia.
+    // Normaliza pelo teto de relocacao da cascata.
     float relocMag = length(offset) / max(casc.w * 0.45f, 1e-4f);
     float4 stats   = ProbeStats[probeIid];
 

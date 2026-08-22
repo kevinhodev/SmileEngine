@@ -207,8 +207,7 @@ namespace Smile {
         PointDiagnosticCB       = Upload.Resource;
         PointDiagnosticMappedCB = Upload.Mapped;
 
-        // O readback tem o tamanho da SAIDA (kPointOutputRows x Vec4), nao o do CB — antes os
-        // dois compartilhavam o mesmo Desc e a distincao vinha de um `Desc.Width =` no meio.
+        // O readback tem o tamanho da saida, nao o do cbuffer.
         const u64 OutputBytes = static_cast<u64>(kPointOutputRows) * sizeof(Vec4);
         PointDiagnosticOutput = GpuResources::CreateBuffer(
             _Device, OutputBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
@@ -276,10 +275,7 @@ namespace Smile {
         return true;
     }
 
-    // Re-executa o ULTIMO ponto pedido. O diagnostico e one-shot por clique, entao mudar um knob
-    // que altera o peso das probes deixava o painel exibindo o snapshot anterior — dois estados
-    // diferentes com numeros identicos, que e o modo de falha mais caro possivel numa ferramenta
-    // de auditoria (parece que o knob nao funciona). Chamado pelos setters de amostragem do GI.
+    // Reexecuta o ultimo clique apos mudar parametros de amostragem.
     bool FDDGIDebug::RepeatPointDiagnostic() {
         if (!PointInputsReady || !PointHasLastRequest || PointRequestPending) return false;
         PointRequestPending = true;
@@ -337,8 +333,7 @@ namespace Smile {
             static_cast<f32>(std::min(PointRequestY, _Height - 1u)),
             static_cast<f32>(_Width), static_cast<f32>(_Height)
         };
-        // Os mesmos knobs que o deferred usa — o diagnostico tem que pesar as probes com o
-        // bias real, senao volta a relatar numeros de outro gather.
+        // Usa os mesmos parametros de amostragem do deferred.
         C->BiasParams = {
             _DDGI.GetSurfaceBiasScale(), _DDGI.GetSurfaceBiasMax(),
             _DDGI.GetVolumeFadeProbes(), 0.0f
@@ -405,16 +400,11 @@ namespace Smile {
             Result.WorldNormal   = { Rows[1].X, Rows[1].Y, Rows[1].Z };
             Result.TotalWeight   = Rows[1].W;
             Result.VolumeWeight  = Rows[kPointRowVolumeIdx].X;
-            // YZW da mesma linha: a escolha de cascata que o gather fez neste ponto. O shader ja
-            // publicava os tres e o parser copiava so o X — os campos ficavam no default e o
-            // painel nao tinha como relatar a selecao REAL, que e metade do que o diagnostico
-            // existe para responder quando ha duas cascatas.
             Result.PrimaryCascade = static_cast<i32>(std::lround(Rows[kPointRowVolumeIdx].Y));
             Result.NextCascade    = static_cast<i32>(std::lround(Rows[kPointRowVolumeIdx].Z));
             Result.PrimaryWeight  = Rows[kPointRowVolumeIdx].W;
             f32 BestWeight = -1.0f;
-            // Abaixo deste limiar a perda de visibilidade e residual; nao destaque
-            // uma probe como "risco" apenas porque ela foi a maior entre oito zeros.
+            // Ignora perda residual ao escolher a sonda de maior risco.
             f32 BestRisk = 0.005f;
             for (u32 I = 0; I < kPointProbeCount; ++I) {
                 const Vec4& A = Rows[2u + I * 3u];
@@ -519,9 +509,7 @@ namespace Smile {
         C->RayParams       = { (f32)_FrameIndex, RayRadius,
                                static_cast<f32>(SelectedProbeCount),
                                static_cast<f32>(SelectedRiskSlot) };
-        // Quatro vetores de quatro = os 16 slots do diagnostico (duas paginas de oito). Em laco,
-        // e nao desenrolado em 0/1: com 16 as quatro copias manuais seriam quatro chances de
-        // trocar um indice.
+        // Quatro vetores de quatro cobrem os 16 slots do diagnostico.
         static_assert(kPointProbeCount == 16, "o laco abaixo enche 4 float4 por vetor");
         for (u32 V = 0; V < 4; ++V) {
             C->SelectedIndices[V] = {
@@ -543,9 +531,7 @@ namespace Smile {
             TransitionResource(_CL, R, State, After);
             State = After;
         };
-        // Stability e um retrato do trace ATUAL. ProbeData.w so e atualizado durante a
-        // fase transiente de relocation e fica obsoleto depois; por isso este modo calcula
-        // as estatisticas sob demanda a partir de ProbesTrace.
+        // Stability calcula estatisticas atuais diretamente do ProbesTrace.
         if (Mode == EMode::Stability) {
             Transition(ProbeStatsBuf.Get(), ProbeStatsState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             StatsPSO.Bind(_CL);
@@ -568,10 +554,7 @@ namespace Smile {
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->IASetVertexBuffers(0, 0, nullptr);
         _CL->IASetIndexBuffer(nullptr);
-        // O modo Selected manda mesmo com contagem ZERO: "nenhuma probe selecionada" tem que
-        // desenhar NENHUMA, e nao o grid inteiro. Com o `SelectedProbeCount > 0` que existia
-        // aqui, limpar a selecao (ponto fora do volume de sondas, onde nenhuma contribui) caia
-        // no ramo de baixo e despejava as ~4,4 mil esferas do volume na tela.
+        // No modo Selected, contagem zero desenha zero sondas.
         const bool SelectedMode = Mode == EMode::Selected;
         const u32 InstanceCount = SelectedMode ? SelectedProbeCount : NumProbes;
         _CL->DrawInstanced(kSphereVerts, InstanceCount, 0, 0);
@@ -585,7 +568,6 @@ namespace Smile {
         if (ShowRays) {
             _CL->SetPipelineState(RaysPSO.Get());
             _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            // O inspector desliga rays. Nos demais modos, desenha o volume inteiro como antes.
             _CL->DrawInstanced(6, SelectedMode ? 0u : NumProbes, 0, 0);
         }
     }

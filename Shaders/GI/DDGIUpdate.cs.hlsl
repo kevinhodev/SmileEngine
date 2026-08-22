@@ -3,9 +3,7 @@
 #define DDGI_RAYS 64 
 #define DDGI_TILE 6
 
-// Declarado ate o InvalidateMaxHyst (e nao so o prefixo que este passe usava) porque a
-// invalidacao espacial mora la. Prefixo truncado le por offset e funciona — o MiscParams3, que
-// vem depois, e so do atlas de distancia e por isso nao aparece aqui.
+// Layout completo ate a cauda de cascatas, espelhado por DDGIConstants.
 cbuffer DDGICB : register(b0) {
     float4 GridMinSpacing;
     float4 GridCountRays;
@@ -27,21 +25,14 @@ cbuffer DDGICB : register(b0) {
     float4 SkyParams;
     float4 InvalidateMin;     // xyz = min da caixa de invalidacao, w = 1 se ativa
     float4 InvalidateMaxHyst; // xyz = max da caixa, w = hysteresis dentro dela
-    float4 RadianceCacheCamCell;      // preenchimento p/ alcancar o bloco de cascatas
+    float4 RadianceCacheCamCell;
     float4 RadianceCacheLodCapFlags;
     float4 RadianceCacheResources;
     float4 MiscParams3;
-    // Cascatas: a posicao da sonda no teste de invalidacao regional sai daqui, nao do
-    // GridMinSpacing (que e a GROSSA).
-    // z = prefixo de sondas atualizado; w = intervalo temporal da cascata grossa neste update.
+    // z = prefixo atualizado; w = intervalo temporal da grossa.
     float4 GICascadeParams;
     float4 GICascadeGridMinSpacing[4];
-    // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
-    // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
     float4 GICascadeScrollOffset[4];
-    // Quanto cada cascata ROLOU desde o ultimo update que rodou, em celulas (xyz), w = rolou.
-    // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
-    // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
     float4 GICascadeScrollDelta[4];
     float4 ProbeCompactionParams; // x = Trace/Update usam a lista compacta desta passada
 };
@@ -52,8 +43,7 @@ Buffer<uint>        ActiveProbeIndices : register(t2);
 Buffer<uint>        ActiveProbeCount   : register(t3);
 RWTexture2D<float4> IrradAtlas  : register(u0);
 
-// Tabela de copia da borda octaedrica (wrap com fold; do Wicked, mesma que o Flax usa):
-// uint4(srcX, srcY, dstX, dstY) em coords do tile COM borda (0..7 p/ interior 6).
+// uint4(srcX, srcY, dstX, dstY) para a borda octaedrica do tile.
 #define DDGI_BORDER_COUNT 28
 static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
     uint4(6,1, 1,0), uint4(5,1, 2,0), uint4(4,1, 3,0), uint4(3,1, 4,0), uint4(2,1, 5,0), uint4(1,1, 6,0),
@@ -63,10 +53,7 @@ static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
     uint4(1,1, 7,7), uint4(6,1, 0,7), uint4(1,6, 7,0), uint4(6,6, 0,0)
 };
 
-// Acumulador do detector de mudanca, em ponto fixo de 1/1024. Ponto fixo e nao float porque
-// `InterlockedAdd` so existe para inteiro em groupshared; a quantizacao fica tres ordens de
-// grandeza abaixo do menor limiar da curva de resposta. Teto: 36 texels x 1024 = 36864, e a
-// medida e <= 1 por construcao (DDGI_RelChange3), entao nao ha como estourar.
+// Ponto fixo 1/1024 para permitir InterlockedAdd em groupshared.
 groupshared uint gChangeAccum;
 
 [numthreads(DDGI_TILE, DDGI_TILE, 1)]
@@ -81,14 +68,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     if (probeIdx >= updateProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
-    // Indice GLOBAL -> (cascata, indice local). A geometria da sonda e sempre LOCAL; so o atlas e
-    // os buffers falam em global. Com uma cascata os dois coincidem — e por isso a F6.1 nao muda
-    // pixel nenhum.
     int  cascade  = DDGI_CascadeOfProbe(probeIdx, count);
     int  localIdx = DDGI_LocalProbeIndex(probeIdx, count);
-    // ARMAZENAMENTO -> GEOMETRIA (ver DDGI_GeometricCoord). O `pc` daqui pra frente e a coordenada
-    // no MUNDO; o tile volta a ser endereçado pelo slot dentro do DDGI_TileOrigin, com o mesmo
-    // scroll. Os dois sentidos na mesma funcao seriam faceis de trocar — por isso sao dois nomes.
     int3 scroll = (int3)GICascadeScrollOffset[cascade].xyz;
     int3 pc     = DDGI_GeometricCoord(DDGI_ProbeCoord(localIdx, count), scroll, count);
     const bool newlyExposed =
@@ -128,40 +109,17 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int2   texel = tileOrigin + local;
     float3 prev  = IrradAtlas[texel].rgb;
 
-    // Probe recem-ativado/relocado (marcado pelo Relocate): historia e do lugar antigo (ou
-    // preto de dentro da parede) — descarta e toma a estimativa nova inteira.
-    // A lamina recem-exposta pelo scroll entra pela MESMA porta, e e a porta certa: o conteudo do
-    // slot descreve outro ponto do mundo, exatamente como o da sonda que acabou de sair de dentro
-    // de uma parede. Misturar 1% da estimativa nova com 99% de um lugar a dezenas de metros e o
-    // arrasto que o scrolling existe para evitar.
-    // Se a grossa pulou o frame anterior, h^2 preserva a meia-vida em tempo de parede do update
-    // completo. O expoente vem da idade REAL na CPU, entao um full forcado consecutivo usa h^1.
+    // Historico de sonda nova/relocada pertence a outro ponto; grossa compensa updates pulados.
     const float temporalInterval = (cascade > 0) ? max(GICascadeParams.w, 1.0f) : 1.0f;
     const float temporalHyst = pow(saturate(SunColorHyst.w), temporalInterval);
     float  hyst    = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : temporalHyst;
 
-    // Invalidacao ESPACIAL (FDDGI::InvalidateRegion): um objeto nasceu ou morreu aqui perto.
-    // Diferente do caso acima, a historia desta sonda continua quase toda valida — so a parcela
-    // vinda daquele objeto mudou. Por isso troca por uma hysteresis RAPIDA em vez de zerar:
-    // converge em ~34 frames sem o pop de amostra unica. Fora da caixa, nada muda — e essa a
-    // diferenca para o reset global, que jogava fora dado bom da cena inteira.
-    // Posicao RELOCADA (o .xyz do ProbeData e offset de mundo): a sonda que a relocacao moveu
-    // para fora de uma parede pode estar meio espacamento longe do vertice do grid, e e ela quem
-    // mais precisa reavaliar. Mesmo teste, mesma origem, no atlas de distancia.
-    // Grid da CASCATA da sonda: o teste compara a posicao de mundo dela contra a caixa, e
-    // reconstrui-la com a origem/espacamento da grossa poria a sonda da fina em outro lugar.
+    // Invalidacao regional usa a posicao relocada e o grid da propria cascata.
     hyst = DDGI_RegionalHysteresis(pc, ProbeData[probeIdx].xyz, GICascadeGridMinSpacing[cascade].xyz,
                                    GICascadeGridMinSpacing[cascade].w, InvalidateMin, InvalidateMaxHyst.xyz,
                                    InvalidateMaxHyst.w, hyst);
 
-    // Detector de mudanca (rede da invalidacao por evento; ver DDGI_AdaptiveHysteresis).
-    // Reduzido por SONDA e nao por texel: por texel ele derrubaria a histerese justamente onde
-    // o estimador tem menos raios caindo naquele cone — ruido se auto-alimentando. A media
-    // sobre os 36 texels e tambem o que exige "uma proporcao da sonda" em vez de um texel
-    // isolado, entao um firefly sozinho nao dispara (entra com peso 1/36).
-    //
-    // O piso/banda morta de 0.02 e no dominio gamma do atlas (~0,003 de radiancia linear):
-    // abaixo dele os dois lados sao preto e a medida so amplificaria ruido (ver DDGI_RelChange3).
+    // Detector reduz por sonda para um texel ruidoso nao dominar a resposta.
     uint groupIdx = GTid.y * DDGI_TILE + GTid.x;
     if (groupIdx == 0u) gChangeAccum = 0u;
     GroupMemoryBarrierWithGroupSync();
@@ -172,25 +130,13 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     const float relProbe = (float)gChangeAccum * (1.0f / (1024.0f * DDGI_TILE * DDGI_TILE));
     const float hystNew  = DDGI_AdaptiveHysteresis(relProbe, hyst);
 
-    // Sonda ENTERRADA (`occluded` acima escreve PRETO): resposta LIMITADA, nao mudo. Silenciar
-    // era o obvio — uma sonda oscilando em torno do limiar de 35% de backface produz a maior
-    // mudanca relativa que existe, e reagir com 0.50 a cada oscilacao seria uma sonda piscando.
-    // So que silenciar tambem deixa passar o caso REAL: geometria dinamica engolindo a sonda
-    // depois dos 180 frames de relocacao, quando a classificacao ja congelou e ninguem mais vai
-    // marca-la inativa — ela seguiria irradiando luz velha por ~150 frames.
-    //
-    // O teto de 0.90 (~29 frames para 95%) atende os dois: a oscilacao custa um filtro suave em
-    // vez de um pop, e a sonda realmente engolida apaga em meio segundo em vez de dois e meio.
-    // O `min` externo preserva a regra da casa — o detector so REDUZ, nunca aumenta: reset (0),
-    // relocacao (0) e invalidacao regional (0.90) continuam ganhando.
+    // Limita a resposta de sondas enterradas para evitar oscilacao no limiar de backface.
     hyst = occluded ? min(hyst, max(hystNew, 0.90f)) : hystNew;
 
     float3 blended = lerp(result, prev, hyst);
     IrradAtlas[texel] = float4(blended, 1.0f);
 
-    // Copia a borda de 1px do tile (fold octaedrico) p/ o bilinear ser continuo na costura.
-    // Barrier de DEVICE: as fontes sao texels do atlas escritos por outras threads do grupo.
-    // Sem divergencia no return de cima: probeIdx e uniforme no grupo inteiro.
+    // Publica o interior antes de copiar a borda octaedrica.
     DeviceMemoryBarrierWithGroupSync();
     int2 padOrigin = tileOrigin - 1;
     [loop]
