@@ -7,9 +7,7 @@
 namespace Smile {
     Mat44 FTransform::Matrix() const {
         const Mat44 S = Mat44::Scale(Scale);
-        const Mat44 R = Mat44::RotationX(RotationEuler.X)
-                      * Mat44::RotationY(RotationEuler.Y)
-                      * Mat44::RotationZ(RotationEuler.Z);
+        const Mat44 R = Mat44::RotationEulerXYZ(RotationEuler);
         const Mat44 T = Mat44::Translation(Position);
         return S * R * T;
     }

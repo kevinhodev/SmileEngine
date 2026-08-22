@@ -2,6 +2,8 @@
 
 #include "Smile/Core/Types.h"
 #include <cmath>
+#include <limits>
+#include <type_traits>
 
 namespace Smile {
 	constexpr f32 Pi    = 3.14159265358979f;
@@ -14,4 +16,12 @@ namespace Smile {
 	inline f32  Lerp(f32 a, f32 b, f32 t)    { return a + t * (b - a); }
 	inline f32  Saturate(f32 v)               { return Clamp(v, 0.0f, 1.0f); }
 	inline bool IsNearZero(f32 v)             { return v > -1e-6f && v < 1e-6f; }
+
+    template<typename T>
+    inline T SnapToStep(T V, T Step) {
+        static_assert(std::is_floating_point_v<T>);
+        return Step > std::numeric_limits<T>::epsilon()
+            ? std::floor(V / Step + T(0.5)) * Step
+            : V;
+    }
 } 

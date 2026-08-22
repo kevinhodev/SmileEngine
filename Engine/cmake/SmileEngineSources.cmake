@@ -72,6 +72,7 @@ smile_engine_group("Input"
 )
 
 smile_engine_group("Math"
+    Include/Smile/Math/Geometry.h
     Include/Smile/Math/Mat44.h
     Include/Smile/Math/Math.h
     Include/Smile/Math/MathUtils.h

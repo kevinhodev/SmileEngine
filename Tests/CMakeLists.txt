@@ -1,3 +1,27 @@
+add_executable(SmileMathPrimitivesTests
+    MathPrimitivesTests.cpp
+)
+
+target_compile_features(SmileMathPrimitivesTests PRIVATE cxx_std_20)
+target_include_directories(SmileMathPrimitivesTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+set_target_properties(SmileMathPrimitivesTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.MathPrimitives
+    COMMAND SmileMathPrimitivesTests
+)
+
+set_tests_properties(Smile.MathPrimitives PROPERTIES
+    LABELS "math;geometry;matrix"
+)
+
 add_executable(SmileOceanMathBaselineTests
     OceanMathBaselineTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Water/OceanSpectrum.cpp

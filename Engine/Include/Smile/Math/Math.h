@@ -5,3 +5,4 @@
 #include "Smile/Math/Vec3.h"
 #include "Smile/Math/Vec4.h"
 #include "Smile/Math/Mat44.h"
+#include "Smile/Math/Geometry.h"

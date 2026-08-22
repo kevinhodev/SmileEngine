@@ -6,29 +6,25 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Gizmo de transformação do editor. Renderizáveis usam o centro da AABB em mundo como
-    // pivô para manter meshes importadas com origem distante estáveis durante rotação e escala.
+    // Usa o centro da AABB em mundo como pivô de renderizáveis com origem distante.
     class GizmoController {
     public:
         enum class EAxis : Smile::u32 { None = 0, X, Y, Z };
 
-        // Select desativa os handles, mas preserva o picking de objetos e luzes.
+        // Select oculta os handles sem desativar o picking.
         enum class EMode : Smile::u32 { Select = 0, Translate, Rotate, Scale };
 
         void SetEnabled(bool V) { Enabled = V; }
         bool GetEnabled() const { return Enabled; }
         bool IsDragging() const { return Dragging; }
 
-        // O modo permanece fixo durante um gesto.
         void  SetMode(EMode M) { if (!Dragging) { Mode = M; Hovered = EAxis::None; } }
 
         enum class ESpace : Smile::u32 { World = 0, Local };
 
-        // Explica à UI por que o espaço escolhido não pode ser aplicado.
         enum class ESpaceRestriction : Smile::u32 { None = 0, ScaleIsLocal, LightHasNoLocal };
 
-        // Luzes não possuem uma base local completa; escala permanece local porque TRS não
-        // representa o cisalhamento produzido por escala em eixos globais rotacionados.
+        // Luzes usam mundo; escala usa local para evitar cisalhamento não representável por TRS.
         ESpace SpaceFor(bool IsLight) const {
             if (IsLight)              return ESpace::World;
             if (Mode == EMode::Scale) return ESpace::Local;
@@ -40,7 +36,7 @@ namespace SmileEditor {
             return ESpaceRestriction::None;
         }
 
-        // Espaço escolhido pelo usuário; EffectiveSpace aplica as restrições do contexto atual.
+        // Preferência do usuário; EffectiveSpace aplica as restrições atuais.
         ESpace GetSpace() const { return Space; }
         void   SetSpace(ESpace S) {
             if (Dragging || IsSpaceForced()) return;
@@ -53,15 +49,14 @@ namespace SmileEditor {
         bool              IsSpaceForced()  const { return Restriction() != ESpaceRestriction::None; }
         EMode GetMode() const { return Mode; }
 
-        // Snap absoluto: o resultado, calculado a partir do estado inicial do gesto, cai em
-        // múltiplos do passo configurado.
+        // Snap absoluto, sempre calculado a partir do início do gesto.
         struct FSnap {
             bool  TranslateOn = false;
             bool  RotateOn    = false;
             bool  ScaleOn     = false;
-            float TranslateM  = 0.10f;   // metros
+            float TranslateM  = 0.10f;   // m
             float RotateDeg   = 15.0f;
-            float ScaleStep   = 0.10f;   // fracao (0.10 = 10%)
+            float ScaleStep   = 0.10f;   // 0.10 = 10%
         };
 
         const FSnap& Snap() const { return SnapCfg; }
@@ -86,8 +81,7 @@ namespace SmileEditor {
         // Deve rodar após UpdateCamera e antes de RenderFrame.
         void Submit(Smile::Renderer& R);
 
-        // Luzes não entram no ID-buffer; o teste usa a mesma métrica de tela dos billboards.
-        // Em sobreposição, vence o último ícone submetido. Retorna -1 quando não há acerto.
+        // Picking de luzes, ausentes do ID-buffer; retorna -1 sem acerto.
         int PickLightIcon(Smile::Renderer& R, Smile::u32 X, Smile::u32 Y) const;
 
         // Coordenadas de mouse correspondem aos pixels do backbuffer.
@@ -97,7 +91,7 @@ namespace SmileEditor {
         bool OnMouseRelease(Smile::Renderer& R);
 
     private:
-        // Retorna o pivô selecionado e a escala constante em tela. OutIdx=-1 indica ausência.
+        // Retorna o pivô selecionado; OutIdx=-1 indica ausência.
         bool   GetPivot(Smile::Renderer& R, Smile::Vec3& OutPivot, int& OutIdx,
                         bool& OutIsLight) const;
         float  ScaleFor(Smile::Renderer& R, const Smile::Vec3& Pivot) const;
@@ -121,10 +115,8 @@ namespace SmileEditor {
                            const Smile::Vec3 Axes[3]) const;
         void   SubmitLightShapes(Smile::Renderer& R) const;
         bool   HasRotationHandles(Smile::Renderer& R, bool IsLight, int Idx) const;
-        // Fonte única do tamanho usado pelo desenho e pelo hit-test do ícone.
         float  IconHalfSizeFor(Smile::Renderer& R, const Smile::Vec3& Position) const;
 
-        // Invalida históricos globais afetados por mudanças de iluminação.
         void   MarkLightEnergyChanged(Smile::Renderer& R) const;
 
         // Atualiza bounds, TLAS e regiões de GI após alterar um renderizável.
@@ -141,7 +133,7 @@ namespace SmileEditor {
         bool        Enabled = true;
         EMode       Mode    = EMode::Translate;
         ESpace      Space   = ESpace::World;
-        // Cache para consultas da UI que não possuem acesso ao Renderer.
+        // Cache para a UI, que não acessa o Renderer.
         bool        SelectionIsLight = false;
         FSnap       SnapCfg{};
         bool        SnapInverted = false;
@@ -153,11 +145,11 @@ namespace SmileEditor {
         Smile::Vec3 DragStartPos{};
         Smile::Vec3 DragStartPivot{};
         Smile::Vec3 DragAxisWorld{};
-        // Pivô e base permanecem fixos para todo o gesto.
+        // Pivô e base congelados no início do gesto.
         Smile::Vec3 DragAxes[3]{};
         float       DragStartT = 0.0f;
 
-        // A rotação é sempre recomputada do estado inicial para evitar deriva incremental.
+        // Estado inicial usado para evitar deriva incremental.
         Smile::Vec3 DragStartEuler{};
         Smile::Vec3 DragStartSpotDir{};
         Smile::Vec3 DragStartRingDir{};

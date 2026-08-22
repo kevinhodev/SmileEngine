@@ -20,9 +20,7 @@ namespace SmileEditor {
         constexpr float kRingThickness = 2.5f;
         constexpr float kRingRadiusFrac = 0.85f;
         constexpr int   kRingSegments   = 64;
-        constexpr float kTwoPi          = 6.28318530718f;
-        constexpr float kDegToRad       = 0.01745329252f;
-        // Preserva transforms invertíveis; o gizmo não representa espelhamento.
+        // Mantém transforms invertíveis; o gizmo não representa espelhamento.
         constexpr float kMinScale = 0.001f;
 
         Vec3 AxisFromEnum(const Vec3 Axes[3], GizmoController::EAxis A) {
@@ -37,57 +35,6 @@ namespace SmileEditor {
         float& Comp(Vec3& V, int I) { return I == 0 ? V.X : (I == 1 ? V.Y : V.Z); }
         float  Comp(const Vec3& V, int I) { return I == 0 ? V.X : (I == 1 ? V.Y : V.Z); }
 
-        float SnapTo(float V, float Step) {
-            return (Step > 1e-6f) ? std::floor(V / Step + 0.5f) * Step : V;
-        }
-        // Distância ao segmento, limitada às extremidades desenhadas.
-        float DistPointSeg(float Px, float Py, float Ax, float Ay, float Bx, float By) {
-            const float dx = Bx - Ax, dy = By - Ay;
-            const float len2 = dx * dx + dy * dy;
-            float t = (len2 > 1e-6f) ? (((Px - Ax) * dx + (Py - Ay) * dy) / len2) : 0.0f;
-            t = std::clamp(t, 0.0f, 1.0f);
-            const float cx = Ax + dx * t, cy = Ay + dy * t;
-            return std::sqrt((Px - cx) * (Px - cx) + (Py - cy) * (Py - cy));
-        }
-
-        // Usa exatamente a convenção de matriz linha de FTransform.
-        Mat44 RotOf(const Vec3& Euler) {
-            return Mat44::RotationX(Euler.X) * Mat44::RotationY(Euler.Y)
-                 * Mat44::RotationZ(Euler.Z);
-        }
-
-        // Inverso de RotOf, equivalente à decomposição usada pelo cooker.
-        Vec3 EulerOf(const Mat44& R) {
-            const float sy = std::clamp(R.M[0][2], -1.0f, 1.0f);
-            const float ry = std::asin(sy);
-            // Em gimbal lock, escolhe uma representação Euler equivalente.
-            if (std::fabs(std::cos(ry)) > 1e-6f)
-                return Vec3{ std::atan2(R.M[1][2], R.M[2][2]), ry,
-                             std::atan2(R.M[0][1], R.M[0][0]) };
-            return Vec3{ std::atan2(-R.M[2][1], R.M[1][1]), ry, 0.0f };
-        }
-
-        // Rodrigues na convenção linha da engine.
-        Mat44 AxisAngleRow(const Vec3& A, float Angle) {
-            const float c = std::cos(Angle), s = std::sin(Angle), k = 1.0f - c;
-            Mat44 m = Mat44::Identity();
-            m.M[0][0] = c + k*A.X*A.X;     m.M[0][1] = k*A.X*A.Y + s*A.Z; m.M[0][2] = k*A.X*A.Z - s*A.Y;
-            m.M[1][0] = k*A.Y*A.X - s*A.Z; m.M[1][1] = c + k*A.Y*A.Y;     m.M[1][2] = k*A.Y*A.Z + s*A.X;
-            m.M[2][0] = k*A.Z*A.X + s*A.Y; m.M[2][1] = k*A.Z*A.Y - s*A.X; m.M[2][2] = c + k*A.Z*A.Z;
-            return m;
-        }
-
-        // Multiplicação linha pela parte 3x3.
-        Vec3 MulRow3(const Vec3& V, const Mat44& M) {
-            return Vec3{ V.X*M.M[0][0] + V.Y*M.M[1][0] + V.Z*M.M[2][0],
-                         V.X*M.M[0][1] + V.Y*M.M[1][1] + V.Z*M.M[2][1],
-                         V.X*M.M[0][2] + V.Y*M.M[1][2] + V.Z*M.M[2][2] };
-        }
-
-        // Para matriz ortonormal, v*M^T leva mundo para espaço local.
-        Vec3 MulRow3Transposed(const Vec3& V, const Mat44& M) {
-            return Vec3{ V.Dot(M.GetRow3(0)), V.Dot(M.GetRow3(1)), V.Dot(M.GetRow3(2)) };
-        }
     }
 
     float GizmoController::IconHalfSizeFor(Smile::Renderer& R, const Vec3& Position) const {
@@ -95,13 +42,11 @@ namespace SmileEditor {
     }
 
     int GizmoController::PickLightIcon(Smile::Renderer& R, u32 _X, u32 _Y) const {
-        // Gizmo desligado nao desenha icone nenhum (Submit sai cedo); marker invisivel nao pode
-        // interceptar o clique que deveria cair no picking normal de objetos.
+        // Um ícone invisível não deve interceptar o picking de objetos.
         if (!Enabled) return -1;
         const auto& Lights = R.GetScene().Lights();
         if (Lights.empty()) return -1;
 
-        // Mede em tela o mesmo raio usado pelo billboard.
         const Vec3  CamRight = R.GetCameraRight();
         const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
 
@@ -116,7 +61,7 @@ namespace SmileEditor {
             const float dx = fx - cx, dy = fy - cy;
             if (RadiusPx2 <= 0.0f || dx * dx + dy * dy > RadiusPx2) continue;
 
-            // O último submetido também é o último desenhado em caso de sobreposição.
+            // Em sobreposição, vence o último ícone desenhado.
             BestIdx = i;
         }
         return BestIdx;
@@ -157,7 +102,8 @@ namespace SmileEditor {
         if (SpaceFor(IsLight) == ESpace::World || Idx < 0) return;
         const auto& List = R.GetScene().Renderables();
         if (Idx >= static_cast<int>(List.size())) return;
-        const Mat44 Rot = RotOf(List[static_cast<size_t>(Idx)].Transform.RotationEuler);
+        const Mat44 Rot = Mat44::RotationEulerXYZ(
+            List[static_cast<size_t>(Idx)].Transform.RotationEuler);
         for (int i = 0; i < 3; ++i) Out[i] = Rot.GetRow3(i).NormalizedSafe(Out[i]);
     }
 
@@ -174,11 +120,14 @@ namespace SmileEditor {
         AxisBasis(_Renderer, IsLight, Idx, Axes);
         const EAxis Ids[3] = { EAxis::X, EAxis::Y, EAxis::Z };
         const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
+        const Vec2 Mouse{ fx, fy };
         float Best = kHitRadius; EAxis BestAxis = EAxis::None;
         for (int i = 0; i < 3; ++i) {
             float px1, py1;
             if (!_Renderer.WorldToScreen(Pivot + Axes[i] * Scale, px1, py1)) continue;
-            const float dist = DistPointSeg(fx, fy, px0, py0, px1, py1);
+            const Vec2 Closest = Smile::ClosestPointOnSegment(
+                Mouse, Vec2{ px0, py0 }, Vec2{ px1, py1 });
+            const float dist = (Mouse - Closest).Length();
             if (dist < Best) { Best = dist; BestAxis = Ids[i]; }
         }
         return BestAxis;
@@ -202,27 +151,33 @@ namespace SmileEditor {
         const Vec3  CamDir = _Renderer.GetCameraPos() - Pivot;
         const EAxis Ids[3] = { EAxis::X, EAxis::Y, EAxis::Z };
         const float fx = static_cast<float>(_X), fy = static_cast<float>(_Y);
+        const Vec2 Mouse{ fx, fy };
 
         float Best = kHitRadius; EAxis BestAxis = EAxis::None;
         for (int i = 0; i < 3; ++i) {
             const Vec3 U = Axes[(i + 1) % 3], V = Axes[(i + 2) % 3];
-            float PrevX = 0.0f, PrevY = 0.0f; bool PrevOk = false;
+            float PrevX = 0.0f, PrevY = 0.0f;
+            Vec3 PrevW{};
+            bool PrevOk = false, PrevNear = false;
             for (int s = 0; s <= kRingSegments; ++s) {
-                const float  a = kTwoPi * static_cast<float>(s) / kRingSegments;
+                const float  a = Smile::TwoPi * static_cast<float>(s) / kRingSegments;
                 const Vec3   Offset = U * std::cos(a) + V * std::sin(a);
                 const Vec3   W  = Pivot + Offset * Radius;
-                float cx, cy;
+                float cx = 0.0f, cy = 0.0f;
                 const bool Ok = _Renderer.WorldToScreen(W, cx, cy);
-                // Apenas a metade sólida voltada à câmera participa do hit-test.
                 const bool Near = Offset.Dot(CamDir) > 0.0f;
-                if (Ok && PrevOk && Near) {
-                    const float dist = DistPointSeg(fx, fy, PrevX, PrevY, cx, cy);
+                if (Ok && PrevOk && Near && PrevNear) {
+                    float SegmentT = 0.0f;
+                    const Vec2 Closest = Smile::ClosestPointOnSegment(
+                        Mouse, Vec2{ PrevX, PrevY }, Vec2{ cx, cy }, &SegmentT);
+                    const float dist = (Mouse - Closest).Length();
                     if (dist < Best) {
                         Best = dist; BestAxis = Ids[i];
-                        if (OutRingPoint) *OutRingPoint = W;
+                        if (OutRingPoint) *OutRingPoint = PrevW + (W - PrevW) * SegmentT;
                     }
                 }
-                PrevX = cx; PrevY = cy; PrevOk = Ok;
+                if (Ok) { PrevX = cx; PrevY = cy; PrevW = W; }
+                PrevOk = Ok; PrevNear = Near;
             }
         }
         return BestAxis;
@@ -266,7 +221,6 @@ namespace SmileEditor {
             DD.Icon(L.Position, S, MCol,
                     L.Type == Smile::ELightType::Spot ? 1u : 0u, IsSel);
 
-            // O spot selecionado exibe sua direção.
             if (IsSel && L.Type == Smile::ELightType::Spot) {
                 const Vec3 Dir = L.Direction.NormalizedSafe(Vec3{ 0.0f, -1.0f, 0.0f });
                 DD.Line(L.Position + Dir * (S * 1.4f), L.Position + Dir * (S * 4.0f),
@@ -313,14 +267,13 @@ namespace SmileEditor {
         const Vec3  CamDir = _Renderer.GetCameraPos() - Pivot;
 
         for (int i = 0; i < 3; ++i) {
-            // Durante o gesto, mantém apenas o anel ativo.
             if (Dragging && Highlighted != Ids[i]) continue;
             const Vec3  col = (Highlighted == Ids[i]) ? kHighlight : kAxisColor[i];
             const Vec3  U = Axes[(i + 1) % 3], V = Axes[(i + 2) % 3];
             Vec3 Prev = Pivot + U * Radius;
             bool PrevNear = U.Dot(CamDir) > 0.0f;
             for (int s = 1; s <= kRingSegments; ++s) {
-                const float a = kTwoPi * static_cast<float>(s) / kRingSegments;
+                const float a = Smile::TwoPi * static_cast<float>(s) / kRingSegments;
                 const Vec3  Offset = U * std::cos(a) + V * std::sin(a);
                 const Vec3  W = Pivot + Offset * Radius;
                 const bool  Near = Offset.Dot(CamDir) > 0.0f;
@@ -336,7 +289,8 @@ namespace SmileEditor {
         // Mostra os raios inicial e atual do gesto.
         if (Dragging && Active != EAxis::None) {
             const Vec3 Start = DragStartRingDir * Radius;
-            const Vec3 Cur   = MulRow3(Start, AxisAngleRow(DragAxisWorld, DragAngle));
+            const Vec3 Cur = Mat44::RotationAxis(DragAxisWorld, DragAngle)
+                                 .TransformVectorRow(Start);
             DD.Line(Pivot, Pivot + Start, Smile::Vec4{ Vec3{0.85f,0.85f,0.85f}, 0.65f },
                     Smile::EDebugDepthMode::Foreground, 1.5f);
             DD.Line(Pivot, Pivot + Cur, Smile::Vec4{ kHighlight, 1.0f },
@@ -379,12 +333,11 @@ namespace SmileEditor {
     void GizmoController::Submit(Smile::Renderer& _Renderer) {
         if (!Enabled) return;
 
-        // Marcadores de luz permanecem visíveis em todos os modos.
         SubmitLightShapes(_Renderer);
 
         Vec3 Pivot; int Idx; bool IsLight;
         const bool HasSelection = GetPivot(_Renderer, Pivot, Idx, IsLight);
-        // Atualiza o cache da UI mesmo quando não há handles para desenhar.
+        // Mantém as restrições da UI sincronizadas mesmo sem handles.
         SelectionIsLight = HasSelection && IsLight;
 
         if (Mode == EMode::Select) return;
@@ -453,7 +406,7 @@ namespace SmileEditor {
         DragIdx        = Idx;
         DragIsLight    = IsLight;
         DragStartPivot = Pivot;
-        // Desenho e matemática compartilham a base congelada no press.
+        // Desenho e matemática compartilham a base congelada.
         for (int i = 0; i < 3; ++i) DragAxes[i] = Axes[i];
         DragAxisWorld  = AxisFromEnum(Axes, Axis).NormalizedSafe(Vec3::UnitY());
         DragAngle      = 0.0f;
@@ -494,17 +447,17 @@ namespace SmileEditor {
         if (!R.WorldToScreen(DragStartPivot, px0, py0)) return false;
         const Vec2 Off{ static_cast<float>(X) - px0, static_cast<float>(Y) - py0 };
         const float Len = std::sqrt(Off.X*Off.X + Off.Y*Off.Y);
-        if (Len < 1e-3f) return false;   // cursor em cima do pivo: nao ha direcao de referencia
+        if (Len < 1e-3f) return false;
         DialRef         = Vec2{ Off.X / Len, Off.Y / Len };
         DialAngle       = 0.0f;
         DialRevolutions = 0;
-        // Direção unitária permite que o feedback acompanhe o raio visual atual.
         const Vec3 RingVec = RingPoint - DragStartPivot;
         DragStartRingDir   = RingVec.NormalizedSafe(Vec3::UnitX());
 
         // Mede em tela o sinal da rotação para absorver handedness e orientação do eixo.
         float ax, ay, bx, by;
-        const Vec3 Probe = DragStartPivot + MulRow3(RingVec, AxisAngleRow(DragAxisWorld, 0.02f));
+        const Vec3 Probe = DragStartPivot
+                         + Mat44::RotationAxis(DragAxisWorld, 0.02f).TransformVectorRow(RingVec);
         if (!R.WorldToScreen(DragStartPivot + RingVec, ax, ay)) return false;
         if (!R.WorldToScreen(Probe, bx, by)) return false;
         const Vec2 Radial{ ax - px0, ay - py0 };
@@ -537,9 +490,9 @@ namespace SmileEditor {
             // Em mundo, alinha o pivô à grade; em local, quantiza a distância percorrida.
             if (SpaceFor(DragIsLight) == ESpace::World) {
                 const float PivotOnAxis = DragStartPivot.Dot(DragAxisWorld) + Delta;
-                Delta += SnapTo(PivotOnAxis, SnapCfg.TranslateM) - PivotOnAxis;
+                Delta += Smile::SnapToStep(PivotOnAxis, SnapCfg.TranslateM) - PivotOnAxis;
             } else {
-                Delta = SnapTo(Delta, SnapCfg.TranslateM);
+                Delta = Smile::SnapToStep(Delta, SnapCfg.TranslateM);
             }
         }
 
@@ -549,7 +502,7 @@ namespace SmileEditor {
             auto& Lights = R.GetScene().Lights();
             if (DragIdx >= static_cast<int>(Lights.size())) return;
             Smile::FLight& L = Lights[static_cast<size_t>(DragIdx)];
-            // Mudanças radiométricas cobrem os volumes anterior e atual da luz.
+            // Invalida as regiões anterior e atual da luz.
             Vec3 OldMin, OldMax, NewMin, NewMax;
             L.InfluenceBounds(OldMin, OldMax);
             L.Position = NewPos;
@@ -570,22 +523,23 @@ namespace SmileEditor {
 
     void GizmoController::ApplyRotate(Smile::Renderer& R, u32 X, u32 Y) {
         float px0, py0;
-        // Reprojeta o pivô para acompanhar movimentos de câmera durante o gesto.
+        // A câmera pode se mover durante o gesto.
         if (!R.WorldToScreen(DragStartPivot, px0, py0)) return;
         const Vec2 Off{ static_cast<float>(X) - px0, static_cast<float>(Y) - py0 };
         if (Off.X*Off.X + Off.Y*Off.Y < 1e-6f) return;
 
-        // O mostrador em tela acumula voltas sem degenerar quando o anel fica de perfil.
+        // O dial em tela acumula voltas mesmo com o anel de perfil.
         const Vec2 Perp{ -DialRef.Y, DialRef.X };
         const float a = std::atan2(Off.X*Perp.X + Off.Y*Perp.Y, Off.X*DialRef.X + Off.Y*DialRef.Y);
-        if (a * DialAngle < 0.0f && std::fabs(a) > 1.5707963f)
+        if (a * DialAngle < 0.0f && std::fabs(a) > Smile::HalfPi)
             DialRevolutions += (a < 0.0f) ? 1 : -1;
         DialAngle = a;
-        DragAngle = (a + kTwoPi * static_cast<float>(DialRevolutions)) * DialSign;
+        DragAngle = (a + Smile::TwoPi * static_cast<float>(DialRevolutions)) * DialSign;
         // Snap atua no ângulo do gesto, não nos componentes Euler resultantes.
-        if (SnapActive()) DragAngle = SnapTo(DragAngle, SnapCfg.RotateDeg * kDegToRad);
+        if (SnapActive())
+            DragAngle = Smile::SnapToStep(DragAngle, SnapCfg.RotateDeg * Smile::ToRad);
 
-        const Mat44 Delta = AxisAngleRow(DragAxisWorld, DragAngle);
+        const Mat44 Delta = Mat44::RotationAxis(DragAxisWorld, DragAngle);
 
         if (DragIsLight) {
             auto& Lights = R.GetScene().Lights();
@@ -593,7 +547,8 @@ namespace SmileEditor {
             Smile::FLight& L = Lights[static_cast<size_t>(DragIdx)];
             Vec3 Min, Max;
             L.InfluenceBounds(Min, Max);
-            L.Direction = MulRow3(DragStartSpotDir, Delta).NormalizedSafe(DragStartSpotDir);
+            L.Direction = Delta.TransformVectorRow(DragStartSpotDir)
+                               .NormalizedSafe(DragStartSpotDir);
             R.NotifyGIRegionChanged(Min, Max, Smile::EGIRegionChange::Radiometric);
             MarkLightEnergyChanged(R);
             return;
@@ -604,8 +559,10 @@ namespace SmileEditor {
         Smile::FRenderable& Rn = List[static_cast<size_t>(DragIdx)];
         const Vec3 OldMin = Rn.AABBMin, OldMax = Rn.AABBMax;
         // Recalcula do estado inicial para evitar deriva e manter o pivô fixo.
-        Rn.Transform.RotationEuler = EulerOf(RotOf(DragStartEuler) * Delta);
-        Rn.Transform.Position      = MulRow3(DragStartPos - DragStartPivot, Delta) + DragStartPivot;
+        Rn.Transform.RotationEuler =
+            (Mat44::RotationEulerXYZ(DragStartEuler) * Delta).ToEulerXYZ();
+        Rn.Transform.Position = Delta.TransformVectorRow(DragStartPos - DragStartPivot)
+                              + DragStartPivot;
         CommitRenderableEdit(R, DragIdx, OldMin, OldMax);
     }
 
@@ -624,8 +581,9 @@ namespace SmileEditor {
 
         const float Start  = Comp(DragStartScale, i);
         float       Target = std::max(kMinScale, Start * Raw);
-        // Snap atua no valor final da escala e respeita o piso invertível.
-        if (SnapActive()) Target = std::max(kMinScale, SnapTo(Target, SnapCfg.ScaleStep));
+        // Snap atua no valor final e respeita o piso invertível.
+        if (SnapActive())
+            Target = std::max(kMinScale, Smile::SnapToStep(Target, SnapCfg.ScaleStep));
         const float Eff    = (std::fabs(Start) > 1e-8f) ? (Target / Start) : 1.0f;
 
         const Vec3 OldMin = Rn.AABBMin, OldMax = Rn.AABBMax;
@@ -633,12 +591,12 @@ namespace SmileEditor {
         Comp(NewScale, i) = Target;
 
         // Compensa a translação para manter o pivô visual imóvel.
-        const Mat44 Rot = RotOf(Rn.Transform.RotationEuler);
-        Vec3 DLocal = MulRow3Transposed(DragStartPivot - DragStartPos, Rot);
+        const Mat44 Rot = Mat44::RotationEulerXYZ(Rn.Transform.RotationEuler);
+        Vec3 DLocal = Rot.TransformVectorRowTransposed(DragStartPivot - DragStartPos);
         Comp(DLocal, i) *= Eff;
 
         Rn.Transform.Scale    = NewScale;
-        Rn.Transform.Position = DragStartPivot - MulRow3(DLocal, Rot);
+        Rn.Transform.Position = DragStartPivot - Rot.TransformVectorRow(DLocal);
         CommitRenderableEdit(R, DragIdx, OldMin, OldMax);
     }
 
