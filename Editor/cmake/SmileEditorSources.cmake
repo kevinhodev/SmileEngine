@@ -167,6 +167,7 @@ smile_editor_assets("UI\\QML\\Shared"
     Qml/components/DockPanelHeader.qml
     Qml/components/InspectorSectionHeader.qml
     Qml/components/PairedScrubRow.qml
+    Qml/components/PresetRow.qml
     Qml/components/PrimarySliderRow.qml
     Qml/components/ScrubField.qml
     Qml/components/AxisField.qml

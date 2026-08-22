@@ -7,9 +7,7 @@ import "Scene" as Scene
 // selecao (mesh, luz, componente de ambiente); a hierarquia fica no SceneOutlinerPanel.
 //
 // Sem cards: o conceito separa secoes por header em caixa alta + hairline de 1 px, o que
-// devolve a largura que a moldura dos cards consumia num dock de 320 px. Os inspectores de
-// ambiente (nuvens/clima/oceano) seguem com os proprios cards por enquanto — eles nao fazem
-// parte desta leva de redesign.
+// devolve a largura que a moldura consumia num dock de 320 px.
 //
 // Dependencias explicitas da raiz (chegam por setInitialProperties):
 //  - `outlinerModel` (SceneOutlinerBridge): selecao, transform, estatisticas e material da mesh.
@@ -340,8 +338,8 @@ Rectangle {
             }
 
             // ======== AMBIENTE ========
-            // Os tres inspectores de ambiente ainda usam a linguagem de cards da leva
-            // anterior; entram aqui inteiros e serao redesenhados na sua propria leva.
+            // Os tres componentes compartilham preset, linhas de valor e secoes expansivas;
+            // a identidade ja foi respondida pelo card acima e nao se repete aqui.
             Item {
                 visible: root.hasEnv
                 width: parent.width

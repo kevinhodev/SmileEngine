@@ -9,6 +9,7 @@ ScrubRow 1.0 ScrubRow.qml
 PrimarySliderRow 1.0 PrimarySliderRow.qml
 BipolarSliderRow 1.0 BipolarSliderRow.qml
 InspectorSectionHeader 1.0 InspectorSectionHeader.qml
+PresetRow 1.0 PresetRow.qml
 PairedScrubRow 1.0 PairedScrubRow.qml
 StepperRow 1.0 StepperRow.qml
 Chip 1.0 Chip.qml
