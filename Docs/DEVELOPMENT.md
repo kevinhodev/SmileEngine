@@ -123,8 +123,8 @@ validadas no editor, idealmente com captura antes/depois usando o protocolo de `
 
 1. Reduzir a superfície e o ownership de `Renderer.h`, movendo estado para os subsistemas donos sem
    voltar a concentrar a implementação em uma única TU.
-2. Extrair a fila de jobs de `ViewportWidget`; telemetria pertence ao `StatsBridge`, e apresentação
-   de debug targets/probes ao `DebugTargetsBridge`.
+2. Reduzir a superfície de coordenação entre `ViewportWidget`, `RendererJobQueue` e `RenderThread`
+   conforme novos consumidores de jobs aparecerem.
 3. Aumentar a cobertura CPU de `Math`, `CookedFormat`, culling e mutações de cena.
 4. Limpar comentários por subsistema junto de mudanças funcionais, movendo conhecimento durável para
    documentos temáticos e evitando um diff cosmético gigante.

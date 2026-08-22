@@ -28,6 +28,7 @@ namespace SmileEditor {
 
     ViewportWidget::ViewportWidget(QWidget* _Parent)
         : QWidget(_Parent),
+          RendererJobs(RendererThread),
           Renderer(RendererThread.GetRenderer())
     {
         setAttribute(Qt::WA_NativeWindow);
@@ -63,6 +64,20 @@ namespace SmileEditor {
         ResizeDebounce->setInterval(kResizeDebounceMs);
         connect(ResizeDebounce, &QTimer::timeout, this, &ViewportWidget::ApplyPendingResize);
 
+        connect(&RendererJobs, &RendererJobQueue::BecameBusy,
+                RedrawTimer, &QTimer::stop);
+        connect(&RendererJobs, &RendererJobQueue::JobFinished, this, [this]() {
+            if (PendingResizeSize.isValid() &&
+                PendingResizeSize != AppliedResizeSize && ResizeDebounce &&
+                !InteractiveResize) {
+                ResizeDebounce->start(0);
+            }
+        });
+        connect(&RendererJobs, &RendererJobQueue::BecameIdle, this, [this]() {
+            if (!RendererShutdownRequested && isVisible() && RedrawTimer)
+                RedrawTimer->start();
+        });
+
         // Limita o editor em segundo plano a aproximadamente 10 FPS.
         connect(qGuiApp, &QGuiApplication::applicationStateChanged, this,
                 [this](Qt::ApplicationState State) {
@@ -77,6 +92,7 @@ namespace SmileEditor {
         if (RedrawTimer) RedrawTimer->stop();
         if (InitializationDebounce) InitializationDebounce->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
+        RendererJobs.Stop();
         // Cobre teardown parcial fora do fluxo de RendererStopped.
         RendererThread.RequestStop();
         RendererThread.Join();
@@ -88,7 +104,7 @@ namespace SmileEditor {
         if (RedrawTimer) RedrawTimer->stop();
         if (InitializationDebounce) InitializationDebounce->stop();
         if (ResizeDebounce) ResizeDebounce->stop();
-        RendererJobs.clear();
+        RendererJobs.Stop();
         RendererThread.RequestStop();
         if (RendererThread.IsStopped()) OnRenderThreadStopped();
     }
@@ -290,73 +306,9 @@ namespace SmileEditor {
             const QString& _CoalesceKey,
             RenderThread::RendererJob _Job,
             RendererJobCallback _Completion) {
-        if (!_Job || RendererShutdownRequested || !RendererThread.IsReady()) return false;
-
-        // Conserva somente o último job ainda não iniciado de cada família.
-        if (!_CoalesceKey.isEmpty()) {
-            for (auto It = RendererJobs.rbegin(); It != RendererJobs.rend(); ++It) {
-                if (It->CoalesceKey == _CoalesceKey) {
-                    It->Execute = std::move(_Job);
-                    It->Completion = std::move(_Completion);
-                    return true;
-                }
-            }
-        }
-
-        RendererJobs.push_back(FQueuedRendererJob{
-            _CoalesceKey, std::move(_Job), std::move(_Completion) });
-        DispatchNextRendererJob();
-        return true;
-    }
-
-    void ViewportWidget::DispatchNextRendererJob() {
-        if (RendererJobActive || RendererShutdownRequested || RendererJobs.empty()) return;
-
-        FQueuedRendererJob Job = std::move(RendererJobs.front());
-        RendererJobs.pop_front();
-        if (RedrawTimer) RedrawTimer->stop();
-        RendererJobActive = true;
-
-        QPointer<ViewportWidget> Self(this);
-        RendererJobCallback Completion = std::move(Job.Completion);
-        RendererJobCallback FailureCompletion = Completion;
-        const bool Queued = RendererThread.RequestRendererJob(
-            std::move(Job.Execute),
-            [Self, Completion = std::move(Completion)](
-                    RenderThread::JobCompletion _Result) mutable {
-                if (!Self) return;
-                const bool Success = _Result.Success;
-                const QString Error = QString::fromStdString(_Result.Error);
-                QMetaObject::invokeMethod(Self,
-                    [Self, Success, Error, Completion = std::move(Completion)]() mutable {
-                        if (!Self) return;
-
-                        // Publica o resultado antes de liberar o próximo job ou frame.
-                        if (!Self->RendererShutdownRequested && Completion)
-                            Completion(Success, Error);
-                        Self->RendererThread.CompleteJob();
-                        Self->RendererJobActive = false;
-                        Self->DispatchNextRendererJob();
-
-                        if (Self->PendingResizeSize.isValid() &&
-                            Self->PendingResizeSize != Self->AppliedResizeSize &&
-                            Self->ResizeDebounce && !Self->InteractiveResize)
-                            Self->ResizeDebounce->start(0);
-
-                        if (!Self->RendererShutdownRequested &&
-                            Self->RendererJobs.empty() && Self->isVisible() &&
-                            Self->RedrawTimer)
-                            Self->RedrawTimer->start();
-                    }, Qt::QueuedConnection);
-            });
-
-        if (!Queued) {
-            RendererJobActive = false;
-            if (!RendererShutdownRequested && FailureCompletion)
-                FailureCompletion(false, QStringLiteral("render thread indisponivel"));
-            DispatchNextRendererJob();
-            if (RendererJobs.empty() && isVisible() && RedrawTimer) RedrawTimer->start(1);
-        }
+        if (RendererShutdownRequested) return false;
+        return RendererJobs.Enqueue(
+            _CoalesceKey, std::move(_Job), std::move(_Completion));
     }
 
     void ViewportWidget::OnRenderThreadStopped() {

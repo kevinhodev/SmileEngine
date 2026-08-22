@@ -111,6 +111,7 @@ smile_editor_domain(Integration
 
 smile_editor_domain(Viewport
     GizmoController
+    RendererJobQueue
     RenderThread
     ViewportWidget
 )

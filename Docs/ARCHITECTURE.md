@@ -941,9 +941,9 @@ Siga a convenção existente (copie `FAmbientOcclusion` ou `FVolumetricClouds` c
 - **Boilerplate DX12 duplicado** — *funil de recursos resolvido*. `GpuResources.h` (§4) é o
   caminho único da engine para DEFAULT/UPLOAD/READBACK e aplica tracking, instrumentação e a
   política D3D12MA num só ponto. ~60 root signatures ainda seguem montadas campo a campo.
-- **`ViewportWidget` ainda concentra a fila de jobs do renderer:** telemetria pertence ao
-  `StatsBridge`, e render targets/probes ao `DebugTargetsBridge`. O tipo ficou restrito ao host do
-  HWND, render loop, input/gizmos e coordenação dos jobs. Os knobs pertencem ao
+- **Fila de jobs do renderer:** `RendererJobQueue` concentra backlog, coalescimento e callbacks na
+  thread Qt; `ViewportWidget` apenas pausa e retoma o pacing. O widget ficou restrito ao host do
+  HWND, render loop e input/gizmos. Os knobs pertencem ao
   `RenderSettingsBridge`, e configuração/snapshot externos passam por `RenderSettingsController`.
 - **Acoplamento de compilação:** 59 dos 73 headers públicos de `Graphics/` puxam
   `<d3d12.h>`/`<Windows.h>`; `Renderer.h` ainda puxa cerca de 64 headers e é incluído por 10 TUs.

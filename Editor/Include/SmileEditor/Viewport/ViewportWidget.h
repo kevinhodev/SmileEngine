@@ -5,11 +5,10 @@
 #include <QPoint>
 #include <QElapsedTimer>
 #include <QString>
-#include <deque>
-#include <functional>
 #include <memory>
 #include "Smile/Math/Math.h"
 #include "SmileEditor/Viewport/GizmoController.h"
+#include "SmileEditor/Viewport/RendererJobQueue.h"
 #include "SmileEditor/Viewport/RenderThread.h"
 
 class QTimer;
@@ -54,7 +53,7 @@ namespace SmileEditor {
         void              BeginRendererShutdown();
         bool              IsRendererStopped() const { return RendererStoppedFlag; }
         RendererHandle    GetRenderer() const { return Renderer; }
-        using RendererJobCallback = std::function<void(bool, const QString&)>;
+        using RendererJobCallback = RendererJobQueue::Completion;
         bool CommitImportedSceneAsync(
             std::shared_ptr<Smile::FSceneImportResult> Imported,
             bool Additive,
@@ -146,11 +145,11 @@ namespace SmileEditor {
         void FlushPendingGizmoInput(Smile::Renderer& Renderer);
         void ResetTransientInput();
         void ApplyPendingResize();
-        void DispatchNextRendererJob();
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
-        RenderThread   RendererThread;
-        RendererHandle Renderer;
+        RenderThread     RendererThread;
+        RendererJobQueue RendererJobs;
+        RendererHandle   Renderer;
         GizmoController GizmoCtrl;
         QTimer*       RedrawTimer       = nullptr;
         QTimer*       InitializationDebounce = nullptr;
@@ -168,13 +167,6 @@ namespace SmileEditor {
         bool          MouseLookActive  = false;
         bool          IgnoreNextMove   = false;
         bool          RendererOwnsSurface = false;
-        struct FQueuedRendererJob {
-            QString                     CoalesceKey;
-            RenderThread::RendererJob   Execute;
-            RendererJobCallback         Completion;
-        };
-        std::deque<FQueuedRendererJob> RendererJobs;
-        bool          RendererJobActive = false;
         // Capturado com o evento porque o gesto pode ser aplicado no frame seguinte.
         bool          PendingGizmoSnapInverted = false;
         bool          GizmoMousePending = false;
