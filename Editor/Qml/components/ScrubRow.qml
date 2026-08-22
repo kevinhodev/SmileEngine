@@ -30,10 +30,10 @@ Item {
         anchors.right: field.left
         anchors.rightMargin: 10
         text: root.label
-        color: Theme.textNormal
+        color: Theme.textMuted
         elide: Text.ElideRight
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: 11
     }
 
     Rectangle {

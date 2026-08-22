@@ -22,9 +22,9 @@ Item {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: root.label
-        color: Theme.textSecondary
+        color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 13
+        font.pixelSize: 11
         renderType: Text.QtRendering
         renderTypeQuality: Text.HighRenderTypeQuality
     }

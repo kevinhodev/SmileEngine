@@ -17,10 +17,10 @@ Item {
         anchors.right: hintText.left
         anchors.rightMargin: 8
         text: toggleRow.label
-        color: toggleRow.interactive ? Theme.textNormal : Theme.textMuted
+        color: toggleRow.interactive ? Theme.textMuted : Theme.textDisabled
         elide: Text.ElideRight
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: 11
     }
 
     Text {

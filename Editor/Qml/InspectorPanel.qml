@@ -268,7 +268,7 @@ Rectangle {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     text: outlinerModel.meshMaterial
-                    color: C.Theme.textSecondary
+                    color: C.Theme.textPrimary
                     font.family: C.Theme.fontFamily
                     font.pixelSize: 12
                     elide: Text.ElideMiddle

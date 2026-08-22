@@ -20,7 +20,7 @@ Item {
     Text {
         x: 0; y: 0
         text: row.label
-        color: Theme.textSecondary
+        color: Theme.textMuted
         font.family: Theme.fontFamily
         font.pixelSize: 11
     }

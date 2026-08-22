@@ -11,14 +11,17 @@ Item {
     width: parent ? parent.width : 0
     height: 26
 
+    // Mesmo tier do rotulo do VectorRow ("Posicao", "Rotacao"): rotulo de dado e LEGENDA do
+    // numero, nao titulo. Em textSecondary ele empatava com o SectionHeader logo acima e a
+    // secao perdia o inicio — o cabecalho so se le como cabecalho se a linha abaixo recuar.
     Text {
         id: rowLabel
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: root.label
-        color: Theme.textSecondary
+        color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 12
+        font.pixelSize: 11
         renderType: Text.QtRendering
         renderTypeQuality: Text.HighRenderTypeQuality
     }

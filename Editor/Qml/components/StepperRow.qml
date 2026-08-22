@@ -55,9 +55,9 @@ Item {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: root.label
-        color: Theme.textNormal
+        color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: 11
     }
 
     Rectangle {

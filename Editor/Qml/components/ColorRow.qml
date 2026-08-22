@@ -36,7 +36,7 @@ Item {
     Text {
         y: 4
         text: colorRow.label
-        color: Theme.textNormal
+        color: Theme.textMuted
         font.family: Theme.fontFamily
         font.pixelSize: 11
     }

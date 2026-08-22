@@ -50,6 +50,12 @@ QtObject {
     // O conceito trabalha com tres tiers (principal/secundario/muted). `textNormal` fica no
     // meio deles porque a base de codigo ja distingue quatro niveis; remove-lo achataria a
     // hierarquia das janelas que ainda nao passaram pelo redesign.
+    // Tres papeis fixos no Inspector, e e a distancia entre eles que faz a secao se ler:
+    //   textSecondary -> CABECALHO de secao (mono, caixa alta, 10 px)
+    //   textMuted     -> ROTULO de propriedade (sans, 11 px)
+    //   textPrimary   -> VALOR (mono nos numeros, sans nos nomes)
+    // Rotulo e cabecalho no mesmo tier empatam e a secao perde o inicio — foi o que
+    // aconteceu com ESTATISTICAS antes de os rotulos descerem para textMuted.
     readonly property color textPrimary: "#F2F2F0"
     readonly property color textNormal: "#C9C9CF"
     readonly property color textSecondary: "#A0A0A8"
