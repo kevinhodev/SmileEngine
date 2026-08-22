@@ -217,6 +217,8 @@ namespace Smile {
         u32  RadianceCacheCapacity() const;
         void SetUseReSTIRGI(bool V);
         bool GetUseReSTIRGI() const;
+        void SetGIHalfRes(bool V);
+        bool GetGIHalfRes() const;
         void SetUseReSTIRDI(bool V);
         bool GetUseReSTIRDI() const;
         bool ReSTIRDIActive() const;

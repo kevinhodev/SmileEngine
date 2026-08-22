@@ -88,11 +88,16 @@ namespace SmileEditor {
         const Smile::Renderer& _Renderer) {
         const auto& Settings = _Renderer.Settings();
         const auto& DDGI = _Renderer.GetDDGI();
+        const auto& ReSTIRGI = _Renderer.GetReSTIRGI();
         const auto GridCount = DDGI.GridCount();
 
         FGIStatusSnapshot Out;
         Out.FrameIndex             = _Renderer.GetFrameIndex();
         Out.Settings               = CollectSettings(_Renderer);
+        Out.ReSTIRGIHalfRes        = ReSTIRGI.GetHalfRes();
+        Out.ReSTIRGIHalfResEffective = ReSTIRGI.HalfResEffective();
+        Out.ReSTIRGIRenderWidth    = static_cast<int>(ReSTIRGI.TraceWidth());
+        Out.ReSTIRGIRenderHeight   = static_cast<int>(ReSTIRGI.TraceHeight());
         Out.DDGIInitialized        = DDGI.IsInitialized();
         Out.DesiredCascadeCount    = static_cast<int>(Settings.GetGICascadeCount());
         Out.ActualCascadeCount     = static_cast<int>(DDGI.CascadeCount());
@@ -353,6 +358,8 @@ namespace SmileEditor {
                 Settings.SetGIInterleavedUpdates(*_Overrides.InterleavedUpdates);
             if (_Overrides.ProbeCompaction)
                 Settings.SetGIProbeCompaction(*_Overrides.ProbeCompaction);
+            if (_Overrides.HalfRes)
+                Settings.SetGIHalfRes(*_Overrides.HalfRes);
             if (_Overrides.AdaptiveRays)
                 Settings.SetGIAdaptiveRays(*_Overrides.AdaptiveRays);
             if (_Overrides.AdaptiveHysteresis)

@@ -20,6 +20,12 @@
     "validate:gi:probe-compaction": "npm run build && node scripts/gi-probe-compaction.mjs",
     "smoke:gi:probe-compaction-default": "npm run build && node scripts/gi-probe-compaction.mjs --startup-smoke",
     "analyze:gi:probe-compaction": "python scripts/compare-gi-probe-compaction.py",
+    "validate:gi:half-res": "npm run build && node scripts/gi-half-res.mjs",
+    "validate:gi:half-res:rr": "npm run build && node scripts/gi-half-res.mjs --gameplay-rr",
+    "validate:gi:half-res:motion": "npm run build && node scripts/gi-half-res-motion.mjs",
+    "smoke:gi:half-res": "npm run build && node scripts/gi-half-res.mjs --startup-smoke",
+    "analyze:gi:half-res": "python scripts/compare-gi-half-res.py",
+    "analyze:gi:half-res:motion": "python scripts/compare-gi-half-res-motion.py",
     "benchmark:gi": "npm run build && node scripts/gi-benchmark.mjs",
     "benchmark:gi:adaptive": "npm run build && node scripts/gi-benchmark.mjs --suite adaptive"
   },

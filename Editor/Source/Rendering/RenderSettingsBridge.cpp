@@ -347,6 +347,10 @@ namespace SmileEditor {
         return Renderer && Renderer->Settings().GetUseReSTIRGI();
     }
 
+    bool RenderSettingsBridge::IsReSTIRGIHalfRes() const {
+        return Renderer && Renderer->Settings().GetGIHalfRes();
+    }
+
     bool RenderSettingsBridge::IsReGIREnabled() const {
         return Renderer && Renderer->Settings().GetUseReGIR();
     }
@@ -419,6 +423,18 @@ namespace SmileEditor {
 
         emit GISettingsChanged();
         if (SourceDebugDropped && Viewport) Viewport->NotifyRendererResourcesChanged();
+    }
+
+    void RenderSettingsBridge::ToggleReSTIRGIHalfRes() {
+        if (!Renderer) return;
+        {
+            auto RendererAccess = Renderer.Lock();
+            auto& Settings = RendererAccess->Settings();
+            Settings.SetGIHalfRes(!Settings.GetGIHalfRes());
+        }
+        emit GISettingsChanged();
+        // Atualiza consumidores dos recursos realocados.
+        if (Viewport) Viewport->NotifyRendererResourcesChanged();
     }
 
     void RenderSettingsBridge::ToggleReGIR() {

@@ -300,6 +300,12 @@ namespace SmileEditor {
                     { QStringLiteral("adaptiveHysteresis"), _Status.AdaptiveHysteresis },
                     { QStringLiteral("cascades"), Cascades },
                 } },
+                { QStringLiteral("restirGI"), QJsonObject{
+                    { QStringLiteral("halfRes"), _Status.ReSTIRGIHalfRes },
+                    { QStringLiteral("halfResEffective"), _Status.ReSTIRGIHalfResEffective },
+                    { QStringLiteral("renderWidth"), _Status.ReSTIRGIRenderWidth },
+                    { QStringLiteral("renderHeight"), _Status.ReSTIRGIRenderHeight },
+                } },
                 { QStringLiteral("settings"), SerializeSettings(_Status.Settings) },
             };
         }
@@ -700,6 +706,7 @@ namespace SmileEditor {
                                 Overrides.CascadeCount) &&
             ReadOptionalBool(_Arguments, "interleavedUpdates", Overrides.InterleavedUpdates) &&
             ReadOptionalBool(_Arguments, "probeCompaction", Overrides.ProbeCompaction) &&
+            ReadOptionalBool(_Arguments, "halfRes", Overrides.HalfRes) &&
             ReadOptionalBool(_Arguments, "adaptiveRays", Overrides.AdaptiveRays) &&
             ReadOptionalBool(_Arguments, "adaptiveHysteresis",
                              Overrides.AdaptiveHysteresis);
@@ -755,6 +762,13 @@ namespace SmileEditor {
                   QJsonObject{ { QStringLiteral("error"), QStringLiteral("preset invalido") } });
             return;
         }
+        const bool ResetHistory = _Arguments.value(QStringLiteral("resetHistory")).toBool(true);
+        if (!ResetHistory && (Preset != QStringLiteral("gameplay") || Slot >= 0)) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("captura sem reset exige gameplay e camera livre") } });
+            return;
+        }
 
         double PinHours = -1.0;
         const bool PinTime = _Arguments.value(QStringLiteral("pinTimeOfDay")).toBool(true);
@@ -780,7 +794,8 @@ namespace SmileEditor {
             return;
         }
 
-        if (!Capture->Shoot(Slot, Warmup, Preset == QStringLiteral("scientific"), PinHours)) {
+        if (!Capture->ShootAdvanced(Slot, Warmup, Preset == QStringLiteral("scientific"),
+                                    PinHours, ResetHistory)) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
                                 QStringLiteral("pedido de captura foi recusado") } });

@@ -66,6 +66,7 @@ namespace SmileEditor {
         // --- Iluminacao global ----------------------------------------------------------
         Q_PROPERTY(bool ddgiEnabled READ IsDDGIEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool restirGIHalfRes READ IsReSTIRGIHalfRes NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY GISettingsChanged)
         // World radiance cache. As tres primeiras sao knobs; as cinco ultimas, telemetria do
         // readback (ver FRadianceCacheStats) — por isso so tem READ.
@@ -227,6 +228,7 @@ namespace SmileEditor {
 
         bool              IsDDGIEnabled() const;
         bool              IsReSTIRGIEnabled() const;
+        bool              IsReSTIRGIHalfRes() const;
         bool              IsReGIREnabled() const;
         bool              IsRadianceCacheEnabled() const;
         bool              IsRadianceCacheQuery() const;
@@ -281,6 +283,7 @@ namespace SmileEditor {
 
         Q_INVOKABLE void ToggleDDGI();
         Q_INVOKABLE void ToggleReSTIRGI();
+        Q_INVOKABLE void ToggleReSTIRGIHalfRes();
         Q_INVOKABLE void ToggleReGIR();
         Q_INVOKABLE void ToggleRadianceCache();
         Q_INVOKABLE void ToggleRadianceCacheQuery();

@@ -443,9 +443,9 @@ namespace Smile {
             RaytracingScene.InstanceGeoSRV(), GIFb,
             Targets.DepthSRVSlot, GBuffer.SRVSlot(1), RenderWidth(), RenderHeight());
 
-        // Alvos de timer: cada um no dominio do SEU dispatch — o gather do ReSTIR e full-res e o
-        // trace de reflexao e half-res. Sem NVAPI, Initialize() e no-op e os alvos nao existem.
-        TimerGI.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        // Timers usam o domínio efetivo de cada dispatch.
+        TimerGI.Initialize(Backend->Device.Native(), Backend->SRVHeap,
+                           ReSTIRGI.TraceWidth(), ReSTIRGI.TraceHeight());
         TimerReflections.Initialize(Backend->Device.Native(), Backend->SRVHeap,
                                     Reflections.TraceWidth(), Reflections.TraceHeight());
 

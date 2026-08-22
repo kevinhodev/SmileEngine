@@ -34,6 +34,7 @@ export interface CaptureFrameOptions {
   bookmarkSlot: number;
   warmupFrames: number;
   preset: "scientific" | "gameplay";
+  resetHistory: boolean;
   pinTimeOfDay: boolean;
   timeOfDayHours?: number;
   timeoutSeconds: number;
@@ -102,6 +103,7 @@ export interface GIConfigureOverrides {
   cascadeCount?: number;
   interleavedUpdates?: boolean;
   probeCompaction?: boolean;
+  halfRes?: boolean;
   adaptiveRays?: boolean;
   adaptiveHysteresis?: boolean;
 }
@@ -146,6 +148,12 @@ export interface GIStatus {
     adaptiveRays: boolean;
     adaptiveHysteresis: boolean;
     cascades: GICascadeStatus[];
+  };
+  restirGI: {
+    halfRes: boolean;
+    halfResEffective: boolean;
+    renderWidth: number;
+    renderHeight: number;
   };
   settings: Record<string, unknown>;
 }
@@ -245,6 +253,7 @@ export class SmileEditorBridge {
       bookmarkSlot: options.bookmarkSlot,
       warmupFrames: options.warmupFrames,
       preset: options.preset,
+      resetHistory: options.resetHistory,
       pinTimeOfDay: options.pinTimeOfDay,
     };
     if (options.timeOfDayHours !== undefined) {
@@ -502,6 +511,7 @@ export class SmileEditorBridge {
       typeof status.frameIndex !== "number" ||
       !status.policy ||
       !status.ddgi ||
+      !status.restirGI ||
       !Array.isArray(status.ddgi.cascades) ||
       !status.settings ||
       typeof status.settings !== "object" ||

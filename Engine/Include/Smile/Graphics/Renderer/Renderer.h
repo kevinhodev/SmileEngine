@@ -450,6 +450,7 @@ namespace Smile {
         // Telemetria do DDGI (spacing, momentos de distancia, contagem de sondas) p/ o painel
         // de GI. Os knobs — inclusive os de amostragem — moraram p/ o FRenderSettings.
         const FDDGI& GetDDGI() const { return DDGI; }
+        const FReSTIRGI& GetReSTIRGI() const { return ReSTIRGI; }
 
         // As flags de edicao de material/luz (Mark*/Notify*) moraram p/ o FRenderSettings; o
         // RenderFrame consome MaterialRTStateDirty/IndirectLightingDirty uma vez, antes do
@@ -472,6 +473,7 @@ namespace Smile {
         void SetSunDirection(const Vec3& Dir);
         void SetSunAzimuthElevation(f32 AzimuthDeg, f32 ElevationDeg);
         void SetCloudsHalfRes(bool HalfRes); // recria o RT das nuvens (flush da fila)
+        void SetGIHalfRes(bool HalfRes); // realoca reservoirs/trace e preserva saida full-res
         void SetCloudWeatherSeed(u32 Seed);  // re-bakeia na hora (flush + dispatch sincrono)
         void SetCloudWeatherCells(u32 Mult);
         bool LoadCloudWeatherTexture(const std::wstring& Path);

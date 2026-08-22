@@ -58,6 +58,8 @@ namespace Smile {
         // Escolher pela ocupacao teria dado 64 — metade do necessario.
         u32            WarmupFrames = 128;
         ECapturePreset Preset       = ECapturePreset::Scientific;
+        // false preserva o histórico temporal vigente.
+        bool           ResetHistory = true;
         // Hora do dia a FIXAR durante a sessao, em [0,24); negativo = usar a hora corrente.
         //
         // A hora nao pode ser canonicalizada como o ElapsedTime: aquele e "segundos desde o boot",
@@ -121,6 +123,9 @@ namespace Smile {
         u32  DDGIAdaptiveMinRays = 0;
         u32  DDGIAdaptiveMaxRays = 0;
         bool ReSTIRGI           = false;
+        bool ReSTIRGIHalfResRequested = false;
+        bool ReSTIRGIHalfResEffective = false;
+        u32  ReSTIRGIRenderWidth = 0, ReSTIRGIRenderHeight = 0;
         bool ReSTIRDI           = false;
         bool ReGIR              = false; // EFETIVO: a grade foi construida neste frame
         // Os dois campos que explicam um ReGIR pedido e nao construido. Ele exige consumidor E

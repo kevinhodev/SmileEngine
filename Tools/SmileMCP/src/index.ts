@@ -530,6 +530,7 @@ server.registerTool(
       cascadeCount: z.number().int().min(1).max(4).nullish(),
       interleavedUpdates: z.boolean().nullish(),
       probeCompaction: z.boolean().nullish(),
+      halfRes: z.boolean().nullish(),
       adaptiveRays: z.boolean().nullish(),
       adaptiveHysteresis: z.boolean().nullish(),
       timeoutSeconds: z.number().min(1).max(120).default(30),
@@ -838,6 +839,10 @@ server.registerTool(
         .describe("-1 usa a camera atual; 0 a 3 restauram o bookmark antes da captura."),
       warmupFrames: z.number().int().min(0).max(512).default(128),
       preset: z.enum(["scientific", "gameplay"]).default("scientific"),
+      resetHistory: z
+        .boolean()
+        .default(true)
+        .describe("false captura continuidade temporal; exige preset gameplay e bookmarkSlot -1."),
       pinTimeOfDay: z
         .boolean()
         .default(true)
@@ -862,6 +867,7 @@ server.registerTool(
         bookmarkSlot: input.bookmarkSlot,
         warmupFrames: input.warmupFrames,
         preset: input.preset,
+        resetHistory: input.resetHistory,
         pinTimeOfDay: input.pinTimeOfDay,
         timeOfDayHours: input.timeOfDayHours,
         timeoutSeconds: input.timeoutSeconds,

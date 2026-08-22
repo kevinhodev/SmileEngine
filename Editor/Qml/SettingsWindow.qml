@@ -2153,10 +2153,37 @@ Rectangle {
                         onToggled: renderModel.ToggleReSTIRGI()
                     }
 
+                    Text {
+                        id: giRestirHalfLabel
+                        x: 20
+                        y: giRestirHint.y + giRestirHint.height + 16
+                        text: "ReSTIR GI meia-res"
+                        color: renderModel.restirGIEnabled ? root.textNormal : root.textSecondary
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        id: giRestirHalfHint
+                        x: 20
+                        y: giRestirHalfLabel.y + giRestirHalfLabel.height + 2
+                        text: "¼ dos pixels + reconstrução temporal"
+                        color: root.textMuted
+                        font.family: C.Theme.fontFamily
+                        font.pixelSize: 10
+                    }
+                    Toggle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 20
+                        y: giRestirHalfLabel.y - 3
+                        enabled: renderModel.restirGIEnabled
+                        checked: renderModel.restirGIHalfRes
+                        onToggled: renderModel.ToggleReSTIRGIHalfRes()
+                    }
+
                     StatusRow {
                         id: giCacheStatus
                         x: 20
-                        y: giRestirHint.y + giRestirHint.height + 16
+                        y: giRestirHalfHint.y + giRestirHalfHint.height + 16
                         width: parent.width - 40
                         label: "World radiance cache"
                         value: !renderModel.radianceCacheEnabled ? "desligado"

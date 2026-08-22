@@ -45,6 +45,9 @@ namespace SmileEditor {
         // Enfileira. Slot < 0 = camera livre (o manifesto registra -1). Scientific = resolucao
         // nativa, sem upscaler e sem TAA. PinHours >= 0 fixa a hora do dia da sessao.
         Q_INVOKABLE bool Shoot(int Slot, int WarmupFrames, bool Scientific, double PinHours);
+        // Variante MCP que pode preservar o histórico vigente.
+        bool ShootAdvanced(int Slot, int WarmupFrames, bool Scientific, double PinHours,
+                           bool ResetHistory);
         // Hora do dia corrente, para a UI oferecer "usar a hora atual" sem o operador ter de
         // ler o painel de TOD e digitar. Negativo se o renderer nao estiver disponivel.
         Q_INVOKABLE double CurrentTimeOfDayHours() const;

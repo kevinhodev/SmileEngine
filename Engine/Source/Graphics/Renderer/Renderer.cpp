@@ -431,6 +431,15 @@ namespace Smile {
         VolumetricClouds.Resize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
     }
 
+    void Renderer::SetGIHalfRes(bool _HalfRes) {
+        if (ReSTIRGI.GetHalfRes() == _HalfRes) return;
+        ReSTIRGI.SetHalfRes(_HalfRes);
+        if (!Initialized || !Backend->Device.RaytracingSupported() || RenderWidth() == 0) return;
+        // O resize troca recursos e descriptors usados por comandos em voo.
+        Backend->DirectQueue.Flush();
+        SetupReflectionsForScene();
+    }
+
     void Renderer::SetCloudWeatherSeed(u32 _Seed) {
         CloudNoise.SetSeed(_Seed);
         if (!Initialized || !CloudNoise.IsInitialized()) return;

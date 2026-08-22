@@ -52,6 +52,11 @@ namespace SmileEditor {
     }
 
     bool CaptureBridge::Shoot(int _Slot, int _WarmupFrames, bool _Scientific, double _PinHours) {
+        return ShootAdvanced(_Slot, _WarmupFrames, _Scientific, _PinHours, true);
+    }
+
+    bool CaptureBridge::ShootAdvanced(int _Slot, int _WarmupFrames, bool _Scientific,
+                                      double _PinHours, bool _ResetHistory) {
         if (!Renderer) {
             emit Message(tr("Renderizador indisponível — captura não iniciada"));
             return false;
@@ -66,6 +71,7 @@ namespace SmileEditor {
             _WarmupFrames < 0 ? 0 : (_WarmupFrames > 512 ? 512 : _WarmupFrames));
         Request.Preset       = _Scientific ? Smile::ECapturePreset::Scientific
                                            : Smile::ECapturePreset::Gameplay;
+        Request.ResetHistory = _ResetHistory;
         // Negativo = não fixar (usa a hora corrente). Fixar é o caminho normal do A/B: com o
         // Time of Day correndo, duas capturas disparadas com minutos de diferença teriam sóis
         // diferentes, e nenhum reset conserta isso depois.

@@ -62,6 +62,7 @@ smile_compile_shader(GI/DDGICompactFinalize.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 # ReSTIR GI — final-gather difuso por pixel (reservoir espaciotemporal) sobre o DDGI (cache)
 smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReSTIRGISpatial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(GI/ReSTIRGIUpsample.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 if(SMILE_SHADER_TIMER_AVAILABLE)
     smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl cs_6_6 main SHADER_OUTPUTS
         OUTPUT_NAME ReSTIRGITraceTimed ${SMILE_TIMER_FLAGS})

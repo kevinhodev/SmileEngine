@@ -290,9 +290,11 @@ namespace Smile {
         Applied.CacheAutoWarmup = false;
         CaptureState->Session.StashSettings(Stash, Applied);
 
-        // Fase temporal canonica torna animacoes reproduziveis entre capturas.
-        FrameState->ElapsedTime = FRendererCaptureState::kElapsedSeconds;
-        Weather.SetWetness(SettledWetness());
+        // Capturas live não alteram conteúdo temporal.
+        if (CaptureState->Session.Pending().ResetHistory) {
+            FrameState->ElapsedTime = FRendererCaptureState::kElapsedSeconds;
+            Weather.SetWetness(SettledWetness());
+        }
 
         // Hora do dia e estado autorado e so e fixada quando o pedido a declara.
         const f32 PinHours = CaptureState->Session.Pending().PinTimeOfDayHours;
@@ -311,7 +313,8 @@ namespace Smile {
 
         // Resete depois do preset, que pode realocar alvos e invalidar historicos.
         CaptureState->Session.BeginSession();
-        Settings().NotifyDeterministicCapture();
+        if (CaptureState->Session.Active().ResetHistory)
+            Settings().NotifyDeterministicCapture();
         LogInfo("Captura: aquecendo " +
                 std::to_string(CaptureState->Session.Active().WarmupFrames) +
                 " frames renderizados");
@@ -362,6 +365,10 @@ namespace Smile {
         S.DDGIAdaptiveMinRays = static_cast<u32>(DDGI.GetMinRays());
         S.DDGIAdaptiveMaxRays = static_cast<u32>(DDGI.GetMaxRays());
         S.ReSTIRGI    = _Modes.ReSTIRGIActive;
+        S.ReSTIRGIHalfResRequested = ReSTIRGI.GetHalfRes();
+        S.ReSTIRGIHalfResEffective = _Modes.ReSTIRGIActive && ReSTIRGI.HalfResEffective();
+        S.ReSTIRGIRenderWidth  = _Modes.ReSTIRGIActive ? ReSTIRGI.TraceWidth() : 0u;
+        S.ReSTIRGIRenderHeight = _Modes.ReSTIRGIActive ? ReSTIRGI.TraceHeight() : 0u;
         S.ReSTIRDI    = _Modes.ReSTIRDIActiveFrame;
         // Toggle + consumidor + luz na cena.
         S.ReGIR       = CaptureState->ReGIRRanThisFrame;

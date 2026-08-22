@@ -18,8 +18,7 @@ using Microsoft::WRL::ComPtr;
 namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kGIFormat   = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        // Reservoir: x2 precisa da faixa inteira de fp32 (e posicao de mundo — a RTXDI tambem a
-        // guarda assim); o resto vive empacotado em quatro uints. Ver ReSTIRReservoir.hlsli.
+        // x2 usa FP32; os demais campos são empacotados em quatro uints.
         constexpr DXGI_FORMAT kRes0Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
         constexpr DXGI_FORMAT kRes1Format = DXGI_FORMAT_R32G32B32A32_UINT;
 
@@ -60,6 +59,15 @@ namespace Smile {
         auto Free = [&](u32& Slot, u32 Count) {
             if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
         };
+        // Em full-res, os slots de trace são aliases dos slots públicos.
+        if (TraceGITexture) {
+            Free(TraceGITexSRV, 1);
+            Free(TraceGITexUAV, 1);
+        } else {
+            TraceGITexSRV = TraceGITexUAV = kInvalidSlot;
+        }
+        Free(UpsampleTable, 5);
+        Free(ResolvedGITexUAV, 1);
         Free(GITexSRV, 1);
         Free(GITexUAV, 1);
         for (u32 i = 0; i < 2; ++i) {
@@ -70,15 +78,18 @@ namespace Smile {
             Res0State[i] = Res1State[i] = D3D12_RESOURCE_STATE_COMMON;
         }
         Free(PackSrvTable, 4); Free(PackUavTable, 4); Free(NrdOutSRV, 1);
-        // O alvo da fonte entra aqui como todo o resto. Faltando, cada resize perdia dois slots do
-        // heap para sempre — e, se o setup seguinte falhasse, o SRV antigo continuaria registrado
-        // apontando para uma textura que ja nao existe.
         Free(SourceDebugSRV, 1);
         Free(SourceDebugUAV, 1);
         SourceDebugTex.Reset();
         SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
+        TraceGITexture.Reset();
+        TraceGITextureState = D3D12_RESOURCE_STATE_COMMON;
+        ResolvedGITexture.Reset();
+        ResolvedGITextureState = D3D12_RESOURCE_STATE_COMMON;
         GITexture.Reset();
         GITextureState = D3D12_RESOURCE_STATE_COMMON;
+        FullWidth = FullHeight = Width = Height = 0;
+        ReconstructionHistoryValid = false;
         Ready = false;
     }
 
@@ -91,15 +102,7 @@ namespace Smile {
         const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
         const u32 _DistSlot      = _Fallback.DistanceAtlasSRV;
         const u32 _ProbeDataSlot = _Fallback.ProbeDataSRV;
-        // Valida os SETE slots, nao so tres: todos vao direto p/ CpuHandleStaging ao montar as
-        // tabelas, e la kInvalidSlot (0xFFFFFFFF) vira base + 0xFFFFFFFF * HandleSize — ~128 GiB
-        // fora do heap. O CopyDescriptors le desse endereco: access violation, ou pior, descriptor
-        // corrompido em silencio. Hoje o Renderer garante os quatro que faltavam, mas isso e
-        // invariante de call site, nao da classe.
-        //
-        // Os tres do fallback continuam validados mesmo com Available == false: `sem volume` quer
-        // dizer slot NEUTRO, nunca slot invalido. Se chegou invalido, o Renderer nao criou os
-        // recursos neutros — e ai o certo e nao montar a tabela, nao montar com um buraco.
+        // Todos os slots entram em CopyDescriptors; fallback ausente usa slots neutros válidos.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
             _SkyViewSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot ||
             _IrradSlot == kInvalidSlot || _DistSlot == kInvalidSlot ||
@@ -107,26 +110,30 @@ namespace Smile {
             _GBufferSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot)
             return;
 
-        Width = _Width; Height = _Height;
+        FullWidth = _Width; FullHeight = _Height;
+        Width  = HalfRes ? (_Width + 1u) / 2u : _Width;
+        Height = HalfRes ? (_Height + 1u) / 2u : _Height;
         DepthSlot = _DepthSlot; GBufferSlot = _GBufferSlot; VelocitySlot = _VelocitySlot;
-        GITexture = CreateUAVTex2D(_Device, Width, Height, kGIFormat, "ReSTIR GI · saida");
+        GITexture = CreateUAVTex2D(_Device, FullWidth, FullHeight, kGIFormat,
+                                   "ReSTIR GI · saida full-res");
+        if (HalfRes) {
+            TraceGITexture = CreateUAVTex2D(_Device, Width, Height, kGIFormat,
+                                            "ReSTIR GI · trace half-res");
+            ResolvedGITexture = CreateUAVTex2D(_Device, FullWidth, FullHeight, kGIFormat,
+                                               "ReSTIR GI · reconstrução temporal");
+        }
         for (u32 i = 0; i < 2; ++i) {
-            // Os dois lados do ping-pong compartilham o rotulo: o breakdown soma e mostra o custo
-            // real do historico, que e o numero que interessa comparar entre builds.
             Res0[i] = CreateUAVTex2D(_Device, Width, Height, kRes0Format, "ReSTIR GI · reservoir");
             Res1[i] = CreateUAVTex2D(_Device, Width, Height, kRes1Format, "ReSTIR GI · reservoir");
         }
-        // Falsa-cor de diagnostico, entao 8 bits por canal bastam — nao e radiancia.
-        //
-        // CUSTO, para nao ser esquecido: RGBA8 permanente sao ~4,8 MiB nesta resolucao e ~31,6 MiB
-        // em 4K, alocados exista ou nao alguem olhando. Aceitavel para ferramenta de editor agora;
-        // se incomodar, o caminho e R8_UINT com o decode no visor — a classe cabe em 3 bits e
-        // economizaria 75%. A cor ja vive numa funcao so (RC_SourceColor), entao a troca e local.
+        // Falsa-cor de diagnóstico; não armazena radiância.
         SourceDebugTex = CreateUAVTex2D(_Device, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM,
                                         "ReSTIR GI · fonte do candidato");
         GITextureState = D3D12_RESOURCE_STATE_COMMON;
+        TraceGITextureState = D3D12_RESOURCE_STATE_COMMON;
+        ResolvedGITextureState = D3D12_RESOURCE_STATE_COMMON;
         SourceDebugState = D3D12_RESOURCE_STATE_COMMON;
-        FrameParity = 0; NeedsClear = true;
+        FrameParity = 0; NeedsClear = true; ReconstructionHistoryValid = false;
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
         Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -143,6 +150,15 @@ namespace Smile {
             _SRVHeap.CreateUAV(_Device, Res, Uav, UavSlot);
         };
         MakeSrvUav(GITexture.Get(), kGIFormat, GITexSRV, GITexUAV);
+        if (HalfRes) {
+            MakeSrvUav(TraceGITexture.Get(), kGIFormat, TraceGITexSRV, TraceGITexUAV);
+            ResolvedGITexUAV = _SRVHeap.Allocate(1);
+            Uav.Format = kGIFormat;
+            _SRVHeap.CreateUAV(_Device, ResolvedGITexture.Get(), Uav, ResolvedGITexUAV);
+        } else {
+            TraceGITexSRV = GITexSRV;
+            TraceGITexUAV = GITexUAV;
+        }
         MakeSrvUav(SourceDebugTex.Get(), DXGI_FORMAT_R8G8B8A8_UNORM,
                    SourceDebugSRV, SourceDebugUAV);
         for (u32 i = 0; i < 2; ++i) {
@@ -173,8 +189,7 @@ namespace Smile {
                 _SRVHeap.CpuHandleStaging(_VelocitySlot),
                 _SRVHeap.CpuHandleStaging(Res0SRV[prev]),
                 _SRVHeap.CpuHandleStaging(Res1SRV[prev]),
-                // t11/t12 continuam filler porque SetPunctualLightsSRV escreve as luzes no
-                // offset 13 fixo.
+                // t11/t12 preservam o offset fixo t13 das luzes.
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
                 _SRVHeap.CpuHandleStaging(_InstanceSlot),
             };
@@ -182,7 +197,7 @@ namespace Smile {
 
             TraceUAVTable[p] = _SRVHeap.Allocate(3);
             D3D12_CPU_DESCRIPTOR_HANDLE USrc[3] = {
-                _SRVHeap.CpuHandleStaging(GITexUAV),
+                _SRVHeap.CpuHandleStaging(TraceGITexUAV),
                 _SRVHeap.CpuHandleStaging(Res0UAV[p]),
                 _SRVHeap.CpuHandleStaging(Res1UAV[p]),
             };
@@ -204,27 +219,30 @@ namespace Smile {
             CopyTable(SpatialTable[p], SSrc, 10);
         }
 
+        if (HalfRes) {
+            UpsampleTable = _SRVHeap.Allocate(5);
+            D3D12_CPU_DESCRIPTOR_HANDLE UpsampleSrc[5] = {
+                _SRVHeap.CpuHandleStaging(TraceGITexSRV),
+                _SRVHeap.CpuHandleStaging(_DepthSlot),
+                _SRVHeap.CpuHandleStaging(_GBufferSlot),
+                _SRVHeap.CpuHandleStaging(_VelocitySlot),
+                _SRVHeap.CpuHandleStaging(GITexSRV),
+            };
+            CopyTable(UpsampleTable, UpsampleSrc, 5);
+        }
+
         Ready = true;
     }
 
     void FReSTIRGI::SetPunctualLightsSRV(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                          u32 _StagingSlot) {
-        // Este t13 e o UNICO descriptor reescrito por frame num heap shader-visible, com frames
-        // em voo — o mesmo padrao que ja causou a "descriptor race t13" no projeto. O que torna
-        // seguro e haver uma tabela por paridade e a paridade alternar a cada RecordTrace: ao
-        // escrever a tabela p da CPU no frame N, o frame em voo mais antigo que ainda pode estar
-        // lendo e o N-1, que usou a tabela 1-p. Com 3 frames em voo isso deixa de valer (o N-2
-        // usou p), entao o assert quebra o build em vez de virar corrupcao intermitente.
+        // A tabela shader-visible é versionada pela mesma paridade dos reservoirs.
         static_assert(kParityTables == FCommandQueue::kFramesInFlight,
                       "tabela de trace do ReSTIR versionada por paridade: com mais frames em voo "
                       "e preciso mais tabelas (ou desacoplar paridade do ping-pong do versionamento)");
         if (!Ready) return;
 
-        // Indexado por FrameParity, NAO por FrameSlot (que e o padrao do FReflections): aqui a
-        // tabela carrega qual conjunto de reservoirs e prev/curr, entao tem que ser exatamente a
-        // que o RecordTrace vai bindar. Os dois indices desincronizam de vez assim que o ReSTIR
-        // fica um frame desligado — FrameSlot avanca com o frame, FrameParity so dentro do
-        // RecordTrace — e aí as luzes iriam parar na tabela errada.
+        // FrameSlot avança mesmo quando o passe não grava; FrameParity identifica a tabela correta.
         D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[FrameParity] + 13);
         D3D12_CPU_DESCRIPTOR_HANDLE Src = _SRVHeap.CpuHandleStaging(_StagingSlot);
         UINT One = 1;
@@ -243,25 +261,29 @@ namespace Smile {
         CPU.View            = _View;
         CPU.CameraPos       = { _CameraPos.X, _CameraPos.Y, _CameraPos.Z, 1.0f };
         CPU.ScreenParams    = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
+        CPU.TraceScreenParams = { static_cast<f32>(Width), static_cast<f32>(Height),
+                                  1.0f / static_cast<f32>(Width),
+                                  1.0f / static_cast<f32>(Height) };
+        // Cada fase 2x2 atualiza um pixel full-res por texel interno.
+        const u32 Phase = HalfRes ? (_FrameIndex & 3u) : 0u;
+        CPU.ResolutionParams = { HalfRes ? 2.0f : 1.0f,
+                                 static_cast<f32>(Phase & 1u),
+                                 static_cast<f32>((Phase >> 1u) & 1u),
+                                 HalfRes ? 1.0f : 0.0f };
         CPU.GridMinSpacing  = GIGridMinSpacing;
         CPU.GridCount       = GIGridCount;
         CPU.AtlasParams     = GIAtlasParams;
         CPU.SunDirIntensity = { _SunDir.X, _SunDir.Y, _SunDir.Z, _SunIntensity };
-        // w = ShadowRayMask. Nenhum dos dois valores inclui translucido: vidro que deixa a luz
-        // passar no gather nao pode projetar sombra dura no mesmo frame.
+        // w = ShadowRayMask, sem translucência.
         CPU.SunColor        = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
                                                                 : kRTMaskShadowFast) };
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
                                 RayEps.HitShadowRayBias };
-        // GI cru (RR/None) usa teto de firefly mais apertado: sem o NRD pra limpar o residuo, os
-        // outliers viram sparkles que o RR nao remove bem. O caminho NRD mantem o teto original.
+        // GI cru usa teto de firefly mais restritivo.
         CPU.ShadeParams     = { 0.0f, AlbedoLOD, // .x livre
                                 UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
-        // Sem historico de superficie nao ha x1 anterior p/ reconstruir, entao o reuso temporal
-        // deste frame cai — o passe volta a valer so pela amostra inicial, que e exatamente o que
-        // ele ja fazia num frame de disoclusao. Nao invalida o reservoir: assim que o slot voltar,
-        // o historico ainda esta la e o acumulo retoma sem piscar.
+        // Sem superfície anterior, este frame usa apenas o candidato novo.
         const bool HasSurfaceHistory = _PrevSurfaceSlot != kInvalidSlot;
         CPU.ReuseParams     = { MCap, PosRejectScale, Visibility ? 1.0f : 0.0f,
                                 (Temporal && HasSurfaceHistory) ? 1.0f : 0.0f };
@@ -277,8 +299,7 @@ namespace Smile {
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipModePacked() };
-        // .w = piso de roughness do hit secundario: o reservoir e cache NAO-direcional (ver
-        // FGIHitSampling::SecondaryRoughnessMin e o bloco no ShadeSurfaceHit).
+        // .w = piso de roughness do cache não direcional.
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
                                 GIHit.SecondaryRoughnessMin };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
@@ -290,18 +311,16 @@ namespace Smile {
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
-        // O slot bindless viaja como float; -1 e o sentinela de "captura off" (o shader testa
-        // < 0). Sem a permutacao instrumentada isto nunca e lido, mas fica coerente de todo jeito.
-        // `.y` = alvo da FONTE do candidato, pelo MESMO sentinela. -1 desliga, e o shader testa
-        // `< 0` — nunca converter kInvalidSlot para float: 0xFFFFFFFF nao e representavel exato em
-        // f32 e viraria um indice bindless enorme, valido para o branch e catastrofico no heap.
+        // Slots bindless em float usam -1 como sentinela; nunca converta kInvalidSlot.
         CPU.DebugParams           = { (TraceTimed && TimerSlot != kInvalidSlot)
                                           ? static_cast<f32>(TimerSlot) : -1.0f,
                                       (SourceDebug && SourceDebugUAV != kInvalidSlot)
                                           ? static_cast<f32>(SourceDebugUAV) : -1.0f,
                                       0.0f, 0.0f };
         CPU.HistoryParams         = { static_cast<f32>(HasSurfaceHistory ? _PrevSurfaceSlot : 0u),
-                                      0.0f, 0.0f, 0.0f };
+                                      (HalfRes && HasSurfaceHistory && ReconstructionHistoryValid)
+                                          ? 1.0f : 0.0f,
+                                      0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReSTIRGIConstants),
                     &CPU, sizeof(ReSTIRGIConstants));
     }
@@ -331,10 +350,7 @@ namespace Smile {
         const u32 p = FrameParity, prev = 1u - FrameParity;
 
         if (NeedsClear) {
-            // Res1 e um formato INTEIRO: limpar com ClearUnorderedAccessViewFloat nele e undefined
-            // behavior (a runtime le o clear value como float e o descriptor diz UINT). O que
-            // importa zerar de fato e o canal de M — M == 0 e o unico sinal de "sem historico"
-            // que o Pass A checa antes de tocar em qualquer outro campo.
+            // Res1 é UINT; M == 0 marca reservoir sem histórico.
             Transition(_CL, Res0[prev].Get(), Res0State[prev], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             const float ZeroF[4] = { 0, 0, 0, 0 };
             _CL->ClearUnorderedAccessViewFloat(_SRVHeap.GpuHandle(Res0UAV[prev]),
@@ -352,11 +368,13 @@ namespace Smile {
         Transition(_CL, Res1[prev].Get(), Res1State[prev], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, Res0[p].Get(), Res0State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, Res1[p].Get(), Res1State[p], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        // So com o debug LIGADO. A justificativa anterior ("o estado e do recurso, nao do knob")
-        // nao se sustenta: o ultimo frame ligado termina em SRV, e desligado o recurso pode
-        // simplesmente ficar la — ninguem escreve nele. Sem o gate eram duas barreiras por frame
-        // (SRV->UAV->SRV) para um alvo que o shader nem toca.
+        if (HalfRes) {
+            Transition(_CL, TraceGITexture.Get(), TraceGITextureState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        } else {
+            Transition(_CL, GITexture.Get(), GITextureState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
         if (SourceDebug && SourceDebugTex) {
             Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -368,7 +386,7 @@ namespace Smile {
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[p]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable[p]));
-        // O UAV falso da extensao: o driver troca o acesso, mas a tabela precisa estar setada.
+        // A extensão exige a tabela do UAV reservado.
         if (Timed)
             _CL->SetComputeRootDescriptorTable(FComputePipeline::kNvApiRootParam,
                                                FShaderTimer::ExtnTable(_SRVHeap));
@@ -382,31 +400,44 @@ namespace Smile {
             Transition(_CL, Res1[p].Get(), Res1State[p], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             D3D12_RESOURCE_BARRIER UB{};
             UB.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-            UB.UAV.pResource = GITexture.Get();
+            UB.UAV.pResource = HalfRes ? TraceGITexture.Get() : GITexture.Get();
             _CL->ResourceBarrier(1, &UB);
 
             SpatialPSO.Bind(_CL);
             _CL->SetComputeRootConstantBufferView(0, CBAddr());
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpatialTable[p]));
-            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(GITexUAV));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceGITexUAV));
             _CL->Dispatch(GX, GY, 1);
             if (_Profiler) _Profiler->End(_CL);
         }
 
-        // Estado combinado em vez de escolher por UseNrd. Sao TRES leitores: o deferred (t16,
-        // passe grafico = PIXEL), o pack do NRD (compute = NON_PIXEL) e o visualizador de debug,
-        // que le a GITexture CRUA — e este ultimo e registrado incondicionalmente pelo Renderer
-        // (GITexRawSRVSlot) e o FDebugView nao emite barreira nenhuma. Terminar so em NON_PIXEL
-        // com o NRD ligado deixava o alvo "ReSTIR GI" cru em estado invalido p/ um passe grafico:
-        // erro da debug layer e leitura indefinida justamente no alvo mais util p/ debugar.
-        // Custo: a mesma unica barreira de antes.
+        if (HalfRes) {
+            if (_Profiler) _Profiler->Begin(_CL, "Reconstrução temporal 4 fases");
+            Transition(_CL, TraceGITexture.Get(), TraceGITextureState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, GITexture.Get(), GITextureState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, ResolvedGITexture.Get(), ResolvedGITextureState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            UpsamplePSO.Bind(_CL);
+            _CL->SetComputeRootConstantBufferView(0, CBAddr());
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpsampleTable));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedGITexUAV));
+            _CL->Dispatch((FullWidth + 7u) / 8u, (FullHeight + 7u) / 8u, 1);
+
+            // Resolve separado evita read/write simultâneo e preserva o descriptor público.
+            Transition(_CL, ResolvedGITexture.Get(), ResolvedGITextureState,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Transition(_CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_COPY_DEST);
+            _CL->CopyResource(GITexture.Get(), ResolvedGITexture.Get());
+            ReconstructionHistoryValid = true;
+            if (_Profiler) _Profiler->End(_CL);
+        }
+
+        // Deferred, NRD e debug consomem a saída em estágios diferentes.
         Transition(_CL, GITexture.Get(), GITextureState,
                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        // O alvo da fonte volta para leitura pelo mesmo motivo da GITexture crua: ele e registrado
-        // no DebugTargets e o FDebugView nao emite barreira nenhuma — sem esta, o visor leria um
-        // recurso em UNORDERED_ACCESS. Gatada igual a de subida: o par abre e fecha junto, entao o
-        // recurso nunca fica em UAV depois de um frame com o debug desligado.
         if (SourceDebug && SourceDebugTex) {
             Transition(_CL, SourceDebugTex.Get(), SourceDebugState,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -416,13 +447,8 @@ namespace Smile {
     }
 
     void FReSTIRGI::OnRegisterDebugTargets() {
-        // Exige o toggle LIGADO, e nao so o recurso existir: registrado com o debug desligado, o
-        // alvo aparece na lista e o operador pode seleciona-lo — para ver uma textura que ninguem
-        // escreveu neste frame (lixo de alocacao, ou o mapa de quando o toggle esteve ligado).
-        // Um alvo so deve ser oferecido quando alguem esta enchendo ele.
         if (!SourceDebug || !SourceDebugTex || SourceDebugSRV == kInvalidSlot) return;
-        // Raw: o shader ja escreve cor de diagnostico em faixa visivel. Passar por tonemap
-        // distorceria a leitura — verde e laranja tem de sair como sao.
+        // A cor já está em faixa de visualização.
         DebugTargets::Register(kSourceDebugTargetName, SourceDebugSRV, EDebugDecode::Raw,
                                0, 1, 1.0f, 0, /*LinearFilter*/ false);
     }
@@ -430,9 +456,7 @@ namespace Smile {
     void FReSTIRGI::SetupNrdPack(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                  ID3D12Resource* _ViewZ, ID3D12Resource* _NormalRough,
                                  ID3D12Resource* _Mv, ID3D12Resource* _DiffRadHit, ID3D12Resource* _Out) {
-        // Idempotente pelo mesmo motivo do ReSTIR DI: com o NRD alocado sob demanda
-        // (Renderer::ReconcileNrdAllocation) isto e re-chamado a cada toggle do denoiser, e sem
-        // devolver os slots cada troca vazaria 9 descritores.
+        // Recriado a cada mudança de alocação do NRD.
         {
             auto FreeIf = [&](u32& Slot, u32 Count) {
                 if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
@@ -441,8 +465,6 @@ namespace Smile {
             FreeIf(PackSrvTable, 4);
             FreeIf(NrdOutSRV, 1);
         }
-        // Os CINCO recursos, nao so dois: ponteiro nulo vira descriptor nulo (legal em D3D12), as
-        // escritas do pack somem em silencio e o NRD denoisa lixo sem erro nenhum.
         if (!Ready || !_ViewZ || !_NormalRough || !_Mv || !_DiffRadHit || !_Out) return;
 
         PackUavTable = _SRVHeap.Allocate(4);
@@ -477,7 +499,7 @@ namespace Smile {
 
     void FReSTIRGI::RecordNrdPack(ID3D12GraphicsCommandList* _CL, FTextureSRVHeap& _SRVHeap) {
         if (!Ready || PackSrvTable == kInvalidSlot) return;
-        const u32 GX = (Width + 7) / 8, GY = (Height + 7) / 8;
+        const u32 GX = (FullWidth + 7) / 8, GY = (FullHeight + 7) / 8;
         NrdPackPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(PackSrvTable));
@@ -488,6 +510,7 @@ namespace Smile {
     void FReSTIRGI::CreatePipelines(ID3D12Device* _Device) {
         TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 3, true);
         SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
+        UpsamplePSO.Initialize(_Device, "ReSTIRGIUpsample.cs_6_6.cso", 5, 1, true);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
 
         if (FShaderTimer::IsAvailable()) {
@@ -503,7 +526,8 @@ namespace Smile {
 
     FPassShaderStems FReSTIRGI::ShaderStems() const {
         static const char* const kStems[] = { "ReSTIRGITrace.cs", "ReSTIRGITraceTimed.cs",
-                                              "ReSTIRGISpatial.cs", "ReSTIRNrdPack.cs" };
+                                              "ReSTIRGISpatial.cs", "ReSTIRGIUpsample.cs",
+                                              "ReSTIRNrdPack.cs" };
         return { kStems, static_cast<u32>(std::size(kStems)) };
     }
 

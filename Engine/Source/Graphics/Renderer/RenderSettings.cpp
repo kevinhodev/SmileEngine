@@ -518,6 +518,14 @@ namespace Smile {
     }
     bool FRenderSettings::GetUseReSTIRGI() const { return R.UseReSTIRGI; }
 
+    void FRenderSettings::SetGIHalfRes(bool _V) {
+        if (_V == R.ReSTIRGI.GetHalfRes()) return;
+        R.SetGIHalfRes(_V);
+        // Invalida consumidores temporais sem derrubar os caches de mundo.
+        Invalidate(Dom::IndirectSurfaceRoute);
+    }
+    bool FRenderSettings::GetGIHalfRes() const { return R.ReSTIRGI.GetHalfRes(); }
+
     void FRenderSettings::SetUseReSTIRDI(bool _V) {
         if (_V == R.UseReSTIRDI) return;
         // Os reservoirs do DI so caem na borda de SUBIDA; o resto cai sempre.

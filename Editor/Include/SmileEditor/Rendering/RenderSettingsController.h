@@ -126,6 +126,7 @@ namespace SmileEditor {
         std::optional<int>  CascadeCount;
         std::optional<bool> InterleavedUpdates;
         std::optional<bool> ProbeCompaction;
+        std::optional<bool> HalfRes;
         std::optional<bool> AdaptiveRays;
         std::optional<bool> AdaptiveHysteresis;
     };
@@ -145,6 +146,10 @@ namespace SmileEditor {
     struct FGIStatusSnapshot {
         quint64 FrameIndex = 0;
         FRenderSettingsSnapshot Settings;
+        bool ReSTIRGIHalfRes = false;
+        bool ReSTIRGIHalfResEffective = false;
+        int  ReSTIRGIRenderWidth = 0;
+        int  ReSTIRGIRenderHeight = 0;
         bool DDGIInitialized = false;
         int  DesiredCascadeCount = 1;
         int  ActualCascadeCount  = 0;

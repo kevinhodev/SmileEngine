@@ -95,7 +95,7 @@ namespace Smile {
             }
             if (S.UseGI)       Add("gi");
             if (S.DDGIReady)   Add("ddgi");
-            if (S.ReSTIRGI)    Add("rgi");
+            if (S.ReSTIRGI)    Add(S.ReSTIRGIHalfResEffective ? "rgiH" : "rgi");
             // O `rdi` carrega a CONFIGURACAO DE AMOSTRAGEM junto, pelo mesmo motivo do `rc` mais
             // abaixo: o sweep da Fase 0 produz capturas que so diferem no orcamento de candidatas,
             // e sem isto as quatro cairiam na pasta com nome identico — as "duas capturas
@@ -515,6 +515,7 @@ namespace Smile {
                 File << "  \"bookmarkSlot\": " << ActiveRequest.BookmarkSlot << ",\n";
                 File << "  \"preset\": \"" << (Scientific ? "scientific" : "gameplay") << "\",\n";
                 File << "  \"warmupFrames\": " << ActiveRequest.WarmupFrames << ",\n";
+                File << "  \"historyReset\": " << Bool(ActiveRequest.ResetHistory) << ",\n";
                 File << "  \"temporalSampleIndex\": " << _State.TemporalSampleIndex << ",\n";
                 File << "  \"frameIndex\": " << _State.FrameIndex << ",\n";
                 File << "  \"outputWidth\": "  << _State.OutputWidth  << ",\n";
@@ -558,6 +559,14 @@ namespace Smile {
                 File << "  \"ddgiAdaptiveMaxRays\": "
                      << _State.DDGIAdaptiveMaxRays << ",\n";
                 File << "  \"restirGI\": "     << Bool(_State.ReSTIRGI)    << ",\n";
+                File << "  \"restirGIHalfResRequested\": "
+                     << Bool(_State.ReSTIRGIHalfResRequested) << ",\n";
+                File << "  \"restirGIHalfResEffective\": "
+                     << Bool(_State.ReSTIRGIHalfResEffective) << ",\n";
+                File << "  \"restirGIRenderWidth\": "
+                     << _State.ReSTIRGIRenderWidth << ",\n";
+                File << "  \"restirGIRenderHeight\": "
+                     << _State.ReSTIRGIRenderHeight << ",\n";
                 File << "  \"restirDI\": "     << Bool(_State.ReSTIRDI)    << ",\n";
                 // `regir` continua sendo o EFETIVO — os manifestos ja capturados da serie usam
                 // esta chave com esse significado, e renomea-la quebraria a comparacao com eles.
