@@ -643,10 +643,7 @@ namespace SmileEditor {
         Renderer->GetScene().BumpTransformsVersion();
         // Ocultar/mostrar muda o que o mapa estatico contem, tanto quanto criar ou remover.
         Renderer->GetScene().BumpStaticCastersVersion();
-        // ...e muda o que os CACHES ja acumularam. O atlas do DDGI cai so na regiao afetada;
-        // reservoirs, reflexoes, ReGIR e cache de radiancia nao tem granularidade espacial e
-        // caem inteiros (dominio SceneContent). Diferente do arraste de gizmo, aqui e um clique
-        // discreto: nao ha gesto continuo para o reset atrapalhar.
+        // DDGI invalida a região; caches sem granularidade espacial usam SceneContent.
         // Geometria: a instancia sai da TLAS (RaytracingScene pula !Visible), entao as sondas
         // dali passam a enxergar coisa diferente — e a classificacao delas envelheceu junto.
         if (HasRegion)
@@ -667,11 +664,7 @@ namespace SmileEditor {
             const auto& Renderables = Renderer->GetScene().Renderables();
             if (Row.SceneIdx < 0 || Row.SceneIdx >= (int)Renderables.size()) return;
             const auto& R = Renderables[(size_t)Row.SceneIdx];
-            // FRenderable::AABBMin/Max ja e a caixa de MUNDO (derivada da local pelo Transform
-            // em RefreshWorldBounds), entao o centro sai direto dela. Somar Transform.Position
-            // aqui contava a translacao DUAS vezes: era no-op enquanto o cooker bakeava a
-            // transform no vertice e todo transform era identidade, e passou a jogar a camera
-            // longe do objeto quando a v7 tirou o bake.
+            // AABBMin/Max já estão em world space; somar a posição duplicaria a translação.
             Center = (R.AABBMin + R.AABBMax) * 0.5f;
             Radius = std::max(((R.AABBMax - R.AABBMin) * 0.5f).Length(), 0.25f);
         } else if (Row.Kind == KLight) {

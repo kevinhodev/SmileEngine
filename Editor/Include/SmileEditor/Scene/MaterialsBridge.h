@@ -8,6 +8,7 @@
 #include <QImage>
 #include <QJsonObject>
 #include <QMutex>
+#include <QPointer>
 #include <QQuickImageProvider>
 #include <QSet>
 #include <QString>
@@ -19,16 +20,8 @@
 namespace Smile { class Renderer; class FTexture; }
 
 namespace SmileEditor {
-    // Ponte C++<->QML do Editor de Materiais (MaterialsWindow.qml). Modelo flat dos materiais
-    // importados (Renderer::GetMaterials()), com busca/filtro reconstruindo a lista no C++
-    // (racional do SceneOutlinerBridge). Edicao e AO VIVO: os setters mutam
-    // FMaterial::Constants e chamam UpdateConstants() (CBV upload mapeado — a cena inteira
-    // reage no frame seguinte, estilo Material Instance da Flax). TwoSided/Blend tambem sao
-    // ao vivo: o Renderer escolhe PSO/passe por draw, por frame.
-    //
-    // Persistencia: <cena>.materials.json (sidecar, mesma convencao do .visibility.json) —
-    // por NOME de material, so os que divergem do default cozido (snapshot no Rebuild).
-    // Cargas aditivas reaplicam os overrides por nome.
+    // Modelo editavel de materiais com filtros, sidecar e previews offscreen. Alteracoes atualizam
+    // o material ao vivo; apenas divergencias do snapshot cozido sao persistidas.
     class MaterialsBridge : public QAbstractListModel {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -286,16 +279,10 @@ namespace SmileEditor {
         // tocado, mais o estado "modificado" e os papeis afetados da linha no browser.
         void   NotifySelectionChanged();
         void   TouchSelected(EChangeDomain Domain);
-        // Igual ao TouchSelected, mais o pedido de refresh do snapshot InstanceGeo. Use nos
-        // setters cujo campo o RAY TRACING le (ver FDDGI::FillInstanceGeo): cor base, metallic,
-        // roughness, emissivo, cutoff, shading model, alpha-test/blend/two-sided e troca de
-        // textura. Campos so-raster (parallax, NormalStrength, AOStrength, subsurface) devem usar
-        // o TouchSelected puro — marcar a toa reseta o historico do GI/denoiser sem motivo.
+        // Atualiza tambem InstanceGeo; use apenas para campos lidos pelo ray tracing.
         void   TouchSelectedRT(EChangeDomain Domain);
         bool   IsModified(const Smile::FMaterial* M) const;
-        // Aplica OverrideCache por nome, SO nos materiais recem-vistos (_Fresh). Reaplicar em
-        // material ja carregado descartaria a edicao nao salva dele — o Rebuild dispara tambem
-        // em carga aditiva, nao so na abertura da cena.
+        // Aplica overrides apenas a materiais novos para preservar edicoes ainda nao salvas.
         void   ApplyOverrides(const QSet<const Smile::FMaterial*>& _Fresh);
         QJsonObject MaterialToJson(const Smile::FMaterial& M) const;
         void   JsonToMaterial(const QJsonObject& O, Smile::FMaterial& M) const;
@@ -308,11 +295,9 @@ namespace SmileEditor {
         QString          JsonPath;                     // <cena>.materials.json (nao-aditiva)
         bool             JsonDirty = false;
         QHash<const Smile::FMaterial*, FSnapshot> Defaults;   // default cozido por material
-        // Sidecar carregado, por FMaterial::Id (hash de conteudo). Nome nao serve de chave: ha
-        // homonimos nas cenas cozidas e eles compartilhavam override indevidamente.
+        // Chave por Id evita compartilhar overrides entre materiais homonimos.
         QHash<quint64, QJsonObject>               OverrideCache;
-        // Sidecar v1 (chaveado por NOME) ainda em disco: aplicado por nome uma unica vez, no load,
-        // e reescrito como v2 no proximo save. Some depois disso.
+        // Cache legado v1, migrado para Id no proximo save.
         QHash<QString, QJsonObject>               LegacyOverrideCache;
         // Texturas trocadas no editor: material -> (slot -> path; "" = slot limpo).
         QHash<const Smile::FMaterial*, QHash<int, QString>> TexOverrides;
@@ -334,9 +319,7 @@ namespace SmileEditor {
         quint64        PreviewEpoch = 1;               // muda em invalidacao estrutural
         QHash<quint64, quint64> PreviewRequests;       // request id -> epoch da submissao
 
-        // Thumbnails do browser: esfera renderizada a 256 e armazenada em 96x96, sob demanda
-        // (data() enfileira, Refresh drena 1/frame). Chaves por INDICE de material — o
-        // provider roda na render thread do QML e nao pode tocar no Renderer.
+        // O provider le apenas imagens prontas; Refresh produz no maximo um thumbnail por frame.
         mutable QMutex        ThumbMutex;
         mutable QHash<int, QImage> ThumbByIdx;
         mutable QHash<int, int>    ThumbVersion;
@@ -363,7 +346,7 @@ namespace SmileEditor {
         }
 
     private:
-        MaterialsBridge* Bridge = nullptr;
+        QPointer<MaterialsBridge> Bridge;
     };
 
     // Thumbnails do browser (image://materialthumb/<idx>_v<n>). O sufixo _v so fura o
@@ -381,6 +364,6 @@ namespace SmileEditor {
         }
 
     private:
-        MaterialsBridge* Bridge = nullptr;
+        QPointer<MaterialsBridge> Bridge;
     };
 }

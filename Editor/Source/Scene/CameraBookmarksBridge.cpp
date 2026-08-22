@@ -111,13 +111,7 @@ namespace SmileEditor {
             return false;
         }
 
-        // UM Lock() para as tres leituras, e nao tres `Renderer->`. O operator-> solta o lock no
-        // fim da EXPRESSAO (ver RenderThread.h: "para uma sequencia [...] use Lock()"), entao tres
-        // acessos separados deixam a render thread avancar no meio: sairia posicao de um frame com
-        // orientacao de outro, uma pose que a camera nunca teve. Numa camera parada isso quase
-        // nunca aparece — e "quase nunca" e exatamente o modo de falha que uma captura de
-        // referencia nao pode ter, porque o erro seria pequeno, silencioso e so visivel como um
-        // A/B que nao fecha.
+        // Um único lock garante que posição, orientação e FOV pertençam ao mesmo frame.
         FSlot Staged{};
         {
             auto Access = Renderer.Lock();
@@ -279,11 +273,7 @@ namespace SmileEditor {
     bool CameraBookmarksBridge::SaveToDisk() {
         if (JsonPath.isEmpty()) return false;
 
-        // Nao substituir em silencio o que nao foi entendido. Pode ser a referencia de uma sessao
-        // de captura anterior, ou o sidecar de uma build mais nova aberto por engano numa antiga.
-        // O State NAO muda aqui. Ele so vira Ok depois do commit(): promover antes deixaria uma
-        // gravacao FALHA declarando que o arquivo em disco e nosso, e a proxima tentativa pularia
-        // o backup sobre um sidecar que continua sendo o nao entendido.
+        // Preserve sidecars desconhecidos; State só vira Ok depois de um commit bem-sucedido.
         if (State == ESidecarState::Corrupt || State == ESidecarState::Incompatible) {
             if (!BackupUnreadableSidecar()) return false;
         }

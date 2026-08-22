@@ -239,15 +239,7 @@ namespace SmileEditor {
         // que a luz entrega no direto. Quem quiser mais energia sobe a Intensity, que vale nos dois.
         Smile::Vec3 OldMin, OldMax; L->InfluenceBounds(OldMin, OldMax);
         L->RTWeight = (float)std::clamp(_V, 0.0, 1.0);
-        // Quem consome este peso — DDGI, ReSTIR GI e reflexoes — ACUMULOU energia da luz antiga,
-        // e o atlas seguraria essa energia por muitos frames: o slider pareceria inerte e a
-        // calibracao seria contra um estado que o usuario ja mandou embora.
-        //
-        // Era MarkIndirectLightingDirty (dominio SkyRadiance), que carrega DDGIAtlas e portanto
-        // derrubava o atlas INTEIRO — a piscada de GI a cada tique do slider. Trocado pela via
-        // por regiao + SceneContent: a caixa de influencia cobre o DDGI com precisao e o
-        // SceneContent ainda alcanca MAIS caches que o SkyRadiance (ReGIR e o cache de radiancia
-        // tambem guardam energia de luz puntual). Este e o caminho de toda edicao de luz agora.
+        // Invalide só a região afetada; consumidores sem granularidade usam SceneContent.
         InvalidateLightRegion(*L, OldMin, OldMax);
         Touch(false);
     }
@@ -504,11 +496,7 @@ namespace SmileEditor {
             L.OuterConeDeg      = (float)O.value(QStringLiteral("outerConeDeg")).toDouble(L.OuterConeDeg);
             L.Enabled           = O.value(QStringLiteral("enabled")).toBool(true);
             L.CastShadows       = O.value(QStringLiteral("castShadows")).toBool(true);
-            // Default 1.0: cena salva antes deste campo existir continua com a luz cheia no RT.
-            // Clamp TAMBEM aqui: o setter limita a [0,1], mas o JSON e fronteira de entrada — um
-            // arquivo editado a mao reintroduziria peso > 1 e inflaria o indireto acima do direto,
-            // que e exatamente o contrato que o teto existe p/ garantir. Negativo viraria energia
-            // negativa no hit.
+            // O JSON é fronteira de entrada; preserve o default legado e aplique o mesmo clamp.
             L.RTWeight          = std::clamp(
                 (float)O.value(QStringLiteral("rtWeight")).toDouble(1.0), 0.0f, 1.0f);
             Lights->push_back(L);

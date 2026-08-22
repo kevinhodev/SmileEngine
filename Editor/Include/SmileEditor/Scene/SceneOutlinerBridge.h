@@ -9,19 +9,8 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Ponte C++<->QML do Scene Outliner (SceneOutlinerPanel.qml). Modelo FLAT da arvore da
-    // cena: os grupos (Ambiente/Luzes/Meshes), pastas por asset importado e as linhas folha
-    // viram uma lista de linhas visiveis que a ListView virtualiza — expand/colapso, busca e
-    // filtro reconstroem a lista aqui no C++ (Rebuild), nunca no QML (2k+ meshes).
-    //
-    // Le a cena via RendererHandle (acesso serializado com a thread de renderizacao). As ACOES
-    // de luz (add/remover/duplicar/toggle/propriedades) continuam no LightsBridge — o QML
-    // chama lightsModel; o MainWindow conecta LightsChanged -> Rebuild daqui. Ambiente tem
-    // bridges proprias para edicao; este modelo conserva apenas hierarquia e selecao.
-    //
-    // Agrupamento de meshes: MainWindow avisa OnSceneLoaded apos cada LoadCookedScene; cada
-    // carga vira uma "pasta" com o range [begin, end) em Scene.Renderables(). Renderables
-    // RaytracingOnly (proxy do terreno) ficam fora da lista.
+    // Modelo flat e virtualizavel da hierarquia da cena. Edicao de luzes e ambiente permanece nas
+    // bridges de dominio; este tipo cuida de hierarquia, selecao e visibilidade de meshes.
     class SceneOutlinerBridge : public QAbstractListModel {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -119,12 +108,9 @@ namespace SmileEditor {
 
         Q_INVOKABLE void toggleExpand(int row);
         Q_INVOKABLE void selectRow(int row);    // ambiente/luz/mesh: selecao exclusiva
-        // Olho de mesh/pasta: flip de FRenderable::Visible + bump da TransformsVersion
-        // (o rebuild leve da TLAS re-coleta as instancias pulando !Visible -> o GI/reflexos
-        // respeitam o toggle no frame seguinte). Pasta = range inteiro do asset.
+        // Pasta aplica visibilidade ao range inteiro do asset.
         Q_INVOKABLE void toggleEye(int row);
-        // Duplo-clique: teleporta a camera pra enquadrar o objeto mantendo a orientacao
-        // (mesh = AABB, luz = posicao + raio da fonte). Estilo tecla F da UE.
+        // Enquadra mesh ou luz mantendo a orientacao da camera.
         Q_INVOKABLE void focusRow(int row);
         Q_INVOKABLE int  selectedRowIndex() const; // linha selecionada na lista flat (-1 = fora)
         // Setas cima/baixo: move a selecao pra proxima linha selecionavel.
@@ -134,11 +120,7 @@ namespace SmileEditor {
         Q_INVOKABLE bool saveVisibility();
         Q_INVOKABLE void closePanel() { emit CloseRequested(); }
 
-        // Del / Ctrl+D sobre uma MESH selecionada (o equivalente de luz mora no LightsBridge).
-        // Falam por Id, nao por indice: o Renderer remove/copia e reancora tudo que enderecava
-        // a cena por indice, entao a linha selecionada aqui ja nao vale depois da chamada.
-        // A copia nasce no FIM da lista, ou seja, cai na pasta residual "Outros" — e o que ela
-        // e: um objeto da CENA, nao mais parte do asset importado que a originou.
+        // Mutacoes usam Id porque indices deixam de ser validos depois da operacao.
         Q_INVOKABLE bool deleteSelectedMesh();
         Q_INVOKABLE bool duplicateSelectedMesh();
 
@@ -177,9 +159,7 @@ namespace SmileEditor {
 
         void RebuildRows(QVector<FRow>& Out) const;
         bool RowSelected(const FRow& Row) const;
-        // Um renderavel saiu da lista no indice dado: as pastas sao ranges [Begin,End) sobre
-        // ela, entao toda fronteira depois do buraco recua um. Sem isto a ultima mesh de cada
-        // asset vazaria para a pasta seguinte.
+        // Corrige ranges [Begin, End) depois da remocao de um renderavel.
         void ShiftAssetRangesAfterRemoval(int RemovedIndex);
         // Troca Rows preservando o scroll: mesma estrutura -> dataChanged; senao reset.
         void ApplyRows(QVector<FRow>&& NewRows);

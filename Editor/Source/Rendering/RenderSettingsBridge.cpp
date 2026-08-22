@@ -8,17 +8,17 @@
 #include <algorithm>
 #include <cmath>
 
-// Corpos movidos do ViewportWidget.cpp, sem reescrita: mesmos clamps, mesmos defaults de
-// "antes do renderer existir" e mesmos sinais. Este passo e de ORGANIZACAO — se um valor
-// mudar, e erro de digitacao no move.
 namespace SmileEditor {
     RenderSettingsBridge::RenderSettingsBridge(QObject* _Parent) : QObject(_Parent) {}
+
+    void RenderSettingsBridge::SetViewport(ViewportWidget* _Viewport) {
+        Viewport = _Viewport;
+    }
 
     void RenderSettingsBridge::SetRenderer(RendererHandle _R) {
         Renderer = std::move(_R);
         emit AvailableChanged();
-        // Uma emissao por dominio: o QML reavalia os cards com os valores reais do motor, que
-        // podem divergir dos defaults compilados na bridge.
+        // Reavalia os defaults da UI com as capacidades reais do renderer.
         emit SunShaftsSettingsChanged();
         emit VolFogSettingsChanged();
         emit ShadowSettingsChanged();
@@ -498,11 +498,7 @@ namespace SmileEditor {
             ? QStringLiteral("✓")
             : QStringLiteral("✗ sobra %1").arg(static_cast<long long>(S.SrcTotal) -
                                                static_cast<long long>(Sum));
-        // `inelegível` vem depois do travessão porque é OUTRO EIXO. Ele cruza com DDGI e com zero
-        // — nunca com cache, por construção —, e o texto diz exatamente isso e nada além: os
-        // totais marginais NÃO respondem quanto da inelegibilidade caiu especificamente no DDGI.
-        // Afirmar "é a parcela estrutural do DDGI" seria inventar uma interseção não medida; para
-        // tê-la seria preciso um contador de `ineligible && ddgiAnswered`, que não existe.
+        // Inelegível é um eixo marginal; os contadores não medem sua interseção com DDGI e zero.
         return QStringLiteral("fonte: cache %1 · DDGI %2 · zero %3 (%4 hits · soma %5)"
                               " — inelegíveis %6 (em DDGI ou zero)")
             .arg(Pct(S.SrcCache), Pct(S.SrcDDGI), Pct(S.SrcZero))
@@ -624,13 +620,8 @@ namespace SmileEditor {
             if (V == Settings.GetIndirectPrimary()) return;
             const bool MapBefore = Settings.GetGISourceDebug();
             Settings.SetIndirectPrimary(V);
-            // Mesmo caso do ToggleReSTIRGI: sair de SHaRC para o produtor do mapa da fonte, que e
-            // o RecordTrace do ReSTIR GI. O detector de borda do renderer faria isso sozinho no
-            // proximo frame, mas ele nao tem como notificar a janela de debug — entao o caminho do
-            // OPERADOR resolve aqui, sincrono, e o detector segue cobrindo os automaticos.
-            //
-            // O historico NAO e derrubado aqui: quem derruba e o detector, que ve a borda do valor
-            // EFETIVO. Invalidar tambem no setter cancelaria a captura duas vezes pelo mesmo evento.
+            // O caminho interativo remove o mapa órfão e notifica a janela de debug. O detector do
+            // renderer continua responsável por mudanças automáticas e pela invalidação histórica.
             Settings.DropGISourceDebugIfOrphaned();
             SourceDebugDropped = MapBefore && !Settings.GetGISourceDebug();
         } // lock solto antes dos sinais
@@ -658,20 +649,15 @@ namespace SmileEditor {
         Smile::FRadianceCacheSnapshot Snap;
         const bool Live = CacheSnapshot(Snap);
         if (Snap.Capacity == 0) return QStringLiteral("cache não montado");
-        // SEM snapshot válido não há o que resumir. Antes esta linha imprimia os últimos números
-        // conhecidos ao lado de toggles atuais — com o cache desligado, para sempre.
+        // Não reutilize números antigos quando o frame ainda não produziu uma medição válida.
         if (!Live) return QStringLiteral("%1 células de capacidade · sem medição no frame")
                               .arg(Snap.Capacity);
-        // A OCUPAÇÃO entra no texto daqui, e não é concatenada no QML a partir da propriedade
-        // numérica: sem medição aquela propriedade devolve 0,0, e "sem medição · 0,0%" lê como
-        // ocupação zero — que é um estado real e completamente diferente. Número que só significa
-        // algo junto de uma condição não pode ser publicado sozinho.
+        // Formate ocupação junto do estado para distinguir zero medido de ausência de medição.
         const double Occ = Snap.Capacity > 0
             ? 100.0 * static_cast<double>(Snap.Stats.Occupied) /
                   static_cast<double>(Snap.Capacity)
             : 0.0;
-        // Composto de UMA cópia, e não chamando os getters acima: cada um deles pega o próprio
-        // lock, e a linha misturaria números de frames diferentes.
+        // Componha toda a linha do mesmo snapshot para não misturar frames.
         const QString Hit = Snap.Meta.Stats
             ? QString::number(Snap.Stats.Queries > 0
                                   ? 100.0 * static_cast<double>(Snap.Stats.Hits) /
@@ -694,13 +680,7 @@ namespace SmileEditor {
     }
 
     QString RenderSettingsBridge::GetRadianceCacheMissBreakdown() const {
-        // String VAZIA quando não há o que mostrar, e não um aviso: a linha some, e é o próprio
-        // QML que decide isso perguntando `text.length`. Um "detalhe desligado" na tela ocupava
-        // altura para repetir o que o toggle logo acima já diz.
-        //
-        // Os DOIS sub-regimes que esta linha precisa saem do snapshot: `Detail` produz os motivos,
-        // `Stats` produz o denominador (as consultas). Ligar o detalhe agora não faz os números de
-        // dois frames atrás terem sido medidos com ele.
+        // Vazio oculta a linha. Detail e Stats devem pertencer ao mesmo snapshot válido.
         Smile::FRadianceCacheSnapshot Snap;
         if (!CacheSnapshot(Snap) || !Snap.Meta.Detail || !Snap.Meta.Stats) return QString();
         const auto& S = Snap.Stats;
@@ -754,11 +734,7 @@ namespace SmileEditor {
                  TermPct(S.TermOther));
     }
 
-    // Os quatro toggles que governam a telemetria emitem TAMBEM o StatsChanged. Sem isso as linhas
-    // de diagnostico so reagiriam ao Timer do painel — que para junto com o cache —, e desligar a
-    // instrumentacao deixava numeros antigos na tela por tempo indefinido. Um Q_PROPERTY tem UM
-    // sinal de NOTIFY, entao quem muda a validade avisa nos dois canais em vez de a propriedade
-    // escutar dois.
+    // Toggles de instrumentação também invalidam o snapshot exibido no painel.
     void RenderSettingsBridge::ToggleRadianceCache() {
         if (!Renderer) return;
         auto A = Renderer.Lock();
@@ -816,12 +792,7 @@ namespace SmileEditor {
         } // lock SOLTO antes dos sinais: ver abaixo
 
         emit GISettingsChanged();
-        // A lista de alvos da janela de debug é CACHEADA no modelo do viewport e só é relida
-        // quando estes sinais saem. Sem isto o alvo entrava e saía do registro do engine — o que
-        // já funcionava — e a janela continuava exibindo o modelo antigo e o último preview.
-        //
-        // Fora do escopo do lock de propósito: o QML relê as propriedades no ato e tenta pegar o
-        // mesmo lock do renderer. Emitir com ele na mão é convite a deadlock.
+        // Atualize o modelo cacheado fora do lock; o QML relê propriedades ao receber o sinal.
         if (Changed && Viewport) Viewport->NotifyRendererResourcesChanged();
     }
     void RenderSettingsBridge::ToggleRadianceCacheDedicatedUpdate() {
@@ -987,12 +958,7 @@ namespace SmileEditor {
 
 
     namespace {
-        // Tabela unica dos knobs de epsilon: dirige leitura, escrita e a UI. O ponteiro-p/-membro
-        // evita 9 getters e 9 setters quase identicos, e a UI e um Repeater sobre esta lista.
-        //
-        // UiScale = quantas unidades de UI por unidade de mundo (metro). Os offsets aparecem em
-        // MILIMETROS porque o sweep interessante e sub-milimetrico (o Lumen usa 0,1-0,5 mm) e ler
-        // "0,0002 m" num slider e inutil. MaxAge e contagem de frames, entao escala 1.
+        // Uma tabela dirige leitura, escrita e UI. UiScale converte metros para a unidade exibida.
         struct FEpsKnob {
             const char* Key;
             const char* Label;

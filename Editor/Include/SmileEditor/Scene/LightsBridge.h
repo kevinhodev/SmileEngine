@@ -12,18 +12,8 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Ponte C++<->QML do painel de Luzes (LightsPanel.qml). Le/escreve Scene.Lights() do
-    // Renderer direto por meio de RendererHandle, que serializa o acesso com a thread de
-    // renderizacao (mesmo racional do TimeOfDayBridge).
-    //
-    // Sinais: LightsChanged = estrutura da lista mudou (add/remove/duplicar/load) — o QML
-    // reconstroi as linhas via `revision` + lightAt(); SelectionChanged = outra luz virou a
-    // selecionada (painel OU clique no marker do viewport, sincronizado no Refresh);
-    // LightChanged = propriedade da luz selecionada mudou (setter ou gizmo arrastando).
-    //
-    // Persistencia: <cena>.lights.json ao lado do .sscene (QJson). O load acontece no
-    // OnSceneLoaded (MainWindow chama apos LoadCookedScene); o save e explicito (botao do
-    // painel) com flag `dirty` pra sinalizar mudancas nao salvas.
+    // Modelo de luzes da cena com selecao, edicao e persistencia em <cena>.lights.json.
+    // RendererHandle serializa setters e Refresh com a producao de frames.
     class LightsBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -123,19 +113,11 @@ namespace SmileEditor {
         void SelectLight(int index) { selectLight(index); } // WRITE da Q_PROPERTY
         void Touch(bool Structure); // rev++/dirty + sinais (Structure = lista mudou de forma)
 
-        // Invalidacao dos caches de GI depois de editar uma luz. `OldMin/OldMax` e a caixa de
-        // influencia de ANTES da edicao — capture-a no setter antes de mexer no campo. Nos
-        // setters que nao mexem em posicao nem raio ela e igual a de depois, e passar as duas
-        // continua correto (o FDDGI une caixas).
-        //
-        // O Touch() ao lado dela cuida so de UI e persistencia: quem consome a luz no mundo —
-        // atlas do DDGI, reservoirs, ReGIR, reflexoes, cache de radiancia — nao ouve sinal de Qt.
+        // OldMin/OldMax preservam a regiao anterior; Touch cobre apenas UI e persistencia.
         void InvalidateLightRegion(const Smile::FLight& L,
                                    const Smile::Vec3& OldMin, const Smile::Vec3& OldMax);
         bool LoadLights();          // le o JsonPath e ADICIONA na cena
-        // Pose = posicao + direcao. Um par so, porque quem escreve e quem compara tem de cobrir
-        // exatamente os mesmos campos: vigiar menos do que se guarda faz o Refresh perder a
-        // mudanca; guardar menos do que se vigia faz ele disparar todo frame.
+        // O cache de pose deve cobrir os mesmos campos comparados por Refresh.
         void CacheSelectedPose(const Smile::FLight& L);
         bool PoseMatchesCache(const Smile::FLight& L) const;
 

@@ -58,10 +58,10 @@ namespace SmileEditor {
         void Reply(QLocalSocket* Socket, const QString& Id, bool Ok,
                    const QJsonObject& Payload);
 
-        CaptureBridge*        Capture   = nullptr;
-        CameraBookmarksBridge* Bookmarks = nullptr;
-        RenderSettingsController* RenderSettings = nullptr;
-        QLocalServer*         Server    = nullptr;
+        QPointer<CaptureBridge> Capture;
+        QPointer<CameraBookmarksBridge> Bookmarks;
+        QPointer<RenderSettingsController> RenderSettings;
+        QLocalServer* Server = nullptr;
         QHash<QLocalSocket*, QByteArray> Buffers;
         QPointer<QLocalSocket> ActiveCaptureSocket;
         QString               ActiveCaptureId;

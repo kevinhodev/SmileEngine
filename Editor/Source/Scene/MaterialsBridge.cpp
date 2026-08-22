@@ -286,11 +286,8 @@ namespace SmileEditor {
     void MaterialsBridge::Rebuild() {
         if (Renderer) {
             auto RendererAccess = Renderer.Lock();
-            // Snapshot do default cozido de quem ainda nao tem (cargas novas), depois
-            // overrides do sidecar por nome — a ordem garante que "Reverter" volta ao cooker.
-            // "Fresh" = material que ainda nao tinha snapshot, ou seja, entrou nesta carga. Numa
-            // carga nao-aditiva o OnSceneLoaded limpou Defaults, entao sao todos; numa aditiva,
-            // so os novos — e os antigos preservam o que o usuario editou e ainda nao salvou.
+            // Capture defaults antes dos overrides. Em cargas aditivas, aplique-os só aos novos
+            // materiais para preservar edições ainda não salvas.
             QSet<const Smile::FMaterial*> Fresh;
             for (const auto& M : Renderer->GetMaterials()) {
                 if (Defaults.contains(M.get())) continue;

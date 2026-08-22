@@ -1,33 +1,19 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QVariantList>
 #include "SmileEditor/Viewport/RenderThread.h"
 
 namespace Smile {
-    // So o parametro por referencia precisa do tipo aqui; a definicao chega pelo Renderer.h no
-    // .cpp. Mesmo criterio do FRenderSettings, que declara os irmaos dele da mesma forma.
     struct FRadianceCacheSnapshot;
 }
 
 namespace SmileEditor {
     class ViewportWidget;
 
-    // Ponte C++<->QML dos KNOBS DE RENDER (paginas do SettingsWindow e parte do
-    // ViewportToolbar). Espelha, do lado do editor, o que o FRenderSettings fez do lado do
-    // motor: um caminho unico para parametro de render.
-    //
-    // Antes disto os ~92 knobs eram Q_PROPERTY do ViewportWidget, que acumulava host do HWND,
-    // input, telemetria, visualizador de debug E a bridge de render — o espelho do god object
-    // (ver §13 do Docs/ARCHITECTURE.md). Ficam de proposito no ViewportWidget, porque nao sao
-    // knobs: view mode, visualizador de render targets, instrumentacao (BVH/timer de RT) e toda
-    // a telemetria (fps, contagens, VRAM, timings de GPU).
-    //
-    // Leitura e escrita sincronas passam pelo RendererHandle, que serializa com a thread de
-    // render — mesmo padrao do TimeOfDayBridge. Os poucos knobs que precisam recriar recursos
-    // (render scale e troca de upscaler/denoiser) vao por job assincrono na
-    // fila do ViewportWidget, que os serializa com os frames; e por isso que a bridge conhece o
-    // viewport.
+    // Knobs tecnicos de render do SettingsWindow e ViewportToolbar. Acesso simples usa
+    // RendererHandle; recriacao de recursos passa pela RendererJobQueue do viewport.
     class RenderSettingsBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -68,12 +54,10 @@ namespace SmileEditor {
         Q_PROPERTY(bool restirGIEnabled READ IsReSTIRGIEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIHalfRes READ IsReSTIRGIHalfRes NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reGIREnabled READ IsReGIREnabled NOTIFY GISettingsChanged)
-        // World radiance cache. As tres primeiras sao knobs; as cinco ultimas, telemetria do
-        // readback (ver FRadianceCacheStats) — por isso so tem READ.
+        // Knobs e telemetria do world radiance cache.
         Q_PROPERTY(bool radianceCacheEnabled READ IsRadianceCacheEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheQuery READ IsRadianceCacheQuery NOTIFY GISettingsChanged)
-        // Aquecimento automatico: knob (bool) + o estado em que ele esta, que e telemetria e muda
-        // sozinho — por isso o estado sai por StatsChanged e nao por GISettingsChanged.
+        // O estado de warmup muda sozinho e usa StatsChanged.
         Q_PROPERTY(bool radianceCacheAutoWarmup READ IsRadianceCacheAutoWarmup
                        NOTIFY GISettingsChanged)
         Q_PROPERTY(QString radianceCacheWarmup READ GetRadianceCacheWarmup NOTIFY StatsChanged)
@@ -82,16 +66,11 @@ namespace SmileEditor {
                        NOTIFY GISettingsChanged)
         Q_PROPERTY(bool radianceCacheStatsSource READ IsRadianceCacheStatsSource
                        NOTIFY GISettingsChanged)
-        // Mapa por pixel da fonte do candidato tracado. Alvo proprio na janela de debug — o
-        // contador diz QUANTO, este diz ONDE.
+        // Mapa por pixel da fonte do candidato tracado.
         Q_PROPERTY(bool giSourceDebug READ IsGISourceDebug NOTIFY GISettingsChanged)
-        // Decomposicao da FONTE do terminal — texto pronto, como o breakdown de miss acima e pelo
-        // mesmo motivo: a regra de "zero medido x nao medido" mora do lado do C++, onde o knob esta.
+        // Textos prontos preservam a semantica de "zero" versus "nao medido".
         Q_PROPERTY(QString radianceCacheSourceBreakdown READ GetRadianceCacheSourceBreakdown
                        NOTIFY StatsChanged)
-        // Decomposicao dos misses e saude do hash — texto pronto, e nao dez propriedades: o painel
-        // nao tem o que fazer com os numeros crus alem de imprimi-los lado a lado, e a regra de
-        // "zero medido x nao medido" mora do lado do C++, onde o knob esta.
         Q_PROPERTY(QString radianceCacheMissBreakdown READ GetRadianceCacheMissBreakdown
                        NOTIFY StatsChanged)
         Q_PROPERTY(bool radianceCacheDedicatedUpdate READ IsRadianceCacheDedicatedUpdate
@@ -116,19 +95,13 @@ namespace SmileEditor {
         Q_PROPERTY(double radianceCacheConvergence READ GetRadianceCacheConvergence NOTIFY StatsChanged)
         Q_PROPERTY(double radianceCacheMemoryMB READ GetRadianceCacheMemoryMB NOTIFY GISettingsChanged)
         Q_PROPERTY(QString radianceCacheSummary READ GetRadianceCacheSummary NOTIFY StatsChanged)
-        // Politica do indireto: primario e fallback, PEDIDO e EFETIVO. Sai por GISettingsChanged
-        // porque o pedido e knob; o efetivo tambem muda com disponibilidade do volume, e ai quem
-        // atualiza e o Timer do painel.
+        // Resume politica pedida e efetiva quando a capacidade diverge.
         Q_PROPERTY(QString indirectPolicySummary READ GetIndirectPolicySummary
                        NOTIFY GISettingsChanged)
-        // O PEDIDO, que e o que o combo edita. O efetivo nao vira propriedade separada de
-        // proposito: ele so significa alguma coisa ao lado do pedido, e e o summary acima que
-        // mostra os dois com a seta na divergencia. Publicar o efetivo sozinho convidaria a UI a
-        // exibi-lo como se fosse a selecao — e ai selecionar SHaRC sem o passe pronto pareceria um
-        // combo que volta sozinho.
-        // 0 = ReSTIR+SHaRC, 1 = DDGI, 2 = Off  (ordem de EIndirectPrimary)
+        // Valores pedidos; o efetivo aparece apenas no summary acima.
+        // 0=ReSTIR+SHaRC, 1=DDGI, 2=Off.
         Q_PROPERTY(int indirectPrimary READ GetIndirectPrimary NOTIFY GISettingsChanged)
-        // 0 = DDGI, 1 = Environment, 2 = Black  (ordem de EIndirectFallback)
+        // 0=DDGI, 1=Environment, 2=Black.
         Q_PROPERTY(int indirectFallback READ GetIndirectFallback NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
@@ -164,10 +137,8 @@ namespace SmileEditor {
     public:
         explicit RenderSettingsBridge(QObject* parent = nullptr);
 
-        // MainWindow chama no RendererInitialized (mesmo ponto do TimeOfDayBridge).
         void SetRenderer(RendererHandle R);
-        // Fila de jobs serializada com os frames, para os knobs que recriam recursos.
-        void SetViewport(ViewportWidget* V) { Viewport = V; }
+        void SetViewport(ViewportWidget* V);
 
         bool Available() const { return static_cast<bool>(Renderer); }
 
@@ -239,10 +210,7 @@ namespace SmileEditor {
         bool              IsRadianceCacheStatsSource() const;
         bool              IsGISourceDebug() const;
         QString           GetRadianceCacheSourceBreakdown() const;
-        // Contadores + meta + capacidade numa leitura SO, por valor e sob um lock so. Falso quando
-        // nao ha snapshot valido. Todo getter de telemetria passa por aqui: pedir as partes em
-        // chamadas separadas atravessa o lock temporario do RendererHandle e mistura frames.
-        // Nao e Q_PROPERTY de proposito — quem decide se a linha aparece e o TEXTO estar vazio.
+        // Le o snapshot inteiro sob um unico lock; false quando ainda nao ha dados validos.
         bool              CacheSnapshot(Smile::FRadianceCacheSnapshot& Out) const;
         bool              IsRadianceCacheDedicatedUpdate() const;
         bool              IsRadianceCacheCompactUpdate() const;
@@ -276,8 +244,7 @@ namespace SmileEditor {
         double            GetGIVolumeFadeProbes() const;
         QVariantList      GetRayEpsilons() const;
 
-        // Politica do indireto. Indices de EIndirectPrimary/EIndirectFallback; fora da faixa nao
-        // faz nada, em vez de cair num default silencioso.
+        // Ignoram indices fora dos enums correspondentes.
         Q_INVOKABLE void SetIndirectPrimary(int V);
         Q_INVOKABLE void SetIndirectFallback(int V);
 
@@ -359,9 +326,7 @@ namespace SmileEditor {
         void VolFogSettingsChanged();
         void ShadowSettingsChanged();
         void GISettingsChanged();
-        // Telemetria que muda TODO frame (readback do radiance cache). Nao e emitido pelo
-        // renderer: o card do painel puxa com um Timer proprio enquanto esta visivel, entao
-        // formatar QString a 5 Hz so acontece com alguem olhando.
+        // O painel solicita esta telemetria apenas enquanto estiver visivel.
         void StatsChanged();
         void RenderSettingsChanged();
         // Capacidades de upscaler/denoiser: so mudam quando o renderer nasce.
@@ -369,6 +334,6 @@ namespace SmileEditor {
 
     private:
         RendererHandle  Renderer;
-        ViewportWidget* Viewport = nullptr;
+        QPointer<ViewportWidget> Viewport;
     };
 }

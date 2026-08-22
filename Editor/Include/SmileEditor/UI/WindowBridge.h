@@ -8,10 +8,7 @@
 class QWidget;
 
 namespace SmileEditor {
-    // Ponte C++<->QML da barra de titulo (MainBar.qml). Executa min/max/fechar na janela e
-    // fornece ao NativeWindowFilter as "zonas" da barra (altura + retangulos interativos),
-    // equivalente ao GetWindowZoneForPoint do Slate: a QML reporta onde estao os controles
-    // (menus/botoes) pra esses pontos virarem HTCLIENT, e o resto da faixa vira HTCAPTION.
+    // Comandos da janela e zonas interativas usadas pelo hit-test da barra frameless.
     class WindowBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool maximized READ IsMaximized NOTIFY MaximizedChanged)

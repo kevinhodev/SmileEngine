@@ -1,15 +1,14 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 
 #include "SmileEditor/Viewport/RenderThread.h"
 
 namespace SmileEditor {
     class ViewportWidget;
 
-    // API do inspector de nuvens da cena. O estado ainda vive em FRenderSettings enquanto o
-    // ambiente nao e um componente persistente; manter esta fronteira permite trocar o modelo
-    // depois sem reescrever o QML nem devolver os controles ao painel de configuracoes globais.
+    // API autoral das nuvens enquanto o estado ainda vive em FRenderSettings.
     class CloudsBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -38,7 +37,7 @@ namespace SmileEditor {
         explicit CloudsBridge(QObject* parent = nullptr);
 
         void SetRenderer(RendererHandle renderer);
-        void SetViewport(ViewportWidget* viewport) { Viewport = viewport; }
+        void SetViewport(ViewportWidget* viewport);
 
         bool Available() const { return static_cast<bool>(Renderer); }
         bool IsEnabled() const;
@@ -89,6 +88,6 @@ namespace SmileEditor {
 
     private:
         RendererHandle Renderer;
-        ViewportWidget* Viewport = nullptr;
+        QPointer<ViewportWidget> Viewport;
     };
 }

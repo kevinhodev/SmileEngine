@@ -13,6 +13,10 @@
 namespace SmileEditor {
     CloudsBridge::CloudsBridge(QObject* _Parent) : QObject(_Parent) {}
 
+    void CloudsBridge::SetViewport(ViewportWidget* _Viewport) {
+        Viewport = _Viewport;
+    }
+
     void CloudsBridge::SetRenderer(RendererHandle _Renderer) {
         Renderer = std::move(_Renderer);
         emit AvailableChanged();

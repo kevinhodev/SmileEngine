@@ -39,11 +39,7 @@ namespace SmileEditor {
             return true;
         }
 
-        // Variantes OPCIONAIS: ausente devolve nullopt, e nao um default. E a diferenca entre
-        // "preserve o que esta la" e "escreva o default" — com a segunda, cada etapa do sweep teria
-        // de repetir todos os knobs, ou reescreveria calada o eixo que nao estava em teste.
-        // `null` explicito conta como ausente, para um cliente poder omitir um campo montando o
-        // objeto dinamicamente.
+        // Ausente ou null preserva o valor atual; não aplica um default silencioso.
         bool ReadOptionalInteger(const QJsonObject& _Object, const char* _Name,
                                  int _Min, int _Max, std::optional<int>& _Out) {
             const QJsonValue Value = _Object.value(QLatin1String(_Name));
@@ -403,11 +399,7 @@ namespace SmileEditor {
 
         const QString Command = Request.value(QStringLiteral("command")).toString();
         if (Command == QStringLiteral("status")) {
-            // CaptureBridge::Available usa TryLock para nunca engasgar um binding QML. Para a
-            // prontidao do protocolo isso e a semantica errada: em uma cena pesada, a amostragem
-            // a cada 250 ms pode cair sempre dentro do frame e reportar false para sempre. A
-            // consulta MCP pode esperar o frame soltar o lock; o resultado passa a ser estado,
-            // nao uma foto da contencao naquele microssegundo.
+            // O status MCP pode aguardar o lock; prontidão não deve refletir contenção momentânea.
             const bool Ready = RenderSettings ? RenderSettings->Ready()
                                               : Capture && Capture->Available();
             QJsonObject Result{
@@ -525,18 +517,8 @@ namespace SmileEditor {
                                 QStringLiteral("bookmarkSlot invalido") } });
             return;
         }
-        // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Todos opcionais: o profile_configure
-        // continua sendo o mesmo comando com o mesmo contrato, e um chamador que nao conheca estes
-        // campos ve o comportamento de antes.
-        //
-        // O teto de 64 nao e limite de qualidade — o sweep vai de 8 para baixo. E guarda contra um
-        // digito a mais num script, que num loop por pixel vira um dispatch de minutos.
-        //
-        // ⚠️ VALIDADO ANTES DO Restore ABAIXO, e a ordem nao e estilo. O Restore MOVE A CAMERA, e
-        // uma falha depois dele devolveria erro deixando a pose trocada: o chamador conclui que
-        // nada aconteceu e a proxima captura com bookmarkSlot -1 sai da camera errada, sem nada no
-        // manifesto denunciando. Numa regua que existe para ser deterministica, todo argumento se
-        // valida antes do primeiro efeito colateral.
+        // Valide tudo antes de Restore: ele move a câmera, e uma falha posterior deixaria efeito
+        // parcial. O teto de candidatos também evita dispatches acidentalmente longos.
         FProfileOverrides Overrides;
         if (!ReadOptionalNumberHalfOpen(_Arguments, "timeOfDayHours", 0.0, 24.0,
                                         Overrides.TimeOfDayHours)) {

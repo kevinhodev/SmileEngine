@@ -6,14 +6,8 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Ponte C++<->QML da janela Time of Day (TimeOfDayWindow.qml). Le/escreve o FTimeOfDay do
-    // Renderer direto por meio de RendererHandle, que serializa o acesso com a thread de
-    // renderizacao. Alem do estado bruto, expoe leituras derivadas (elevacao/azimute de sol e lua,
-    // fracao de fase) e SunElevationAt/MoonElevationAt p/ a janela desenhar o arco do dia.
-    //
-    // Sinais: StateChanged = qualquer knob mudou (setter ou hora escrutinada); TimeChanged = o
-    // relogio andou (por frame, via Refresh no FrameReady) — separados p/ o QML nao reavaliar
-    // os cards estaticos a cada frame.
+    // Estado autoral e valores derivados do ciclo solar/lunar. TimeChanged separa o relogio dos
+    // knobs estaticos para evitar reavaliar todo o painel a cada frame.
     class TimeOfDayBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -31,7 +25,7 @@ namespace SmileEditor {
         Q_PROPERTY(double moonDiskSize READ MoonDiskSize WRITE SetMoonDiskSize NOTIFY StateChanged)
         Q_PROPERTY(double moonDiskBrightness READ MoonDiskBrightness WRITE SetMoonDiskBrightness NOTIFY StateChanged)
         Q_PROPERTY(double starIntensity READ StarIntensity WRITE SetStarIntensity NOTIFY StateChanged)
-        // Clima (FWeather) saiu daqui: mora na pagina Clima do SettingsWindow via ViewportWidget.
+        // Clima pertence ao WeatherBridge.
         // Sol manual (TOD desligado): az/el em graus, escreve via Renderer::SetSunAzimuthElevation.
         Q_PROPERTY(double manualAzimuthDeg READ ManualAzimuthDeg WRITE SetManualAzimuthDeg NOTIFY StateChanged)
         Q_PROPERTY(double manualElevationDeg READ ManualElevationDeg WRITE SetManualElevationDeg NOTIFY StateChanged)

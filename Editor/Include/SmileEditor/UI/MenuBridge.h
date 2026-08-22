@@ -3,9 +3,7 @@
 #include <QObject>
 
 namespace SmileEditor {
-    // Ponte C++<->QML dos menus (EditorMenuBar.qml). A QML chama os slots; cada um emite o sinal
-    // correspondente, que o MainWindow conecta a logica real (dialogs, setters do Renderer, etc.).
-    // Mantem os menus desacoplados do MainWindow, no mesmo espirito de LogBridge/WindowBridge.
+    // Estado e comandos do menu; MainWindow conecta os sinais a logica da aplicacao.
     class MenuBridge : public QObject {
         Q_OBJECT
         // Estado dos docks refletido nos checks do menu "Janela".
@@ -20,7 +18,7 @@ namespace SmileEditor {
         explicit MenuBridge(QObject* parent = nullptr);
 
         bool ConsoleVisible() const { return ConsoleVis; }
-        void SetConsoleVisible(bool v); // MainWindow chama (visibilityChanged do dock)
+        void SetConsoleVisible(bool v);
         bool TimeOfDayVisible() const { return TimeOfDayVis; }
         void SetTimeOfDayVisible(bool v);
         bool LightsVisible() const { return LightsVis; }
