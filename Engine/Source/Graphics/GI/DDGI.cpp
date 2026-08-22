@@ -74,19 +74,41 @@ namespace Smile {
         FreeSlot(ProbeRayCountSRVSlot, 1);
         FreeSlot(ProbeDataUAVSlot, 2); 
         ProbeRayCountUAVSlot = kInvalidSlot;
-        for (u32 i = 0; i < kTraceTables; ++i) FreeSlot(TraceTable[i], 9);
+        FreeSlot(ActiveProbeIndicesSRVSlot, 1);
+        FreeSlot(ActiveProbeCountSRVSlot, 1);
+        FreeSlot(ActiveProbeBuildUAVStart, 2);
+        ActiveProbeIndicesUAVSlot = kInvalidSlot;
+        ActiveProbeCountUAVSlot   = kInvalidSlot;
+        FreeSlot(ActiveProbeDispatchArgsUAVSlot, 1);
+        for (u32 i = 0; i < kTraceTables; ++i) FreeSlot(TraceTable[i], 11);
         FreeSlot(SceneGITableStart_, 3);
-        FreeSlot(UpdateTableStart, 2);
+        FreeSlot(UpdateTableStart, 4);
         IrradAtlas.Reset();
         DistAtlas.Reset();
         ProbesTrace.Reset();
         ProbeDataBuf.Reset();
         ProbeRayCountBuf.Reset();
+        ActiveProbeIndicesBuf.Reset();
+        ActiveProbeCountBuf.Reset();
+        ActiveProbeDispatchArgsBuf.Reset();
+        if (ActiveProbeCountReadback && MappedActiveProbeCount) ActiveProbeCountReadback->Unmap(0, nullptr);
+        ActiveProbeCountReadback.Reset();
+        MappedActiveProbeCount = nullptr;
         AtlasState         = D3D12_RESOURCE_STATE_COMMON;
         DistState          = D3D12_RESOURCE_STATE_COMMON;
         ProbesState        = D3D12_RESOURCE_STATE_COMMON;
         ProbeDataState     = D3D12_RESOURCE_STATE_COMMON;
         ProbeRayCountState = D3D12_RESOURCE_STATE_COMMON;
+        ActiveProbeIndicesState = D3D12_RESOURCE_STATE_COMMON;
+        ActiveProbeCountState   = D3D12_RESOURCE_STATE_COMMON;
+        ActiveProbeDispatchArgsState = D3D12_RESOURCE_STATE_COMMON;
+        LastUpdateUsedProbeCompaction_ = false;
+        LastActiveProbeCount_ = 0;
+        LastCompactedProbeCapacity_ = 0;
+        for (u32 I = 0; I < kTraceTables; ++I) {
+            CompactionReadbackIssued_[I] = false;
+            CompactionReadbackCapacity_[I] = 0;
+        }
         Ready = false;
     }
 
@@ -309,6 +331,20 @@ namespace Smile {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ProbeRayCountBuf = CreateDefaultBuffer(_Device, static_cast<UINT64>(NumProbes) * sizeof(u32),
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ActiveProbeIndicesBuf = CreateDefaultBuffer(
+            _Device, static_cast<UINT64>(NumProbes) * sizeof(u32), D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ActiveProbeCountBuf = CreateDefaultBuffer(
+            _Device, sizeof(u32), D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ActiveProbeDispatchArgsBuf = CreateDefaultBuffer(
+            _Device, sizeof(D3D12_DISPATCH_ARGUMENTS), D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ActiveProbeCountReadback = GpuResources::CreateReadbackBuffer(
+            _Device, static_cast<u64>(FCommandQueue::kFramesInFlight) * sizeof(u32));
+        void* ActiveReadback = nullptr;
+        SMILE_HR(ActiveProbeCountReadback->Map(0, nullptr, &ActiveReadback));
+        MappedActiveProbeCount = reinterpret_cast<u8*>(ActiveReadback);
 
         AtlasSRVSlot       = _SRVHeap.Allocate(1);
         AtlasUAVSlot       = _SRVHeap.Allocate(1);
@@ -318,10 +354,16 @@ namespace Smile {
         ProbesTraceUAVSlot = _SRVHeap.Allocate(1);
         ProbeDataSRVSlot     = _SRVHeap.Allocate(1);
         ProbeRayCountSRVSlot = _SRVHeap.Allocate(1);
+        ActiveProbeIndicesSRVSlot = _SRVHeap.Allocate(1);
+        ActiveProbeCountSRVSlot   = _SRVHeap.Allocate(1);
 
         const u32 RelocUAVBase = _SRVHeap.Allocate(2);
         ProbeDataUAVSlot     = RelocUAVBase;
         ProbeRayCountUAVSlot = RelocUAVBase + 1;
+        ActiveProbeBuildUAVStart  = _SRVHeap.Allocate(2);
+        ActiveProbeIndicesUAVSlot = ActiveProbeBuildUAVStart;
+        ActiveProbeCountUAVSlot   = ActiveProbeBuildUAVStart + 1;
+        ActiveProbeDispatchArgsUAVSlot = _SRVHeap.Allocate(1);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC Tex2DSrv{};
         Tex2DSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -354,6 +396,9 @@ namespace Smile {
         BufSrv.Buffer.NumElements         = NumProbes;
         BufSrv.Buffer.StructureByteStride = 0;
         _SRVHeap.CreateSRV(_Device, ProbeRayCountBuf.Get(), BufSrv, ProbeRayCountSRVSlot);
+        _SRVHeap.CreateSRV(_Device, ActiveProbeIndicesBuf.Get(), BufSrv, ActiveProbeIndicesSRVSlot);
+        BufSrv.Buffer.NumElements = 1;
+        _SRVHeap.CreateSRV(_Device, ActiveProbeCountBuf.Get(), BufSrv, ActiveProbeCountSRVSlot);
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC BufUav{};
         BufUav.ViewDimension       = D3D12_UAV_DIMENSION_BUFFER;
@@ -363,6 +408,13 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, ProbeDataBuf.Get(), BufUav, ProbeDataUAVSlot);
         BufUav.Format              = DXGI_FORMAT_R32_UINT;
         _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
+        BufUav.Buffer.NumElements = NumProbes;
+        _SRVHeap.CreateUAV(_Device, ActiveProbeIndicesBuf.Get(), BufUav, ActiveProbeIndicesUAVSlot);
+        BufUav.Buffer.NumElements = 1;
+        _SRVHeap.CreateUAV(_Device, ActiveProbeCountBuf.Get(), BufUav, ActiveProbeCountUAVSlot);
+        BufUav.Buffer.NumElements = 3;
+        _SRVHeap.CreateUAV(_Device, ActiveProbeDispatchArgsBuf.Get(), BufUav,
+                           ActiveProbeDispatchArgsUAVSlot);
 
         D3D12_CPU_DESCRIPTOR_HANDLE Src[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSRVSlot),
@@ -378,10 +430,18 @@ namespace Smile {
         };
         UINT DstCount = 8; UINT SrcCounts[8] = { 1, 1, 1, 1, 1, 1, 1, 1 };
         for (u32 i = 0; i < kTraceTables; ++i) {
-            TraceTable[i] = _SRVHeap.Allocate(9);
+            TraceTable[i] = _SRVHeap.Allocate(11);
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = _SRVHeap.CpuHandle(TraceTable[i]);
             _Device->CopyDescriptors(1, &Dst, &DstCount, 8, Src, SrcCounts,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            _Device->CopyDescriptorsSimple(
+                1, _SRVHeap.CpuHandle(TraceTable[i] + 9),
+                _SRVHeap.CpuHandleStaging(ActiveProbeIndicesSRVSlot),
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            _Device->CopyDescriptorsSimple(
+                1, _SRVHeap.CpuHandle(TraceTable[i] + 10),
+                _SRVHeap.CpuHandleStaging(ActiveProbeCountSRVSlot),
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         }
 
         SceneGITableStart_ = _SRVHeap.Allocate(3);
@@ -395,14 +455,16 @@ namespace Smile {
         _Device->CopyDescriptors(1, &GDst, &GDstCount, 3, GSrc, GSrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        UpdateTableStart = _SRVHeap.Allocate(2);
+        UpdateTableStart = _SRVHeap.Allocate(4);
         D3D12_CPU_DESCRIPTOR_HANDLE UDst = _SRVHeap.CpuHandle(UpdateTableStart);
-        D3D12_CPU_DESCRIPTOR_HANDLE USrc[2] = {
+        D3D12_CPU_DESCRIPTOR_HANDLE USrc[4] = {
             _SRVHeap.CpuHandleStaging(ProbesTraceSRVSlot),
             _SRVHeap.CpuHandleStaging(ProbeDataSRVSlot),
+            _SRVHeap.CpuHandleStaging(ActiveProbeIndicesSRVSlot),
+            _SRVHeap.CpuHandleStaging(ActiveProbeCountSRVSlot),
         };
-        UINT UDstCount = 2; UINT USrcCounts[2] = { 1, 1 };
-        _Device->CopyDescriptors(1, &UDst, &UDstCount, 2, USrc, USrcCounts,
+        UINT UDstCount = 4; UINT USrcCounts[4] = { 1, 1, 1, 1 };
+        _Device->CopyDescriptors(1, &UDst, &UDstCount, 4, USrc, USrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         // A GROSSA, nao a cascata 0: quem le este campo sem saber de cascata (fade de borda,
@@ -439,6 +501,16 @@ namespace Smile {
         CL->ClearUnorderedAccessViewUint(_SRVHeap.GpuHandle(ProbeRayCountUAVSlot),
                                          _SRVHeap.CpuHandleStaging(ProbeRayCountUAVSlot),
                                          ProbeRayCountBuf.Get(), RayCountInit, 0, nullptr);
+        Transition(CL, ActiveProbeIndicesBuf.Get(), ActiveProbeIndicesState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        const UINT CountZero[4] = { 0, 0, 0, 0 };
+        CL->ClearUnorderedAccessViewUint(_SRVHeap.GpuHandle(ActiveProbeCountUAVSlot),
+                                         _SRVHeap.CpuHandleStaging(ActiveProbeCountUAVSlot),
+                                         ActiveProbeCountBuf.Get(), CountZero, 0, nullptr);
+        Transition(CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(CL, IrradAtlas.Get(),   AtlasState,     kAtlasRead);
         Transition(CL, DistAtlas.Get(),    DistState,      kAtlasRead);
         Transition(CL, ProbeDataBuf.Get(), ProbeDataState, kAtlasRead); 
@@ -465,6 +537,15 @@ namespace Smile {
         // congelada no maximo e o knob nasceria inerte no volume novo.
         RelocateFramesLeft = Relocation ? kRelocateConvergeFrames
                                         : (AdaptiveRays ? kReclassifyFrames : 0);
+        LastProbeWakeSerial_ = 0;
+        LastActiveProbeCount_ = NumProbes;
+        LastCompactedProbeCapacity_ = NumProbes;
+        ProbeCompactionThisUpdate_ = false;
+        LastUpdateUsedProbeCompaction_ = false;
+        for (u32 I = 0; I < kTraceTables; ++I) {
+            CompactionReadbackIssued_[I] = false;
+            CompactionReadbackCapacity_[I] = 0;
+        }
         // O estado REGIONAL pertence ao volume que acabou de morrer. A caixa esta em coordenadas
         // de uma grade que nao existe mais, e os contadores mandariam o atlas RECEM-ZERADO passar
         // dezenas de frames com histerese reduzida numa regiao arbitraria da grade nova — os dois
@@ -586,7 +667,33 @@ namespace Smile {
                                const Vec3& _SunColor, u32 _FrameIndex, u32 _PunctualLightCount) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
+
+        // O FrameSlot so volta para a CPU depois da fence correspondente. Portanto este contador
+        // tem a mesma garantia do GpuProfiler: ao reutilizar o slot, o CopyBufferRegion gravado
+        // nele terminou. Nao ha stall nem GetData sincrono no caminho de render.
+        if (CompactionReadbackIssued_[FrameSlot] && MappedActiveProbeCount) {
+            u32 Count = 0;
+            std::memcpy(&Count, MappedActiveProbeCount +
+                        static_cast<size_t>(FrameSlot) * sizeof(u32), sizeof(u32));
+            LastCompactedProbeCapacity_ = CompactionReadbackCapacity_[FrameSlot];
+            LastActiveProbeCount_ = std::min(Count, LastCompactedProbeCapacity_);
+            CompactionReadbackIssued_[FrameSlot] = false;
+        }
+
+        // Uma sonda excluida nao pode observar sozinha que a parede ao redor desapareceu. Eventos
+        // de geometria ja agendam reclassificacao; esta varredura de dois updates e a rede para
+        // mudancas que escapem desses eventos. Dois, e nao um: o primeiro Relocate marca a sonda
+        // reativada com w>=1; o segundo faz os atlas tomarem a estimativa nova com hysteresis 0 e
+        // demove a marca. 2/240 adiciona menos de 1% de duty-cycle cheio, embora o pico continue
+        // aparecendo no profiler — por isso o A/B tambem olha frametime, nao so a media.
+        if (ProbeCompaction && RelocateFramesLeft == 0 &&
+            UpdateSerial_ >= LastProbeWakeSerial_ + kProbeWakeInterval) {
+            RelocateFramesLeft = kProbeWakeUpdates;
+            LastProbeWakeSerial_ = UpdateSerial_;
+        }
         ScheduleUpdate();
+        ProbeCompactionThisUpdate_ = ProbeCompaction && DispatchCommandSignature &&
+                                     RelocateFramesLeft == 0 && !HysteresisResetPending;
         CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
         // Histerese 0 enquanto houver reset pendente: o update SUBSTITUI o atlas em vez de
         // misturar 99% do conteudo velho (ver ResetHistoryOnce). O flag so e consumido quando o
@@ -717,6 +824,8 @@ namespace Smile {
                                 static_cast<f32>(FoliageShadows ? kRTMaskShadowFull
                                                                 : kRTMaskShadowFast),
                                 AdaptiveHysteresis ? 1.0f : 0.0f };
+        CPU.ProbeCompactionParams = { ProbeCompactionThisUpdate_ ? 1.0f : 0.0f,
+                                      0.0f, 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
@@ -815,12 +924,69 @@ namespace Smile {
         const u32 GroupsX = DispatchGroupsX(UpdateProbes);
         const u32 GroupsY = DispatchGroupsY(UpdateProbes);
 
+        const bool UseCompaction = ProbeCompactionThisUpdate_ && DispatchCommandSignature &&
+                                   ActiveProbeIndicesBuf && ActiveProbeCountBuf &&
+                                   ActiveProbeDispatchArgsBuf;
+        LastUpdateUsedProbeCompaction_ = UseCompaction;
+
+        auto UAVBarrier = [&](ID3D12Resource* Resource = nullptr) {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            B.UAV.pResource = Resource;
+            _CL->ResourceBarrier(1, &B);
+        };
+        auto DispatchProbeWork = [&] {
+            if (UseCompaction) {
+                _CL->ExecuteIndirect(DispatchCommandSignature.Get(), 1,
+                                     ActiveProbeDispatchArgsBuf.Get(), 0, nullptr, 0);
+            } else {
+                _CL->Dispatch(GroupsX, GroupsY, 1);
+            }
+        };
+
+        if (UseCompaction) {
+            Transition(_CL, ActiveProbeIndicesBuf.Get(), ActiveProbeIndicesState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Transition(_CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Transition(_CL, ActiveProbeDispatchArgsBuf.Get(), ActiveProbeDispatchArgsState,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            const UINT Zero[4] = { 0, 0, 0, 0 };
+            _CL->ClearUnorderedAccessViewUint(
+                _SRVHeap.GpuHandle(ActiveProbeCountUAVSlot),
+                _SRVHeap.CpuHandleStaging(ActiveProbeCountUAVSlot),
+                ActiveProbeCountBuf.Get(), Zero, 0, nullptr);
+
+            CompactBuildPSO.Bind(_CL);
+            _CL->SetComputeRootConstantBufferView(0, CBAddr());
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbeDataSRVSlot));
+            _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ActiveProbeBuildUAVStart));
+            _CL->Dispatch((UpdateProbes + 63) / 64, 1, 1);
+            UAVBarrier(); // publica lista e contador antes do finalize/consumidores
+
+            Transition(_CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            CompactFinalizePSO.Bind(_CL);
+            _CL->SetComputeRootConstantBufferView(0, CBAddr()); // layout exige b0; shader ignora
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ActiveProbeCountSRVSlot));
+            _CL->SetComputeRootDescriptorTable(2,
+                _SRVHeap.GpuHandle(ActiveProbeDispatchArgsUAVSlot));
+            _CL->Dispatch(1, 1, 1);
+            UAVBarrier(ActiveProbeDispatchArgsBuf.Get());
+
+            Transition(_CL, ActiveProbeIndicesBuf.Get(), ActiveProbeIndicesState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            Transition(_CL, ActiveProbeDispatchArgsBuf.Get(), ActiveProbeDispatchArgsState,
+                       D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        }
+
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         TracePSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbesTraceUAVSlot));
-        _CL->Dispatch(GroupsX, GroupsY, 1);
+        DispatchProbeWork();
 
         Transition(_CL, ProbesTrace.Get(), ProbesState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(_CL, IrradAtlas.Get(),  AtlasState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -829,14 +995,14 @@ namespace Smile {
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(AtlasUAVSlot));
-        _CL->Dispatch(GroupsX, GroupsY, 1);
+        DispatchProbeWork();
 
         Transition(_CL, DistAtlas.Get(), DistState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         UpdateDistPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DistUAVSlot));
-        _CL->Dispatch(GroupsX, GroupsY, 1);
+        DispatchProbeWork();
 
         if (RelocateFramesLeft > 0 || ScrolledNow) {
             if (RelocateFramesLeft > 0) --RelocateFramesLeft;
@@ -851,6 +1017,21 @@ namespace Smile {
             // kAtlasRead (que contem PIXEL) e o TransitionForUpdate, na fila DIRETA. A volta para
             // kAtlasRead fica no TransitionForRead, tambem na direta, depois do wait.
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
+        if (UseCompaction) {
+            // Telemetria com dois frames de atraso, sem sincronizar a CPU. O count volta a SRV
+            // ainda nesta list para os descritores permanentes nunca apontarem para COPY_SOURCE.
+            Transition(_CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+            _CL->CopyBufferRegion(
+                ActiveProbeCountReadback.Get(),
+                static_cast<UINT64>(FrameSlot) * sizeof(u32),
+                ActiveProbeCountBuf.Get(), 0, sizeof(u32));
+            Transition(_CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            CompactionReadbackIssued_[FrameSlot] = true;
+            CompactionReadbackCapacity_[FrameSlot] = UpdateProbes;
         }
 
         // Reclassificacao pos-edicao, agendada quando a janela de invalidacao FECHA (ver
@@ -884,15 +1065,28 @@ namespace Smile {
     }
 
     void FDDGI::CreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 9, 1, true); 
-        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 2, 1);
-        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 2, 1);
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 11, 1, true);
+        UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 4, 1);
+        UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 4, 1);
         RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
+        CompactBuildPSO.Initialize(_Device, "DDGICompactBuild.cs_6_0.cso", 1, 2);
+        CompactFinalizePSO.Initialize(_Device, "DDGICompactFinalize.cs_6_0.cso", 1, 1);
+
+        D3D12_INDIRECT_ARGUMENT_DESC Arg{};
+        Arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+        D3D12_COMMAND_SIGNATURE_DESC Desc{};
+        Desc.ByteStride       = sizeof(D3D12_DISPATCH_ARGUMENTS);
+        Desc.NumArgumentDescs = 1;
+        Desc.pArgumentDescs   = &Arg;
+        SMILE_HR(_Device->CreateCommandSignature(
+            &Desc, nullptr, IID_PPV_ARGS(&DispatchCommandSignature)));
     }
 
 
     FPassShaderStems FDDGI::ShaderStems() const {
-        static const char* const kStems[] = { "DDGITrace.cs", "DDGIUpdate.cs", "DDGIUpdateDist.cs", "DDGIRelocate.cs" };
+        static const char* const kStems[] = {
+            "DDGITrace.cs", "DDGIUpdate.cs", "DDGIUpdateDist.cs", "DDGIRelocate.cs",
+            "DDGICompactBuild.cs", "DDGICompactFinalize.cs" };
         return { kStems, static_cast<u32>(std::size(kStems)) };
     }
 

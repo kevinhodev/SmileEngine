@@ -47,6 +47,7 @@ cbuffer DDGICB : register(b0) {
     // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
     // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
     float4 GICascadeScrollDelta[4];
+    float4 ProbeCompactionParams; // x = Trace/Update usam a lista compacta desta passada
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -61,6 +62,8 @@ Buffer<uint>                    ProbeRayCount:register(t7);
 
 #include "../LightsCommon.hlsli"
 StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntuais no GI
+Buffer<uint>                    ActiveProbeIndices : register(t9);
+Buffer<uint>                    ActiveProbeCount   : register(t10);
 
 RWTexture2D<float4>             ProbesTrace : register(u0);
 
@@ -75,9 +78,15 @@ SamplerState LinearWrap  : register(s1);
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int   numProbes = (int)AtlasParams.w;
     int   updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
-    // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
-    int   probeIdx  = DDGI_ProbeFromGroup(Gid.xy, updateProbes);
+    const bool compact = ProbeCompactionParams.x > 0.5f;
+    const int workProbes = compact ? min((int)ActiveProbeCount[0], updateProbes) : updateProbes;
+    // No caminho compacto, o mesmo mapeamento 2D lineariza ITEMS da lista. O indice global da
+    // sonda vem do buffer e continua alimentando RNG, atlas e cascata — compactar nao muda a
+    // identidade da amostra.
+    int   workIdx   = DDGI_ProbeFromGroup(Gid.xy, max(workProbes, 1));
     int   rayIdx    = (int)GTid.x;
+    if (workIdx >= workProbes) return;
+    int   probeIdx  = compact ? (int)ActiveProbeIndices[workIdx] : workIdx;
     if (probeIdx >= updateProbes) return;
 
     int3  count   = (int3)GridCountRays.xyz;

@@ -101,6 +101,7 @@ export interface GIConfigureOverrides {
   indirectFallback?: IndirectFallback;
   cascadeCount?: number;
   interleavedUpdates?: boolean;
+  probeCompaction?: boolean;
   adaptiveRays?: boolean;
   adaptiveHysteresis?: boolean;
 }
@@ -131,6 +132,12 @@ export interface GIStatus {
     adaptiveMinRays: number;
     adaptiveMaxRays: number;
     interleavedUpdates: boolean;
+    probeCompaction: boolean;
+    probeCompactionEffective: boolean;
+    activeProbeCount: number;
+    compactedProbeCapacity: number;
+    probeWakeInterval: number;
+    lastProbeWakeSerial: number;
     scheduledCascadeCount: number;
     lastUpdatedCascadeCount: number;
     updateSerial: number;

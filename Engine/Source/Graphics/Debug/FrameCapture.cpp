@@ -541,6 +541,16 @@ namespace Smile {
                      << Bool(_State.DDGIAdaptiveRays) << ",\n";
                 File << "  \"ddgiInterleavedUpdates\": "
                      << Bool(_State.DDGIInterleavedUpdates) << ",\n";
+                File << "  \"ddgiProbeCompaction\": "
+                     << Bool(_State.DDGIProbeCompaction) << ",\n";
+                File << "  \"ddgiProbeCompactionEffective\": "
+                     << Bool(_State.DDGIProbeCompactionEffective) << ",\n";
+                File << "  \"ddgiActiveProbeCount\": "
+                     << _State.DDGIActiveProbeCount << ",\n";
+                File << "  \"ddgiCompactedProbeCapacity\": "
+                     << _State.DDGICompactedProbeCapacity << ",\n";
+                File << "  \"ddgiProbeWakeInterval\": "
+                     << _State.DDGIProbeWakeInterval << ",\n";
                 File << "  \"ddgiLastUpdatedCascadeCount\": "
                      << _State.DDGILastUpdatedCascadeCount << ",\n";
                 File << "  \"ddgiAdaptiveMinRays\": "

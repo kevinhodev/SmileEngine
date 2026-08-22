@@ -45,10 +45,13 @@ cbuffer DDGICB : register(b0) {
     // So os passes de update leem: e com ele que DDGI_NewlyExposed decide, em inteiro, se o slot
     // guarda outro ponto do mundo. Ver DDGIConstants::CascadeScrollDelta.
     float4 GICascadeScrollDelta[4];
+    float4 ProbeCompactionParams; // x = Trace/Update usam a lista compacta desta passada
 };
 
 Texture2D<float4>   ProbesTrace : register(t0);
 Buffer<float4>      ProbeData   : register(t1); // w>=1 = probe recem-ativado/relocado
+Buffer<uint>        ActiveProbeIndices : register(t2);
+Buffer<uint>        ActiveProbeCount   : register(t3);
 RWTexture2D<float2> DistAtlas   : register(u0);
 
 // Tabela de copia da borda octaedrica (wrap com fold; do Wicked, mesma que o Flax usa):
@@ -78,8 +81,11 @@ static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int numProbes = (int)AtlasParams.w;
     int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
-    // Grade 2D de grupos (ver DDGI_ProbeFromGroup): o dispatch 1D parava em 65535 sondas.
-    int probeIdx  = DDGI_ProbeFromGroup(Gid.xy, updateProbes);
+    const bool compact = ProbeCompactionParams.x > 0.5f;
+    const int workProbes = compact ? min((int)ActiveProbeCount[0], updateProbes) : updateProbes;
+    int workIdx = DDGI_ProbeFromGroup(Gid.xy, max(workProbes, 1));
+    if (workIdx >= workProbes) return;
+    int probeIdx = compact ? (int)ActiveProbeIndices[workIdx] : workIdx;
     if (probeIdx >= updateProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;

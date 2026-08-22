@@ -125,6 +125,7 @@ namespace SmileEditor {
         std::optional<Smile::EIndirectFallback> IndirectFallback;
         std::optional<int>  CascadeCount;
         std::optional<bool> InterleavedUpdates;
+        std::optional<bool> ProbeCompaction;
         std::optional<bool> AdaptiveRays;
         std::optional<bool> AdaptiveHysteresis;
     };
@@ -156,6 +157,12 @@ namespace SmileEditor {
         int  AdaptiveMinRays = 0;
         int  AdaptiveMaxRays = 0;
         bool InterleavedUpdates = false;
+        bool ProbeCompaction = false;
+        bool ProbeCompactionEffective = false;
+        int  ActiveProbeCount = 0;
+        int  CompactedProbeCapacity = 0;
+        int  ProbeWakeInterval = 0;
+        quint64 LastProbeWakeSerial = 0;
         int  ScheduledCascadeCount = 0;
         int  LastUpdatedCascadeCount = 0;
         quint64 UpdateSerial = 0;

@@ -529,6 +529,7 @@ server.registerTool(
       indirectFallback: z.enum(["ddgi", "environment", "black"]).nullish(),
       cascadeCount: z.number().int().min(1).max(4).nullish(),
       interleavedUpdates: z.boolean().nullish(),
+      probeCompaction: z.boolean().nullish(),
       adaptiveRays: z.boolean().nullish(),
       adaptiveHysteresis: z.boolean().nullish(),
       timeoutSeconds: z.number().min(1).max(120).default(30),

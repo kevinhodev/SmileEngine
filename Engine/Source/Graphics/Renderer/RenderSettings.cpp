@@ -675,6 +675,13 @@ namespace Smile {
         R.DDGI.SetInterleavedUpdates(_V);
     }
 
+    bool FRenderSettings::GetGIProbeCompaction() const {
+        return R.DDGI.GetProbeCompaction();
+    }
+    void FRenderSettings::SetGIProbeCompaction(bool _V) {
+        R.DDGI.SetProbeCompaction(_V);
+    }
+
     bool FRenderSettings::GetGIAdaptiveRays() const { return R.DDGI.GetAdaptiveRays(); }
     void FRenderSettings::SetGIAdaptiveRays(bool _V) {
         if (_V == R.DDGI.GetAdaptiveRays()) return;

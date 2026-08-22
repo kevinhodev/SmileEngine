@@ -279,6 +279,11 @@ namespace Smile {
         bool GetGIInterleavedUpdates() const;
         void SetGIInterleavedUpdates(bool V);
 
+        // Compacta na GPU as sondas amostraveis e usa dispatch indireto nos tres passes pesados.
+        // Experimental/default OFF ate o A/B Bistro + Emerald Square.
+        bool GetGIProbeCompaction() const;
+        void SetGIProbeCompaction(bool V);
+
         // Raios por sonda variaveis com a proximidade de geometria: sonda em espaco aberto
         // decima para MinRays, sonda encostada em geometria fica no teto. E a alavanca de CUSTO
         // do DDGI — o orcamento hoje e 64 raios fixos vezes NumProbes.

@@ -105,6 +105,12 @@ namespace SmileEditor {
         Out.AdaptiveMinRays        = DDGI.GetMinRays();
         Out.AdaptiveMaxRays        = DDGI.GetMaxRays();
         Out.InterleavedUpdates     = DDGI.GetInterleavedUpdates();
+        Out.ProbeCompaction        = DDGI.GetProbeCompaction();
+        Out.ProbeCompactionEffective = DDGI.LastUpdateUsedProbeCompaction();
+        Out.ActiveProbeCount       = static_cast<int>(DDGI.LastActiveProbeCount());
+        Out.CompactedProbeCapacity = static_cast<int>(DDGI.LastCompactedProbeCapacity());
+        Out.ProbeWakeInterval      = static_cast<int>(DDGI.ProbeWakeInterval());
+        Out.LastProbeWakeSerial    = DDGI.LastProbeWakeSerial();
         Out.ScheduledCascadeCount  = static_cast<int>(DDGI.ScheduledCascadeCount());
         Out.LastUpdatedCascadeCount = static_cast<int>(DDGI.LastUpdatedCascadeCount());
         Out.UpdateSerial           = DDGI.UpdateSerial();
@@ -345,6 +351,8 @@ namespace SmileEditor {
                     static_cast<Smile::u32>(*_Overrides.CascadeCount));
             if (_Overrides.InterleavedUpdates)
                 Settings.SetGIInterleavedUpdates(*_Overrides.InterleavedUpdates);
+            if (_Overrides.ProbeCompaction)
+                Settings.SetGIProbeCompaction(*_Overrides.ProbeCompaction);
             if (_Overrides.AdaptiveRays)
                 Settings.SetGIAdaptiveRays(*_Overrides.AdaptiveRays);
             if (_Overrides.AdaptiveHysteresis)

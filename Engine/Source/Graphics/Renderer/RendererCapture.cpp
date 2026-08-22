@@ -353,6 +353,11 @@ namespace Smile {
         S.DDGIRaysPerProbe    = DDGI.RaysPerProbe();
         S.DDGIAdaptiveRays    = DDGI.GetAdaptiveRays();
         S.DDGIInterleavedUpdates = DDGI.GetInterleavedUpdates();
+        S.DDGIProbeCompaction = DDGI.GetProbeCompaction();
+        S.DDGIProbeCompactionEffective = DDGI.LastUpdateUsedProbeCompaction();
+        S.DDGIActiveProbeCount = DDGI.LastActiveProbeCount();
+        S.DDGICompactedProbeCapacity = DDGI.LastCompactedProbeCapacity();
+        S.DDGIProbeWakeInterval = DDGI.ProbeWakeInterval();
         S.DDGILastUpdatedCascadeCount = DDGI.LastUpdatedCascadeCount();
         S.DDGIAdaptiveMinRays = static_cast<u32>(DDGI.GetMinRays());
         S.DDGIAdaptiveMaxRays = static_cast<u32>(DDGI.GetMaxRays());

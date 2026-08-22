@@ -145,6 +145,10 @@ namespace Smile {
         // representavel no float do cbuffer — teleporte de milhoes de celulas nao vira ruido.
         // xyz = delta por eixo; w = 1 quando a cascata rolou desde o ultimo update.
         Vec4 CascadeScrollDelta[4];
+        // Compactacao experimental de sondas. Anexado no FIM para nao deslocar nenhum consumidor
+        // existente do DDGICB. x = 1 quando Trace/Update/UpdateDist recebem uma lista compacta;
+        // yzw reservados. O buffer da lista continua sendo binding, nao indice bindless no CB.
+        Vec4 ProbeCompactionParams;
     };
     static_assert(offsetof(DDGIConstants, CascadeScrollDelta) == 528,
                   "o delta de scroll segue o bloco de cascatas, no fim do DDGICB");
@@ -158,6 +162,8 @@ namespace Smile {
                   "MiscParams3 deve permanecer anexado ao fim do DDGICB");
     static_assert(offsetof(DDGIConstants, Cascades) == 384,
                   "o bloco de cascatas deve permanecer anexado ao fim do DDGICB");
+    static_assert(offsetof(DDGIConstants, ProbeCompactionParams) == 592,
+                  "a compactacao deve permanecer anexada depois dos deltas de scroll");
 
     // Menor n com H^n <= Residual. Existe para a JANELA da invalidacao regional acompanhar a
     // HISTERESE dela sozinha: as duas so fazem sentido juntas — o que a regiao promete e "sobra
@@ -307,6 +313,24 @@ namespace Smile {
         u32  CascadeUpdateAge(u32 C) const {
             return CascadeUpdateAge_[C < kMaxCascades ? C : 0];
         }
+
+        // Lista GPU de sondas amostraveis (`ProbeData.w >= 0`) usada pelos tres passes pesados.
+        // Lâminas recem-expostas entram mesmo quando o slot antigo carregava marca inativa.
+        void SetProbeCompaction(bool V) {
+            if (ProbeCompaction == V) return;
+            ProbeCompaction = V;
+            LastProbeWakeSerial_ = UpdateSerial_;
+            // Ao ligar, atualiza classificacao e offsets antes de confiar na lista. Se desligar,
+            // o caminho cheio volta no proximo update sem mudar o significado dos atlas.
+            if (V) TriggerReclassify();
+        }
+        bool GetProbeCompaction() const { return ProbeCompaction; }
+        bool ProbeCompactionScheduled() const { return ProbeCompactionThisUpdate_; }
+        bool LastUpdateUsedProbeCompaction() const { return LastUpdateUsedProbeCompaction_; }
+        u32  LastActiveProbeCount() const { return LastActiveProbeCount_; }
+        u32  LastCompactedProbeCapacity() const { return LastCompactedProbeCapacity_; }
+        static constexpr u32 ProbeWakeInterval() { return kProbeWakeInterval; }
+        u64  LastProbeWakeSerial() const { return LastProbeWakeSerial_; }
 
         // Cascata 0 e a mais FINA; a ULTIMA e a que cobre a cena.
         //
@@ -587,12 +611,21 @@ namespace Smile {
         FComputePipeline UpdatePSO;
         FComputePipeline UpdateDistPSO;
         FComputePipeline RelocatePSO;
+        FComputePipeline CompactBuildPSO;
+        FComputePipeline CompactFinalizePSO;
+
+        Microsoft::WRL::ComPtr<ID3D12CommandSignature> DispatchCommandSignature;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> IrradAtlas;       
         Microsoft::WRL::ComPtr<ID3D12Resource> DistAtlas;        
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbesTrace;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeDataBuf;
         Microsoft::WRL::ComPtr<ID3D12Resource> ProbeRayCountBuf; 
+        Microsoft::WRL::ComPtr<ID3D12Resource> ActiveProbeIndicesBuf;
+        Microsoft::WRL::ComPtr<ID3D12Resource> ActiveProbeCountBuf;
+        Microsoft::WRL::ComPtr<ID3D12Resource> ActiveProbeDispatchArgsBuf;
+        Microsoft::WRL::ComPtr<ID3D12Resource> ActiveProbeCountReadback;
+        u8* MappedActiveProbeCount = nullptr;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         u32 AtlasSRVSlot       = kInvalidSlot;
@@ -605,18 +638,27 @@ namespace Smile {
         u32 ProbeDataUAVSlot   = kInvalidSlot;
         u32 ProbeRayCountSRVSlot = kInvalidSlot;
         u32 ProbeRayCountUAVSlot = kInvalidSlot;
+        u32 ActiveProbeIndicesSRVSlot = kInvalidSlot;
+        u32 ActiveProbeCountSRVSlot   = kInvalidSlot;
+        u32 ActiveProbeBuildUAVStart  = kInvalidSlot; // [indices, count]
+        u32 ActiveProbeIndicesUAVSlot = kInvalidSlot;
+        u32 ActiveProbeCountUAVSlot   = kInvalidSlot;
+        u32 ActiveProbeDispatchArgsUAVSlot = kInvalidSlot;
         // Tabela do trace versionada por frame em voo: o t8 (luzes) e reescrito todo frame e o
         // frame anterior ainda pode estar lendo a tabela dele no heap shader-visible.
         static constexpr u32 kTraceTables = 2; // == FCommandQueue::kFramesInFlight (assert no .cpp)
         u32 TraceTable[kTraceTables] = { kInvalidSlot, kInvalidSlot };
         u32 SceneGITableStart_ = kInvalidSlot;
-        u32 UpdateTableStart   = kInvalidSlot;   // [ProbesTrace, ProbeData] p/ Update/UpdateDist
+        u32 UpdateTableStart   = kInvalidSlot;   // [trace, data, active indices, active count]
 
         D3D12_RESOURCE_STATES AtlasState     = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES DistState      = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ProbesState    = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ProbeDataState     = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ProbeRayCountState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES ActiveProbeIndicesState = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES ActiveProbeCountState   = D3D12_RESOURCE_STATE_COMMON;
+        D3D12_RESOURCE_STATES ActiveProbeDispatchArgsState = D3D12_RESOURCE_STATE_COMMON;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB   = nullptr;
@@ -675,6 +717,19 @@ namespace Smile {
         bool InterleavedUpdates = true;
         bool CoarseDue_ = true;
         bool ScheduledFullForced_ = false;
+        // Default ON desde o A/B pareado de 21/08/2026: Bistro/Emerald reduziram o DDGI em
+        // 15,7%/17,3% sem sair do envelope visual de repeticao. O harness reproduzivel fica em
+        // Tools/SmileMCP/scripts/gi-probe-compaction.mjs.
+        bool ProbeCompaction = true;
+        bool ProbeCompactionThisUpdate_ = false;
+        bool LastUpdateUsedProbeCompaction_ = false;
+        static constexpr u32 kProbeWakeInterval = 240;
+        static constexpr u32 kProbeWakeUpdates  = 2;
+        u64 LastProbeWakeSerial_ = 0;
+        u32 LastActiveProbeCount_ = 0;
+        u32 LastCompactedProbeCapacity_ = 0;
+        bool CompactionReadbackIssued_[kTraceTables]{};
+        u32 CompactionReadbackCapacity_[kTraceTables]{};
         u32  AtlasWidth  = 0, AtlasHeight = 0;
         u32  DistAtlasWidth = 0, DistAtlasHeight = 0;
         // Grade de tiles do atlas. TilesPerRow e sempre um MULTIPLO de CountX (a banda contem
