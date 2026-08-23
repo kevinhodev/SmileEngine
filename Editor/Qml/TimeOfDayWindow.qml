@@ -4,11 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Janela flutuante do Time of Day (substitui o antigo dock TimeOfDayPanel). Liga em
-// `todModel` (TimeOfDayBridge) e `todWindow` (WindowBridge da QDialog frameless).
-// Hero: arco do ceu interativo — clicar/arrastar na horizontal escruba o relogio
-// (o proprio arco e o scrubber mais expressivo da janela). Abaixo, timeline com
-// gradiente dia/noite e cards em duas colunas no estilo do SettingsWindow.
+// Janela do ciclo solar/lunar, ligada a TimeOfDayBridge e WindowBridge.
 Rectangle {
     id: root
     required property var todModel
@@ -33,8 +29,7 @@ Rectangle {
     readonly property color sunColor: "#d8a03a"
     readonly property color moonColor: "#8fa9d8"
 
-    // Nascer/por do sol do dia corrente (horas fracionarias; -1 = sol nao cruza o horizonte).
-    // Recalculado quando lat/dia/norte mudam; alimenta os marcadores do arco e os presets.
+    // -1 indica que o sol nao cruza o horizonte no dia corrente.
     property real sunriseH: -1
     property real sunsetH: -1
 
@@ -55,8 +50,6 @@ Rectangle {
 
     function fmt(v, dec) { return v.toFixed(dec === undefined ? 1 : dec).replace(".", ",") }
 
-    // Distancias circulares (o dia da 24h e o ano da 365d fazem wrap) — usadas pelos chips
-    // p/ decidir quando acender.
     function hourDist(a, b) { var d = Math.abs(a - b); return Math.min(d, 24 - d) }
     function dayDist(a, b)  { var d = Math.abs(a - b); return Math.min(d, 365 - d) }
 
@@ -87,8 +80,6 @@ Rectangle {
         return "Minguante"
     }
 
-    // Fase do dia p/ o rotulo da timeline. Recebe hora/elevacao como args so p/ o QML
-    // criar as dependencias de binding (ambas notificam em TimeChanged).
     function dayPhase(hours, sunEl) {
         if (sunEl >= 6)   return "dia"
         if (sunEl >= 0)   return hours < 12 ? "amanhecer" : "entardecer"
@@ -96,7 +87,6 @@ Rectangle {
         return "noite"
     }
 
-    // ---- Componentes compartilhados (Editor/Qml/components) ----
     component Toggle: C.Toggle {}
     component Card: C.Card { contentSpacing: 10 }
     component SliderRow: C.SliderRow {}
@@ -313,16 +303,12 @@ Rectangle {
                     Connections {
                         target: root.todModel
                         function onTimeChanged()  { arc.requestPaint() }
-                        function onStateChanged() {
-                            root.recomputeSunTimes()
-                            arc.requestPaint()
-                        }
+                        function onStateChanged() { arc.requestPaint() }
+                        function onSolarPathChanged() { root.recomputeSunTimes() }
                     }
                     onWidthChanged: requestPaint()
 
-                    // Upgrade: o arco e o scrubber. Arrastar na horizontal seta a hora;
-                    // durante o arrasto o relogio pausa e volta ao soltar (senao o tick
-                    // briga com o mouse).
+                    // Pausa o relogio durante o scrub para evitar disputa com o tick.
                     MouseArea {
                         anchors.fill: parent
                         enabled: root.todModel.enabled
@@ -340,7 +326,6 @@ Rectangle {
                         onPositionChanged: (mouse) => { if (pressed) scrub(mouse.x) }
                         onReleased: root.todModel.running = wasRunning
                         onCanceled: root.todModel.running = wasRunning
-                        // scroll = nudge fino de ±15 min (SetTimeHours faz o wrap)
                         onWheel: (wheel) => {
                             root.todModel.timeHours = root.todModel.timeHours +
                                                  (wheel.angleDelta.y > 0 ? 0.25 : -0.25)
@@ -348,7 +333,6 @@ Rectangle {
                     }
                 }
 
-                // chip da hora corrente sobre a linha do agora
                 Rectangle {
                     x: Math.max(60, Math.min(parent.width - 106,
                        (root.todModel.timeHours / 24) * parent.width - 23))
@@ -368,7 +352,6 @@ Rectangle {
                     }
                 }
 
-                // leitura rapida sol/lua nos cantos
                 Text {
                     x: 8; y: 6
                     text: "sol " + Math.round(root.todModel.sunElevationDeg) + "°  ·  az " +
@@ -386,7 +369,6 @@ Rectangle {
                 }
             }
 
-            // ---- Timeline: play/pause + scrubber com gradiente dia/noite + hora grande ----
             Item {
                 width: parent.width
                 height: 36
@@ -411,8 +393,7 @@ Rectangle {
                     TapHandler { onTapped: root.todModel.running = !root.todModel.running }
                 }
 
-                // Hora digitavel: fora de foco segue o relogio; clicar, digitar HH:MM e
-                // Enter aplica (Esc cancela e o binding restaura).
+                // Aceita HH:MM; fora de foco acompanha o relogio.
                 TextInput {
                     id: bigTime
                     anchors.right: parent.right
@@ -426,7 +407,7 @@ Rectangle {
                     selectionColor: root.blue
                     selectedTextColor: C.Theme.shell
                     validator: RegularExpressionValidator {
-                        regularExpression: /^\d{1,2}:\d{2}$/
+                        regularExpression: /^(?:[01]?\d|2[0-3]):[0-5]\d$/
                     }
                     Binding {
                         target: bigTime; property: "text"
@@ -436,8 +417,7 @@ Rectangle {
                     }
                     onAccepted: {
                         var p = text.split(":")
-                        root.todModel.timeHours = Math.min(23, parseInt(p[0])) +
-                                             Math.min(59, parseInt(p[1])) / 60
+                        root.todModel.timeHours = Number(p[0]) + Number(p[1]) / 60
                         focus = false
                     }
                     Keys.onEscapePressed: focus = false
@@ -500,7 +480,6 @@ Rectangle {
                 }
             }
 
-            // ---- Cards em duas colunas ----
             Item {
                 width: parent.width
                 implicitHeight: Math.max(leftCol.implicitHeight, rightCol.implicitHeight)
@@ -515,8 +494,7 @@ Rectangle {
                         iconName: "clock"
                         visible: root.todModel.enabled
 
-                        // Presets pulam p/ momentos-chave; amanhecer/entardecer vem dos
-                        // cruzamentos reais do horizonte na config corrente.
+                        // Amanhecer e entardecer usam os cruzamentos do horizonte.
                         Row {
                             width: parent.width
                             spacing: 6
@@ -590,8 +568,6 @@ Rectangle {
                         title: "Geografia"
                         iconName: "pin"
 
-                        // Estacoes: dia do ano nos solsticios/equinocio, seguindo o hemisferio
-                        // da latitude corrente (verao no sul = dezembro).
                         Row {
                             width: parent.width
                             spacing: 6
@@ -659,8 +635,6 @@ Rectangle {
                             }
                         ]
 
-                        // Fase por chips: o offset em horas e detalhe do modelo — o usuario
-                        // pensa "cheia/nova". O slider abaixo vira ajuste fino.
                         Row {
                             width: parent.width
                             spacing: 6

@@ -40,6 +40,31 @@ namespace {
         return D < 0.0 ? D + 24.0 : D;
     }
 
+    void TestSolarCardinalPositions() {
+        std::cout << "[Sun] cardinal positions at the equator\n";
+        Smile::FTimeOfDay Tod;
+        Tod.DayOfYear = 80;
+        Tod.LatitudeDeg = 0.0f;
+        Tod.NorthOffsetDeg = 0.0f;
+
+        const Smile::Vec3 Dawn = Tod.DirAtHour(6.0f);
+        const Smile::Vec3 Noon = Tod.DirAtHour(12.0f);
+        const Smile::Vec3 Dusk = Tod.DirAtHour(18.0f);
+        const Smile::Vec3 Midnight = Tod.DirAtHour(0.0f);
+
+        Check(std::abs(Dawn.Y) < 0.01 && Dawn.X > 0.999,
+              "equinox dawn is not on the eastern horizon");
+        Check(Noon.Y > 0.999, "equinox noon is not near the zenith");
+        Check(std::abs(Dusk.Y) < 0.01 && Dusk.X < -0.999,
+              "equinox dusk is not on the western horizon");
+        Check(Midnight.Y < -0.999, "equinox midnight sun is not below the observer");
+
+        Tod.NorthOffsetDeg = 90.0f;
+        const Smile::Vec3 RotatedDawn = Tod.DirAtHour(6.0f);
+        Check(std::abs(RotatedDawn.X) < 0.01 && RotatedDawn.Z < -0.999,
+              "north offset does not rotate the solar path");
+    }
+
     void TestCanonicalPhasesAcrossCalendar() {
         std::cout << "[Moon] canonical phases across latitude, season and time\n";
         const int Days[] = { 1, 80, 172, 266, 355 };
@@ -160,6 +185,7 @@ namespace {
 
 int main() {
 
+    TestSolarCardinalPositions();
     TestCanonicalPhasesAcrossCalendar();
     TestTimelineAndDiskScaleSemantics();
     TestSiderealClockAndCalendarRollover();

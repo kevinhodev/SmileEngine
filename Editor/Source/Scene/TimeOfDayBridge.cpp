@@ -9,8 +9,7 @@ namespace SmileEditor {
     namespace {
         constexpr double kToDeg = 180.0 / 3.14159265358979;
 
-        // FTimeOfDay de fallback: mantem a janela funcional (bindings validos) antes do renderer
-        // inicializar; os valores sao os defaults da engine e sao descartados no SetRenderer.
+        // Mantem os bindings validos antes da inicializacao do renderer.
         Smile::FTimeOfDay& FallbackTod() {
             static Smile::FTimeOfDay Tod;
             return Tod;
@@ -23,11 +22,11 @@ namespace SmileEditor {
         Renderer = _Renderer;
         SyncManualFromRenderer();
         emit AvailableChanged();
+        emit SolarPathChanged();
         emit StateChanged();
         emit TimeChanged();
     }
 
-    // ---- Acesso ao estado ----
     class LockedTimeOfDay {
     public:
         explicit LockedTimeOfDay(const RendererHandle& _Renderer)
@@ -60,7 +59,7 @@ namespace SmileEditor {
     double TimeOfDayBridge::StarIntensity() const  { return TodOfConst(Renderer)->StarIntensity; }
 
     double TimeOfDayBridge::SunElevationDeg() const {
-        // TOD off: le a direcao manual corrente do renderer (a que de fato ilumina a cena).
+        // Com o ciclo desligado, exibe a direcao manual efetiva.
         if (Renderer && !Enabled()) return std::asin(std::clamp((double)Renderer->Settings().GetSunDirection().Y, -1.0, 1.0)) * kToDeg;
         return sunElevationAt(TimeHours());
     }
@@ -96,11 +95,10 @@ namespace SmileEditor {
         return std::asin(std::clamp((double)D.Y, -1.0, 1.0)) * kToDeg;
     }
 
-    // ---- Setters ----
     void TimeOfDayBridge::SetEnabled(bool _V) {
         auto Tod = TodOf(Renderer);
         if (Tod->Enabled == _V) return;
-        // Desligando: congela o sol onde esta e re-sincroniza os sliders manuais nele.
+        // Preserva a ultima direcao solar ao voltar ao controle manual.
         Tod->Enabled = _V;
         if (!_V) SyncManualFromRenderer();
         emit StateChanged();
@@ -125,7 +123,11 @@ namespace SmileEditor {
         emit StateChanged();
     }
     void TimeOfDayBridge::SetLatitudeDeg(double _V) {
-        TodOf(Renderer)->LatitudeDeg = (float)std::clamp(_V, -66.0, 66.0);
+        auto Tod = TodOf(Renderer);
+        const float Latitude = (float)std::clamp(_V, -66.0, 66.0);
+        if (std::abs(Tod->LatitudeDeg - Latitude) < 1e-4f) return;
+        Tod->LatitudeDeg = Latitude;
+        emit SolarPathChanged();
         emit StateChanged();
         emit TimeChanged();
     }
@@ -135,6 +137,7 @@ namespace SmileEditor {
         if (Tod->DayOfYear == Day) return;
         Tod->DayOfYear = Day;
         LastEmittedDay = Day;
+        emit SolarPathChanged();
         emit StateChanged();
         emit TimeChanged();
     }
@@ -161,8 +164,6 @@ namespace SmileEditor {
         emit StateChanged();
     }
     void TimeOfDayBridge::SetMoonDiskBrightness(double _V) {
-        // Cap em 3: acima de ~2 o disco cai no ombro do tonemap e esmaga o contraste dos
-        // mares da textura (ver nota no FTimeOfDay::MoonDiskBrightness).
         TodOf(Renderer)->MoonDiskBrightness = (float)std::clamp(_V, 0.1, 3.0);
         emit StateChanged();
     }
@@ -193,6 +194,7 @@ namespace SmileEditor {
         if (TimeChangedNow || DayChangedNow) {
             LastEmittedHours = Now;
             LastEmittedDay = Day;
+            if (DayChangedNow) emit SolarPathChanged();
             emit TimeChanged();
         }
         if (DayChangedNow) emit StateChanged();
