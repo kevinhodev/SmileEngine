@@ -9,6 +9,7 @@
 
 namespace Smile {
     class FGpuMesh;
+    class FMaterial;
     class FTextureSRVHeap;
 
     // Outline de selecao no editor (estilo Flax/Cry): renderiza o(s) objeto(s) selecionado(s)
@@ -24,8 +25,9 @@ namespace Smile {
         // MVP SEM jitter (o outline e desenhado pos-TAA; usar o MVP jittered do forward faria a
         // borda tremer ~1px/frame com o Halton do TAA). O subsistema grava esse MVP no seu CB.
         struct FDrawItem {
-            const FGpuMesh* Mesh;
-            Mat44           MVP; // Model * ViewProjUnjittered
+            const FGpuMesh*  Mesh;
+            const FMaterial* Material;
+            Mat44            MVP; // Model * ViewProjUnjittered
         };
         static constexpr u32 kMaxOutlineObjects = 16; // teto de objetos selecionados por frame
 
@@ -44,11 +46,12 @@ namespace Smile {
 
         // 1) Limpa a mascara e desenha as silhuetas dos itens selecionados nela (sem depth).
         //    Usa as dims supersampled internas (MaskW/MaskH). FrameSlot indexa o CB double-buffered.
-        void RecordMask(ID3D12GraphicsCommandList* CmdList,
+        void RecordMask(ID3D12GraphicsCommandList* CmdList, FTextureSRVHeap& SRVHeap,
                         const FDrawItem* Items, size_t Count, u32 FrameSlot);
 
         // 2) Edge-detect fullscreen da mascara -> blend da borda no RTV de destino.
-        //    Chamar apos RecordMask. Transiciona a mascara RT->PSR e de volta. FrameSlot p/ o CB.
+        //    Chamar apos RecordMask. Transiciona a mascara RT->PSR; o proximo RecordMask a
+        //    devolve para RT. FrameSlot seleciona o CB do frame em voo.
         void RecordOutline(ID3D12GraphicsCommandList* CmdList, FTextureSRVHeap& SRVHeap,
                            D3D12_CPU_DESCRIPTOR_HANDLE TargetRTV, u32 Width, u32 Height, u32 FrameSlot);
 
@@ -77,6 +80,7 @@ namespace Smile {
 
         ComPtr<ID3D12RootSignature> MaskRootSig;
         ComPtr<ID3D12PipelineState> MaskPSO;
+        ComPtr<ID3D12PipelineState> MaskAlphaPSO;
         ComPtr<ID3D12RootSignature> OutlineRootSig;
         ComPtr<ID3D12PipelineState> OutlinePSO;
 

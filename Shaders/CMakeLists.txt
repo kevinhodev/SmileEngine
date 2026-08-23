@@ -237,7 +237,9 @@ smile_compile_shader(Tonemap/FlickerHeatmap.ps.hlsl       ps_6_0 main SHADER_OUT
 # Selecao no editor — picking (GPU ID-buffer, estilo hit-proxy) + outline (mascara + edge-detect)
 smile_compile_shader(Selection/SelectionGeom.vs.hlsl      vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Selection/ObjectID.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Selection/ObjectIDAlpha.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Selection/SelectionMask.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Selection/SelectionMaskAlpha.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Selection/SelectionOutline.ps.hlsl   ps_6_0 main SHADER_OUTPUTS)
 
 # DebugDraw: servico de desenho 3D imediato p/ tooling do editor (gizmo etc.)

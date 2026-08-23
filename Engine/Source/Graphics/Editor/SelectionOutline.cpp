@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Editor/SelectionOutline.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
+#include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Backend/D3D12/SwapChain.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
@@ -68,14 +69,43 @@ namespace Smile {
 
     void FSelectionOutline::BuildRootSignatures(ID3D12Device* Device) {
         {
-            D3D12_ROOT_PARAMETER P{};
-            P.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-            P.Descriptor.ShaderRegister = 2; 
-            P.ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+            D3D12_DESCRIPTOR_RANGE MaterialRange{};
+            MaterialRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            MaterialRange.NumDescriptors                    = kMaterialTextureSlots;
+            MaterialRange.BaseShaderRegister                = 0;
+            MaterialRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+            D3D12_ROOT_PARAMETER P[4]{};
+            P[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            P[0].Descriptor.ShaderRegister = 2;
+            P[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+            P[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            P[1].Descriptor.ShaderRegister = 1;
+            P[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+            P[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            P[2].DescriptorTable.NumDescriptorRanges = 1;
+            P[2].DescriptorTable.pDescriptorRanges   = &MaterialRange;
+            P[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+            P[3].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            P[3].Constants.ShaderRegister = 0;
+            P[3].Constants.Num32BitValues = 4;
+            P[3].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+
+            D3D12_STATIC_SAMPLER_DESC Sampler{};
+            Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
+            Sampler.MaxAnisotropy    = 8;
+            Sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            Sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            Sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            Sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+            Sampler.ShaderRegister   = 0;
+            Sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
             D3D12_ROOT_SIGNATURE_DESC Desc{};
-            Desc.NumParameters = 1;
-            Desc.pParameters   = &P;
+            Desc.NumParameters     = _countof(P);
+            Desc.pParameters       = P;
+            Desc.NumStaticSamplers = 1;
+            Desc.pStaticSamplers   = &Sampler;
             Desc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
             ComPtr<ID3DBlob> Blob, Err;
@@ -136,6 +166,7 @@ namespace Smile {
         {
             auto VS = LoadShaderBytecode("SelectionGeom.vs_6_0.cso");
             auto PS = LoadShaderBytecode("SelectionMask.ps_6_0.cso");
+            auto AlphaPS = LoadShaderBytecode("SelectionMaskAlpha.ps_6_0.cso");
 
             D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
                 { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -169,6 +200,9 @@ namespace Smile {
             PSODesc.RTVFormats[0]         = kMaskFormat;
             PSODesc.SampleDesc            = { 1, 0 };
             SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&MaskPSO)));
+            PSODesc.PS = { AlphaPS.data(), AlphaPS.size() };
+            SMILE_HR(Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&MaskAlphaPSO)));
         }
 
         {
@@ -226,6 +260,7 @@ namespace Smile {
     }
 
     void FSelectionOutline::RecordMask(ID3D12GraphicsCommandList* CmdList,
+                                       FTextureSRVHeap& SRVHeap,
                                        const FDrawItem* Items, size_t Count, u32 FrameSlot) {
         if (!Initialized) return;
 
@@ -251,8 +286,10 @@ namespace Smile {
         CmdList->RSSetViewports(1, &VP);
         CmdList->RSSetScissorRects(1, &Sci);
 
+        ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
+        CmdList->SetDescriptorHeaps(1, Heaps);
         CmdList->SetGraphicsRootSignature(MaskRootSig.Get());
-        CmdList->SetPipelineState(MaskPSO.Get());
+        ID3D12PipelineState* BoundPSO = nullptr;
         const size_t N = std::min(Count, static_cast<size_t>(kMaxOutlineObjects));
         const D3D12_GPU_VIRTUAL_ADDRESS CBBase = ObjectCB->GetGPUVirtualAddress();
 
@@ -260,6 +297,19 @@ namespace Smile {
         for (size_t i = 0; i < N; ++i) {
             const FDrawItem& It = Items[i];
             if (!It.Mesh || !It.Mesh->IsValid()) continue;
+
+            const bool AlphaAware = It.Material &&
+                (It.Material->Constants.AlphaTest != 0 || It.Material->Blend);
+            ID3D12PipelineState* Wanted = AlphaAware ? MaskAlphaPSO.Get() : MaskPSO.Get();
+            if (Wanted != BoundPSO) {
+                CmdList->SetPipelineState(Wanted);
+                BoundPSO = Wanted;
+            }
+            if (AlphaAware) {
+                It.Material->Bind(CmdList, SRVHeap);
+                const u32 Constants[4] = { It.Material->Blend ? 2u : 1u, 0, 0, 0 };
+                CmdList->SetGraphicsRoot32BitConstants(3, 4, Constants, 0);
+            }
 
             const u64 Slot = static_cast<u64>(FrameBase + i);
             std::memcpy(MappedObjectCB + Slot * 256, &It.MVP, sizeof(Mat44));
@@ -310,7 +360,9 @@ namespace Smile {
     }
 
     FPassShaderStems FSelectionOutline::ShaderStems() const {
-        static const char* const kStems[] = { "SelectionGeom.vs", "SelectionMask.ps", "SelectionOutline.ps" };
+        static const char* const kStems[] = { "SelectionGeom.vs", "SelectionMask.ps",
+                                              "SelectionMaskAlpha.ps", "SelectionOutline.ps",
+                                              "PostProcess.vs" };
         return { kStems, static_cast<u32>(std::size(kStems)) };
     }
 

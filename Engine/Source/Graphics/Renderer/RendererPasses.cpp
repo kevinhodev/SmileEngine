@@ -526,8 +526,10 @@ namespace Smile {
         if (Sel.Renderable >= 0 && Sel.Slot != FSelectionDraw::kNoSlot && Sel.Mesh
             && SelectionOutline.IsInitialized()) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "Contorno da seleção");
-            FSelectionOutline::FDrawItem Item{ Sel.Mesh, Sel.Model * Vw.ViewProjUnjittered };
-            SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
+            FSelectionOutline::FDrawItem Item{
+                Sel.Mesh, Sel.Mat, Sel.Model * Vw.ViewProjUnjittered
+            };
+            SelectionOutline.RecordMask(CommandList, Backend->SRVHeap, &Item, 1, FrameSlot);
             auto BackRTV = Backend->SwapChain.CurrentRTV();
             SelectionOutline.RecordOutline(CommandList, Backend->SRVHeap, BackRTV,
                                            Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight(), FrameSlot);
@@ -869,11 +871,11 @@ namespace Smile {
                 std::vector<FObjectPicker::FDrawItem> PickItems;
                 PickItems.reserve(VisibleScratch.size());
                 for (const FVisibleItem& V : VisibleScratch)
-                    PickItems.push_back({ V.R->Mesh,
+                    PickItems.push_back({ V.R->Mesh, V.Mat,
                                           ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
                                           V.SceneIndex + 1 });
-                ObjectPicker.RecordIDPass(CommandList, DSV, PickItems.data(), PickItems.size(),
-                                          RenderWidth(), RenderHeight());
+                ObjectPicker.RecordIDPass(CommandList, Backend->SRVHeap,
+                                          PickItems.data(), PickItems.size());
 
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -1881,6 +1883,7 @@ namespace Smile {
 
         u32             SelectedSlot  = kInvalidSlot;
         const FGpuMesh* SelectedMesh  = nullptr;
+        FMaterial*      SelectedMat   = nullptr;
         Mat44           SelectedModel = Mat44::Identity();
         // Hasteado do loop: a selecao virou uma consulta (mesh OU luz), e o loop abaixo roda
         // por renderavel da cena.
@@ -1909,7 +1912,8 @@ namespace Smile {
                 std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                             &OC, sizeof(ObjectConstants));
                 if (static_cast<int>(si) == SelectedRenderable) {
-                    SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
+                    SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedMat = Mat;
+                    SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
                 SceneState->PreviousModels[si] = Model;
@@ -1917,7 +1921,9 @@ namespace Smile {
         }
         // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a
         // consome ~1400 linhas abaixo, e recompor la exigiria varrer tudo de novo.
-        _Ctx.Selection = { SelectedSlot, SelectedMesh, SelectedModel, SelectedRenderable };
+        _Ctx.Selection = {
+            SelectedSlot, SelectedMesh, SelectedMat, SelectedModel, SelectedRenderable
+        };
 
         // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
         // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
