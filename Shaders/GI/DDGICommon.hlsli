@@ -27,7 +27,7 @@
 #define INSTGEO_FLAG_ROUGHMAP  64u // tem mapa Roughness separado (RoughMapIndex valido; R=rough)
 #define INSTGEO_FLAG_TRANSLUCENT 128u // material Blend; usado pelo BvhDebug
 
-// Layout de 84 bytes espelhado por FRTInstanceGeo.
+// Layout de 100 bytes espelhado por FRTInstanceGeo.
 struct InstanceGeo {
     float4 BaseColor;
     uint   VertexSrv;
@@ -44,6 +44,9 @@ struct InstanceGeo {
     uint   MrMapIndex;
     uint   MetalMapIndex; // mapa Metalness separado (slot +6); valido sob INSTGEO_FLAG_METALMAP
     uint   RoughMapIndex; // mapa Roughness separado (slot +7); valido sob INSTGEO_FLAG_ROUGHMAP
+    // tint.rgb + intensidade.a. O hit de RT reconstrói o mesmo
+    // TransColor = BaseColor * (rgb * a) usado pelo deferred.
+    float4 SubsurfaceColor;
 };
 
 struct DDGIVertex {
