@@ -12,6 +12,7 @@
 #include <exception>
 #include <vector>
 #include <iterator>
+#include <algorithm>
 
 using Microsoft::WRL::ComPtr;
 
@@ -311,10 +312,17 @@ namespace Smile {
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
+        CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
+                                      GIHit.EnvironmentSky.Z, 0.0f };
+        CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
+                                      GIHit.EnvironmentGround.Z, 0.0f };
+
         // Slots bindless em float usam -1 como sentinela; nunca converta kInvalidSlot.
-        CPU.DebugParams           = { (TraceTimed && TimerSlot != kInvalidSlot)
+        CPU.DebugParams           = { (DebugExecutionEnabled && TraceTimed &&
+                                       TimerSlot != kInvalidSlot)
                                           ? static_cast<f32>(TimerSlot) : -1.0f,
-                                      (SourceDebug && SourceDebugUAV != kInvalidSlot)
+                                      (DebugExecutionEnabled && SourceDebug &&
+                                       SourceDebugUAV != kInvalidSlot)
                                           ? static_cast<f32>(SourceDebugUAV) : -1.0f,
                                       0.0f, 0.0f };
         CPU.HistoryParams         = { static_cast<f32>(HasSurfaceHistory ? _PrevSurfaceSlot : 0u),
@@ -444,6 +452,58 @@ namespace Smile {
                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         FrameParity ^= 1u;
+    }
+
+    bool FReSTIRGI::RecordPixelDebugCopy(ID3D12GraphicsCommandList* CL,
+                                          ID3D12Resource* Destination,
+                                          u32 FullX, u32 FullY,
+                                          u32 TraceX, u32 TraceY,
+                                          u64 OutputOffset, u64 Reservoir0Offset,
+                                          u64 Reservoir1Offset) {
+        if (!Ready || !CL || !Destination || FullWidth == 0 || FullHeight == 0 ||
+            Width == 0 || Height == 0) return false;
+
+        FullX = std::min(FullX, FullWidth - 1u);
+        FullY = std::min(FullY, FullHeight - 1u);
+        TraceX = std::min(TraceX, Width - 1u);
+        TraceY = std::min(TraceY, Height - 1u);
+        // RecordTrace() alterna FrameParity depois do dispatch; o dado deste frame ficou no outro.
+        const u32 Current = 1u - FrameParity;
+        const D3D12_RESOURCE_STATES OutputBefore = GITextureState;
+        const D3D12_RESOURCE_STATES Res0Before = Res0State[Current];
+        const D3D12_RESOURCE_STATES Res1Before = Res1State[Current];
+        Transition(CL, GITexture.Get(), GITextureState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Transition(CL, Res0[Current].Get(), Res0State[Current],
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Transition(CL, Res1[Current].Get(), Res1State[Current],
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+        auto CopyTexel = [&](ID3D12Resource* Resource, DXGI_FORMAT Format,
+                             u32 X, u32 Y, u64 Offset) {
+            D3D12_TEXTURE_COPY_LOCATION Src{};
+            Src.pResource = Resource;
+            Src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            Src.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION Dst{};
+            Dst.pResource = Destination;
+            Dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            Dst.PlacedFootprint.Offset = Offset;
+            Dst.PlacedFootprint.Footprint.Format = Format;
+            Dst.PlacedFootprint.Footprint.Width = 1;
+            Dst.PlacedFootprint.Footprint.Height = 1;
+            Dst.PlacedFootprint.Footprint.Depth = 1;
+            Dst.PlacedFootprint.Footprint.RowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+            const D3D12_BOX Box{ X, Y, 0, X + 1u, Y + 1u, 1 };
+            CL->CopyTextureRegion(&Dst, 0, 0, 0, &Src, &Box);
+        };
+        CopyTexel(GITexture.Get(), kGIFormat, FullX, FullY, OutputOffset);
+        CopyTexel(Res0[Current].Get(), kRes0Format, TraceX, TraceY, Reservoir0Offset);
+        CopyTexel(Res1[Current].Get(), kRes1Format, TraceX, TraceY, Reservoir1Offset);
+
+        Transition(CL, GITexture.Get(), GITextureState, OutputBefore);
+        Transition(CL, Res0[Current].Get(), Res0State[Current], Res0Before);
+        Transition(CL, Res1[Current].Get(), Res1State[Current], Res1Before);
+        return true;
     }
 
     void FReSTIRGI::OnRegisterDebugTargets() {

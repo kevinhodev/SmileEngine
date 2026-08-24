@@ -620,9 +620,6 @@ namespace Smile {
         // O estado efetivo precisa refletir o que o shader realmente produz.
         if (IndirectFallback == EIndirectFallback::DDGI && !DDGIVolumeLive())
             return EIndirectFallback::Black;
-        // Environment ainda nao possui sinal publicado nos passes de RT.
-        if (IndirectFallback == EIndirectFallback::Environment)
-            return EIndirectFallback::Black;
         return IndirectFallback;
     }
 

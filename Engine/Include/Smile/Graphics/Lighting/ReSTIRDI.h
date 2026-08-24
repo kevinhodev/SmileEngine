@@ -162,6 +162,11 @@ namespace Smile {
         bool IsReady() const       { return Ready; }
         bool IsNrdReady() const    { return NrdReady; }
         u32  OutputSRVSlot() const { return OutSRV; }
+        // Copia um único pixel da saída e do reservoir FINAL do frame para um readback
+        // fornecido pelo renderer. O passe mantém a paridade e os estados dos recursos privados.
+        bool RecordPixelDebugCopy(ID3D12GraphicsCommandList* CL, ID3D12Resource* Destination,
+                                  u32 X, u32 Y, u64 OutputOffset,
+                                  u64 WeightOffset, u64 ReservoirOffset);
 
     private:
         void CreateConstantBuffer(ID3D12Device* Device);

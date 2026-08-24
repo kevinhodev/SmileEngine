@@ -107,7 +107,7 @@ namespace Smile {
         // --- Reconstrucao temporal ------------------------------------------------------
         bool UpscaleActive = false; // ha upscaler ativo (FSR/DLSS/RR) — nullptr = nativo
         bool TAAActive     = false; // TAA proprio; exclusivo com o upscaler
-        bool RRMode        = false; // DLSS Ray Reconstruction: substitui NRD + SR num eval
+        bool RRMode        = false; // DLSS RR: denoise neural + SR no mesmo evaluate
 
         // --- Iluminacao indireta --------------------------------------------------------
         bool ReflectionsActive   = false;

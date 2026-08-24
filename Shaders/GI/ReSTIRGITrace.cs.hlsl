@@ -43,6 +43,8 @@ cbuffer ReSTIRCB : register(b0) {
     float4 GICascadeScrollOffset[4];
     float4 TraceScreenParams;        // xy=dominio trace/reservoir, zw=inverso
     float4 ResolutionParams;         // x=escala (1/2), yz=fase 2x2, w=half-res
+    float4 EnvironmentSky;
+    float4 EnvironmentGround;
 };
 
 #include "../RayOffset.hlsli"
@@ -161,6 +163,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    P.EnvironmentSky     = EnvironmentSky.rgb;
+    P.EnvironmentGround  = EnvironmentGround.rgb;
     // O cache é não direcional.
     P.RoughnessMin       = GIBiasParams.w;
     P.CacheRayRoughness  = -1.0f;
@@ -215,7 +219,6 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         n2 = -dir;                                  // normal "virada" p/ o ponto visivel
         WriteSourceViz(px, RC_SRC_SKY);
     }
-
     // Limita outliers antes do WRS.
     {
         float lum = ReSTIR_Luminance(Lo);

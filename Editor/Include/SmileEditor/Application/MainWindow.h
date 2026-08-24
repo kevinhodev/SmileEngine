@@ -36,6 +36,7 @@ namespace SmileEditor {
     class RenderSettingsBridge;
     class StatsBridge;
     class DebugTargetsBridge;
+    class ReSTIRDebugBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -64,6 +65,7 @@ namespace SmileEditor {
         void ShowTimeOfDay();
         void ShowStats();
         void ShowDebugTargets();
+        void ShowReSTIR();
         void ShowMaterials();
 
     private:
@@ -95,6 +97,7 @@ namespace SmileEditor {
         QPointer<QDialog>     TodDlg;
         QPointer<QDialog>     StatsDlg;
         QPointer<QDialog>     DebugTargetsDlg;
+        QPointer<QDialog>     ReSTIRDlg;
         LightsBridge*         LightsBr    = nullptr;
         SceneOutlinerBridge*  OutlinerBr  = nullptr;
         SceneDocument*        SceneDoc    = nullptr;
@@ -108,6 +111,7 @@ namespace SmileEditor {
         RenderSettingsBridge* RenderBr   = nullptr;
         StatsBridge*          StatsBr    = nullptr;
         DebugTargetsBridge*   DebugTargetsBr = nullptr;
+        ReSTIRDebugBridge*    ReSTIRBr = nullptr;
         QPointer<QDialog>     MaterialsDlg;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;

@@ -103,7 +103,7 @@ namespace Smile {
         // dele montadas — que e exatamente o que UpdatePassActive() responde.
         M.RadianceCacheUpdateActive = RadianceCache.UpdatePassActive();
         const u32 CacheDebugIndex = DebugTargets::IndexOf(FRadianceCache::kDebugTargetName);
-        M.RadianceCacheDebugActive = RadianceCache.CanVisualize() &&
+        M.RadianceCacheDebugActive = DebugExecutionActive() && RadianceCache.CanVisualize() &&
             CacheDebugIndex != DebugTargets::kInvalid &&
             (DebugTargetIndex == CacheDebugIndex ||
              std::find(DebugSelection.begin(), DebugSelection.end(), CacheDebugIndex) !=
@@ -421,13 +421,17 @@ namespace Smile {
     }
 
     void Renderer::PushRayTracingFrameState(const FFrameModes& _Modes,
-                                            const FEffectiveIndirectPolicy& _Policy) {
+                                            const FEffectiveIndirectPolicy& _Policy,
+                                            const FFrameAmbient& _Ambient) {
         // DLSS Ray Reconstruction: resolve neural + SR. Precisa do RR inicializado e dos guides;
         // nenhum denoiser temporal externo pode preceder o eval.
         // Instrumentacao de timer: um gate so, empurrado todo frame. kInvalidSlot manda o passe
         // de volta p/ a PSO normal — desligado nao custa uma instrucao (ver FShaderTimer).
-        TimerCaptureActive = RtShaderTimer && FShaderTimer::IsAvailable() &&
+        const bool DebugActive = DebugExecutionActive();
+        TimerCaptureActive = DebugActive && RtShaderTimer && FShaderTimer::IsAvailable() &&
                              TimerGI.IsReady() && TimerReflections.IsReady();
+        ReSTIRGI.SetDebugExecutionEnabled(DebugActive);
+        RadianceCache.SetInstrumentationActive(DebugActive);
         ReSTIRGI.SetTimerSlot(TimerCaptureActive ? TimerGI.UavSlot()
                                                  : FShaderTimer::kInvalidSlot);
         Reflections.SetTimerSlot(TimerCaptureActive ? TimerReflections.UavSlot()
@@ -461,6 +465,10 @@ namespace Smile {
             // Descriptors seguem a existencia fisica; este gate por frame segue a politica
             // efetiva e impede a leitura dos recursos neutros quando DDGI nao e o fallback.
             GIHit.FallbackAvailable = _Policy.Fallback == EIndirectFallback::DDGI;
+            GIHit.EnvironmentFallback = _Policy.Fallback == EIndirectFallback::Environment;
+            const f32 EnvironmentScale = UseAtmosphereAmbient ? AtmoAmbientIntensity : 0.0f;
+            GIHit.EnvironmentSky    = _Ambient.Sky * EnvironmentScale;
+            GIHit.EnvironmentGround = _Ambient.Ground * EnvironmentScale;
             DDGI.SetGIHitSampling(GIHit);
             Reflections.SetGIHitSampling(GIHit);
             const FDDGICascadeConstants GICasc = DDGI.CascadeConstants();
@@ -473,9 +481,9 @@ namespace Smile {
             RadianceCache.SetGIHitSampling(GIHit);
         }
 
-        ReSTIRGI.SetUseNrd(_Modes.NrdIndirectMode); // Modes.RRMode => false => ReSTIR entrega GI cru (ruidoso)
+        ReSTIRGI.SetUseNrd(_Modes.NrdIndirectMode);
         Reflections.SetUseNrd(_Modes.NrdIndirectMode);
-        Reflections.SetRawSpec(_Modes.RRMode);        // reflexao crua (Resolved direto) p/ o RR denoisar
+        Reflections.SetRawSpec(_Modes.RRMode);
     }
 
     void Renderer::UpdateAtmosphereAndVolumetrics(const FFrameModes& _Modes,
@@ -811,7 +819,7 @@ namespace Smile {
         // Os publicadores abaixo capturam a colocacao atual das cascatas.
         DDGI.PrepareCascadePlacement(Vw.CameraPosition, Vw.CameraForward);
         const FFrameAmbient  Amb = PublishFrameConstants(Vw, Lt, Policy, FrameSlot, MappedCB);
-        PushRayTracingFrameState(Modes, Policy);
+        PushRayTracingFrameState(Modes, Policy, Amb);
 
         MappedCB->ReflectionParams = { Reflections.GetMaxRoughness(), Reflections.GetRoughnessFade(),
                                        Modes.ReflectionsActive ? 1.0f : 0.0f,
@@ -899,7 +907,7 @@ namespace Smile {
         // traca os raios PRIMARIOS que o pipeline hibrido nunca traca, entao nao le G-buffer nem
         // depth e nao entra em nenhuma cadeia de dependencia. Sem o toggle, nao custa nada.
         // Nao precisa de clear: todo pixel do dominio escreve (o miss tem cor propria).
-        if (BvhDebugEnabled && BvhDebug.IsReady()) {
+        if (DebugExecutionActive() && BvhDebugEnabled && BvhDebug.IsReady()) {
             BvhDebug.Render(CommandList, Backend->SRVHeap, Vw.InvViewProjFull, Vw.CameraPosition,
                             BvhDebugMode, DDGI.MaxRayDistance(), BvhDebugComplexityMax,
                             FrameSlot);

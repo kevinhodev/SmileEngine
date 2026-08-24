@@ -33,6 +33,19 @@ namespace Smile {
         constexpr u64 kDebugProbeDistOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
         constexpr u64 kDebugProbeReadbackSize =
             D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 2ull;
+        constexpr u64 kPixelDebugGBufferAOffset = 0;
+        constexpr u64 kPixelDebugGBufferBOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+        constexpr u64 kPixelDebugGBufferCOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 2ull;
+        constexpr u64 kPixelDebugDepthOffset    = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 3ull;
+        constexpr u64 kPixelDebugDIOutputOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 4ull;
+        constexpr u64 kPixelDebugDIWeightOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 5ull;
+        constexpr u64 kPixelDebugDIReservoirOffset =
+            D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 6ull;
+        constexpr u64 kPixelDebugGIOutputOffset = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 7ull;
+        constexpr u64 kPixelDebugGIRes0Offset   = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 8ull;
+        constexpr u64 kPixelDebugGIRes1Offset   = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 9ull;
+        constexpr u64 kPixelDebugReadbackSize   =
+            D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT * 10ull;
 
         f32 HalfToFloat(u16 H) {
             const u32 Sign = static_cast<u32>(H & 0x8000u) << 16;
@@ -56,6 +69,45 @@ namespace Smile {
             f32 Result;
             std::memcpy(&Result, &Bits, sizeof(Result));
             return Result;
+        }
+
+        f32 SrgbToLinear(f32 V) {
+            return V <= 0.04045f ? V / 12.92f
+                                 : std::pow((V + 0.055f) / 1.055f, 2.4f);
+        }
+
+        void DecodeOct(f32 X, f32 Y, f32 Out[3]) {
+            f32 Z = 1.0f - std::abs(X) - std::abs(Y);
+            const f32 T = std::max(-Z, 0.0f);
+            X += X >= 0.0f ? -T : T;
+            Y += Y >= 0.0f ? -T : T;
+            const f32 InvLength =
+                1.0f / std::sqrt(std::max(X * X + Y * Y + Z * Z, 1.0e-20f));
+            Out[0] = X * InvLength;
+            Out[1] = Y * InvLength;
+            Out[2] = Z * InvLength;
+        }
+
+        void DecodeOctUnorm16(u32 Packed, f32 Out[3]) {
+            const f32 X = static_cast<f32>(Packed & 0xFFFFu) * (2.0f / 65535.0f) - 1.0f;
+            const f32 Y = static_cast<f32>(Packed >> 16) * (2.0f / 65535.0f) - 1.0f;
+            DecodeOct(X, Y, Out);
+        }
+
+        void DecodeOctSnorm16(u32 Packed, f32 Out[3]) {
+            const i16 Xq = static_cast<i16>(Packed & 0xFFFFu);
+            const i16 Yq = static_cast<i16>(Packed >> 16);
+            const f32 X = std::clamp(static_cast<f32>(Xq) / 32767.0f, -1.0f, 1.0f);
+            const f32 Y = std::clamp(static_cast<f32>(Yq) / 32767.0f, -1.0f, 1.0f);
+            DecodeOct(X, Y, Out);
+        }
+
+        void DecodeRGB9E5(u32 Packed, f32 Out[3]) {
+            const i32 E = static_cast<i32>(Packed >> 27) - 15;
+            const f32 Scale = std::exp2(static_cast<f32>(E - 9));
+            Out[0] = static_cast<f32>(Packed & 0x1FFu) * Scale;
+            Out[1] = static_cast<f32>((Packed >> 9) & 0x1FFu) * Scale;
+            Out[2] = static_cast<f32>((Packed >> 18) & 0x1FFu) * Scale;
         }
     }
 
@@ -92,6 +144,11 @@ namespace Smile {
             DebugProbeSamplePending[I] = false;
             DebugProbeSampleVersion[I] = 0;
             DebugProbeSampleIndex[I]   = kNoDebugProbe;
+
+            PixelDebugReadback[I] =
+                GpuResources::CreateReadbackBuffer(Backend->Device.Native(), kPixelDebugReadbackSize);
+            PixelDebugReadbackPending[I] = false;
+            PixelDebugMeta[I] = {};
         }
     }
 
@@ -154,6 +211,113 @@ namespace Smile {
                 DebugProbeSampleReady = true;
             }
         }
+
+        if (PixelDebugReadbackPending[_FrameSlot]) {
+            PixelDebugReadbackPending[_FrameSlot] = false;
+            const FPixelDebugFrameMeta Meta = PixelDebugMeta[_FrameSlot];
+            if (Meta.Version == PixelDebugRequestVersion) {
+                void* Mapped = nullptr;
+                D3D12_RANGE ReadRange{ 0, static_cast<SIZE_T>(kPixelDebugReadbackSize) };
+                SMILE_HR(PixelDebugReadback[_FrameSlot]->Map(0, &ReadRange, &Mapped));
+                const auto* Bytes = static_cast<const u8*>(Mapped);
+                auto ReadU32 = [&](u64 Offset) {
+                    u32 V = 0;
+                    std::memcpy(&V, Bytes + Offset, sizeof(V));
+                    return V;
+                };
+                auto ReadF32 = [&](u64 Offset) {
+                    f32 V = 0.0f;
+                    std::memcpy(&V, Bytes + Offset, sizeof(V));
+                    return V;
+                };
+                auto ReadHalf4 = [&](u64 Offset, f32 Out[4]) {
+                    u16 H[4]{};
+                    std::memcpy(H, Bytes + Offset, sizeof(H));
+                    for (u32 I = 0; I < 4; ++I) Out[I] = HalfToFloat(H[I]);
+                };
+
+                FPixelDebugResult R{};
+                R.ScreenX = Meta.ScreenX; R.ScreenY = Meta.ScreenY;
+                R.RenderX = Meta.RenderX; R.RenderY = Meta.RenderY;
+                R.FrameIndex = Meta.FrameIndex;
+                R.DeviceDepth = ReadF32(kPixelDebugDepthOffset);
+                R.SurfaceValid = R.DeviceDepth > 0.0f && std::isfinite(R.DeviceDepth);
+
+                const u8* A = Bytes + kPixelDebugGBufferAOffset;
+                R.BaseColor[0] = SrgbToLinear(static_cast<f32>(A[0]) / 255.0f);
+                R.BaseColor[1] = SrgbToLinear(static_cast<f32>(A[1]) / 255.0f);
+                R.BaseColor[2] = SrgbToLinear(static_cast<f32>(A[2]) / 255.0f);
+                R.AO = static_cast<f32>(A[3]) / 255.0f;
+                const u32 B = ReadU32(kPixelDebugGBufferBOffset);
+                DecodeOct(static_cast<f32>(B & 0x3FFu) * (2.0f / 1023.0f) - 1.0f,
+                          static_cast<f32>((B >> 10) & 0x3FFu) * (2.0f / 1023.0f) - 1.0f,
+                          R.WorldNormal);
+                R.Roughness = static_cast<f32>((B >> 20) & 0x3FFu) / 1023.0f;
+                R.ShadingModel = (B >> 30) & 0x3u;
+                const u8* C = Bytes + kPixelDebugGBufferCOffset;
+                R.Metallic = static_cast<f32>(C[0]) / 255.0f;
+                for (u32 I = 0; I < 3; ++I)
+                    R.Subsurface[I] = static_cast<f32>(C[I + 1u]) / 255.0f;
+
+                if (R.SurfaceValid) {
+                    const f32 U = (static_cast<f32>(R.RenderX) + 0.5f) /
+                                  static_cast<f32>(std::max(Meta.RenderWidth, 1u));
+                    const f32 V = (static_cast<f32>(R.RenderY) + 0.5f) /
+                                  static_cast<f32>(std::max(Meta.RenderHeight, 1u));
+                    const f32 Clip[4] = { U * 2.0f - 1.0f, 1.0f - V * 2.0f,
+                                          R.DeviceDepth, 1.0f };
+                    f32 World[4]{};
+                    for (u32 Col = 0; Col < 4; ++Col)
+                        for (u32 Row = 0; Row < 4; ++Row)
+                            World[Col] += Clip[Row] * Meta.InvViewProj.M[Row][Col];
+                    const f32 InvW = std::abs(World[3]) > 1.0e-8f ? 1.0f / World[3] : 0.0f;
+                    for (u32 I = 0; I < 3; ++I) R.WorldPosition[I] = World[I] * InvW;
+                }
+
+                R.DIAvailable = Meta.DIAvailable;
+                R.DIAnalyticLightCount = Meta.DIAnalyticLightCount;
+                R.DIMeshLightCount = Meta.DIMeshLightCount;
+                if (R.DIAvailable) {
+                    ReadHalf4(kPixelDebugDIOutputOffset, R.DIOutput);
+                    R.DIWeight = ReadF32(kPixelDebugDIWeightOffset);
+                    u32 DI[4]{};
+                    std::memcpy(DI, Bytes + kPixelDebugDIReservoirOffset, sizeof(DI));
+                    R.DILightIndex = DI[0];
+                    R.DIUV[0] = static_cast<f32>(DI[1] & 0xFFFFu) / 65535.0f;
+                    R.DIUV[1] = static_cast<f32>(DI[1] >> 16) / 65535.0f;
+                    R.DIM = DI[2] & 0xFFFFu;
+                    R.DIAge = (DI[2] >> 16) & 0xFFu;
+                    DecodeOctUnorm16(DI[3], R.DINormal);
+                    R.DIValid = R.DILightIndex != 0xFFFFFFFFu && R.DIM > 0u &&
+                                R.DIWeight > 0.0f;
+                }
+
+                R.GIAvailable = Meta.GIAvailable;
+                R.GIHalfRes = Meta.GIHalfRes;
+                R.GITraceX = Meta.GITraceX; R.GITraceY = Meta.GITraceY;
+                R.GISurfaceX = Meta.GISurfaceX; R.GISurfaceY = Meta.GISurfaceY;
+                if (R.GIAvailable) {
+                    ReadHalf4(kPixelDebugGIOutputOffset, R.GIOutput);
+                    f32 Res0[4]{};
+                    std::memcpy(Res0, Bytes + kPixelDebugGIRes0Offset, sizeof(Res0));
+                    for (u32 I = 0; I < 3; ++I) R.GIX2[I] = Res0[I];
+                    R.GIWeight = Res0[3];
+                    u32 Res1[4]{};
+                    std::memcpy(Res1, Bytes + kPixelDebugGIRes1Offset, sizeof(Res1));
+                    DecodeOctSnorm16(Res1[0], R.GIN2);
+                    DecodeRGB9E5(Res1[1], R.GIRadiance);
+                    R.GIM = Res1[2] & 0xFFFFu;
+                    R.GIAge = Res1[2] >> 16;
+                    DecodeOctSnorm16(Res1[3], R.GIN1);
+                    R.GIValid = R.GIM > 0u && R.GIWeight > 0.0f;
+                }
+
+                D3D12_RANGE NoWrite{ 0, 0 };
+                PixelDebugReadback[_FrameSlot]->Unmap(0, &NoWrite);
+                PixelDebugResult = R;
+                PixelDebugResultReady = true;
+            }
+        }
     }
 
     bool Renderer::ConsumeDebugPreview(std::vector<u8>& _OutPixels) {
@@ -167,6 +331,35 @@ namespace Smile {
         if (!DebugProbeSampleReady) return false;
         _OutSample = DebugProbeSampleResult;
         DebugProbeSampleReady = false;
+        return true;
+    }
+
+    bool Renderer::RequestPixelDebug(u32 _X, u32 _Y) {
+        const u32 RW = RenderWidth(), RH = RenderHeight();
+        const u32 OW = OutputWidth(), OH = OutputHeight();
+        if (!Initialized || RW == 0 || RH == 0 || OW == 0 || OH == 0) return false;
+        PixelDebugRequestScreenX = std::min(_X, OW - 1u);
+        PixelDebugRequestScreenY = std::min(_Y, OH - 1u);
+        PixelDebugRequestRenderX = std::min(
+            static_cast<u32>(static_cast<u64>(PixelDebugRequestScreenX) * RW / OW), RW - 1u);
+        PixelDebugRequestRenderY = std::min(
+            static_cast<u32>(static_cast<u64>(PixelDebugRequestScreenY) * RH / OH), RH - 1u);
+        ++PixelDebugRequestVersion;
+        PixelDebugRequestPending = true;
+        PixelDebugResultReady = false;
+        return true;
+    }
+
+    void Renderer::CancelPixelDebug() {
+        ++PixelDebugRequestVersion;
+        PixelDebugRequestPending = false;
+        PixelDebugResultReady = false;
+    }
+
+    bool Renderer::ConsumePixelDebug(FPixelDebugResult& _OutResult) {
+        if (!PixelDebugResultReady) return false;
+        _OutResult = PixelDebugResult;
+        PixelDebugResultReady = false;
         return true;
     }
 
@@ -505,8 +698,9 @@ namespace Smile {
             const FRadianceCacheStats& Ring = RadianceCache.Stats();
             S.CacheSrcTotal      = Ring.SrcTotal;
             S.CacheSrcCache      = Ring.SrcCache;
-            S.CacheSrcDDGI       = Ring.SrcDDGI;
-            S.CacheSrcZero       = Ring.SrcZero;
+            S.CacheSrcDDGI        = Ring.SrcDDGI;
+            S.CacheSrcEnvironment = Ring.SrcEnvironment;
+            S.CacheSrcZero        = Ring.SrcZero;
             S.CacheSrcIneligible = Ring.SrcIneligible;
         }
 
@@ -812,12 +1006,13 @@ namespace Smile {
         // A janela e uma ferramenta interativa: capturar so 1/3 dos frames fazia o jitter
         // temporal aparecer como tremedeira e deixava o movimento visivelmente defasado.
         const bool CapturePreview  = PreviewActive;
+        const bool CapturePixel    = DebugExecutionActive() && PixelDebugRequestPending;
 
         // Debug fullscreen e probes nao combinam com os guides da cena. Pule o RR para nao
         // contaminar seu historico; a saida RR tambem nao possui RTV para mover o debug depois.
         const bool RRPoisoned = Modes.RRMode && (MainDebugActive || DDGIDebugDrew);
 
-        if ((MainDebugActive || CapturePreview) &&
+        if ((MainDebugActive || CapturePreview || CapturePixel) &&
             GBuffer.IsInitialized() && DebugViewPass.IsInitialized()) {
             GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             // Timers e BVH saem de seus dispatches em UAV.
@@ -830,7 +1025,7 @@ namespace Smile {
             // Depth e normal podem ser escolhidos tanto no toolbar quanto na janela. Deixa-os
             // legiveis durante os dois draws e restaura exatamente os estados de entrada.
             const bool NeedPublishedInputs =
-                CapturePreview || DebugTargetIndex < DbgAll.size();
+                CapturePreview || CapturePixel || DebugTargetIndex < DbgAll.size();
             const D3D12_RESOURCE_STATES NormalBefore = Targets.NormalBufferState;
             if (NeedPublishedInputs) {
                 FBarrierBatch InputBatch;
@@ -1027,6 +1222,98 @@ namespace Smile {
                 DebugViewPass.Execute(CommandList, Backend->SRVHeap, &Tile, 1, 1,
                                       GBuffer.SRVTableStart(), Targets.VelocitySRVSlot, Viewport,
                                       Vec2{ 0.0f, 0.0f }, /*EncodeForDisplay=*/false);
+            }
+
+            if (CapturePixel && PixelDebugReadback[FrameSlot]) {
+                GBuffer.TransitionToRead(CommandList, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                FBarrierBatch DepthToCopy;
+                DepthToCopy.Transition(
+                    Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE);
+                DepthToCopy.Flush(CommandList);
+
+                auto CopyTexel = [&](ID3D12Resource* Resource, DXGI_FORMAT Format, u64 Offset) {
+                    D3D12_TEXTURE_COPY_LOCATION Src{};
+                    Src.pResource = Resource;
+                    Src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                    Src.SubresourceIndex = 0;
+                    D3D12_TEXTURE_COPY_LOCATION Dst{};
+                    Dst.pResource = PixelDebugReadback[FrameSlot].Get();
+                    Dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                    Dst.PlacedFootprint.Offset = Offset;
+                    Dst.PlacedFootprint.Footprint.Format = Format;
+                    Dst.PlacedFootprint.Footprint.Width = 1;
+                    Dst.PlacedFootprint.Footprint.Height = 1;
+                    Dst.PlacedFootprint.Footprint.Depth = 1;
+                    Dst.PlacedFootprint.Footprint.RowPitch =
+                        D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+                    const D3D12_BOX Box{
+                        PixelDebugRequestRenderX, PixelDebugRequestRenderY, 0,
+                        PixelDebugRequestRenderX + 1u, PixelDebugRequestRenderY + 1u, 1 };
+                    CommandList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, &Box);
+                };
+                CopyTexel(GBuffer.Resource(0), FGBuffer::kFormatA, kPixelDebugGBufferAOffset);
+                CopyTexel(GBuffer.Resource(1), FGBuffer::kFormatB, kPixelDebugGBufferBOffset);
+                CopyTexel(GBuffer.Resource(2), FGBuffer::kFormatC, kPixelDebugGBufferCOffset);
+                CopyTexel(Targets.DepthBuffer.Get(), DXGI_FORMAT_D32_FLOAT,
+                          kPixelDebugDepthOffset);
+
+                FPixelDebugFrameMeta Meta{};
+                Meta.Version = PixelDebugRequestVersion;
+                Meta.ScreenX = PixelDebugRequestScreenX;
+                Meta.ScreenY = PixelDebugRequestScreenY;
+                Meta.RenderX = PixelDebugRequestRenderX;
+                Meta.RenderY = PixelDebugRequestRenderY;
+                Meta.RenderWidth = RenderWidth();
+                Meta.RenderHeight = RenderHeight();
+                Meta.FrameIndex = FrameState ? FrameState->TemporalSampleIndex : 0u;
+                Meta.InvViewProj = Vw.InvViewProjFull;
+                Meta.DIAnalyticLightCount = FrameLightCount;
+                Meta.DIMeshLightCount = MeshLights.LightCount();
+                Meta.DIAvailable = Modes.ReSTIRDIActiveFrame &&
+                    ReSTIRDI.RecordPixelDebugCopy(
+                        CommandList, PixelDebugReadback[FrameSlot].Get(),
+                        Meta.RenderX, Meta.RenderY, kPixelDebugDIOutputOffset,
+                        kPixelDebugDIWeightOffset, kPixelDebugDIReservoirOffset);
+
+                Meta.GIHalfRes = Modes.ReSTIRGIActive && ReSTIRGI.HalfResEffective();
+                if (Modes.ReSTIRGIActive && ReSTIRGI.TraceWidth() > 0 &&
+                    ReSTIRGI.TraceHeight() > 0) {
+                    Meta.GITraceX = std::min(
+                        static_cast<u32>(static_cast<u64>(Meta.RenderX) *
+                                         ReSTIRGI.TraceWidth() /
+                                         std::max(RenderWidth(), 1u)),
+                        ReSTIRGI.TraceWidth() - 1u);
+                    Meta.GITraceY = std::min(
+                        static_cast<u32>(static_cast<u64>(Meta.RenderY) *
+                                         ReSTIRGI.TraceHeight() /
+                                         std::max(RenderHeight(), 1u)),
+                        ReSTIRGI.TraceHeight() - 1u);
+                    if (Meta.GIHalfRes) {
+                        const u32 Phase = Meta.FrameIndex & 3u;
+                        Meta.GISurfaceX = std::min(
+                            Meta.GITraceX * 2u + (Phase & 1u), RenderWidth() - 1u);
+                        Meta.GISurfaceY = std::min(
+                            Meta.GITraceY * 2u + ((Phase >> 1u) & 1u), RenderHeight() - 1u);
+                    } else {
+                        Meta.GISurfaceX = Meta.RenderX;
+                        Meta.GISurfaceY = Meta.RenderY;
+                    }
+                    Meta.GIAvailable = ReSTIRGI.RecordPixelDebugCopy(
+                        CommandList, PixelDebugReadback[FrameSlot].Get(),
+                        Meta.RenderX, Meta.RenderY, Meta.GITraceX, Meta.GITraceY,
+                        kPixelDebugGIOutputOffset, kPixelDebugGIRes0Offset,
+                        kPixelDebugGIRes1Offset);
+                }
+
+                FBarrierBatch DepthFromCopy;
+                DepthFromCopy.Transition(
+                    Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                DepthFromCopy.Flush(CommandList);
+                PixelDebugMeta[FrameSlot] = Meta;
+                PixelDebugReadbackPending[FrameSlot] = true;
+                PixelDebugRequestPending = false;
             }
 
             if (NeedPublishedInputs) {

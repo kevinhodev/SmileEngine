@@ -310,7 +310,6 @@ namespace Smile {
                                     FrameState->TemporalSampleIndex, Lt.RainSkyDim, Vw.View,
                                     FrameState->PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
         }
-
         // Cache e ReSTIR GI compartilham a mascara de sombra para produzir a mesma radiancia.
         if (Modes.RadianceCacheUpdateActive) {
             RadianceCache.SetUpdatePunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap,
@@ -1063,7 +1062,6 @@ namespace Smile {
             auto HDR_RTV_Rebind = Targets.HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &HDR_RTV_Rebind, FALSE, &DSV);
         }
-
         if (UseWater && Water.IsInitialized()) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "Água — superfície");
 

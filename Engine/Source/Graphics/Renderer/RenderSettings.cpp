@@ -86,7 +86,7 @@ namespace Smile {
             SetUpscaler(EUpscaler::DLSS);
         R.ApplyUpscalerScale();
         // Depois do ApplyUpscalerScale: ele pode disparar RecreateInternalTargets (que ja
-        // reconcilia), e ai isto vira no-op. Sair do NRD devolve os ~336 MB das duas instancias.
+        // reconcilia), e ai isto vira no-op. Sair do NRD devolve os pools do RELAX; RR nao os usa.
         R.ReconcileNrdAllocation();
     }
 
@@ -525,6 +525,7 @@ namespace Smile {
         Invalidate(Dom::IndirectSurfaceRoute);
     }
     bool FRenderSettings::GetGIHalfRes() const { return R.ReSTIRGI.GetHalfRes(); }
+
 
     void FRenderSettings::SetUseReSTIRDI(bool _V) {
         if (_V == R.UseReSTIRDI) return;

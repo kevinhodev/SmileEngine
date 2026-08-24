@@ -13,6 +13,7 @@ namespace SmileEditor {
         Q_PROPERTY(bool inspectorVisible READ InspectorVisible NOTIFY InspectorVisibleChanged)
         Q_PROPERTY(bool statsVisible READ StatsVisible NOTIFY StatsVisibleChanged)
         Q_PROPERTY(bool debugTargetsVisible READ DebugTargetsVisible NOTIFY DebugTargetsVisibleChanged)
+        Q_PROPERTY(bool restirVisible READ ReSTIRVisible NOTIFY ReSTIRVisibleChanged)
         Q_PROPERTY(bool materialsVisible READ MaterialsVisible NOTIFY MaterialsVisibleChanged)
 
     public:
@@ -30,6 +31,8 @@ namespace SmileEditor {
         void SetStatsVisible(bool v);
         bool DebugTargetsVisible() const { return DebugTargetsVis; }
         void SetDebugTargetsVisible(bool v);
+        bool ReSTIRVisible() const { return ReSTIRVis; }
+        void SetReSTIRVisible(bool v);
         bool MaterialsVisible() const { return MaterialsVis; }
         void SetMaterialsVisible(bool v);
 
@@ -44,6 +47,7 @@ namespace SmileEditor {
         void toggleInspector()  { emit ToggleInspectorRequested(); }
         void toggleStats()      { emit ToggleStatsRequested(); }
         void toggleDebugTargets() { emit ToggleDebugTargetsRequested(); }
+        void toggleReSTIR()       { emit ToggleReSTIRRequested(); }
         void toggleMaterials()  { emit ToggleMaterialsRequested(); }
         void setVSync(bool on)            { emit VSyncToggled(on); }
         void setFrustumCulling(bool on)   { emit FrustumCullingToggled(on); }
@@ -60,6 +64,7 @@ namespace SmileEditor {
         void ToggleInspectorRequested();
         void ToggleStatsRequested();
         void ToggleDebugTargetsRequested();
+        void ToggleReSTIRRequested();
         void ToggleMaterialsRequested();
         void MaterialsVisibleChanged();
         void TimeOfDayVisibleChanged();
@@ -67,6 +72,7 @@ namespace SmileEditor {
         void InspectorVisibleChanged();
         void StatsVisibleChanged();
         void DebugTargetsVisibleChanged();
+        void ReSTIRVisibleChanged();
         void VSyncToggled(bool on);
         void FrustumCullingToggled(bool on);
         void DepthPrepassToggled(bool on);
@@ -79,6 +85,7 @@ namespace SmileEditor {
         bool InspectorVis = true;
         bool StatsVis     = false; // Estatisticas: janela flutuante, comeca fechada
         bool DebugTargetsVis = false; // Visualizador de render targets: idem
+        bool ReSTIRVis = false; // Laboratorio ReSTIR: janela flutuante
         bool MaterialsVis = false; // Editor de Materiais: janela flutuante, comeca fechada
     };
 }

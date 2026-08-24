@@ -164,18 +164,19 @@
 // erraram — 8,4% medidos —, enquanto 21,7% de inelegiveis consumiam DDGI escondidos no outro
 // contador. Justamente a ilusao que este instrumento existe para desfazer.
 //
-//   QUEM FORNECEU a radiancia:  SRC_CACHE + SRC_DDGI + SRC_ZERO == SRC_TOTAL
+//   QUEM FORNECEU: SRC_CACHE + SRC_DDGI + SRC_ENVIRONMENT + SRC_ZERO == SRC_TOTAL
 //   POR QUE nao foi o cache:    SRC_INELIGIBLE == missShort + missCone   (eixo proprio)
 //
-// INELIGIBLE cruza com os tres primeiros em vez de competir com eles, e continua obrigatorio pelo
+// INELIGIBLE cruza com as quatro fontes em vez de competir com eles, e continua obrigatorio pelo
 // motivo INVERTIDO do que estava escrito aqui: e ele que diz quanto do DDGI e estrutural — o piso
 // que nenhum aquecimento move — em vez de esconder esse piso da conta.
-#define RC_STAT_SRC_TOTAL      30u // todo hit sombreado; o denominador
-#define RC_STAT_SRC_CACHE      31u
-#define RC_STAT_SRC_DDGI       32u // o cache errou e o volume respondeu
-#define RC_STAT_SRC_ZERO       33u // o cache errou e nao havia volume: zero explicito
-#define RC_STAT_SRC_INELIGIBLE 34u // nem chegou a consultar (segmento curto / cone estreito)
-#define RC_STAT_COUNT          35u
+#define RC_STAT_SRC_TOTAL       30u // todo hit sombreado; o denominador
+#define RC_STAT_SRC_CACHE       31u
+#define RC_STAT_SRC_DDGI        32u // o cache errou e o volume respondeu
+#define RC_STAT_SRC_ENVIRONMENT 33u // ambiente hemisferico integrado
+#define RC_STAT_SRC_ZERO        34u // Black explicito
+#define RC_STAT_SRC_INELIGIBLE  35u // nem chegou a consultar (segmento curto / cone estreito)
+#define RC_STAT_COUNT           36u
 
 // Publicado no CB de cada consumidor do HitShading.hlsli, igual ao FReGIRShaderParams.
 //
@@ -551,28 +552,30 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
 }
 
 // As classes de FONTE como valor, para quem quer o dado e nao o contador. A ordem espelha os
-// RC_STAT_SRC_* (o enderecamento e `RC_STAT_SRC_CACHE + kind`), e as duas ultimas nao tem contador
+// RC_STAT_SRC_* (o enderecamento e `RC_STAT_SRC_CACHE + kind`), e as tres ultimas nao tem contador
 // porque nao passam pelo ShadeSurfaceHit — quem as conhece e o trace.
 // Nao ha `RC_SRC_INELIGIBLE`: inelegibilidade nao e uma FONTE de radiancia — e o motivo de a fonte
-// ter sido outra. Ela vive no eixo dos contadores, e um raio inelegivel se pinta como DDGI ou ZERO,
+// ter sido outra. Ela vive no eixo dos contadores, e um raio inelegivel se pinta como DDGI, ENVIRONMENT ou ZERO,
 // que e o que de fato acendeu aquele pixel.
-#define RC_SRC_CACHE  0u
-#define RC_SRC_DDGI   1u
-#define RC_SRC_ZERO   2u
-#define RC_SRC_SKY    3u // o raio SECUNDARIO escapou: nao houve hit para classificar
-#define RC_SRC_KILLED 4u // segmento morto pela politica de backface
+#define RC_SRC_CACHE       0u
+#define RC_SRC_DDGI        1u
+#define RC_SRC_ENVIRONMENT 2u
+#define RC_SRC_ZERO        3u
+#define RC_SRC_SKY         4u // o raio SECUNDARIO escapou: nao houve hit para classificar
+#define RC_SRC_KILLED      5u // segmento morto pela politica de backface
 // Nao ha superficie primaria neste pixel (ceu na tela). Distinto do SKY: la o raio saiu e nao
 // achou nada; aqui nem chegou a existir raio secundario. Sem esta classe, os dois casos se
 // confundiriam na imagem e o operador leria ceu de fundo como falha do estimador.
-#define RC_SRC_NOSURFACE 5u
+#define RC_SRC_NOSURFACE 6u
 
 // Cor por classe, aqui e nao no consumidor: o visualizador de fonte e o contador tem de falar da
 // MESMA particao, e duas tabelas de cor divergiriam na primeira classe nova.
 float3 RC_SourceColor(uint kind) {
     switch (kind) {
         case RC_SRC_CACHE: return float3(0.15f, 0.85f, 0.25f); // o cache respondeu
-        case RC_SRC_DDGI:  return float3(1.00f, 0.55f, 0.10f); // caiu no fallback
-        case RC_SRC_ZERO:  return float3(0.75f, 0.10f, 0.10f); // sem volume: zero explicito
+        case RC_SRC_DDGI:        return float3(1.00f, 0.55f, 0.10f); // volume
+        case RC_SRC_ENVIRONMENT: return float3(0.15f, 0.65f, 1.00f); // ambiente integrado
+        case RC_SRC_ZERO:        return float3(0.75f, 0.10f, 0.10f); // Black explicito
         case RC_SRC_SKY:       return float3(0.55f, 0.60f, 0.70f);
         case RC_SRC_NOSURFACE: return float3(0.04f, 0.04f, 0.05f); // ceu na tela: nao ha o que medir
         default:               return float3(0.35f, 0.10f, 0.45f); // morto

@@ -161,6 +161,11 @@ MenuBar {
             onTriggered: menuBar.menuBridge.toggleDebugTargets()
         }
         MItem {
+            text: "ReSTIR Lab"; checkColumn: true; shortcutText: "Ctrl+Shift+R"
+            markVisible: menuBar.menuBridge.restirVisible
+            onTriggered: menuBar.menuBridge.toggleReSTIR()
+        }
+        MItem {
             text: "Materiais"; checkColumn: true
             markVisible: menuBar.menuBridge.materialsVisible
             onTriggered: menuBar.menuBridge.toggleMaterials()

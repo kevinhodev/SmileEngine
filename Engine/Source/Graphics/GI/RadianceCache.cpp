@@ -21,7 +21,7 @@ namespace Smile {
         constexpr u32 kAccumStride    = sizeof(u32) * 4;
         constexpr u32 kResolvedStride = sizeof(u32) * 4;
         // Espelha RC_STAT_COUNT do RadianceCache.hlsli.
-        constexpr u32 kStatCount      = 35;
+        constexpr u32 kStatCount      = 36;
         constexpr u32 kStatBytes      = kStatCount * sizeof(u32);
         // Os seis contadores de miss sao endereçados no shader por
         // `RC_STAT_MISS_SHORT + (status - RC_QUERY_SHORT_SEGMENT)`, ou seja as duas sequencias
@@ -30,8 +30,8 @@ namespace Smile {
         // da telemetria de insercao. Mudar um dos lados sem o outro trocaria "cone estreito" por
         // "chave ausente" no painel — dois diagnosticos opostos, e nada acusaria.
         // O mesmo vale para o bloco do PRODUTOR, endereçado por `RC_STAT_TERM_SKY + kind`.
-        static_assert(kStatCount == 35, "layout dos contadores: 7 de tabela/query + 6 de miss + 7 "
-                                        "de insercao + 10 do produtor + 5 de fonte. Mudou o "
+        static_assert(kStatCount == 36, "layout dos contadores: 7 de tabela/query + 6 de miss + 7 "
+                                        "de insercao + 10 do produtor + 6 de fonte. Mudou o "
                                         "shader? Mude a leitura tambem.");
         // Modos do dispatch do resolve (StatsParams.x). Ver o cabecalho do shader.
         constexpr f32 kModeResolve    = 0.0f;
@@ -716,7 +716,7 @@ namespace Smile {
         // telemetria de INSERCAO exige so este — e ela descreve quem ESCREVE na tabela, que com o
         // produtor dedicado e este passe e mais ninguem. Sem isto, a saude do hash nao teria como
         // ser medida no unico regime em que ela existe.
-        if (StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
+        if (InstrumentationActive && StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
         // O MESMO piso de confianca do render. Ele so age se o terminal for consultar, e por isso
         // o registro abaixo esta amarrado ao kFlagQuery e nao ao passe rodar.
@@ -943,9 +943,10 @@ namespace Smile {
         StatsCPU.TermOther   = S[29];
         StatsCPU.SrcTotal      = S[30];
         StatsCPU.SrcCache      = S[31];
-        StatsCPU.SrcDDGI       = S[32];
-        StatsCPU.SrcZero       = S[33];
-        StatsCPU.SrcIneligible = S[34];
+        StatsCPU.SrcDDGI        = S[32];
+        StatsCPU.SrcEnvironment = S[33];
+        StatsCPU.SrcZero        = S[34];
+        StatsCPU.SrcIneligible  = S[35];
         D3D12_RANGE NoWrite{ 0, 0 };
         StatsReadback[InFrameSlot]->Unmap(0, &NoWrite);
     }
@@ -976,26 +977,29 @@ namespace Smile {
             if (ConsumerRuns) {
                 PublishedUpdate = PublishedUpdate || AllowUpdate;
                 PublishedQuery  = PublishedQuery  || Query;
-                PublishedStats  = PublishedStats  || (StatsEnabled && Query);
-                PublishedDetail = PublishedDetail || (StatsEnabled && StatsDetail);
+                PublishedStats  = PublishedStats ||
+                                  (InstrumentationActive && StatsEnabled && Query);
+                PublishedDetail = PublishedDetail ||
+                                  (InstrumentationActive && StatsEnabled && StatsDetail);
                 // A fonte descreve o terminal de um hit SOMBREADO, e nao a consulta: ela e
                 // publicada por quem roda, mesmo sem query — com o cache fechado todo hit termina
                 // em DDGI ou zero, e e legitimo querer medir isso.
-                PublishedSource = PublishedSource || (StatsEnabled && StatsSource);
+                PublishedSource = PublishedSource ||
+                                  (InstrumentationActive && StatsEnabled && StatsSource);
                 // So com consulta: sem ela o piso nao decide nada neste consumidor, e registra-lo
                 // faria o manifesto declarar um controle que nao agiu sobre a imagem.
                 if (Query) PublishedMinSamples = MinSampleCount;
             }
             // So conta acerto/erro quando ha o que contar: sem query o contador so mediria zero
             // e ainda assim pagaria os atomicos.
-            if (StatsEnabled && Query) Flags |= kFlagStats;
+            if (InstrumentationActive && StatsEnabled && Query) Flags |= kFlagStats;
             // O detalhe NAO exige QueryEnabled: metade dele (a telemetria de insercao) vive no
             // RC_Update, e o produtor legado escreve por este mesmo caminho. O que ele exige e a
             // instrumentacao ligada, para o regime ser um so e nao dois.
-            if (StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
+            if (InstrumentationActive && StatsEnabled && StatsDetail) Flags |= kFlagStatsDetail;
             // Nao exige Query pelo mesmo motivo do registro acima: o contador de FONTE mede o que
             // terminou o hit, e "o cache estava fechado, tudo foi DDGI" e uma medida valida.
-            if (StatsEnabled && StatsSource) Flags |= kFlagStatsSource;
+            if (InstrumentationActive && StatsEnabled && StatsSource) Flags |= kFlagStatsSource;
         }
         P.CameraPosCell    = { CameraPos.X, CameraPos.Y, CameraPos.Z, BaseCellSize };
         P.LodCapacityFlags = { LodDistance, static_cast<f32>(CapacityV),

@@ -34,6 +34,8 @@ cbuffer DDGICB : register(b0) {
     float4 GICascadeScrollOffset[4];
     float4 GICascadeScrollDelta[4];
     float4 ProbeCompactionParams; // x = Trace/Update usam a lista compacta desta passada
+    float4 EnvironmentSky;
+    float4 EnvironmentGround;
 };
 
 RaytracingAccelerationStructure Scene       : register(t0);
@@ -144,6 +146,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    P.EnvironmentSky     = EnvironmentSky.rgb;
+    P.EnvironmentGround  = EnvironmentGround.rgb;
     P.RoughnessMin       = GIBiasParams.w;
     P.CacheRayRoughness  = -1.0f;
     RC_UNPACK_PARAMS(P);

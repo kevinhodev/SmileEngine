@@ -710,6 +710,10 @@ namespace Smile {
         CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
+        CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
+                                      GIHit.EnvironmentSky.Z, 0.0f };
+        CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
+                                      GIHit.EnvironmentGround.Z, 0.0f };
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : (f32)kRaysPerProbe;
         const f32 EffMin = AdaptiveRays ? (f32)std::min(MinRays, MaxRays) : (f32)kRaysPerProbe;

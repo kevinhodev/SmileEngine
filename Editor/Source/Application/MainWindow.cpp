@@ -22,6 +22,7 @@
 #include "SmileEditor/Scene/MaterialsBridge.h"
 #include "SmileEditor/Profiling/StatsBridge.h"
 #include "SmileEditor/Debugging/DebugTargetsBridge.h"
+#include "SmileEditor/Debugging/ReSTIRDebugBridge.h"
 #include "SmileEditor/UI/WindowBridge.h"
 #include "SmileEditor/Viewport/ViewportWidget.h"
 #include "SmileEditor/Application/DarkTheme.h"
@@ -54,6 +55,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QProcess>
+#include <QQmlEngine>
 #include <QQuickWidget>
 #include <QShortcut>
 #include <QSizePolicy>
@@ -125,6 +127,16 @@ namespace SmileEditor {
         RenderBr   = new RenderSettingsBridge(this);
         StatsBr    = new StatsBridge(this);
         DebugTargetsBr = new DebugTargetsBridge(this);
+        // Um provider por engine compartilhada. Tanto a janela geral quanto o ReSTIR Lab
+        // consomem a mesma QImage/readback; registrar por janela duplicaria ownership.
+        if (!_QmlEngine.imageProvider(QStringLiteral("debugtargetpreview"))) {
+            _QmlEngine.addImageProvider(
+                QStringLiteral("debugtargetpreview"),
+                new DebugTargetPreviewImageProvider(DebugTargetsBr));
+        }
+        ReSTIRBr = new ReSTIRDebugBridge(RenderBr, DebugTargetsBr, this);
+        connect(ReSTIRBr, &ReSTIRDebugBridge::OpenWindowRequested,
+                this, &MainWindow::ShowReSTIR);
 
         // Mudanças externas invalidam os mesmos bindings usados pela UI.
         connect(RenderSettingsCtrl, &RenderSettingsController::GISettingsChanged,
@@ -278,6 +290,7 @@ namespace SmileEditor {
                     ActiveViewport = TargetViewport;
                     if (StatsBr) StatsBr->SetViewport(TargetViewport);
                     if (DebugTargetsBr) DebugTargetsBr->SetViewport(TargetViewport);
+                    if (ReSTIRBr) ReSTIRBr->SetViewport(TargetViewport);
                 }
             }
         }
@@ -296,6 +309,12 @@ namespace SmileEditor {
             if (Menus) Menus->SetDebugTargetsVisible(Shown);
             // Ocultar pausa o readback, mas preserva a seleção.
             if (DebugTargetsBr) DebugTargetsBr->SetPreviewEnabled(Shown);
+        }
+        if (ReSTIRDlg && _Obj == ReSTIRDlg &&
+            (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
+            const bool Shown = _Event->type() == QEvent::Show;
+            if (Menus) Menus->SetReSTIRVisible(Shown);
+            if (ReSTIRBr) ReSTIRBr->SetWindowVisible(Shown);
         }
         if (MaterialsDlg && _Obj == MaterialsDlg &&
             (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
@@ -540,6 +559,10 @@ namespace SmileEditor {
             if (DebugTargetsDlg && DebugTargetsDlg->isVisible()) DebugTargetsDlg->hide();
             else                                                 ShowDebugTargets();
         });
+        connect(Menus, &MenuBridge::ToggleReSTIRRequested, this, [this]() {
+            if (ReSTIRDlg && ReSTIRDlg->isVisible()) ReSTIRDlg->hide();
+            else                                     ShowReSTIR();
+        });
         connect(Menus, &MenuBridge::ToggleMaterialsRequested, this, [this]() {
             if (MaterialsDlg && MaterialsDlg->isVisible()) MaterialsDlg->hide();
             else                                           ShowMaterials();
@@ -567,6 +590,7 @@ namespace SmileEditor {
         AddShortcut(QKeySequence(tr("Ctrl+O")),       [this]{ Menus->loadScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+O")), [this]{ Menus->addScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+T")), [this]{ Menus->toggleDebugTargets(); });
+        AddShortcut(QKeySequence(tr("Ctrl+Shift+R")), [this]{ Menus->toggleReSTIR(); });
         AddShortcut(QKeySequence(tr("Ctrl+,")),       [this]{ ShowSettings(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
         AddShortcut(QKeySequence(tr("Alt+1")), [this] {
@@ -600,6 +624,7 @@ namespace SmileEditor {
             ActiveViewport = _Viewport;
             if (StatsBr) StatsBr->SetViewport(_Viewport);
             if (DebugTargetsBr) DebugTargetsBr->SetViewport(_Viewport);
+            if (ReSTIRBr) ReSTIRBr->SetViewport(_Viewport);
         }
     }
 
@@ -626,6 +651,9 @@ namespace SmileEditor {
         ToolbarProperties.insert(
             QStringLiteral("debugModel"),
             QVariant::fromValue(static_cast<QObject*>(DebugTargetsBr)));
+        ToolbarProperties.insert(
+            QStringLiteral("restirModel"),
+            QVariant::fromValue(static_cast<QObject*>(ReSTIRBr)));
 
         QQuickWidget* Toolbar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ViewportToolbar.qml"),
@@ -748,6 +776,10 @@ namespace SmileEditor {
             RenderBr->SetRenderer(Viewport->GetRenderer());
             RenderBr->SetViewport(Viewport);
         }
+        if (ReSTIRBr) {
+            ReSTIRBr->SetRenderer(Viewport->GetRenderer());
+            ReSTIRBr->SetViewport(Viewport);
+        }
 
         if (CloudsBr) {
             CloudsBr->SetViewport(Viewport);
@@ -850,6 +882,7 @@ namespace SmileEditor {
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("renderModel"), RenderBr },
+                  { QStringLiteral("restirModel"), ReSTIRBr },
                   { QStringLiteral("cameraBookmarks"), CameraBookmarksBr },
                   { QStringLiteral("capture"), CaptureBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
@@ -982,9 +1015,7 @@ namespace SmileEditor {
                 QStringLiteral("DebugTargetsWindow.qml"),
                 { { QStringLiteral("debugModel"), DebugTargetsBr },
                   { QStringLiteral("debugWindow"), DebugWindowBridge } },
-                Dialog,
-                { { QStringLiteral("debugtargetpreview"),
-                    new DebugTargetPreviewImageProvider(DebugTargetsBr) } });
+                Dialog);
             Panel->setObjectName(QStringLiteral("DebugTargetsWindowPanel"));
 
             auto* DialogLayout = new QVBoxLayout(Dialog);
@@ -1007,6 +1038,50 @@ namespace SmileEditor {
         }
         DebugTargetsDlg->raise();
         DebugTargetsDlg->activateWindow();
+    }
+
+    void MainWindow::ShowReSTIR() {
+        if (!ReSTIRDlg) {
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("ReSTIRDebugWindow"));
+            Dialog->setWindowTitle(tr("ReSTIR Lab — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinimizeButtonHint |
+                                   Qt::WindowMaximizeButtonHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(1180, 780);
+            Dialog->setMinimumSize(940, 620);
+
+            auto* ReSTIRWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
+                QStringLiteral("ReSTIRDebugWindow.qml"),
+                { { QStringLiteral("restirModel"), ReSTIRBr },
+                  { QStringLiteral("debugModel"), DebugTargetsBr },
+                  { QStringLiteral("restirWindow"), ReSTIRWindowBridge } },
+                Dialog);
+            Panel->setObjectName(QStringLiteral("ReSTIRDebugWindowPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            Dialog->installEventFilter(this);
+            ReSTIRDlg = Dialog;
+        }
+
+        if (ReSTIRDlg->isMinimized()) ReSTIRDlg->showNormal();
+        else                          ReSTIRDlg->show();
+
+        if (!ReSTIRDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = geometry().center();
+            ReSTIRDlg->move(Center.x() - ReSTIRDlg->width() / 2,
+                            Center.y() - ReSTIRDlg->height() / 2);
+            ReSTIRDlg->setProperty("smilePositioned", true);
+        }
+        ReSTIRDlg->raise();
+        ReSTIRDlg->activateWindow();
     }
 
     void MainWindow::ShowMaterials() {

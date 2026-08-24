@@ -346,6 +346,9 @@ namespace Smile {
         f32  GetBvhDebugComplexityMax() const          { return BvhDebugComplexityMax; }
         // false sem suporte a RT ou antes da TLAS existir: o editor desabilita o toggle.
         bool IsBvhDebugAvailable() const;
+        // Gate de EXECUÇÃO das ferramentas de diagnóstico. Os toggles acima continuam sendo o
+        // estado pedido pela UI, mas nenhum dispatch/instrumentação ReSTIR roda sem consumidor.
+        void SetDebugToolsWindowActive(bool V) { DebugToolsWindowActive = V; }
 
         // Preview offscreen de multiplos alvos. Colunas 0 escolhe uma grade automatica.
         static constexpr u32 kDebugPreviewWidth  = 1600;
@@ -355,6 +358,50 @@ namespace Smile {
             f32 Irradiance[3] = {};
             f32 MeanDistance = 0.0f;
             f32 DistanceDeviation = 0.0f;
+        };
+        // Snapshot de um pixel da cena e dos estimadores ReSTIR que produziram o frame.
+        // Tipos triviais mantêm o hand-off renderer/editor barato e sem dependência de Qt.
+        struct FPixelDebugResult {
+            u32 ScreenX = 0, ScreenY = 0;
+            u32 RenderX = 0, RenderY = 0;
+            u32 FrameIndex = 0;
+
+            bool SurfaceValid = false;
+            f32 DeviceDepth = 0.0f;
+            f32 WorldPosition[3] = {};
+            f32 BaseColor[3] = {};
+            f32 AO = 0.0f;
+            f32 WorldNormal[3] = {};
+            f32 Roughness = 0.0f;
+            f32 Metallic = 0.0f;
+            f32 Subsurface[3] = {};
+            u32 ShadingModel = 0;
+
+            bool DIAvailable = false;
+            bool DIValid = false;
+            f32 DIOutput[4] = {};
+            f32 DIWeight = 0.0f;
+            u32 DILightIndex = 0xFFFFFFFFu;
+            u32 DIAnalyticLightCount = 0;
+            u32 DIMeshLightCount = 0;
+            f32 DIUV[2] = {};
+            u32 DIM = 0;
+            u32 DIAge = 0;
+            f32 DINormal[3] = {};
+
+            bool GIAvailable = false;
+            bool GIValid = false;
+            bool GIHalfRes = false;
+            u32 GITraceX = 0, GITraceY = 0;
+            u32 GISurfaceX = 0, GISurfaceY = 0;
+            f32 GIOutput[4] = {};
+            f32 GIX2[3] = {};
+            f32 GIWeight = 0.0f;
+            f32 GIN2[3] = {};
+            f32 GIRadiance[3] = {};
+            u32 GIM = 0;
+            u32 GIAge = 0;
+            f32 GIN1[3] = {};
         };
         void SetDebugSelection(const std::vector<u32>& Sel) {
             if (DebugSelection == Sel) return;
@@ -402,6 +449,9 @@ namespace Smile {
         // Consome a captura mais recente em RGBA8. Retorna false quando nenhum readback novo
         // ficou pronto desde a ultima chamada.
         bool ConsumeDebugPreview(std::vector<u8>& OutPixels);
+        bool RequestPixelDebug(u32 X, u32 Y);
+        void CancelPixelDebug();
+        bool ConsumePixelDebug(FPixelDebugResult& OutResult);
 
         // Captura assincrona e deterministica. O chamador define a pose antes do request.
         bool RequestCapture(const FCaptureRequest& Request);
@@ -451,6 +501,8 @@ namespace Smile {
         // de GI. Os knobs — inclusive os de amostragem — moraram p/ o FRenderSettings.
         const FDDGI& GetDDGI() const { return DDGI; }
         const FReSTIRGI& GetReSTIRGI() const { return ReSTIRGI; }
+        const FReSTIRDI& GetReSTIRDI() const { return ReSTIRDI; }
+        const FReGIR& GetReGIR() const { return ReGIR; }
 
         // As flags de edicao de material/luz (Mark*/Notify*) moraram p/ o FRenderSettings; o
         // RenderFrame consome MaterialRTStateDirty/IndirectLightingDirty uma vez, antes do
@@ -513,7 +565,8 @@ namespace Smile {
         // amostragem do 2o bounce, quem denoisa). Um lugar so: sem isto cada passe teria a
         // propria copia e um sweep de calibracao mexeria em metade deles.
         void PushRayTracingFrameState(const FFrameModes& Modes,
-                                      const FEffectiveIndirectPolicy& Policy);
+                                      const FEffectiveIndirectPolicy& Policy,
+                                      const FFrameAmbient& Ambient);
 
         // Atmosfera, height fog, froxel, sun shafts, nuvens e a projecao da sombra de nuvem.
         // Recebe o ambiente porque o froxel e as nuvens integram sobre ele.
@@ -642,6 +695,10 @@ namespace Smile {
         f32                  BvhDebugComplexityMax = FBvhDebugView::kDefaultComplexityMax;
         bool           RtShaderTimer      = false; // toggle do editor
         bool           TimerCaptureActive = false; // resolvido por frame (toggle && disponivel)
+        bool           DebugToolsWindowActive = false;
+        bool           DebugExecutionActive() const {
+            return DebugToolsWindowActive || DebugPreviewEnabled;
+        }
         // Escalas independentes porque os passes operam em ordens de grandeza distintas.
         static constexpr f32 kShaderTimerScaleGI = 1.0f / 250000.0f;
         static constexpr f32 kShaderTimerScaleReflections = 1.0f / 32000.0f;
@@ -664,12 +721,38 @@ namespace Smile {
         ComPtr<ID3D12Resource> DebugPreviewTarget;
         ComPtr<ID3D12Resource> DebugPreviewReadback[FCommandQueue::kFramesInFlight];
         ComPtr<ID3D12Resource> DebugProbeSampleReadback[FCommandQueue::kFramesInFlight];
+        ComPtr<ID3D12Resource> PixelDebugReadback[FCommandQueue::kFramesInFlight];
         FDescriptorHeap        DebugPreviewRTVHeap;
         bool                   DebugPreviewReadbackPending[FCommandQueue::kFramesInFlight] = {};
         u64                    DebugPreviewReadbackVersion[FCommandQueue::kFramesInFlight] = {};
         bool                   DebugProbeSamplePending[FCommandQueue::kFramesInFlight] = {};
         u64                    DebugProbeSampleVersion[FCommandQueue::kFramesInFlight] = {};
         u32                    DebugProbeSampleIndex[FCommandQueue::kFramesInFlight] = {};
+        struct FPixelDebugFrameMeta {
+            u64 Version = 0;
+            u32 ScreenX = 0, ScreenY = 0;
+            u32 RenderX = 0, RenderY = 0;
+            u32 RenderWidth = 0, RenderHeight = 0;
+            u32 FrameIndex = 0;
+            u32 GITraceX = 0, GITraceY = 0;
+            u32 GISurfaceX = 0, GISurfaceY = 0;
+            u32 DIAnalyticLightCount = 0;
+            u32 DIMeshLightCount = 0;
+            Mat44 InvViewProj{};
+            bool DIAvailable = false;
+            bool GIAvailable = false;
+            bool GIHalfRes = false;
+        };
+        FPixelDebugFrameMeta PixelDebugMeta[FCommandQueue::kFramesInFlight];
+        bool                 PixelDebugReadbackPending[FCommandQueue::kFramesInFlight] = {};
+        FPixelDebugResult    PixelDebugResult{};
+        bool                 PixelDebugResultReady = false;
+        bool                 PixelDebugRequestPending = false;
+        u32                  PixelDebugRequestScreenX = 0;
+        u32                  PixelDebugRequestScreenY = 0;
+        u32                  PixelDebugRequestRenderX = 0;
+        u32                  PixelDebugRequestRenderY = 0;
+        u64                  PixelDebugRequestVersion = 0;
         std::vector<u8>        DebugPreviewPixels;
         bool                   DebugPreviewPixelsReady = false;
         bool                   DebugPreviewEnabled = false;
@@ -817,7 +900,7 @@ namespace Smile {
         bool             GIMeasureTerminatorOff = false;
 
         FReSTIRGI        ReSTIRGI;
-        bool             UseReSTIRGI = false; // experimental; default OFF (nao toca o estado padrao)
+        bool             UseReSTIRGI = true;  // estimador indireto padrao da engine
         FNrdDenoiser     Nrd;                 // denoiser do ReSTIR GI (RELAX difuso+especular)
         FDlssRRPass      DlssRR;              // DLSS Ray Reconstruction (denoise+upscale num eval)
         FDlssRRGuides    RRGuides;            // buffers de material que o RR consome (albedo/normal/hitDist)
@@ -827,7 +910,7 @@ namespace Smile {
         // Borda de log do "RR pulado por debug na cena" (ver RRPoisoned no RenderFrame): sem isto o
         // aviso sairia todo frame enquanto o visualizador estivesse ligado.
         bool             RRSkipLogged   = false;
-        EDenoiser        Denoiser = EDenoiser::None; // {None, NRD, DLSS_RR}; default = sem denoise
+        EDenoiser        Denoiser = EDenoiser::NRD; // RELAX e o denoiser padrao do GI/reflexoes
         FReflections     Reflections;
         bool             UseReflections = true;
 

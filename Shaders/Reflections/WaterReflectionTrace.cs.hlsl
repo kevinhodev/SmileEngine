@@ -41,6 +41,8 @@ cbuffer ReflectionCB : register(b0) {
     // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
     // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
     float4 GICascadeScrollOffset[4];
+    float4 EnvironmentSky;
+    float4 EnvironmentGround;
 };
 
 uint ReflectionCullFlags() {
@@ -288,6 +290,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.ReGIRAverageSRV = (uint)ReGIRResources.y;
         P.FrameIndex = (uint)TraceParams.x; P.ReGIRPad = 0u;
         P.SkyViewHeightKm = SkyParams.x;    P.SkyBottomRKm = SkyParams.y;
+        P.EnvironmentSky = EnvironmentSky.rgb;
+        P.EnvironmentGround = EnvironmentGround.rgb;
         // ZERO: hit direcional e consumido uma vez (ver ReflectionTrace.cs.hlsl).
         P.RoughnessMin = 0.0f;              P.CacheRayRoughness = roughness;
         RC_UNPACK_PARAMS(P);

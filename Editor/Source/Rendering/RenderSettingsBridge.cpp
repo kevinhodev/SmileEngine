@@ -351,6 +351,7 @@ namespace SmileEditor {
         return Renderer && Renderer->Settings().GetGIHalfRes();
     }
 
+
     bool RenderSettingsBridge::IsReGIREnabled() const {
         return Renderer && Renderer->Settings().GetUseReGIR();
     }
@@ -437,6 +438,7 @@ namespace SmileEditor {
         if (Viewport) Viewport->NotifyRendererResourcesChanged();
     }
 
+
     void RenderSettingsBridge::ToggleReGIR() {
         if (!Renderer) return;
         auto RendererAccess = Renderer.Lock();
@@ -490,18 +492,18 @@ namespace SmileEditor {
             return QString::number(100.0 * static_cast<double>(N) / T, 'f', 1) +
                    QStringLiteral("%");
         };
-        // A SOMA é impressa junto, e não como conferência do desenvolvedor: as TRÊS fontes são
+        // A SOMA é impressa junto, e não como conferência do desenvolvedor: as QUATRO fontes são
         // mutuamente exclusivas por construção, então qualquer sobra é defeito do instrumento —
         // e um instrumento que só se valida em teste offline não se valida quando importa.
-        const Smile::u32 Sum = S.SrcCache + S.SrcDDGI + S.SrcZero;
+        const Smile::u32 Sum = S.SrcCache + S.SrcDDGI + S.SrcEnvironment + S.SrcZero;
         const QString Check = (Sum == S.SrcTotal)
             ? QStringLiteral("✓")
             : QStringLiteral("✗ sobra %1").arg(static_cast<long long>(S.SrcTotal) -
                                                static_cast<long long>(Sum));
-        // Inelegível é um eixo marginal; os contadores não medem sua interseção com DDGI e zero.
-        return QStringLiteral("fonte: cache %1 · DDGI %2 · zero %3 (%4 hits · soma %5)"
-                              " — inelegíveis %6 (em DDGI ou zero)")
-            .arg(Pct(S.SrcCache), Pct(S.SrcDDGI), Pct(S.SrcZero))
+        // Inelegível é um eixo marginal; os contadores não medem sua interseção com DDGI, ambiente e zero.
+        return QStringLiteral("fonte: cache %1 · DDGI %2 · ambiente %3 · zero %4 "
+                              "(%5 hits · soma %6) — inelegíveis %7")
+            .arg(Pct(S.SrcCache), Pct(S.SrcDDGI), Pct(S.SrcEnvironment), Pct(S.SrcZero))
             .arg(S.SrcTotal).arg(Check).arg(Pct(S.SrcIneligible));
     }
     bool RenderSettingsBridge::IsGISourceDebug() const {

@@ -79,6 +79,8 @@ namespace Smile {
         Vec4 CascadeScrollDelta[4];
         // x = lista compacta de sondas ativas habilitada neste update.
         Vec4 ProbeCompactionParams;
+        Vec4 EnvironmentSky;    // rgb = irradiancia integrada do hemisferio superior
+        Vec4 EnvironmentGround; // rgb = irradiancia integrada do hemisferio inferior
     };
     static_assert(offsetof(DDGIConstants, CascadeScrollDelta) == 528,
                   "o delta de scroll segue o bloco de cascatas, no fim do DDGICB");
@@ -94,6 +96,8 @@ namespace Smile {
                   "o bloco de cascatas deve permanecer anexado ao fim do DDGICB");
     static_assert(offsetof(DDGIConstants, ProbeCompactionParams) == 592,
                   "a compactacao deve permanecer anexada depois dos deltas de scroll");
+    static_assert(offsetof(DDGIConstants, EnvironmentSky) == 608,
+                  "o ambiente deve permanecer anexado ao fim do DDGICB");
 
     // Menor numero de updates que deixa no maximo Residual do historico.
     constexpr u32 DDGIFramesForResidual(f32 _H, f32 _Residual) {

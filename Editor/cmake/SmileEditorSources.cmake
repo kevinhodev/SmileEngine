@@ -122,6 +122,7 @@ smile_editor_domain(Profiling
 
 smile_editor_domain(Debugging
     DebugTargetsBridge
+    ReSTIRDebugBridge
 )
 
 smile_editor_assets("UI\\QML\\Shell"
@@ -151,6 +152,7 @@ smile_editor_assets("UI\\QML\\Rendering"
 
 smile_editor_assets("UI\\QML\\Debugging"
     Qml/DebugTargetsWindow.qml
+    Qml/ReSTIRDebugWindow.qml
 )
 
 smile_editor_assets("UI\\QML\\Profiling"

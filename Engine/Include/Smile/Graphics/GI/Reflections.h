@@ -68,6 +68,8 @@ namespace Smile {
         // Cascatas do DDGI, para o gather do 2o bounce no HitShading. Mesmo bloco dos outros
         // quatro cbuffers; o GIGridMinSpacing continua sendo a GROSSA (peso do volume).
         FDDGICascadeConstants GICascades;
+        Vec4 EnvironmentSky;
+        Vec4 EnvironmentGround;
     };
     static_assert(offsetof(ReflectionConstants, GICascades) == 688,
                   "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
@@ -79,6 +81,8 @@ namespace Smile {
                   "WaterEnvironmentParams divergiu do ReflectionCB da agua");
     static_assert(offsetof(ReflectionConstants, SkyParams) == 624,
                   "SkyParams deve permanecer anexado ao fim do ReflectionCB");
+    static_assert(offsetof(ReflectionConstants, EnvironmentSky) == 832,
+                  "o ambiente deve permanecer anexado ao fim do ReflectionCB");
 
     // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
     // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO

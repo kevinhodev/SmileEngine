@@ -20,6 +20,9 @@ Item {
     property real dragPixels: 180
 
     signal moved(real value)
+    // `moved` previews continuously; `committed` fires once after text entry, reset or drag.
+    // Consumers that invalidate histories/caches should write only on `committed`.
+    signal committed(real value)
 
     readonly property bool modified: !isNaN(defaultValue)
                                      && Math.abs(boundValue - defaultValue)
@@ -64,8 +67,11 @@ Item {
             return
         const parsed = Number(editor.text.trim().replace(",", "."))
         editing = false
-        if (!isNaN(parsed))
-            moved(normalized(parsed / displayScale))
+        if (!isNaN(parsed)) {
+            const nextValue = normalized(parsed / displayScale)
+            moved(nextValue)
+            committed(nextValue)
+        }
     }
 
     function cancelEdit() {
@@ -73,8 +79,11 @@ Item {
     }
 
     function reset() {
-        if (interactive && !isNaN(defaultValue))
-            moved(normalized(defaultValue))
+        if (interactive && !isNaN(defaultValue)) {
+            const nextValue = normalized(defaultValue)
+            moved(nextValue)
+            committed(nextValue)
+        }
     }
 
     Rectangle {
@@ -187,7 +196,11 @@ Item {
                 root.moved(nextValue)
             }
         }
-        onReleased: root.dragging = false
+        onReleased: {
+            if (root.dragging)
+                root.committed(root.previewValue)
+            root.dragging = false
+        }
         onCanceled: root.dragging = false
         onDoubleClicked: root.reset()
     }

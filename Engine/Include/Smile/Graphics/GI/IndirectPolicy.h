@@ -45,12 +45,9 @@ namespace Smile {
     // apaga 30% dos CAMINHOS, e o que sobra e uma imagem mais escura de forma desigual.
     enum class EIndirectFallback : u32 {
         DDGI = 0,    // irradiancia do volume, quando ele existe
-        // ⚠️ DECLARADO, NAO IMPLEMENTADO. Nao ha cor de ambiente no cbuffer de um passe de RT, e o
-        // gather desvanece para preto fora do volume justamente por isso. O
-        // `Renderer::EffectiveFallback` DEGRADA este valor para Black enquanto for assim — pedi-lo
-        // e pedir Black, e reportar "environment" no manifesto seria publicar um estado que o
-        // shader nao produz. Ele fica no enum como intencao nomeada, e nao como pendencia
-        // escondida atras de um numero que ninguem honra.
+        // Irradiancia hemisferica integrada pela atmosfera, publicada nos cinco traces. E um
+        // terminador explicito, nao o preenchimento implicito da borda do DDGI: escolher DDGI
+        // preserva o fade historico para preto fora do volume.
         Environment,
         Black        // zero explicito; util para MEDIR de quanto o fallback e responsavel
     };
@@ -63,9 +60,9 @@ namespace Smile {
     //
     //    Gravar so o efetivo nao mente sobre a imagem — e essa era a tentacao —, mas apaga a
     //    DEGRADACAO. Uma captura que diz `fallback: black` nao distingue "o operador pediu preto
-    //    para medir" de "pediu DDGI e nao havia volume" nem de "pediu Environment, que nao
-    //    existe". Sao tres configuracoes diferentes com o mesmo pixel, e a serie inteira mostrou
-    //    que duas capturas indistinguiveis na pasta sao um convite a compara-las.
+    //    para medir" de "pediu DDGI e nao havia volume". Sao configuracoes diferentes com o
+    //    mesmo pixel, e a serie inteira mostrou que duas capturas indistinguiveis na pasta sao
+    //    um convite a compara-las.
     //
     //    Forma sugerida: `indirectFallbackRequested` + `indirectFallbackEffective`. Iguais na
     //    maioria dos frames; quando divergem, e a divergencia que interessa.

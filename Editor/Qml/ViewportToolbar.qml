@@ -11,6 +11,7 @@ Rectangle {
     required property var viewportModel
     required property var renderModel
     required property var debugModel
+    required property var restirModel
 
     color: C.Theme.shell
     implicitWidth: 900
@@ -594,7 +595,7 @@ Rectangle {
         x: leftTools.x + viewModeButton.x
         y: root.height
         width: 280
-        height: 452
+        height: 396
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
@@ -655,54 +656,40 @@ Rectangle {
                 checked: root.renderModel.ddgiEnabled
                 onToggled: root.renderModel.ToggleDDGI()
             }
-            ToggleRow {
+            ModeRow {
                 x: 8; y: 178; width: 264; height: 28
-                label: "ReSTIR GI"
-                checked: root.renderModel.restirGIEnabled
-                onToggled: root.renderModel.ToggleReSTIRGI()
+                label: "ReSTIR Lab"; shortcutText: "Ctrl+Shift+R"
+                onTapped: { root.restirModel.OpenWindow(); viewModesPopup.close() }
             }
             ToggleRow {
                 x: 8; y: 206; width: 264; height: 28
-                label: "ReSTIR visibility"; detail: "raio extra"
-                checked: root.renderModel.restirGIVisibilityEnabled
-                interactive: root.renderModel.restirGIEnabled
-                onToggled: root.renderModel.ToggleReSTIRGIVisibility()
-            }
-            ToggleRow {
-                x: 8; y: 234; width: 264; height: 28
-                label: "ReGIR"; detail: "hits secundários"
-                checked: root.renderModel.reGIREnabled
-                onToggled: root.renderModel.ToggleReGIR()
-            }
-            ToggleRow {
-                x: 8; y: 262; width: 264; height: 28
                 label: "Folhagem sombreia GI"; detail: "alpha-test"
                 checked: root.renderModel.giFoliageShadows
                 onToggled: root.renderModel.ToggleGIFoliageShadows()
             }
             ToggleRow {
-                x: 8; y: 290; width: 264; height: 28
+                x: 8; y: 234; width: 264; height: 28
                 label: "GTAO"
                 checked: root.renderModel.gtaoEnabled
                 onToggled: root.renderModel.ToggleGTAO()
             }
             ToggleRow {
-                x: 8; y: 318; width: 264; height: 28
+                x: 8; y: 262; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
                 checked: root.renderModel.gtaoHalfRes
                 onToggled: root.renderModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 350; width: 252; height: 1; color: C.Theme.hairline }
+            Rectangle { x: 14; y: 294; width: 252; height: 1; color: C.Theme.hairline }
             Text {
-                x: 14; y: 360
+                x: 14; y: 304
                 text: "Reflexos"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 378; width: 264; height: 28
+                x: 8; y: 322; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: root.renderModel.reflectionsEnabled
                 onToggled: root.renderModel.ToggleReflections()
@@ -710,9 +697,9 @@ Rectangle {
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
 
-            Rectangle { x: 14; y: 410; width: 252; height: 1; color: C.Theme.hairline }
+            Rectangle { x: 14; y: 354; width: 252; height: 1; color: C.Theme.hairline }
             Rectangle {
-                x: 8; y: 416; width: 264; height: 28; radius: 5
+                x: 8; y: 360; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? C.Theme.surfaceRaised : "transparent"
                 Text {
                     x: 8

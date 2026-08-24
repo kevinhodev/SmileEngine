@@ -370,51 +370,35 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
 }
 
 // --------------------------------------------------------------------------------------------
-// Fallback indireto (DDGI)
+// Fallback indireto (DDGI / Environment / Black)
 // --------------------------------------------------------------------------------------------
-// A IRRADIANCIA crua do volume, sem a BRDF ambiente — quem compoe e o PT_ComposeIndirect. Separado
-// porque a Fase 5 troca a FONTE (cache no lugar do volume) sem trocar a composicao, e a Fase 3 nao
-// pode chamar isto de jeito nenhum: o updater alimentado por DDGI so esconderia um sinal cuja
-// origem continuaria sendo DDGI.
-float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P) {
-    // 2o bounce com o gather COMPLETO — Chebyshev, bias de superficie, offset de relocacao e
-    // skip de sonda inativa —, o mesmo que o deferred usa. Antes aqui era a trilinear pura, e
-    // isso era o pior lugar possivel para vazar: o resultado do hit volta para o atlas do DDGI,
-    // que reamostra com hysteresis 0,99, entao o leak se REALIMENTA frame a frame. O Flax
-    // tambem usa o sampler completo no bounce do surface atlas.
-    //
-    // O papel de "direcao da camera" no bias e do raio: quem observa este ponto e a origem do
-    // raio, entao V = -rayDir. Sem isso o termo de view empurraria o ponto para uma direcao sem
-    // relacao com a visada e o bias perderia o sentido geometrico.
-    // O bias em si e calculado DENTRO do wrapper, uma vez por cascata — ele escala com o
-    // espacamento e no blend as duas cascatas querem valores diferentes.
-    float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
-    // Fora do volume o gather clampa e estende a ultima fileira de sondas ao infinito. Na tela
-    // isso e substituido pelo ambiente hemisferico; aqui a radiancia do hit REALIMENTA o atlas,
-    // entao extrapolar seria pior — a borda se reinjetaria. Sem o ambiente colorido do deferred
-    // (nao existe no CB de um passe de RT), o hit desvanece o indireto para ZERO: escurece o
-    // bounce distante em vez de inventar luz. O direto do hit (sol e puntuais) segue inteiro.
-    // GIDistParams.w carrega DUAS coisas (ver FGIHitSampling::SkipModePacked): o skipMode de
-    // sonda inativa nos dois bits baixos e, no bit 2, o gate de MEDICAO — "corte o DDGI como
-    // terminador e me diga quanto muda". Com o gate ligado nao ha gather nenhum: o volW vai a
-    // zero e o custo do tap tambem sai, o que mantem a medicao honesta tambem no profiler.
+// A IRRADIANCIA crua do terminador, sem a BRDF ambiente — quem compoe e o PT_ComposeIndirect.
+// Environment e exclusivo: nao muda o fade historico do modo DDGI fora do volume.
+//
+// outSource e parte do resultado porque radiancia preta nao distingue um DDGI escuro, ambiente
+// escuro e Black. Os valores RC_SRC_* espelham os contadores de fonte.
+float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P,
+                                 out uint outSource) {
     const uint giHitFlags = (uint)GIDistParams.w;
-    const bool termOff    = (giHitFlags & 4u) != 0u;
-    float volW = termOff ? 0.0f
-                         : DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
+
+    // Bit 3: irradiancia hemisferica integrada no CPU a partir da atmosfera. Ela ja esta na
+    // unidade esperada por PT_ComposeIndirect, portanto nao usa SkyIntensity nem amostra a LUT
+    // direcional como se fosse uma integral difusa.
+    if ((giHitFlags & 8u) != 0u) {
+        const float hemi = saturate(S.ShadingN.y * 0.5f + 0.5f);
+        outSource = RC_SRC_ENVIRONMENT;
+        return lerp(P.EnvironmentGround, P.EnvironmentSky, hemi);
+    }
+
+    // 2o bounce com o gather completo — Chebyshev, bias, relocacao, cascatas e skip de sonda.
+    // O bit 2 fecha os taps tanto para o gate de medicao quanto quando DDGI nao e o fallback.
+    const bool termOff = (giHitFlags & 4u) != 0u;
+    const float volW = termOff ? 0.0f
+        : DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
     float3 indirect = float3(0.0f, 0.0f, 0.0f);
     if (volW > 0.0f) {
-        // Tiles por linha (empacotamento 2D; ver DDGI_TileOrigin) derivado do par
-        // (largura, tile) do atlas de distancia, que ja chega aqui pelo contrato de NOME do
-        // GIDistParams — os cinco shaders que incluem este arquivo o declaram, entao nao ha
-        // campo novo a plumbar nem estado duplicado a dessincronizar.
+        const float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
         const int tilesPerRow = DDGI_TilesPerRow(GIDistParams.y, (int)GIDistParams.x);
-        // Wrapper com selecao e blend de cascata. O bias NAO entra pronto — ver a nota no
-        // wrapper: ele escala com o espacamento e cada cascata quer o seu.
-        //
-        // O fallback deste caller e PRETO, e nao ambiente hemisferico: nao existe cor de ambiente
-        // no cbuffer de um passe de RT. Por isso o volW continua aqui fora, e o wrapper devolve
-        // so a irradiancia do DDGI.
         indirect = SampleDDGIIrradianceChebCascaded(
             IrradAtlas, GIDistAtlas, LinearClamp, S.Pos, S.ShadingN, -rayDir,
             GICascadeGridMinSpacing, GICascadeScrollOffset, (int)GICascadeParams.x, P.Count,
@@ -423,23 +407,13 @@ float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P
             GIBiasParams.x, GIBiasParams.y);
         if (volW < 1.0f) indirect *= volW;
     }
+    outSource = (volW > 0.0f) ? RC_SRC_DDGI : RC_SRC_ZERO;
     return indirect;
 }
 
-// Overload que devolve TAMBEM quem respondeu. Existe para a telemetria de fonte da Fase 5 poder
-// separar "o volume cobriu este ponto" de "nao havia volume e o indireto foi zero explicito" —
-// duas coisas que a radiancia devolvida nao distingue (um DDGI legitimamente escuro tambem sai
-// preto). `volW` e o unico lugar onde essa diferenca existe, e ela morria dentro da funcao.
-//
-// Sem duplicar corpo: quem responde e o mesmo bloco de cima. `termOff` conta como NAO respondido,
-// e corretamente — o gate de medicao existe justamente para tirar o DDGI do terminal.
-float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P,
-                                 out bool outDDGIAnswered) {
-    const uint giHitFlags = (uint)GIDistParams.w;
-    const bool termOff    = (giHitFlags & 4u) != 0u;
-    outDDGIAnswered = !termOff &&
-                      DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z) > 0.0f;
-    return PT_SampleIndirectFallback(S, rayDir, P);
+float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P) {
+    uint ignoredSource;
+    return PT_SampleIndirectFallback(S, rayDir, P, ignoredSource);
 }
 
 // O atlas fornece irradiancia difusa, nao uma distribuicao direcional que permita integrar
