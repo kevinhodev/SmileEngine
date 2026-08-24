@@ -39,7 +39,7 @@ namespace Smile {
         // Roda o upscaler: le Color/Depth/Velocity (que o CHAMADOR deve ter posto em
         // NON_PIXEL_SHADER_RESOURCE = COMPUTE_READ) e escreve na textura de output, que e
         // gerenciada aqui (UAV durante o dispatch, PIXEL_SHADER_RESOURCE no fim p/ o post chain).
-        void Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) override;
+        bool Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) override;
 
         ID3D12Resource* OutputResource() const override; // cor reconstruida (display-res, em PIXEL_SHADER_RESOURCE)
         u32             OutputSRVSlot() const override;   // slot no heap da engine p/ o post chain ler

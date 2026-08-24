@@ -159,6 +159,17 @@ namespace Smile {
         RT0.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
         RT0.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
         RT0.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        Blend.IndependentBlendEnable = TRUE;
+        auto& RT1                 = Blend.RenderTarget[1];
+        RT1.BlendEnable           = TRUE;
+        RT1.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+        RT1.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+        RT1.BlendOp               = D3D12_BLEND_OP_ADD;
+        RT1.SrcBlendAlpha         = D3D12_BLEND_ONE;
+        RT1.DestBlendAlpha        = D3D12_BLEND_ZERO;
+        RT1.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+        RT1.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED |
+                                    D3D12_COLOR_WRITE_ENABLE_GREEN;
 
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable   = FALSE; // soft-depth manual no PS (depth vem como SRV)
@@ -174,8 +185,9 @@ namespace Smile {
         PSODesc.DepthStencilState     = Depth;
         PSODesc.InputLayout           = { nullptr, 0 };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        PSODesc.NumRenderTargets      = 1;
+        PSODesc.NumRenderTargets      = 2;
         PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR scene color
+        PSODesc.RTVFormats[1]         = DXGI_FORMAT_R16G16_FLOAT; // velocity UV da chuva
         PSODesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
         PSODesc.SampleDesc            = { 1, 0 };
 
@@ -204,6 +216,17 @@ namespace Smile {
         RT0.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
         RT0.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
         RT0.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        Blend.IndependentBlendEnable = TRUE;
+        auto& RT1                 = Blend.RenderTarget[1];
+        RT1.BlendEnable           = TRUE;
+        RT1.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+        RT1.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+        RT1.BlendOp               = D3D12_BLEND_OP_ADD;
+        RT1.SrcBlendAlpha         = D3D12_BLEND_ONE;
+        RT1.DestBlendAlpha        = D3D12_BLEND_ZERO;
+        RT1.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+        RT1.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED |
+                                    D3D12_COLOR_WRITE_ENABLE_GREEN;
 
         D3D12_DEPTH_STENCIL_DESC Depth{};
         Depth.DepthEnable   = FALSE;
@@ -219,8 +242,9 @@ namespace Smile {
         PSODesc.DepthStencilState     = Depth;
         PSODesc.InputLayout           = { nullptr, 0 };
         PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        PSODesc.NumRenderTargets      = 1;
+        PSODesc.NumRenderTargets      = 2;
         PSODesc.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR scene color
+        PSODesc.RTVFormats[1]         = DXGI_FORMAT_R16G16_FLOAT; // velocity UV da chuva
         PSODesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
         PSODesc.SampleDesc            = { 1, 0 };
 
@@ -279,8 +303,10 @@ namespace Smile {
     }
 
     void FRainWetness::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProjFull,
-                                      const Mat44& _ViewProjFull, const Vec3& _CameraWorldPos,
-                                      f32 _TimeSec, const FWeather& _Weather,
+                                      const Mat44& _ViewProjFull, const Mat44& _ViewProjNoJitter,
+                                      const Mat44& _PrevViewProj, const Vec3& _CameraWorldPos,
+                                      const Vec3& _PrevCameraWorldPos, f32 _TimeSec,
+                                      f32 _PrevTimeSec, const FWeather& _Weather,
                                       const Vec3& _KeyDir, const Vec3& _KeyColorTimesInt,
                                       const Vec3& _SkyAmbient) {
         FrameSlot = _FrameSlot;
@@ -320,6 +346,10 @@ namespace Smile {
         c.KeyLightColor  = { _KeyColorTimesInt.X, _KeyColorTimesInt.Y, _KeyColorTimesInt.Z, 0.0f };
         c.SkyAmbientRain = { _SkyAmbient.X, _SkyAmbient.Y, _SkyAmbient.Z, 0.0f };
         c.RainViewProj   = _ViewProjFull;
+        c.RainViewProjNoJitter = _ViewProjNoJitter;
+        c.PrevRainViewProj = _PrevViewProj;
+        c.PrevCameraWorldPos = { _PrevCameraWorldPos.X, _PrevCameraWorldPos.Y,
+                                 _PrevCameraWorldPos.Z, _PrevTimeSec };
         c.RainParticleParams = { 12.0f, 24.0f, 0.0f, static_cast<f32>(ParticleCount) };
 
         std::memcpy(MappedBase + static_cast<size_t>(FrameSlot) * sizeof(RainWetnessConstants),

@@ -181,25 +181,29 @@ namespace Smile {
         OutY = Impl::Halton(Idx, 3) - 0.5f;
     }
 
-    void FDlssRRPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
+    bool FDlssRRPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
         // RR exige, alem de cor/depth/vel, os 4 guides. Sem qualquer um, aborta sem tocar o output.
         if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity ||
             !In.DiffuseAlbedo || !In.SpecularAlbedo || !In.NormalRoughness || !In.SpecHitDist) {
             LogError("DLSS-RR: dispatch sem cor/depth/vel/guides — pulado");
-            return;
+            return false;
         }
 
         TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        const auto RestoreOutput = [&]() {
+            TransitionResource(Cmd, P->Output.Get(), P->OutputState,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        };
 
         auto* CmdBuf = reinterpret_cast<sl::CommandBuffer*>(Cmd);
 
         sl::FrameToken* Frame = nullptr;
         if (slGetNewFrameToken(Frame, nullptr) != sl::Result::eOk || !Frame) {
             LogError("DLSS-RR: slGetNewFrameToken falhou");
-            TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            return;
+            RestoreOutput();
+            return false;
         }
 
         // --- Common Constants (matrizes row-major SEM jitter; iguais ao DLSS-SR) ---
@@ -228,8 +232,17 @@ namespace Smile {
         C.depthInverted        = sl::Boolean::eTrue;   // engine usa reverse-Z
         C.cameraMotionIncluded = sl::Boolean::eTrue;
         C.motionVectors3D      = sl::Boolean::eFalse;
+        C.orthographicProjection = sl::Boolean::eFalse;
+        C.motionVectorsDilated = sl::Boolean::eFalse;
+        C.motionVectorsJittered = sl::Boolean::eFalse;
         C.reset            = (In.Reset || P->FirstDispatch) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-        slSetConstants(C, *Frame, P->Viewport);
+        sl::Result Rc = slSetConstants(C, *Frame, P->Viewport);
+        if (Rc != sl::Result::eOk) {
+            LogError("DLSS-RR: slSetConstants falhou (codigo " +
+                     std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // --- RR Options (DLSSDOptions, nao DLSSOptions) ---
         sl::DLSSDOptions Opt{};
@@ -241,14 +254,21 @@ namespace Smile {
         // specHitDist -> reflection MV interno; RR precisa das matrizes world<->view.
         Opt.worldToCameraView   = ToSL(In.WorldToView);
         Opt.cameraViewToWorld   = ToSL(In.WorldToView.Inverse());
-        // Preset E = transformer mais recente no Streamline 2.12.
+        // Preset E foi escolhido por A/B na cena Bistro: o Default do runtime 310.7 preserva
+        // ruido correlacionado do ReSTIR GI quase como textura, enquanto E reconstrui melhor o
+        // sinal cru desta engine. Presets sao uma escolha de IQ por aplicacao, conforme o guide.
         Opt.dlaaPreset             = sl::DLSSDPreset::ePresetE;
         Opt.qualityPreset          = sl::DLSSDPreset::ePresetE;
         Opt.balancedPreset         = sl::DLSSDPreset::ePresetE;
         Opt.performancePreset      = sl::DLSSDPreset::ePresetE;
         Opt.ultraPerformancePreset = sl::DLSSDPreset::ePresetE;
-        if (slDLSSDSetOptions(P->Viewport, Opt) != sl::Result::eOk)
-            LogError("DLSS-RR: slDLSSDSetOptions falhou");
+        Rc = slDLSSDSetOptions(P->Viewport, Opt);
+        if (Rc != sl::Result::eOk) {
+            LogError("DLSS-RR: slDLSSDSetOptions falhou (codigo " +
+                     std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // Sanidade da 1a frame (a feature NGX e criada neste evaluate): o plugin cria com a res OTIMA
         // do modo e usa a NOSSA extent como render subrect. Se a render res passar do otimo, o subrect
@@ -290,23 +310,34 @@ namespace Smile {
             sl::ResourceTag(&SpecHitRes, sl::kBufferTypeSpecularHitDistance,   sl::ResourceLifecycle::eValidUntilEvaluate, &RenderExtent),
             sl::ResourceTag(&OutputRes,  sl::kBufferTypeScalingOutputColor,    sl::ResourceLifecycle::eValidUntilEvaluate, &OutputExtent),
         };
-        slSetTagForFrame(*Frame, P->Viewport, Tags, static_cast<uint32_t>(std::size(Tags)), CmdBuf);
+        Rc = slSetTagForFrame(*Frame, P->Viewport, Tags,
+                              static_cast<uint32_t>(std::size(Tags)), CmdBuf);
+        if (Rc != sl::Result::eOk) {
+            LogError("DLSS-RR: slSetTagForFrame falhou (codigo " +
+                     std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // --- Evaluate ---
         const sl::BaseStructure* Inputs[] = { &P->Viewport };
-        sl::Result Rc = slEvaluateFeature(sl::kFeatureDLSS_RR, *Frame, Inputs,
-                                          static_cast<uint32_t>(std::size(Inputs)), CmdBuf);
-        if (Rc != sl::Result::eOk)
+        Rc = slEvaluateFeature(sl::kFeatureDLSS_RR, *Frame, Inputs,
+                               static_cast<uint32_t>(std::size(Inputs)), CmdBuf);
+        if (Rc != sl::Result::eOk) {
             LogError("DLSS-RR: slEvaluateFeature falhou (codigo " + std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
-        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        RestoreOutput();
         P->FirstDispatch = false;
+        return true;
     }
 
     ID3D12Resource* FDlssRRPass::OutputResource() const { return P ? P->Output.Get() : nullptr; }
     u32             FDlssRRPass::OutputSRVSlot() const { return P ? P->OutputSRV : kInvalidSlot; }
-    f32 FDlssRRPass::RenderRatioForQuality(int Quality) const {
+    void FDlssRRPass::RenderSizeForQuality(int Quality, u32 DisplayWidth, u32 DisplayHeight,
+                                           u32& OutWidth, u32& OutHeight) const {
         // Razoes NOMINAIS do DLSS — fallback. Nao sao as razoes reais: o Balanced do NGX e 58,0%, e
         // 1/1.7 = 58,8%. Essa diferenca importa porque o plugin cria a feature NGX com a resolucao
         // OTIMA do driver (dlss_dEntry.cpp:471) e passa a extent que tagamos como
@@ -315,22 +346,37 @@ namespace Smile {
         // ao SDK (§3.0 do ProgrammingGuideDLSS_RR.md) e so caimos no nominal sem SL/output conhecido.
         static const f32 kNominal[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
         const int Q = Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality);
-        if (!P || !P->Supported || P->SW == 0 || P->SH == 0) return kNominal[Q];
+        const auto Fallback = [&]() {
+            OutWidth  = static_cast<u32>(static_cast<f32>(DisplayWidth) * kNominal[Q] + 0.5f);
+            OutHeight = static_cast<u32>(static_cast<f32>(DisplayHeight) * kNominal[Q] + 0.5f);
+        };
+        if (!P || !P->Supported || DisplayWidth == 0 || DisplayHeight == 0) {
+            Fallback();
+            return;
+        }
 
         sl::DLSSDOptions Opt{};
         Opt.mode         = ModeForQuality(Q);
-        Opt.outputWidth  = P->SW;
-        Opt.outputHeight = P->SH;
+        Opt.outputWidth  = DisplayWidth;
+        Opt.outputHeight = DisplayHeight;
         sl::DLSSDOptimalSettings Settings{};
         if (slDLSSDGetOptimalSettings(Opt, Settings) != sl::Result::eOk ||
-            Settings.optimalRenderWidth == 0 || Settings.optimalRenderHeight == 0)
-            return kNominal[Q];
+            Settings.optimalRenderWidth == 0 || Settings.optimalRenderHeight == 0) {
+            Fallback();
+            return;
+        }
+        OutWidth  = Settings.optimalRenderWidth;
+        OutHeight = Settings.optimalRenderHeight;
+    }
 
-        // O Renderer tem UMA escala escalar p/ os dois eixos (RenderScale), entao pega a MENOR das
-        // duas razoes: garante que nem a largura nem a altura derivadas passem do otimo — o
-        // arredondamento do RenderWidth() (+0.5) no pior caso empata com o otimo, nunca o excede.
-        const f32 RatioW = static_cast<f32>(Settings.optimalRenderWidth)  / static_cast<f32>(P->SW);
-        const f32 RatioH = static_cast<f32>(Settings.optimalRenderHeight) / static_cast<f32>(P->SH);
+    f32 FDlssRRPass::RenderRatioForQuality(int Quality) const {
+        static const f32 kNominal[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
+        const int Q = Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality);
+        if (!P || P->SW == 0 || P->SH == 0) return kNominal[Q];
+        u32 W = 0, H = 0;
+        RenderSizeForQuality(Q, P->SW, P->SH, W, H);
+        const f32 RatioW = static_cast<f32>(W) / static_cast<f32>(P->SW);
+        const f32 RatioH = static_cast<f32>(H) / static_cast<f32>(P->SH);
         return RatioW < RatioH ? RatioW : RatioH;
     }
     u32 FDlssRRPass::RenderW()  const { return P ? P->RW : 0; }
@@ -347,10 +393,13 @@ namespace Smile {
     bool FDlssRRPass::IsInitialized() const { return false; }
     bool FDlssRRPass::Available()     const { return false; }
     void FDlssRRPass::GetJitter(u32, f32& OutX, f32& OutY) const { OutX = OutY = 0.0f; }
-    void FDlssRRPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) {}
+    bool FDlssRRPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) { return false; }
     ID3D12Resource* FDlssRRPass::OutputResource() const { return nullptr; }
     u32             FDlssRRPass::OutputSRVSlot() const { return 0xFFFFFFFFu; }
     f32 FDlssRRPass::RenderRatioForQuality(int) const { return 1.0f; }
+    void FDlssRRPass::RenderSizeForQuality(int, u32 W, u32 H, u32& OutW, u32& OutH) const {
+        OutW = W; OutH = H;
+    }
     u32 FDlssRRPass::RenderW()  const { return 0; }
     u32 FDlssRRPass::RenderH()  const { return 0; }
     u32 FDlssRRPass::DisplayW() const { return 0; }

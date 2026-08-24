@@ -63,10 +63,12 @@ namespace Smile {
     }
 
     u32 Renderer::RenderWidth() const {
+        if (UpscalerRenderWidth != 0) return UpscalerRenderWidth;
         return static_cast<u32>(Backend->SwapChain.GetWidth() * RenderScale + 0.5f);
     }
 
     u32 Renderer::RenderHeight() const {
+        if (UpscalerRenderHeight != 0) return UpscalerRenderHeight;
         return static_cast<u32>(Backend->SwapChain.GetHeight() * RenderScale + 0.5f);
     }
 
@@ -398,6 +400,18 @@ namespace Smile {
         // Um resize reinicia historicos e invalida o aquecimento da captura atual.
         CaptureState->Session.Cancel("a janela foi redimensionada durante o aquecimento");
         Backend->Resize(_Width, _Height);
+        // Recalcula o extent OTIMO contra o novo display antes de recriar qualquer alvo. Manter o
+        // W/H do display anterior por um frame e so depois aplicar a razao viola o contrato do RR.
+        if (IUpscaler* Pass = ActiveUpscaler()) {
+            u32 RW = 0, RH = 0;
+            Pass->RenderSizeForQuality(UpscalerQuality, _Width, _Height, RW, RH);
+            if (RW > 0 && RH > 0) {
+                UpscalerRenderWidth  = RW;
+                UpscalerRenderHeight = RH;
+                RenderScale = std::min(static_cast<f32>(RW) / static_cast<f32>(_Width),
+                                       static_cast<f32>(RH) / static_cast<f32>(_Height));
+            }
+        }
         RecreateInternalTargets();
     }
 
@@ -413,12 +427,31 @@ namespace Smile {
 
     void Renderer::ApplyRenderScale(f32 _Scale) {
         _Scale = _Scale < 0.33f ? 0.33f : (_Scale > 2.0f ? 2.0f : _Scale);
-        if (_Scale == RenderScale) return;
+        if (_Scale == RenderScale && UpscalerRenderWidth == 0 && UpscalerRenderHeight == 0) return;
         // Recriar os alvos invalida o aquecimento, exceto durante a aplicacao do proprio preset.
         if (!CaptureState->SetupGuard)
             CaptureState->Session.Cancel("a escala de renderizacao mudou durante o aquecimento");
         RenderScale = _Scale;
+        UpscalerRenderWidth = UpscalerRenderHeight = 0;
         if (!Initialized || Backend->SwapChain.GetWidth() == 0) return;
+        Backend->DirectQueue.Flush();
+        RecreateInternalTargets();
+    }
+
+    void Renderer::ApplyUpscalerRenderSize(u32 _Width, u32 _Height) {
+        const u32 OutputW = Backend->SwapChain.GetWidth();
+        const u32 OutputH = Backend->SwapChain.GetHeight();
+        if (_Width == 0 || _Height == 0 || OutputW == 0 || OutputH == 0) return;
+        if (RenderWidth() == _Width && RenderHeight() == _Height &&
+            UpscalerRenderWidth == _Width && UpscalerRenderHeight == _Height) return;
+        if (!CaptureState->SetupGuard)
+            CaptureState->Session.Cancel("a resolucao de entrada do upscaler mudou durante o aquecimento");
+
+        UpscalerRenderWidth  = _Width;
+        UpscalerRenderHeight = _Height;
+        RenderScale = std::min(static_cast<f32>(_Width) / static_cast<f32>(OutputW),
+                               static_cast<f32>(_Height) / static_cast<f32>(OutputH));
+        if (!Initialized) return;
         Backend->DirectQueue.Flush();
         RecreateInternalTargets();
     }

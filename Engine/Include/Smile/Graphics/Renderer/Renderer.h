@@ -707,7 +707,9 @@ namespace Smile {
 
         bool UseFrustumCulling = true;
         bool UseDepthPrepass   = false;
-        f32  RenderScale       = 1.0f; // SSAA: cena em swapchain*RenderScale; backbuffer nativo
+        f32  RenderScale       = 1.0f; // readback/SSAA; DLSS pode usar W/H inteiros nao uniformes
+        u32  UpscalerRenderWidth  = 0; // 0 = derivar de RenderScale
+        u32  UpscalerRenderHeight = 0;
         u32  LastVisibleCount  = 0;
 
         FPostProcessor           PostProcessor;
@@ -738,9 +740,10 @@ namespace Smile {
 
         // Upscaler pronto para dispatch; nullptr ativa o caminho nativo/TAA.
         IUpscaler* ActiveUpscaler();
-        // Aplica a razao render/display do modo selecionado.
+        // Aplica as dimensoes inteiras do modo selecionado (DLSS/RR exigem o optimal extent exato).
         void ApplyUpscalerScale();
         void ApplyRenderScale(f32 V);   // aplica de fato (clamp + flush + RecreateInternalTargets)
+        void ApplyUpscalerRenderSize(u32 W, u32 H);
 
         FFlickerHeatmap          Flicker;
         u32                      FlickerMode         = 0;      

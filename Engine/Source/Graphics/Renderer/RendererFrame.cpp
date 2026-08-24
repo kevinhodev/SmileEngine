@@ -38,11 +38,15 @@ namespace Smile {
     }
 
     void Renderer::ApplyUpscalerScale() {
-        f32 Ratio = 1.0f;
-        if      (Denoiser == EDenoiser::DLSS_RR) Ratio = DlssRR.RenderRatioForQuality(UpscalerQuality);
-        else if (Upscaler == EUpscaler::FSR)     Ratio = Fsr.RenderRatioForQuality(UpscalerQuality);
-        else if (Upscaler == EUpscaler::DLSS)    Ratio = Dlss.RenderRatioForQuality(UpscalerQuality);
-        ApplyRenderScale(Ratio);
+        IUpscaler* Pass = nullptr;
+        if      (Denoiser == EDenoiser::DLSS_RR) Pass = &DlssRR;
+        else if (Upscaler == EUpscaler::FSR)     Pass = &Fsr;
+        else if (Upscaler == EUpscaler::DLSS)    Pass = &Dlss;
+        if (!Pass) { ApplyRenderScale(1.0f); return; }
+
+        u32 Width = 0, Height = 0;
+        Pass->RenderSizeForQuality(UpscalerQuality, OutputWidth(), OutputHeight(), Width, Height);
+        ApplyUpscalerRenderSize(Width, Height);
     }
 
     namespace {
@@ -173,8 +177,11 @@ namespace Smile {
         V.InvViewProjFull  = V.ViewProjection.Inverse();
         V.InvViewProjUnjit = V.ViewProjUnjittered.Inverse();
 
+        // Compensa apenas a razao entre a resolucao de render e a de apresentacao. O antigo
+        // "- 1" puxava uma mip inteira adicional (Quality ~= -1.59), tornando detalhe subpixel
+        // instavel sob o jitter do DLSS/RR.
         V.MipBias = (_Modes.UpscaleActive && RenderWidth() < OutputWidth())
-            ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth())) - 1.0f
+            ? std::log2(static_cast<f32>(RenderWidth()) / static_cast<f32>(OutputWidth()))
             : 0.0f;
 
         {
@@ -414,8 +421,8 @@ namespace Smile {
 
     void Renderer::PushRayTracingFrameState(const FFrameModes& _Modes,
                                             const FEffectiveIndirectPolicy& _Policy) {
-        // DLSS Ray Reconstruction: denoiser neural que substitui NRD + SR. Precisa do RR inicializado
-        // e dos guides prontos; o eval acontece no bloco de upscale (ActiveUpscaler() == &DlssRR).
+        // DLSS Ray Reconstruction: resolve neural + SR. Precisa do RR inicializado e dos guides;
+        // nenhum denoiser temporal externo pode preceder o eval.
         // Instrumentacao de timer: um gate so, empurrado todo frame. kInvalidSlot manda o passe
         // de volta p/ a PSO normal — desligado nao custa uma instrucao (ver FShaderTimer).
         TimerCaptureActive = RtShaderTimer && FShaderTimer::IsAvailable() &&

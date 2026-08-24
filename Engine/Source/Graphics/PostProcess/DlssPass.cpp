@@ -6,6 +6,7 @@
 #if SMILE_SL_ENABLED
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <string>
 #include <sl.h>
 #include <sl_consts.h>
@@ -146,6 +147,9 @@ namespace Smile {
     bool FDlssPass::Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                u32 RenderW, u32 RenderH, u32 DisplayW, u32 DisplayH) {
         if (!Device || RenderW == 0 || RenderH == 0 || DisplayW == 0 || DisplayH == 0) return false;
+        // Mudanca de modo/render-res precisa invalidar a feature NGX anterior; do contrario o
+        // plugin pode manter dimensoes internas antigas e apenas trocar o subrect tagado.
+        if (P->Created) slFreeResources(sl::kFeatureDLSS, P->Viewport);
         P->Destroy();
 
         // Suporte: SL ja foi inicializado pelo Renderer (slInit + slSetD3DDevice). Checa a feature p/
@@ -220,11 +224,17 @@ namespace Smile {
         OutY = Impl::Halton(Idx, 3) - 0.5f;
     }
 
-    void FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& _UpscaleParams) {
-        if (!P || !P->Created || !Cmd || !_UpscaleParams.Color || !_UpscaleParams.Depth || !_UpscaleParams.Velocity) return;
+    bool FDlssPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& _UpscaleParams) {
+        if (!P || !P->Created || !Cmd || !_UpscaleParams.Color || !_UpscaleParams.Depth ||
+            !_UpscaleParams.Velocity) return false;
 
         TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        const auto RestoreOutput = [&]() {
+            TransitionResource(Cmd, P->Output.Get(), P->OutputState,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        };
 
         auto* CmdBuf = reinterpret_cast<sl::CommandBuffer*>(Cmd);
 
@@ -232,9 +242,8 @@ namespace Smile {
         const uint32_t  FrameIdx = _UpscaleParams.Reset ? 0u : 0u; // token por frame (indice opcional)
         if (slGetNewFrameToken(Frame, nullptr) != sl::Result::eOk || !Frame) {
             LogError("DLSS: slGetNewFrameToken falhou");
-            TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            P->OutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            return;
+            RestoreOutput();
+            return false;
         }
         (void)FrameIdx;
 
@@ -260,8 +269,17 @@ namespace Smile {
         C.depthInverted        = sl::Boolean::eTrue;   // engine usa reverse-Z
         C.cameraMotionIncluded = sl::Boolean::eTrue;
         C.motionVectors3D      = sl::Boolean::eFalse;
+        C.orthographicProjection = sl::Boolean::eFalse;
+        C.motionVectorsDilated = sl::Boolean::eFalse;
+        C.motionVectorsJittered = sl::Boolean::eFalse;
         C.reset            = (_UpscaleParams.Reset || P->FirstDispatch) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-        slSetConstants(C, *Frame, P->Viewport);
+        sl::Result Rc = slSetConstants(C, *Frame, P->Viewport);
+        if (Rc != sl::Result::eOk) {
+            LogError("DLSS: slSetConstants falhou (codigo " +
+                     std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // --- Options (modo por qualidade; HDR; auto-exposure como no FSR) ---
         sl::DLSSOptions DLSSOptions{};
@@ -270,7 +288,13 @@ namespace Smile {
         DLSSOptions.outputHeight    = P->SH;
         DLSSOptions.colorBuffersHDR = sl::Boolean::eTrue;
         DLSSOptions.useAutoExposure = sl::Boolean::eTrue;
-        slDLSSSetOptions(P->Viewport, DLSSOptions);
+        Rc = slDLSSSetOptions(P->Viewport, DLSSOptions);
+        if (Rc != sl::Result::eOk) {
+            LogError("DLSS: slDLSSSetOptions falhou (codigo " +
+                     std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // --- Tags (estado ATUAL de cada recurso; o chamador poe cor/depth/vel em COMPUTE_READ) ---
         sl::Resource ColorRes (sl::ResourceType::eTex2d, _UpscaleParams.Color,       static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
@@ -286,30 +310,70 @@ namespace Smile {
             sl::ResourceTag(&MvecRes,   sl::kBufferTypeMotionVectors,      sl::ResourceLifecycle::eValidUntilEvaluate, &RenderExtent),
             sl::ResourceTag(&OutputRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &OutputExtent),
         };
-        slSetTagForFrame(*Frame, P->Viewport, Tags, static_cast<uint32_t>(std::size(Tags)), CmdBuf);
+        Rc = slSetTagForFrame(*Frame, P->Viewport, Tags,
+                              static_cast<uint32_t>(std::size(Tags)), CmdBuf);
+        if (Rc != sl::Result::eOk) {
+            LogError("DLSS: slSetTagForFrame falhou (codigo " +
+                     std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // --- Evaluate ---
         const sl::BaseStructure* Inputs[] = { &P->Viewport };
-        sl::Result Rc = slEvaluateFeature(sl::kFeatureDLSS, *Frame, Inputs,
-                                          static_cast<uint32_t>(std::size(Inputs)), CmdBuf);
-        if (Rc != sl::Result::eOk)
+        Rc = slEvaluateFeature(sl::kFeatureDLSS, *Frame, Inputs,
+                               static_cast<uint32_t>(std::size(Inputs)), CmdBuf);
+        if (Rc != sl::Result::eOk) {
             LogError("DLSS: slEvaluateFeature falhou (codigo " + std::to_string(static_cast<int>(Rc)) + ")");
+            RestoreOutput();
+            return false;
+        }
 
         // eDisableCLStateTracking e default: o SL pode ter mexido no estado do CL. O Renderer rebinda os
         // descriptor heaps antes do post chain (o post chain seta o proprio root sig/PSO).
 
-        TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        RestoreOutput();
         P->FirstDispatch = false;
+        return true;
     }
 
     ID3D12Resource* FDlssPass::OutputResource() const { return P ? P->Output.Get() : nullptr; }
     u32             FDlssPass::OutputSRVSlot() const { return P ? P->OutputSRV : kInvalidSlot; }
+    void FDlssPass::RenderSizeForQuality(int Quality, u32 DisplayWidth, u32 DisplayHeight,
+                                         u32& OutWidth, u32& OutHeight) const {
+        static const f32 kNominal[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
+        const int Q = Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality);
+        const auto Fallback = [&]() {
+            OutWidth  = static_cast<u32>(static_cast<f32>(DisplayWidth) * kNominal[Q] + 0.5f);
+            OutHeight = static_cast<u32>(static_cast<f32>(DisplayHeight) * kNominal[Q] + 0.5f);
+        };
+        if (!P || !P->Supported || DisplayWidth == 0 || DisplayHeight == 0) {
+            Fallback();
+            return;
+        }
+
+        sl::DLSSOptions Opt{};
+        Opt.mode         = ModeForQuality(Q);
+        Opt.outputWidth  = DisplayWidth;
+        Opt.outputHeight = DisplayHeight;
+        sl::DLSSOptimalSettings Settings{};
+        if (slDLSSGetOptimalSettings(Opt, Settings) != sl::Result::eOk ||
+            Settings.optimalRenderWidth == 0 || Settings.optimalRenderHeight == 0) {
+            Fallback();
+            return;
+        }
+        OutWidth  = Settings.optimalRenderWidth;
+        OutHeight = Settings.optimalRenderHeight;
+    }
+
     f32 FDlssPass::RenderRatioForQuality(int Quality) const {
-        // Razoes nominais padrao do DLSS (iguais as do FSR). Se quiser a res otima exata / dynamic-res,
-        // usar slDLSSGetOptimalSettings.
-        static const f32 R[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
-        return R[Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality)];
+        static const f32 kNominal[] = { 1.0f, 1.0f / 1.5f, 1.0f / 1.7f, 1.0f / 2.0f, 1.0f / 3.0f };
+        const int Q = Quality < 0 ? 0 : (Quality > 4 ? 4 : Quality);
+        if (!P || P->SW == 0 || P->SH == 0) return kNominal[Q];
+        u32 W = 0, H = 0;
+        RenderSizeForQuality(Q, P->SW, P->SH, W, H);
+        return std::min(static_cast<f32>(W) / static_cast<f32>(P->SW),
+                        static_cast<f32>(H) / static_cast<f32>(P->SH));
     }
     u32 FDlssPass::RenderW()  const { return P ? P->RW : 0; }
     u32 FDlssPass::RenderH()  const { return P ? P->RH : 0; }
@@ -328,10 +392,13 @@ namespace Smile {
     bool FDlssPass::IsInitialized() const { return false; }
     bool FDlssPass::Available()     const { return false; }
     void FDlssPass::GetJitter(u32, f32& OutX, f32& OutY) const { OutX = OutY = 0.0f; }
-    void FDlssPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) {}
+    bool FDlssPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) { return false; }
     ID3D12Resource* FDlssPass::OutputResource() const { return nullptr; }
     u32             FDlssPass::OutputSRVSlot() const { return 0xFFFFFFFFu; }
     f32 FDlssPass::RenderRatioForQuality(int) const { return 1.0f; }
+    void FDlssPass::RenderSizeForQuality(int, u32 W, u32 H, u32& OutW, u32& OutH) const {
+        OutW = W; OutH = H;
+    }
     u32 FDlssPass::RenderW()  const { return 0; }
     u32 FDlssPass::RenderH()  const { return 0; }
     u32 FDlssPass::DisplayW() const { return 0; }

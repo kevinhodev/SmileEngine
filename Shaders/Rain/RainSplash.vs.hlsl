@@ -13,6 +13,8 @@ struct VSOut {
     float3 color : TEXCOORD1;
     float  alpha : TEXCOORD2;
     float  life  : TEXCOORD3; // 0 = acabou de bater, 1 = fim do splash
+    float4 curClip  : TEXCOORD4;
+    float4 prevClip : TEXCOORD5;
 };
 
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
@@ -52,14 +54,30 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const float cv = (k & 2u) ? 1.0f : -1.0f;
     float3 wp = hitPos + right * (cu * w) + float3(0.0f, 1.0f, 0.0f) * ((cv * 0.5f + 0.5f) * h);
 
+    // O ponto de impacto e world-fixed; entre frames a coroa apenas expande. Reconstituir
+    // a geometria anterior da propria animacao fornece ao RR o movimento radial do splash.
+    const float dt = max(CameraWorldPos.w - PrevCameraWorldPos.w, 0.0f);
+    float prevLife = life - dt / 0.22f;
+    if (prevLife < 0.0f) prevLife = life; // splash acabou de nascer: sem historico valido
+    float3 prevToCam = PrevCameraWorldPos.xyz - hitPos;
+    float  prevDist  = max(length(prevToCam), 1e-3f);
+    float3 prevRight = normalize(cross(float3(0.0f, 1.0f, 0.0f),
+                                       prevToCam / prevDist) + 1e-5f);
+    const float prevW = 0.025f + prevLife * 0.075f;
+    const float prevH = 0.030f + prevLife * 0.025f;
+    float3 prevWp = hitPos + prevRight * (cu * prevW) + float3(0.0f, 1.0f, 0.0f) *
+                    ((cv * 0.5f + 0.5f) * prevH);
+
     // fades: vida valida, borda do box, perto demais; splash some mais cedo que a gota (30 m)
     float edge = saturate((boxR - length(p.xz - CameraWorldPos.xz)) / (boxR * 0.15f));
     float distF = saturate(1.0f - dist / 30.0f);
     float a = (life >= 0.0f ? 1.0f : 0.0f) * 0.55f * edge * distF *
               saturate((dist - 0.30f) * 2.0f);
-    if (a <= 0.001f) { wp = hitPos; life = 0.0f; } // quad degenerado
+    if (a <= 0.001f) { wp = hitPos; prevWp = hitPos; life = 0.0f; } // quad degenerado
 
     o.pos = mul(float4(wp, 1.0f), RainViewProj);
+    o.curClip  = mul(float4(wp, 1.0f), RainViewProjNoJitter);
+    o.prevClip = mul(float4(prevWp, 1.0f), PrevRainViewProj);
     o.uv  = float2(cu * 0.5f + 0.5f, cv * 0.5f + 0.5f);
 
     // splash pega mais luz que a gota (agua espumada espalha em todas as direcoes)

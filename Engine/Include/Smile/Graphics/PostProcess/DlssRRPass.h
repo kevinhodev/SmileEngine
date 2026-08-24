@@ -19,7 +19,7 @@ namespace Smile {
     //
     // Implementa IUpscaler p/ reusar todo o plumbing "output display-res -> post chain" que o FSR/DLSS-SR ja
     // usam. A diferenca fica no Renderer: quando o RR e o denoiser ativo, o GI/reflexao entram RUIDOSOS na
-    // cor e o NRD e pulado (ver Renderer EDenoiser::DLSS_RR). Os guides chegam pelos campos extras de
+    // cor e nenhum denoiser temporal externo precede o evaluate. Os guides chegam pelos campos extras de
     // FUpscaleParams (DiffuseAlbedo/SpecularAlbedo/NormalRoughness/SpecHitDist + WorldToView).
     //
     // slInit (carregando kFeatureDLSS_RR) / slSetD3DDevice / slShutdown sao do Renderer via o FDlssPass
@@ -47,13 +47,15 @@ namespace Smile {
         // slSetTagForFrame (cor ruidosa + depth + mvec + guides) + slEvaluateFeature(kFeatureDLSS_RR).
         // O SL pode mexer no estado do CL (eDisableCLStateTracking) — o Renderer rebinda os heaps depois.
         // Le os guides de FUpscaleParams (P.DiffuseAlbedo/SpecularAlbedo/NormalRoughness/SpecHitDist).
-        void Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) override;
+        bool Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) override;
 
         ID3D12Resource* OutputResource() const override;
         u32             OutputSRVSlot() const override;
 
         // Razoes nominais padrao do DLSS (iguais as do SR): 1.0 / 1.5 / 1.7 / 2.0 / 3.0. RR nao suporta DRS.
         f32 RenderRatioForQuality(int Quality) const override;
+        void RenderSizeForQuality(int Quality, u32 DisplayWidth, u32 DisplayHeight,
+                                  u32& OutWidth, u32& OutHeight) const override;
 
         u32 RenderW()  const override;
         u32 RenderH()  const override;

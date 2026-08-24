@@ -20,6 +20,9 @@ cbuffer RainCB : register(b0) {
     float4 KeyLightColor;           // F3: rgb = cor x intensidade da key light
     float4 SkyAmbientRain;          // F3: rgb = ambient fisico do ceu
     row_major float4x4 RainViewProj; // F5: view-proj FULL jitterada (particulas projetam mundo)
+    row_major float4x4 RainViewProjNoJitter;
+    row_major float4x4 PrevRainViewProj;
+    float4 PrevCameraWorldPos;       // xyz = camera anterior, w = tempo anterior
     float4 RainParticleParams;      // F5: x = raio XZ do box (m), y = altura (m), z = -,
                                     //     w = num de particulas
 };
@@ -85,7 +88,8 @@ float RainWrapAxis(float h, float cam, float span) {
 // Posicao procedural da gota `iid` no instante corrente (hash + tempo, box com wrap na
 // camera). A MESMA conta alimenta a gota (RainParticles.vs) e o splash dela
 // (RainSplash.vs) — o splash toca na fracao "subterranea" do ciclo da queda.
-float3 RainParticlePos(uint iid, out float speed, out float2 h1out) {
+float3 RainParticlePosAt(uint iid, float3 cameraPos, float timeSec,
+                         out float speed, out float2 h1out) {
     const float2 h0 = Hash22(float2((float)iid * 0.7219f, 17.31f));
     const float2 h1 = Hash22(float2((float)iid * 0.3471f, 91.17f));
     h1out = h1;
@@ -95,12 +99,16 @@ float3 RainParticlePos(uint iid, out float speed, out float2 h1out) {
     speed = CurtainParams.y * (0.85f + h1.x * 0.5f);
 
     float3 p;
-    p.x = RainWrapAxis(h0.x, CameraWorldPos.x, boxR * 2.0f);
-    p.z = RainWrapAxis(h0.y, CameraWorldPos.z, boxR * 2.0f);
-    float m = fmod(h1.y * boxH - CameraWorldPos.y + CameraWorldPos.w * speed, boxH);
+    p.x = RainWrapAxis(h0.x, cameraPos.x, boxR * 2.0f);
+    p.z = RainWrapAxis(h0.y, cameraPos.z, boxR * 2.0f);
+    float m = fmod(h1.y * boxH - cameraPos.y + timeSec * speed, boxH);
     if (m < 0.0f) m += boxH;
-    p.y = CameraWorldPos.y + (boxH - m) - boxH * 0.35f;
+    p.y = cameraPos.y + (boxH - m) - boxH * 0.35f;
     return p;
+}
+
+float3 RainParticlePos(uint iid, out float speed, out float2 h1out) {
+    return RainParticlePosAt(iid, CameraWorldPos.xyz, CameraWorldPos.w, speed, h1out);
 }
 
 // Depth do mapa filtrado bilinear — p/ comparacoes de altura RELATIVAS (drenagem), onde

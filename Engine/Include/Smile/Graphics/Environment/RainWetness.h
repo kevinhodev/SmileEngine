@@ -31,6 +31,9 @@ namespace Smile {
         Vec4  SkyAmbientRain;// F3: rgb = ambient fisico do ceu (streaks visiveis de costas
                              //      pra luz e a noite)
         Mat44 RainViewProj;  // F5: view-proj FULL jitterada (VS das particulas projeta mundo)
+        Mat44 RainViewProjNoJitter; // motion: projecao corrente sem jitter
+        Mat44 PrevRainViewProj;     // motion: projecao anterior sem jitter
+        Vec4  PrevCameraWorldPos;   // xyz = camera anterior, w = tempo anterior
         Vec4  RainParticleParams; // F5: x = raio XZ do box (m), y = altura (m),
                                   //     z = -, w = num de particulas
     };
@@ -73,7 +76,9 @@ namespace Smile {
         void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
-                            const Mat44& ViewProjFull, const Vec3& CameraWorldPos, f32 TimeSec,
+                            const Mat44& ViewProjFull, const Mat44& ViewProjNoJitter,
+                            const Mat44& PrevViewProj, const Vec3& CameraWorldPos,
+                            const Vec3& PrevCameraWorldPos, f32 TimeSec, f32 PrevTimeSec,
                             const FWeather& Weather, const Vec3& KeyDir,
                             const Vec3& KeyColorTimesInt, const Vec3& SkyAmbient);
 
@@ -86,7 +91,8 @@ namespace Smile {
         // F3: cortina de gotas (estilo SceneRain da Cry, cilindros conceituais no fullscreen
         // pass — 3 raios com parallax, streaks procedurais, tint da key light, soft-depth e
         // oclusao pelo mapa da F2). Blend premultiplicado por cima do HDR ja com fog; o
-        // caller poe o RTV do HDR e o depth como SRV (mesmo padrao do Fog.Execute).
+        // caller poe os RTVs HDR + velocity e o depth como SRV. O segundo alvo recebe o
+        // movimento alpha-weighted da chuva para os consumidores temporais (TAA/DLSS/RR).
         void ExecuteCurtain(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                             u32 DepthSRVSlot, u32 Width, u32 Height);
 

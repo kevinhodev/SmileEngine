@@ -63,7 +63,10 @@ namespace Smile {
         virtual bool Available() const = 0;   // DLSS: true so em NVIDIA c/ suporte a feature
 
         virtual void GetJitter(u32 FrameIndex, f32& OutX, f32& OutY) const = 0;
-        virtual void Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) = 0;
+        // true somente quando o evaluate terminou e o OutputResource contem o frame atual.
+        // O Renderer usa o retorno para nao apresentar output velho nem consumir o reset temporal
+        // depois de uma falha transitoria do backend/SDK.
+        virtual bool Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) = 0;
 
         virtual ID3D12Resource* OutputResource() const = 0;
         virtual u32             OutputSRVSlot() const = 0;
@@ -71,6 +74,15 @@ namespace Smile {
         // Razao render/display recomendada p/ o modo de qualidade (0=Native..4=UltraPerf).
         // FSR = razoes fixas; DLSS = query do SDK (slDLSSGetOptimalSettings).
         virtual f32 RenderRatioForQuality(int Quality) const = 0;
+
+        // Dimensoes inteiras do dominio de entrada. DLSS/RR sobrescrevem para devolver exatamente
+        // optimalRenderWidth/Height do SDK; a implementacao base preserva os upscalers de razao fixa.
+        virtual void RenderSizeForQuality(int Quality, u32 DisplayWidth, u32 DisplayHeight,
+                                          u32& OutWidth, u32& OutHeight) const {
+            const f32 Ratio = RenderRatioForQuality(Quality);
+            OutWidth  = static_cast<u32>(static_cast<f32>(DisplayWidth) * Ratio + 0.5f);
+            OutHeight = static_cast<u32>(static_cast<f32>(DisplayHeight) * Ratio + 0.5f);
+        }
 
         virtual u32 RenderW()  const = 0;
         virtual u32 RenderH()  const = 0;

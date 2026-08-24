@@ -363,8 +363,8 @@ namespace Smile {
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             FrameState->TAARanLastFrame = true;
         } else if (Modes.UpscaleActive && !RRPoisoned) {
-            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
-            // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
+            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele recebe a cor
+            // ruidosa, denoise e upscale no mesmo evaluate.
             // MESMO predicado do bloco de sinal (Modes.RRMode, ja em escopo): recalcular so pelo Denoiser
             // divergia dele — os guides podiam nao estar prontos e este bloco tentava o eval do RR
             // enquanto o GI/reflexao ja tinham sido configurados como crus.
@@ -434,14 +434,16 @@ namespace Smile {
                 UpParams.WorldToView     = Vw.View;
             }
 
+            bool UpscaleSucceeded = false;
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList,
                                 IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
-                ActiveUp->Dispatch(CommandList, UpParams);
+                UpscaleSucceeded = ActiveUp->Dispatch(CommandList, UpParams);
             }
-            // Marque RR somente depois de um dispatch efetivo.
-            CaptureState->RRRanThisFrame = IsRR;
-            RRResetPending = false;   // reset consumido
+            // O reset e o output so sao consumidos depois de um evaluate completo. Em falha, o
+            // post recebe o HDR render-res deste frame e a proxima tentativa continua resetada.
+            CaptureState->RRRanThisFrame = IsRR && UpscaleSucceeded;
+            if (UpscaleSucceeded) RRResetPending = false;
 
             // Streamline com state tracking manual pode trocar heaps. Passes seguintes definem
             // root signature e PSO proprios, mas dependem deste rebind dos descriptor heaps.
@@ -459,10 +461,13 @@ namespace Smile {
             if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
-            PostInput    = ActiveUp->OutputResource();
-            PostInputSRV = ActiveUp->OutputSRVSlot();
+            if (UpscaleSucceeded) {
+                PostInput    = ActiveUp->OutputResource();
+                PostInputSRV = ActiveUp->OutputSRVSlot();
+            }
             FrameState->TAARanLastFrame = false;
-            RRSkipLogged    = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
+            if (UpscaleSucceeded)
+                RRSkipLogged = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
         } else {
             // Eval pulado por debug na cena: arma o reset p/ o proximo eval real nao reprojetar de
             // um historico interrompido (o RR ficou N frames sem ver a cena).
@@ -632,11 +637,15 @@ namespace Smile {
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
             Backend->DirectProfiler.Begin(CommandList, "Chuva — cortina/gotas");
-            auto RainRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &RainRTV, FALSE, nullptr);
+            const D3D12_CPU_DESCRIPTOR_HANDLE RainRTVs[] = {
+                Targets.HDRRTVHeap.CpuHandle(0), Targets.VelocityRTVHeap.CpuHandle(0)
+            };
+            CommandList->OMSetRenderTargets(2, RainRTVs, FALSE, nullptr);
             if (Weather.GetCurtainAmount() > 0.001f)
                 RainWetness.ExecuteCurtain(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
                                            RenderWidth(), RenderHeight());
@@ -646,6 +655,8 @@ namespace Smile {
 
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
         }
 
@@ -1157,9 +1168,13 @@ namespace Smile {
                 if (V.Mat->Blend) { AnyBlend = true; break; }
             if (AnyBlend) {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Translúcidos");
-                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[3] = {
+                FBarrierBatch BlendBatch;
+                BlendBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+                BlendBatch.Flush(CommandList);
+                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[4] = {
                     Targets.HDRRTVHeap.CpuHandle(0), Targets.UpscaleMaskRTVHeap.CpuHandle(0),
-                    Targets.UpscaleMaskRTVHeap.CpuHandle(1) };
+                    Targets.UpscaleMaskRTVHeap.CpuHandle(1), Targets.VelocityRTVHeap.CpuHandle(0) };
                 CommandList->OMSetRenderTargets(_countof(BlendRTVs), BlendRTVs, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
@@ -1192,6 +1207,9 @@ namespace Smile {
                     Submit.BindMaterial(CommandList, Backend->SRVHeap, It->Mat);
                     Submit.DrawMesh(CommandList, It->R->Mesh);
                 }
+                BlendBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                BlendBatch.Flush(CommandList);
             }
         }
 
@@ -1603,8 +1621,11 @@ namespace Smile {
             const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
                                        Lt.KeyColor.Z * Lt.KeyInt };
             RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
-                                       Vw.CameraPosition, FrameState->ElapsedTime, Weather, Lt.KeyDir,
-                                       KeyColorInt, Amb.Sky);
+                                       Vw.ViewProjUnjittered, FrameState->PrevViewProj,
+                                       Vw.CameraPosition, FrameState->PrevCameraPosition,
+                                       FrameState->ElapsedTime,
+                                       FrameState->ElapsedTime - FrameState->LastDeltaTime,
+                                       Weather, Lt.KeyDir, KeyColorInt, Amb.Sky);
             RainWetness.Execute(CommandList, Backend->SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
         }
