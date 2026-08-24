@@ -66,6 +66,18 @@ namespace SmileEditor {
             return true;
         }
 
+        bool ReadOptionalNumberClosed(const QJsonObject& _Object, const char* _Name,
+                                      double _Min, double _Max,
+                                      std::optional<double>& _Out) {
+            const QJsonValue Value = _Object.value(QLatin1String(_Name));
+            if (Value.isUndefined() || Value.isNull()) { _Out.reset(); return true; }
+            if (!Value.isDouble()) return false;
+            const double Number = Value.toDouble();
+            if (!std::isfinite(Number) || Number < _Min || Number > _Max) return false;
+            _Out = Number;
+            return true;
+        }
+
         bool ReadOptionalBool(const QJsonObject& _Object, const char* _Name,
                               std::optional<bool>& _Out) {
             const QJsonValue Value = _Object.value(QLatin1String(_Name));
@@ -531,8 +543,17 @@ namespace SmileEditor {
                                 QStringLiteral("timeOfDayHours precisa estar em [0, 24)") } });
             return;
         }
+        if (!ReadOptionalNumberClosed(_Arguments, "rainAmount", 0.0, 1.0,
+                                      Overrides.RainAmount)) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("rainAmount precisa estar em [0, 1]") } });
+            return;
+        }
 
         const bool KnobsOk =
+            ReadOptionalInteger(_Arguments, "upscalerQuality", 0, 4,
+                                Overrides.UpscalerQuality) &&
             ReadOptionalInteger(_Arguments, "diAnalyticCandidates", 1, 64,
                                 Overrides.DIAnalyticCandidates) &&
             // Zero e valido no de mesh: e "nenhuma proposta de triangulo", que nao e o mesmo que
@@ -548,7 +569,7 @@ namespace SmileEditor {
         if (!KnobsOk) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),
-                                QStringLiteral("knob do DI invalido") } });
+                                QStringLiteral("override de perfil invalido") } });
             return;
         }
 

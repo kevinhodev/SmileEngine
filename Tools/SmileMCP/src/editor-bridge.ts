@@ -163,6 +163,8 @@ export interface GIStatus {
 // poder significar "nao informado" em payloads montados dinamicamente.
 export interface ProfileOverrides {
   timeOfDayHours?: number;
+  rainAmount?: number;
+  upscalerQuality?: number;
   diAnalyticCandidates?: number;
   diMeshCandidates?: number;
   meshLightsInPool?: boolean;

@@ -79,6 +79,9 @@ namespace SmileEditor {
     // fixar preset/TOD — exatamente a captura sem regime declarado que o protocolo proibe.
     struct FProfileOverrides {
         std::optional<double> TimeOfDayHours;
+        std::optional<double> RainAmount;
+        // 0=DLAA, 1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance.
+        std::optional<int>  UpscalerQuality;
         std::optional<int>  DIAnalyticCandidates;
         std::optional<int>  DIMeshCandidates;
         std::optional<bool> DIMeshLightsInPool;

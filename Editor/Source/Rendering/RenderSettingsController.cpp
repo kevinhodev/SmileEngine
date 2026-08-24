@@ -180,7 +180,7 @@ namespace SmileEditor {
 
             if (_Preset == EProfilePreset::GameplayRR) {
                 Result.Preset = QStringLiteral("gameplay_rr");
-                Settings.SetUpscalerQuality(0);
+                Settings.SetUpscalerQuality(_Overrides.UpscalerQuality.value_or(0));
                 Settings.SetDenoiser(Smile::EDenoiser::DLSS_RR);
             } else {
                 const bool UseNrd = _Preset == EProfilePreset::ControlledNrd;
@@ -210,6 +210,8 @@ namespace SmileEditor {
             // Muda o DOMINIO amostrado: o setter forca rebuild da tabela e limpa historico.
             if (_Overrides.DIMeshCompactSupport)
                 Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);
+            if (_Overrides.RainAmount)
+                Settings.SetRainAmount(static_cast<float>(*_Overrides.RainAmount));
 
             auto& Tod = Access->GetTimeOfDay();
             Tod.Enabled   = true;

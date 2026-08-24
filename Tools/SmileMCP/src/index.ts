@@ -562,7 +562,7 @@ server.registerTool(
   {
     title: "Configure Smile profiling regime",
     description:
-      "Fixa camera opcional, TOD e os consumidores do hit path; gameplay_rr usa DLSS Ray Reconstruction, controlled_native desliga denoise/upscale e controlled_nrd usa NRD nativo. timeOfDayHours permite escolher a hora fixa (10 por default). Os knobs do ReSTIR DI sao opcionais e, quando omitidos, preservam o valor corrente.",
+      "Fixa camera opcional, TOD, chuva e os consumidores do hit path; gameplay_rr usa DLSS Ray Reconstruction e aceita upscalerQuality 0=DLAA, 1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance. controlled_native desliga denoise/upscale e controlled_nrd usa NRD nativo. timeOfDayHours permite escolher a hora fixa (10 por default).",
     inputSchema: {
       preset: z.enum(["gameplay_rr", "controlled_native", "controlled_nrd"])
         .default("gameplay_rr"),
@@ -573,6 +573,19 @@ server.registerTool(
         .lt(24)
         .nullish()
         .describe("Hora fixa do teste em [0, 24); ausente ou null usa o default historico de 10:00."),
+      rainAmount: z
+        .number()
+        .min(0)
+        .max(1)
+        .nullish()
+        .describe("Intensidade de chuva para o teste em [0, 1]; ausente preserva o estado corrente."),
+      upscalerQuality: z
+        .number()
+        .int()
+        .min(0)
+        .max(4)
+        .nullish()
+        .describe("Modo do DLSS no gameplay_rr: 0=DLAA, 1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance."),
       backgroundThrottle: z
         .boolean()
         .default(false)
