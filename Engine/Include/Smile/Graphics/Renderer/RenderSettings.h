@@ -285,6 +285,10 @@ namespace Smile {
         bool GetGIInterleavedUpdates() const;
         void SetGIInterleavedUpdates(bool V);
 
+        // Teto de ray queries do update DDGI (0 = scheduler legado/sem teto explicito).
+        u32  GetGIUpdateRayBudget() const;
+        void SetGIUpdateRayBudget(u32 V);
+
         // Compacta na GPU as sondas amostraveis e usa dispatch indireto nos tres passes pesados.
         // Experimental/default OFF ate o A/B Bistro + Emerald Square.
         bool GetGIProbeCompaction() const;

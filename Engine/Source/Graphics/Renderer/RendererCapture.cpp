@@ -356,6 +356,11 @@ namespace Smile {
         S.DDGIRaysPerProbe    = DDGI.RaysPerProbe();
         S.DDGIAdaptiveRays    = DDGI.GetAdaptiveRays();
         S.DDGIInterleavedUpdates = DDGI.GetInterleavedUpdates();
+        S.DDGIUpdateRayBudget = DDGI.GetUpdateRayBudget();
+        S.DDGIUpdateBudgetEffective = DDGI.UpdateBudgetEffective();
+        S.DDGIEffectiveProbeBudget = DDGI.EffectiveProbeBudget();
+        S.DDGIScheduledProbeCount = DDGI.ScheduledProbeCount();
+        S.DDGIScheduledProbeStart = DDGI.ScheduledProbeStart();
         S.DDGIProbeCompaction = DDGI.GetProbeCompaction();
         S.DDGIProbeCompactionEffective = DDGI.LastUpdateUsedProbeCompaction();
         S.DDGIActiveProbeCount = DDGI.LastActiveProbeCount();

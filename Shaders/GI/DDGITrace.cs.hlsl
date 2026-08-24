@@ -61,15 +61,19 @@ SamplerState LinearWrap  : register(s1);
 [numthreads(DDGI_RAYS, 1, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int   numProbes = (int)AtlasParams.w;
-    int   updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    int   candidateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    int   scheduledProbes = clamp((int)ProbeCompactionParams.z, 1, candidateProbes);
     const bool compact = ProbeCompactionParams.x > 0.5f;
-    const int workProbes = compact ? min((int)ActiveProbeCount[0], updateProbes) : updateProbes;
+    // Em budget + scroll, a lista pode exceder o teto pelas laminas novas/follow-ups urgentes.
+    const int workProbes = compact ? min((int)ActiveProbeCount[0], numProbes)
+                                   : scheduledProbes;
     // A compactacao muda apenas a ordem de trabalho, nao o indice global da sonda.
     int   workIdx   = DDGI_ProbeFromGroup(Gid.xy, max(workProbes, 1));
     int   rayIdx    = (int)GTid.x;
     if (workIdx >= workProbes) return;
-    int   probeIdx  = compact ? (int)ActiveProbeIndices[workIdx] : workIdx;
-    if (probeIdx >= updateProbes) return;
+    int   probeIdx  = compact ? (int)ActiveProbeIndices[workIdx]
+                              : ((int)ProbeCompactionParams.y + workIdx) % candidateProbes;
+    if (probeIdx >= candidateProbes || probeIdx >= numProbes) return;
 
     int3  count   = (int3)GridCountRays.xyz;
     int   cascade  = DDGI_CascadeOfProbe(probeIdx, count);
@@ -85,8 +89,11 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     const bool scrollOnly    = MiscParams3.w > 0.5f;
     const bool classifyFrame = MiscParams3.z > 0.5f && !scrollOnly;
     const bool justRelocated = GIProbeData[probeIdx].w >= 1.0f;
-    int rayCount = (classifyFrame || newlyExposed || justRelocated)
-                 ? DDGI_RAYS : (int)ProbeRayCount[probeIdx];
+    // A estreia barata do AC Shadows cabe no budget em RAIOS; o frame de follow-up volta a
+    // resolucao cheia antes de a probe entrar no round-robin normal.
+    int rayCount = newlyExposed ? min(DDGI_NEW_PROBE_RAYS, DDGI_RAYS)
+                 : ((classifyFrame || justRelocated)
+                    ? DDGI_RAYS : (int)ProbeRayCount[probeIdx]);
     int stride   = DDGI_RAYS / max(rayCount, 1);
     if ((rayIdx % max(stride, 1)) != 0) {
         ProbesTrace[DDGI_TraceTexel(probeIdx, rayIdx, numProbes, DDGI_RAYS)] =

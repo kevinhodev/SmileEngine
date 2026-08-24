@@ -493,6 +493,70 @@ server.registerTool(
 );
 
 server.registerTool(
+  "smile_scene_objects",
+  {
+    title: "List Smile scene objects",
+    description:
+      "Lista meshes da cena viva com indice, nome, posicao e AABB. Use nameContains para escolher deterministicamente um objeto antes de move-lo.",
+    inputSchema: {
+      nameContains: z.string().max(200).optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+      timeoutSeconds: z.number().min(0.1).max(30).default(5),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const { timeoutSeconds, ...options } = input;
+      return jsonResult(
+        await editorBridge.sceneObjects(options, Math.round(timeoutSeconds * 1000)),
+      );
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_scene_object_set_position",
+  {
+    title: "Move Smile scene object",
+    description:
+      "Define a posicao absoluta de uma mesh viva pelo indice retornado por smile_scene_objects. Atualiza bounds, TLAS e invalida no DDGI as regioes antiga e nova.",
+    inputSchema: {
+      index: z.number().int().min(0).max(10_000_000),
+      x: z.number().min(-1_000_000).max(1_000_000),
+      y: z.number().min(-1_000_000).max(1_000_000),
+      z: z.number().min(-1_000_000).max(1_000_000),
+      timeoutSeconds: z.number().min(0.1).max(30).default(5),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const { timeoutSeconds, ...position } = input;
+      return jsonResult(
+        await editorBridge.setSceneObjectPosition(
+          position, Math.round(timeoutSeconds * 1000),
+        ),
+      );
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
   "smile_gi_status",
   {
     title: "Read Smile GI state",
@@ -529,6 +593,7 @@ server.registerTool(
       indirectFallback: z.enum(["ddgi", "environment", "black"]).nullish(),
       cascadeCount: z.number().int().min(1).max(4).nullish(),
       interleavedUpdates: z.boolean().nullish(),
+      updateRayBudget: z.number().int().min(0).max(100_000_000).nullish(),
       probeCompaction: z.boolean().nullish(),
       halfRes: z.boolean().nullish(),
       adaptiveRays: z.boolean().nullish(),

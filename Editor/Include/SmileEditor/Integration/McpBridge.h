@@ -60,6 +60,10 @@ namespace SmileEditor {
         void HandleCameraGet(QLocalSocket* Socket, const QString& Id);
         void HandleCameraSet(QLocalSocket* Socket, const QString& Id,
                              const QJsonObject& Arguments);
+        void HandleSceneObjects(QLocalSocket* Socket, const QString& Id,
+                                const QJsonObject& Arguments);
+        void HandleSceneObjectSetPosition(QLocalSocket* Socket, const QString& Id,
+                                          const QJsonObject& Arguments);
         void HandleGIStatus(QLocalSocket* Socket, const QString& Id);
         void HandleGIConfigure(QLocalSocket* Socket, const QString& Id,
                                const QJsonObject& Arguments);

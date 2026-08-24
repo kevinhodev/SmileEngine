@@ -3379,7 +3379,7 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                         }
                         Repeater {
-                             model: [1, 2]
+                             model: [1, 2, 3]
                              delegate: Rectangle {
                                  id: cascadeOption
                                  required property int modelData

@@ -165,6 +165,7 @@ namespace Smile {
         V.ViewProjection     = V.View * V.Projection;
         V.ViewProjUnjittered = V.View * V.ProjUnjittered;
         V.CameraPosition     = SceneState->Camera.GetPosition();
+        V.CameraForward      = SceneState->Camera.GetForward();
 
         V.ViewNoTrans = V.View;
         V.ViewNoTrans.M[3][0] = 0.0f;
@@ -808,7 +809,7 @@ namespace Smile {
         TickWorldClock();
         const FFrameLighting Lt  = ResolveFrameLighting();
         // Os publicadores abaixo capturam a colocacao atual das cascatas.
-        DDGI.PrepareCascadePlacement(Vw.CameraPosition);
+        DDGI.PrepareCascadePlacement(Vw.CameraPosition, Vw.CameraForward);
         const FFrameAmbient  Amb = PublishFrameConstants(Vw, Lt, Policy, FrameSlot, MappedCB);
         PushRayTracingFrameState(Modes, Policy);
 

@@ -60,6 +60,7 @@ namespace Smile {
         Mat44 ViewProjection{};
         Mat44 ViewProjUnjittered{};
         Vec3  CameraPosition{};
+        Vec3  CameraForward{ 0.0f, 0.0f, 1.0f };
 
         // Jitter em pixels e o sinal de Y (o FSR/DLSS invertem em relacao ao TAA proprio).
         f32   JitterPxX = 0.0f;

@@ -114,6 +114,11 @@ namespace Smile {
         u32  DDGIRaysPerProbe    = 0;
         bool DDGIAdaptiveRays    = false;
         bool DDGIInterleavedUpdates = false;
+        u32  DDGIUpdateRayBudget = 0;
+        bool DDGIUpdateBudgetEffective = false;
+        u32  DDGIEffectiveProbeBudget = 0;
+        u32  DDGIScheduledProbeCount = 0;
+        u32  DDGIScheduledProbeStart = 0;
         bool DDGIProbeCompaction = false;
         bool DDGIProbeCompactionEffective = false;
         u32  DDGIActiveProbeCount = 0;

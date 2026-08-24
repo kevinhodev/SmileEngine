@@ -690,6 +690,13 @@ namespace Smile {
         R.DDGI.SetInterleavedUpdates(_V);
     }
 
+    u32 FRenderSettings::GetGIUpdateRayBudget() const {
+        return R.DDGI.GetUpdateRayBudget();
+    }
+    void FRenderSettings::SetGIUpdateRayBudget(u32 _V) {
+        R.DDGI.SetUpdateRayBudget(_V);
+    }
+
     bool FRenderSettings::GetGIProbeCompaction() const {
         return R.DDGI.GetProbeCompaction();
     }

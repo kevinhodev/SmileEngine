@@ -96,12 +96,24 @@ export interface CameraPose {
   yawDegrees: number;
 }
 
+export interface SceneObjectSnapshot {
+  index: number;
+  id: number;
+  name: string;
+  visible: boolean;
+  dynamic: boolean;
+  position: { x: number; y: number; z: number };
+  boundsMin: { x: number; y: number; z: number };
+  boundsMax: { x: number; y: number; z: number };
+}
+
 export interface GIConfigureOverrides {
   ddgiEnabled?: boolean;
   indirectPrimary?: IndirectPrimary;
   indirectFallback?: IndirectFallback;
   cascadeCount?: number;
   interleavedUpdates?: boolean;
+  updateRayBudget?: number;
   probeCompaction?: boolean;
   halfRes?: boolean;
   adaptiveRays?: boolean;
@@ -134,10 +146,22 @@ export interface GIStatus {
     adaptiveMinRays: number;
     adaptiveMaxRays: number;
     interleavedUpdates: boolean;
+    updateRayBudget: number;
+    updateBudgetEffective: boolean;
+    effectiveProbeBudget: number;
+    scheduledProbeCount: number;
+    scheduledProbeStart: number;
+    scheduledCascadeMask: number;
     probeCompaction: boolean;
     probeCompactionEffective: boolean;
     activeProbeCount: number;
     compactedProbeCapacity: number;
+    selectedRayCount: number;
+    newProbeCount: number;
+    regionalProbeCount: number;
+    followUpProbeCount: number;
+    quotaProbeCount: number;
+    roundRobinProbeCount: number;
     probeWakeInterval: number;
     lastProbeWakeSerial: number;
     scheduledCascadeCount: number;
@@ -369,6 +393,34 @@ export class SmileEditorBridge {
   ): Promise<CameraPose> {
     const result = await this.request("camera_set", pose, timeoutMs);
     return this.validateCameraPose(result);
+  }
+
+  async sceneObjects(
+    options: { nameContains?: string; limit: number },
+    timeoutMs = 5_000,
+  ): Promise<{ objects: SceneObjectSnapshot[]; count: number }> {
+    const result = await this.request("scene_objects", options, timeoutMs);
+    if (!result || typeof result !== "object" || Array.isArray(result))
+      throw new Error("Lista de objetos invalida retornada pelo editor.");
+    const value = result as { objects?: unknown; count?: unknown };
+    if (!Array.isArray(value.objects) || typeof value.count !== "number")
+      throw new Error("Lista de objetos sem array ou contagem.");
+    return result as { objects: SceneObjectSnapshot[]; count: number };
+  }
+
+  async setSceneObjectPosition(
+    position: { index: number; x: number; y: number; z: number },
+    timeoutMs = 5_000,
+  ): Promise<SceneObjectSnapshot> {
+    const result = await this.request("scene_object_set_position", position, timeoutMs);
+    if (!result || typeof result !== "object" || Array.isArray(result))
+      throw new Error("Objeto invalido retornado pelo editor.");
+    const object = result as Partial<SceneObjectSnapshot>;
+    if (typeof object.index !== "number" || typeof object.name !== "string" ||
+        !object.position || typeof object.position.x !== "number" ||
+        typeof object.position.y !== "number" || typeof object.position.z !== "number")
+      throw new Error("Objeto sem indice, nome ou posicao efetiva.");
+    return object as SceneObjectSnapshot;
   }
 
   async giStatus(timeoutMs = 2_000): Promise<GIStatus> {

@@ -62,6 +62,23 @@ namespace Smile {
     void FComputePipeline::Initialize(ID3D12Device* _Device, const std::string& _CSOName,
                                       u32 _NumSRVs, u32 _NumUAVs,
                                       bool _HeapDirectlyIndexed, bool _NvApiExtnSlot) {
+        InitializeConfigured(_Device, _CSOName, _NumSRVs, _NumUAVs, 0, 1,
+                             _HeapDirectlyIndexed, _NvApiExtnSlot);
+    }
+
+    void FComputePipeline::InitializeWithConstants(
+        ID3D12Device* _Device, const std::string& _CSOName,
+        u32 _NumSRVs, u32 _NumUAVs, u32 _Num32BitConstants,
+        u32 _ConstantsRegister, bool _HeapDirectlyIndexed) {
+        InitializeConfigured(_Device, _CSOName, _NumSRVs, _NumUAVs,
+                             _Num32BitConstants, _ConstantsRegister,
+                             _HeapDirectlyIndexed, false);
+    }
+
+    void FComputePipeline::InitializeConfigured(
+        ID3D12Device* _Device, const std::string& _CSOName,
+        u32 _NumSRVs, u32 _NumUAVs, u32 _Num32BitConstants,
+        u32 _ConstantsRegister, bool _HeapDirectlyIndexed, bool _NvApiExtnSlot) {
         D3D12_DESCRIPTOR_RANGE SRVRange{};
         SRVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         SRVRange.NumDescriptors                    = _NumSRVs;
@@ -83,7 +100,7 @@ namespace Smile {
         NVAPIRange.RegisterSpace                     = FShaderTimer::kExtnSpace;
         NVAPIRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[5]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].Descriptor.RegisterSpace  = 0;
@@ -99,10 +116,22 @@ namespace Smile {
         RootParams[2].DescriptorTable.pDescriptorRanges   = &UAVRange;
         RootParams[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
-        RootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        RootParams[3].DescriptorTable.NumDescriptorRanges = 1;
-        RootParams[3].DescriptorTable.pDescriptorRanges   = &NVAPIRange;
-        RootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+        u32 RootParamCount = 3;
+        if (_Num32BitConstants > 0) {
+            RootParams[RootParamCount].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            RootParams[RootParamCount].Constants.ShaderRegister = _ConstantsRegister;
+            RootParams[RootParamCount].Constants.RegisterSpace = 0;
+            RootParams[RootParamCount].Constants.Num32BitValues = _Num32BitConstants;
+            RootParams[RootParamCount].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+            ++RootParamCount;
+        }
+        if (_NvApiExtnSlot) {
+            RootParams[RootParamCount].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            RootParams[RootParamCount].DescriptorTable.NumDescriptorRanges = 1;
+            RootParams[RootParamCount].DescriptorTable.pDescriptorRanges   = &NVAPIRange;
+            RootParams[RootParamCount].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+            ++RootParamCount;
+        }
 
         D3D12_STATIC_SAMPLER_DESC Samplers[2]{};
         Samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -125,7 +154,7 @@ namespace Smile {
         Samplers[1].ShaderRegister   = 1;
 
         D3D12_ROOT_SIGNATURE_DESC RootSigDesc{};
-        RootSigDesc.NumParameters     = _NvApiExtnSlot ? 4u : 3u;
+        RootSigDesc.NumParameters     = RootParamCount;
         RootSigDesc.pParameters       = RootParams;
         RootSigDesc.NumStaticSamplers = _countof(Samplers);
         RootSigDesc.pStaticSamplers   = Samplers;
