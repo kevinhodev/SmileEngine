@@ -44,7 +44,42 @@ a reconstrução da indireta (e vice-versa) — os dois sinais "vazariam" um no 
 filtro. Manter instâncias independentes é o que garante que cada um reprojeta e acumula
 segundo a própria física.
 
-## 7.3 O contrato mais fácil de quebrar: invalidação de histórico
+## 7.3 Demodulação BRDF: ajudar o NRD sem perder detalhe de textura
+
+> ⚠️ **Nota de verificação:** feature recente (commit `646d1e1`, 22/08/2026), default
+> **ligado** (`BrdfRatioDemodulation = true`) — não está documentada em nenhum `Docs/*.md`
+> na época em que este curso foi escrito; a descrição abaixo vem direto do código e dos
+> comentários dos shaders (`Shaders/Lighting/ReSTIRDINrdComposite.cs.hlsl`).
+
+Denoisers como o NRD/RELAX trabalham melhor sobre sinais **suaves** — quanto mais "plana" a
+variação espacial da entrada, mais fácil é para o filtro distinguir "isto é ruído" de "isto é
+detalhe real". O problema: a radiância que sai do ReSTIR DI já vem **multiplicada** pela BRDF
+do material (que pode variar bastante de pixel a pixel, seguindo o mapa de normal e a
+rugosidade) — então o denoiser recebe um sinal com alta frequência espacial que não é ruído
+nenhum, é textura, e corre o risco de borrá-la junto com o ruído de verdade.
+
+A **demodulação por razão de BRDF** resolve isso invertendo a ordem: em vez de denoisar
+`radiância × BRDF`, a engine denoisa a radiância "pura" (mais suave) e guarda a variação de
+alta frequência da BRDF **separadamente**, numa textura própria (`BrdfRatio`). Só depois que
+o NRD termina, essa variação é multiplicada de volta:
+
+```mermaid
+flowchart LR
+    Raw["radiância × BRDF\n(alta frequência espacial)"] -->|"sem demodulação"| NRDDireto["NRD denoisa\ncom risco de borrar textura"]
+    Raw -->|"COM demodulação"| Split["separa em:\nradiância suave + BrdfRatio"]
+    Split --> NRD2["NRD denoisa só\na radiância suave"]
+    NRD2 --> Remult["multiplica de volta\npelo BrdfRatio"]
+    Remult --> Final["resultado final,\ndetalhe de normal preservado"]
+```
+
+O comentário do próprio shader de composição resume o motivo: *"o fator guarda só o residual
+espacial de alta frequência da BRDF. Aplicar depois do RELAX preserva o sinal temporal limpo
+e devolve detalhe de normal sem alterar o hit distance."* É uma técnica de **pós-processo**
+— não muda o reservoir do ReSTIR DI (Capítulo 5) nem o histórico acumulado pelo RELAX, então
+pode ser ligada e desligada sem invalidar nada (a seção a seguir explica por que isso
+importa).
+
+## 7.4 O contrato mais fácil de quebrar: invalidação de histórico
 
 Praticamente todo subsistema da engine **acumula informação entre frames**: os atlas do
 DDGI, os reservoirs do ReSTIR (DI e GI), a tabela de hash do SHaRC, o histórico dos
@@ -149,7 +184,7 @@ reconvergir (histerese 0,99 no DDGI, teto de 64 amostras por célula no SHaRC) �
 É por isso que o contador de aquecimento de uma captura conta **frames renderizados de
 verdade**, não interações de UI.
 
-## 7.4 Dirty flags coalescidas: por que arrastar um slider não trava o frame
+## 7.5 Dirty flags coalescidas: por que arrastar um slider não trava o frame
 
 Editar um parâmetro na UI do editor (arrastar um slider de intensidade de luz, por exemplo)
 pode disparar o setter correspondente **várias vezes por frame** — um tique por pixel de
@@ -169,7 +204,7 @@ setter foi chamado entre dois frames — a invalidação de fato acontece só um
 > valor **gravado** — sem que o setter tivesse sido atualizado para acompanhar essa mudança
 > de natureza.
 
-## 7.5 As ferramentas de diagnóstico
+## 7.6 As ferramentas de diagnóstico
 
 A engine tem um conjunto de ferramentas voltadas especificamente para inspecionar o estado
 de GI — essenciais porque, como visto acima, boa parte dos bugs desse sistema são
@@ -187,13 +222,13 @@ de GI — essenciais porque, como visto acima, boa parte dos bugs desse sistema 
 | **`VramTracker`** | Uso de VRAM por categoria (10 categorias, incluindo `GI` e `RaytracingAS`), registrado automaticamente na criação de cada recurso |
 | **`FGpuProfiler`** | Timestamps por escopo nomeado (ex.: "DDGI (async)", "Espera do DDGI (async)") — a fonte de todos os números de custo citados nos capítulos anteriores |
 
-## 7.6 Captura determinística: como a engine mede a si mesma de forma confiável
+## 7.7 Captura determinística: como a engine mede a si mesma de forma confiável
 
 Um detalhe final que amarra os capítulos 3–6: como é possível, na prática, comparar "com o
 knob X ligado" contra "com o knob X desligado" de um jeito que realmente isola só aquele
 knob? A resposta é o **capturador determinístico** (`Docs/CAPTURE-PROTOCOL.md`,
 `FFrameCapture`): ele fixa a pose da câmera, a hora do dia, o índice de amostragem temporal,
-espera um número fixo de frames **renderizados** de aquecimento (Seção 7.3), e só então
+espera um número fixo de frames **renderizados** de aquecimento (Seção 7.4), e só então
 grava um PNG — junto com um **manifesto** descrevendo o estado *efetivo* completo daquele
 frame (não só o que foi pedido — Capítulo 6, Seção 6.8).
 
@@ -203,11 +238,12 @@ o custo de +0,83 ms da segunda cascata do DDGI (Capítulo 3), a curva de acerto 
 nenhum desses números significaria nada — poderiam ser ruído do trajeto até a pose, e não do
 knob sendo medido.
 
-## 7.7 Resumo do capítulo
+## 7.8 Resumo do capítulo
 
 | Conceito | O que resolve |
 |---|---|
 | NRD, duas instâncias (direta/indireta) | Evita que sinais com física diferente contaminem um ao outro |
+| Demodulação BRDF (ReSTIR DI) | Preserva detalhe de textura/normal sem confundir o denoiser com ruído |
 | `HistoryDomain.h` (dados, não listas espalhadas) | Um alvo novo = um bit; um domínio errado = erro de compilação |
 | Domínios de conteúdo × filtros de tela (`static_assert`) | Impede que um slider comum reset TAA/RR e faça a tela piscar |
 | Caches de mundo sobrevivem a corte de câmera | Evita reconvergência do zero a cada navegação no editor |
