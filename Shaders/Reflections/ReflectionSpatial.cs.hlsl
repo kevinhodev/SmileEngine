@@ -20,6 +20,7 @@ cbuffer ReflectionCB : register(b0) {
 Texture2D<float4> History : register(t0); 
 Texture2D<float4> GBuffer : register(t1); 
 Texture2D<float>  Depth   : register(t2); 
+Texture2D<float4> Resolved : register(t3);
 
 RWTexture2D<float4> RWDenoised : register(u0);
 
@@ -41,6 +42,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float  deviceZ  = Depth.Load(int3(px, 0)).r;
     float4 gb       = GBuffer.Load(int3(px, 0));
     float  roughness    = gb.b;
+    float  hitDistance  = max(Resolved.Load(int3(px, 0)).a, 0.0f);
     float  combineAlpha = saturate((ReflectParams.x - roughness) / max(ReflectParams.y, 1e-4f));
 
     float frames    = c.a;
@@ -77,8 +79,28 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         if (sz <= 0.0f) continue;
         float3 sW = ReconstructWorld(sp, sz);
         if (abs(dot(sW - worldPos, N)) > planeThresh) continue; 
+        float4 sgb = GBuffer.Load(int3(sp, 0));
+        if (abs(sgb.a - gb.a) > 0.1f) continue;
+
+        float3 sN = DDGI_OctDecode(sgb.rg * 2.0f - 1.0f);
+        float  normalW = pow(saturate(dot(N, sN)), lerp(96.0f, 16.0f, roughness));
+        float  roughnessW = exp(-abs(sgb.b - roughness) /
+                                max(0.04f + roughness * 0.20f, 1e-3f));
+
+        float sHitDistance = max(Resolved.Load(int3(sp, 0)).a, 0.0f);
+        bool  centerHit = hitDistance > 1e-3f;
+        bool  sampleHit = sHitDistance > 1e-3f;
+        if (centerHit != sampleHit) continue;
+        float hitDistanceW = 1.0f;
+        if (centerHit) {
+            float relativeHitDelta = abs(sHitDistance - hitDistance) /
+                                     max(max(sHitDistance, hitDistance), 0.25f);
+            hitDistanceW = exp(-2.5f * relativeHitDelta);
+        }
+
         float4 sc = History.Load(int3(sp, 0));
-        float  wg = exp(-2.0f * t); 
+        float  wg = exp(-2.0f * t) * normalW * roughnessW * hitDistanceW;
+        if (wg <= 1e-4f) continue;
         nbSum += sc.rgb * wg;
         nbW   += wg;
     }

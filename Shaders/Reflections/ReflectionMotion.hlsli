@@ -52,7 +52,9 @@ float4 ComputeGlossyMotion(uint2 px, float3 receiverPos, float3 receiverNormal,
                                   int2(ScreenParams.xy) - 1);
     const float4 actualPrevious = PrevTemporalSurface.Load(int3(previousPx, 0));
     uint previousInstance;
-    if (!TemporalDecodeInstance(actualPrevious.w, instanceCount, previousInstance)) return 0.0f;
+    if (!TemporalDecodeInstance(actualPrevious.w, instanceCount, previousInstance) ||
+        previousInstance != receiverInstance)
+        return 0.0f;
 
     const float planeDistance = abs(dot(actualPrevious.xyz - prevS, prevN));
     const float planeSigma = max(0.02f * length(prevS - PrevCameraPos.xyz), 0.01f);

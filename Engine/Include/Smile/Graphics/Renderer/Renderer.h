@@ -626,6 +626,7 @@ namespace Smile {
         // NRD e alocado sob demanda; cada instancia existe apenas com consumidor ativo.
         bool WantNrdIndirect() const;
         bool WantNrdDirect() const;   // NRD selecionado + ReSTIR DI ligado
+        bool NeedsLocalReflectionDenoiser() const;
         // Bindings de setup sempre validos: DDGI pronto ou recursos neutros de fallback.
         FGIFallbackBindings GIFallbackBindingsForSetup() const;
         void SetupNrdIndirect();      // (re)aloca a instancia indireta e os packs que a leem

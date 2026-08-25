@@ -13,6 +13,7 @@
     "start": "node dist/index.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "smoke:capture": "npm run build && node scripts/capture-smoke.mjs",
+    "validate:reflections:transitions": "npm run build && node scripts/reflection-transition-smoke.mjs",
     "validate:dlss": "npm run build && node scripts/dlss-validation.mjs",
     "validate:dlss-noise": "npm run build && node scripts/dlss-noise-ab.mjs",
     "validate:dlss-rain": "npm run build && node scripts/dlss-rain-validation.mjs",
