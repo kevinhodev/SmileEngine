@@ -59,6 +59,7 @@
 #include <QQuickWidget>
 #include <QShortcut>
 #include <QSizePolicy>
+#include <QStatusBar>
 #include <QTime>
 #include <QTimer>
 #include <QVariant>
@@ -102,9 +103,8 @@ namespace SmileEditor {
         } SinkRollback;
 
         WindowBr   = new WindowBridge(this);
-        // Antes vivia no CreateStatusBar. A QStatusBar deixou de existir (o rodape de metricas
-        // e a faixa do console agora), e tanto a MainBar quanto o ConsolePanel leem daqui —
-        // entao a ponte precisa existir antes dos dois.
+        // A MainBar e o rodape permanente leem a mesma mensagem; a ponte precisa existir antes
+        // da criacao dos dois componentes QML.
         StatusBr   = new StatusBridge(this);
         Menus      = new MenuBridge(this);
         TodBridge  = new TimeOfDayBridge(this);
@@ -169,6 +169,7 @@ namespace SmileEditor {
         });
 
         CreateTopBar();
+        CreateStatusBar();
         setCentralWidget(CreateViewportChrome());
         CreateDocks();
         WireMenuActions();
@@ -422,6 +423,26 @@ namespace SmileEditor {
         });
         qApp->installNativeEventFilter(WinFilter);
         NativeWindowFilter::EnableFrameless(winId());
+    }
+
+    void MainWindow::CreateStatusBar() {
+        auto* Bar = new QStatusBar(this);
+        Bar->setObjectName(QStringLiteral("EditorStatusBar"));
+        Bar->setSizeGripEnabled(false);
+        Bar->setContentsMargins(0, 0, 0, 0);
+        Bar->setFixedHeight(30);
+
+        QQuickWidget* Metrics = CreateQmlPanel(*SharedQmlEngine,
+            QStringLiteral("StatusBar.qml"),
+            { { QStringLiteral("statusModel"), StatusBr },
+              { QStringLiteral("statsModel"),  StatsBr } },
+            Bar);
+        Metrics->setObjectName(QStringLiteral("StatusBarPanel"));
+        Metrics->setFixedHeight(30);
+        Metrics->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        Bar->addWidget(Metrics, 1);
+
+        setStatusBar(Bar);
     }
 
     void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive) {
@@ -681,9 +702,7 @@ namespace SmileEditor {
 
         QQuickWidget* Console = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ConsolePanel.qml"),
-            { { QStringLiteral("logModel"),    ConsoleLog },
-              { QStringLiteral("statusModel"), StatusBr },
-              { QStringLiteral("statsModel"),  StatsBr } },
+            { { QStringLiteral("logModel"), ConsoleLog } },
             ConsoleDock);
         Console->setObjectName("ConsolePanel");
 
@@ -696,8 +715,8 @@ namespace SmileEditor {
         connect(ConsoleLog, &LogBridge::CloseRequested, ConsoleDock, &QDockWidget::close);
 
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        Console->setMinimumHeight(132); // faixa de comando + rodape de metricas + 2 linhas
-        resizeDocks({ ConsoleDock }, { 176 }, Qt::Vertical);
+        Console->setMinimumHeight(102); // faixa de comando + 2 linhas de log
+        resizeDocks({ ConsoleDock }, { 146 }, Qt::Vertical);
 
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
 

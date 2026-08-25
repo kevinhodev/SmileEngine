@@ -5,28 +5,22 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "components" as C
 
-// Faixa inferior fixa do editor no conceito Signal Graphite. Concentra tres coisas que antes
-// moravam em lugares diferentes:
-//  1. abas (Console/Build/Profiler/Assets) — o console vira uma delas, nao a faixa inteira;
-//  2. filtros, busca e acoes na mesma linha das abas;
-//  3. o RODAPE de metricas, que absorveu a QStatusBar separada.
+// Console inferior do editor no conceito Signal Graphite. Concentra abas, filtros, busca e
+// acoes. O rodape de metricas vive no StatusBar.qml, fora deste dock, para continuar visivel
+// quando o usuario fecha os paineis e libera mais area para o viewport.
 //
 // Build/Profiler/Assets aparecem desabilitadas de proposito: o conceito expoe a estrutura em
 // vez de esconde-la, e a aba muda ao ganhar painel — nao ha layout novo a inventar depois.
 //
-// Dependencias explicitas da raiz (chegam por setInitialProperties):
-//  - `logModel`    (LogBridge):    linhas, contagens por nivel e acoes do console.
-//  - `statusModel` (StatusBridge): mensagem transiente do rodape (esquerda).
-//  - `statsModel`  (StatsBridge):  FPS/frame/GPU/meshes/VRAM do rodape (direita).
+// Dependencia explicita da raiz (chega por setInitialProperties):
+//  - `logModel` (LogBridge): linhas, contagens por nivel e acoes do console.
 Rectangle {
     id: root
     required property var logModel
-    required property var statusModel
-    required property var statsModel
 
     color: C.Theme.shell
     implicitWidth: 700
-    implicitHeight: 164
+    implicitHeight: 134
     focus: true
 
     property bool follow: true
@@ -199,34 +193,6 @@ Rectangle {
                 root.levelFilter = chip.level
                 root.requestScrollToEnd()
             }
-        }
-    }
-
-    // Par rotulo/valor do rodape de metricas. Rotulo em mono muted e caixa alta, valor em
-    // mono claro: e a leitura de instrumento que o conceito pede.
-    component Metric: Row {
-        id: metric
-        property string label
-        property string value
-        spacing: 7
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: metric.label
-            color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
-            font.pixelSize: 9
-            font.letterSpacing: 0.5
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
-        }
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: metric.value
-            color: C.Theme.textPrimary
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
         }
     }
 
@@ -494,7 +460,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: commandBar.bottom
-        anchors.bottom: metricsBar.top
+        anchors.bottom: parent.bottom
         anchors.rightMargin: 5
         anchors.topMargin: 4
         anchors.bottomMargin: 4
@@ -690,84 +656,4 @@ Rectangle {
         }
     }
 
-    // ---- Rodape de metricas ----
-    // Absorveu a QStatusBar: esquerda = estado/mensagem transiente, direita = instrumentos.
-    Item {
-        id: metricsBar
-
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 30
-
-        Rectangle {
-            anchors { left: parent.left; right: parent.right; top: parent.top }
-            height: 1
-            color: C.Theme.hairline
-        }
-
-        // Estado. Verde = pronto (papel semantico fixo); com mensagem transiente, ela toma o
-        // lugar do rotulo e o ponto vira ambar — algo esta acontecendo.
-        Row {
-            id: statusRow
-            anchors.left: parent.left
-            anchors.leftMargin: 16
-            anchors.right: metricsRow.left
-            anchors.rightMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 10
-
-            Rectangle {
-                anchors.verticalCenter: parent.verticalCenter
-                width: 6; height: 6; radius: 3
-                color: root.statusModel.message !== "" ? C.Theme.amber : C.Theme.green
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                width: Math.max(0, statusRow.width - 16)
-                text: root.statusModel.message !== "" ? root.statusModel.message : "PRONTO"
-                color: root.statusModel.message !== "" ? C.Theme.textSecondary : C.Theme.green
-                font.family: C.Theme.fontMono
-                font.pixelSize: 10
-                font.letterSpacing: root.statusModel.message !== "" ? 0 : 1
-                elide: Text.ElideRight
-                renderType: Text.QtRendering
-                renderTypeQuality: Text.HighRenderTypeQuality
-            }
-        }
-
-        Row {
-            id: metricsRow
-            anchors.right: parent.right
-            anchors.rightMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 22
-
-            // Locale do sistema nos dois lados: o gpuFrameText e o vramUsageText ja vem
-            // formatados pelo C++, e um toFixed aqui misturaria ponto e virgula na mesma linha.
-            Metric {
-                label: "FPS"
-                value: root.statsModel.fps.toLocaleString(Qt.locale(), 'f', 1)
-            }
-            Metric {
-                label: "FRAME"
-                value: root.statsModel.frameTimeMs.toLocaleString(Qt.locale(), 'f', 2) + " ms"
-            }
-            Metric {
-                visible: root.width > 1100 && root.statsModel.gpuFrameText !== ""
-                label: "GPU"
-                value: root.statsModel.gpuFrameText
-            }
-            Metric {
-                visible: root.width > 1280
-                label: "MESHES"
-                value: root.statsModel.visibleDrawCount + "/" + root.statsModel.totalDrawCount
-            }
-            Metric {
-                visible: root.width > 1440
-                label: "MEM"
-                value: root.statsModel.vramUsageText
-            }
-        }
-    }
 }

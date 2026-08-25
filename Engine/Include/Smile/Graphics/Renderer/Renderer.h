@@ -816,7 +816,7 @@ namespace Smile {
         // achado no CMake. DLSS so fica disponivel em NVIDIA c/ suporte (senao cai p/ FSR/None).
         FFsrPass                 Fsr;
         FDlssPass                Dlss;
-        EUpscaler                Upscaler = EUpscaler::FSR; // selecionado (cai p/ None se indisponivel)
+        EUpscaler                Upscaler = EUpscaler::DLSS; // selecionado (cai p/ None se indisponivel)
         // Padrao = 0 (100%): o upscaler reconstroi/faz AA na resolucao nativa, sem upscale. Decisao
         // de produto — os tiers de upscale ficam como opt-in do usuario. Manter em sincronia com
         // ViewportWidget::ResetRenderSettings().

@@ -70,6 +70,7 @@ namespace SmileEditor {
 
     private:
         void CreateTopBar();
+        void CreateStatusBar();
         void WireMenuActions();
         void CreateDocks();
         QWidget* CreateViewportChrome();

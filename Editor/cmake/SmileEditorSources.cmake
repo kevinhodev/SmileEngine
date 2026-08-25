@@ -129,6 +129,7 @@ smile_editor_assets("UI\\QML\\Shell"
     Qml/ConsolePanel.qml
     Qml/EditorMenuBar.qml
     Qml/MainBar.qml
+    Qml/StatusBar.qml
 )
 
 smile_editor_assets("UI\\QML\\Scene"

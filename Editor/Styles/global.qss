@@ -14,6 +14,17 @@ QMainWindow#SmileMainWindow {
     background: #09090A;
 }
 
+QStatusBar#EditorStatusBar {
+    background: #111113;
+    border: none;
+    margin: 0;
+    padding: 0;
+}
+
+QStatusBar#EditorStatusBar::item {
+    border: none;
+}
+
 QWidget {
     background: transparent;
 }
