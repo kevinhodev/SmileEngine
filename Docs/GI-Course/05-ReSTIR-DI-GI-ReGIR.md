@@ -173,8 +173,14 @@ Duas opções valem menção porque mudam o comportamento de forma perceptível:
   espacial — sem isso, o algoritmo pode combinar amostras que são estatisticamente válidas
   mas geometricamente impossíveis (a luz do vizinho não conseguiria realmente alcançar este
   pixel por causa de um obstáculo).
-- **`HalfRes`** (experimental, desligado por padrão): traça a meio-res e faz *upsample* — uma
-  troca clássica de resolução espacial por velocidade, ainda em avaliação na engine.
+- **`HalfRes`** (experimental, desligado por padrão): traça só a meio-res. A reconstrução
+  para full-res **não** é um upsample simples — é uma reconstrução **temporal em quatro
+  fases**: a cada frame, um quadrante diferente de um bloco 2×2 recebe uma amostra nova
+  traçada de verdade, e os outros três reaproveitam o histórico (rejeitado por
+  profundidade/normal, com um filtro bilateral como reserva para pixels sem histórico
+  válido) — ao longo de 4 frames, todo pixel acaba recebendo uma amostra própria. Uma troca
+  clássica de resolução espacial por velocidade, com o custo temporal amortizado em vez de
+  pago de uma vez; ainda em avaliação na engine, por isso o default continua desligado.
 
 ## 5.7 ReSTIR DI: o mesmo princípio, para luz direta de muitas fontes
 
