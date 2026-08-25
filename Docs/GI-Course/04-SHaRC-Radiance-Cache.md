@@ -83,8 +83,15 @@ float RC_CellSize(uint level, float baseCellSize) {
 }
 ```
 
-`BaseCellSize` (o tamanho no nível 0, colado na câmera) é **0,25 m** por padrão — o mesmo
-valor usado pelo idTech 8 (o motor do *DOOM Eternal*), citado como referência no código.
+`BaseCellSize` (o tamanho no nível 0, colado na câmera) começou em **0,25 m** — o valor de
+referência do idTech 8 (o motor do *DOOM Eternal*), citado no código como ponto de partida.
+Mas o valor **atual em produção é 0,50 m**, e a mudança é um exemplo direto de "a régua de
+medição corrigiu a estimativa inicial": o par antigo `(0,25 m, LodDistance = 12 m)` saturava
+**95,2%** da tabela de hash na cena de referência — ocupação alta demais para medir custo com
+confiança (qualquer teste de capacidade, Seção 4.5, ficaria sempre no limite). Recalibrado
+para `(0,50 m, LodDistance = 6 m)`, a ocupação medida caiu para **22,8%** — dentro da faixa
+saudável. ⚠️ Se você ler `0,25 m` em algum lugar do código ou de uma auditoria antiga, é o
+valor histórico/de referência, não o default atual.
 
 ## 4.4 Colisões: tabela de hash aberta com "baldes"
 
@@ -230,6 +237,28 @@ mesmo pedindo 4. A conclusão registrada é honesta sobre o limite dela: **isso 
 para uma classe de cena** (exterior); um interior, onde o caminho bate mais e escapa menos,
 provavelmente justificaria um valor mais alto.
 
+### Scheduling compacto (`CompactUpdate`): o mesmo trabalho, 4,3× mais rápido
+
+O produtor dedicado atualiza apenas ~4% dos pixels por frame (`UpdateFraction`) — mas a
+primeira implementação ainda **disparava um dispatch do tamanho da tela inteira**, com cada
+thread testando "eu sou um dos pixels sorteados?" e saindo cedo (*early-out*) se não fosse.
+Isso desperdiça ocupação da GPU: a maioria das *waves* (grupos de threads que a GPU executa
+juntos) contém uma mistura de threads "sorteadas" e "não sorteadas", e uma wave só termina
+quando a última thread dela termina — então as threads que saíram cedo ficam **ociosas,
+esperando** as poucas que realmente têm trabalho.
+
+`CompactUpdate` (ligado por padrão desde a Fase 7 do plano de implementação) resolve isso
+compactando **antecipadamente**, de forma analítica, os pixels sorteados dentro de cada
+bloco de 5×5 do tile de atualização — de forma que as *waves* despachadas já contenham só
+threads com trabalho de verdade, em vez de intercalar trabalho e ociosidade.
+
+O resultado medido (`Docs/SHARC-PRIMARY-GI-PLAN.md`, Fase 7, 15/08/2026): o updater caiu de
+**3,75 ms para 0,87 ms** — uma melhora de **4,31×** — e o tempo total de GPU do frame caiu de
+15,65 ms para 12,57 ms. O A/B de imagem confirmou que nada mudou visualmente (60,33 dB de
+PSNR, variação de energia de −0,00047% — dentro do ruído numérico), com ocupação e número de
+amostras idênticos: é uma otimização pura de **como** o trabalho é despachado, não de **o
+que** é calculado.
+
 ## 4.8 Aquecimento (warmup): a tabela precisa de tempo antes de valer a pena consultar
 
 Uma tabela recém-criada (cena nova, ou depois de um reset) está **vazia**. Se o render
@@ -266,7 +295,7 @@ espalha em todas as direções aproximadamente igual), mas **não serve** para:
 - **Meio participante** (névoa volumétrica): não existe uma estrutura de célula de mundo
   equivalente para o volume da névoa.
 - **Auxiliares de superfície específicos** (folhagem, subsurface scattering, translúcidos):
-  continuam lendo o atlas do DDGI diretamente (Capítulo 3, Seção 3.9).
+  continuam lendo o atlas do DDGI diretamente (Capítulo 3, Seção 3.11).
 
 É por isso que a frase do índice — "o SHaRC e o DDGI não competem, eles cobrem o ponto fraco
 um do outro" — não é retórica. É a razão estrutural pela qual os dois sistemas coexistem
@@ -293,6 +322,7 @@ visual que acompanham essa telemetria.
 | LOD por distância (células dobram de tamanho) | Não gasta resolução fina em coisas longe da câmera |
 | Piso de confiança (`MinSampleCount`) | Impede que 1 amostra ruidosa vire "verdade" pra sempre |
 | Produtor dedicado + `UsePrevCacheAtTerminal` | Multi-bounce ao longo do tempo, sem path tracing caro por pixel |
+| Scheduling compacto (`CompactUpdate`) | Mesmo cálculo, 4,31× mais rápido — só reorganiza como as *waves* da GPU são preenchidas |
 | Aquecimento global (`Filling` → `Active`) | Evita gastar consultas numa tabela ainda vazia |
 
 Siga para o [Capítulo 5 — ReSTIR, DI, GI e ReGIR](05-ReSTIR-DI-GI-ReGIR.md), onde entra a
