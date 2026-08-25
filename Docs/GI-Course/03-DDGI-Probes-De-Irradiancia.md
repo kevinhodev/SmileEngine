@@ -255,7 +255,97 @@ pago em troca de reduzir visivelmente o vazamento de luz residual que motivou a 
 inteira. A conclusão registrada: "os 0,83 ms compram a correção do defeito que motivou a
 série inteira, e o sistema segue folgado para 60 fps."
 
-## 3.9 Os três papéis do DDGI (voltamos a este ponto no Capítulo 6)
+## 3.9 Compactação de sondas ativas: não gastar dispatch em sonda enterrada
+
+> ⚠️ **Nota de verificação:** esta seção descreve uma otimização que **não estava
+> implementada** quando `Docs/DDGI-AUDIT.md` foi escrito pela última vez (19/08/2026) — lá
+> ela aparece só como plano ("fica para depois da medição"). O código atual (commit
+> `75f5a61`, 22/08/2026) já a implementa, com o comportamento default **ligado**. É um bom
+> lembrete de que a documentação narrativa da engine pode ficar alguns dias atrás do
+> código — sempre vale conferir o `.h`/`.cpp` quando o objetivo é exatidão.
+
+Uma sonda marcada **inativa** pela classificação (Seção 3.5 — na prática, uma sonda
+**engolida por geometria**, detectada quando a maioria dos 64 raios bate em backface) não
+contribui em nada para o *gather* que os pixels consultam. Mesmo assim, sem tratamento
+especial, ela continuaria sendo atualizada (recebendo raios, sendo integrada no atlas) todo
+frame — trabalho de GPU inteiramente desperdiçado.
+
+`ProbeCompaction` (ligado por padrão) resolve isso com um padrão clássico de GPU-driven
+rendering: **compactar** a lista de sondas que realmente precisam de trabalho, e disparar o
+update via **dispatch indireto** (`ExecuteIndirect`) só sobre elas — em vez de despachar
+sempre para o total de sondas e desperdiçar threads em sondas que sabidamente não importam.
+
+```mermaid
+flowchart LR
+    subgraph Build["DDGICompactBuild.cs.hlsl"]
+        Check{"sonda inativa\nE não é lâmina\nrecém-exposta pelo scroll?"}
+        Check -->|"sim, pula"| Skip["fora da lista"]
+        Check -->|"não"| Add["adiciona à lista compacta\n(InterlockedAdd)"]
+    end
+    Add --> Finalize["DDGICompactFinalize.cs.hlsl\nmonta os argumentos do\nExecuteIndirect"]
+    Finalize --> Dispatch["update roda só sobre\na lista compacta"]
+```
+
+Dois detalhes de precisão que valem a pena guardar:
+
+- **"Inativa" aqui é bem mais estreito do que parece.** Uma sonda em ar livre, no meio de uma
+  sala grande, **não** é "inativa" — ela é tratada pelos raios adaptativos (Seção 3.7), que
+  reduzem sua contagem de raios, mas ela continua no dispatch. Só a sonda literalmente
+  engolida por geometria é excluída aqui. São dois mecanismos complementares, não
+  intercambiáveis — e a compactação só existe de fato com a **relocação ligada**: sem ela, o
+  passe de relocação nem chega a rodar a classificação, e nenhuma sonda é marcada inativa.
+- **Reativação periódica.** Uma sonda marcada inativa poderia, em teoria, deixar de estar
+  enterrada mais tarde (um objeto que a envolvia foi removido, por exemplo) sem que nada
+  force uma reclassificação. Por isso, a cada `kProbeWakeInterval = 240` updates, a engine
+  força `kProbeWakeUpdates = 2` updates com a lista **completa** (não compactada) — o
+  comentário do código chama isso de "dois updates periódicos [que] permitem reativar sondas
+  caso um evento de geometria escape".
+
+## 3.10 Atualização intercalada das cascatas: a grossa não precisa de todo frame
+
+> ⚠️ Mesma ressalva da seção anterior: implementado no commit `c3d6c7b` (22/08/2026), depois
+> da última revisão do `Docs/DDGI-AUDIT.md`, que ainda o tratava como item futuro.
+
+A Seção 3.8 mostrou que, com duas cascatas, o custo do update é aproximadamente o dobro de
+uma cascata só — e que ele é linear no número de sondas. Mas as duas cascatas não têm a
+mesma urgência: a cascata **fina** segue a câmera e precisa reagir rápido; a **grossa** é
+iluminação de baixa frequência espacial, que muda devagar e tolera meia taxa de atualização.
+
+`InterleavedUpdates` (ligado por padrão, só entra em vigor com exatamente duas cascatas)
+explora essa diferença: **a fina atualiza todo frame; a grossa, a cada dois frames,
+alternadamente.**
+
+```mermaid
+sequenceDiagram
+    participant F0 as Frame N
+    participant F1 as Frame N+1
+    participant F2 as Frame N+2
+    F0->>F0: cascata FINA + cascata GROSSA
+    F1->>F1: só cascata FINA
+    F2->>F2: cascata FINA + cascata GROSSA
+```
+
+Duas salvaguardas evitam que essa otimização introduza os mesmos bugs que a auditoria já
+tinha pago uma vez em outro contexto (Capítulo 3, e a lição repetida em vários pontos deste
+curso: "estado duplicado que diverge" foi a causa-raiz de quase todo bug real do DDGI):
+
+- **Eventos urgentes forçam as duas cascatas juntas no mesmo frame** — por exemplo, quando o
+  scrolling da cascata fina substitui a janela inteira de uma vez (um teleporte grande) ou
+  quando há uma reclassificação pendente. Nesses casos, esperar meio frame a mais pela
+  grossa criaria uma inconsistência temporária maior do que a otimização economiza.
+- **A meia-vida temporal é compensada explicitamente.** Quando a grossa pula um update
+  intercalado, o código dobra o peso do próximo update dela (`Cascades.Params.W`) para
+  preservar a mesma "meia-vida" efetiva da histerese — sem essa compensação, a cascata
+  grossa levaria o dobro do tempo para convergir depois de qualquer invalidação, e isso
+  afetaria justamente a cascata que serve de *fallback* incondicional para tudo (Seção 3.11).
+
+O ganho, conforme a aritmética que a própria auditoria projetou antes de implementar: as duas
+cascatas passam de `2,57 + 2,57 ms` para `2,57 + 1,285 ms` — cerca de **3,9 ms amortizados**
+em vez de 5,14 ms, no cenário medido de referência. Vale notar que esse ganho aparece como
+**frames alternados** (um mais caro, um mais barato) e não como um frame uniformemente mais
+rápido — uma média de profiler pode esconder essa alternância.
+
+## 3.11 Os três papéis do DDGI (voltamos a este ponto no Capítulo 6)
 
 Vale adiantar aqui, porque conecta este capítulo ao 4 e ao 6: mesmo quando o SHaRC é a fonte
 **primária** de GI de superfície (o padrão da engine hoje), o DDGI nunca fica ocioso. Ele
@@ -271,7 +361,7 @@ cumpre **três papéis** simultâneos:
    DDGI, porque o SHaRC não tem estrutura equivalente para meio participante (a "névoa" em
    si, não superfícies).
 
-## 3.10 Resumo do capítulo
+## 3.12 Resumo do capítulo
 
 | Conceito | O que resolve |
 |---|---|
@@ -284,6 +374,8 @@ cumpre **três papéis** simultâneos:
 | Bias de superfície com teto | Evita auto-sombra sem reabrir vazamento em paredes finas |
 | Raios adaptativos | Gasta menos raios onde a sonda já "sabe a resposta" |
 | Cascatas + scrolling toroidal | Mais densidade perto da câmera sem perder convergência |
+| Compactação de sondas ativas | Não gasta dispatch em sonda enterrada; reativação periódica evita ficar presa |
+| Atualização intercalada de cascatas | Grossa a cada 2 frames, fina todo frame — ~3,9 ms em vez de ~5,1 ms |
 
 Siga para o [Capítulo 4 — SHaRC](04-SHaRC-Radiance-Cache.md), onde o segundo pilar do
 sistema — mais fino, mais caro de aquecer, e hoje a fonte *primária* de GI — é explicado com
