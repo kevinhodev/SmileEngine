@@ -77,11 +77,12 @@ namespace Smile {
             u32  MrMapIndex       = 0;
             u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
             u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
+            Vec4 SubsurfaceColor{ 1.0f, 1.0f, 1.0f, 0.0f };
         };
-        // 84 B na v8 (+TriangleSrv). Vec4 aqui e alinhado em 4, entao o struct nao ganha padding
+        // 100 B: Vec4 aqui e alinhado em 4, entao o struct nao ganha padding
         // de cauda e o stride do StructuredBuffer casa byte a byte com o `InstanceGeo` do HLSL —
         // que e o unico contrato que importa (StructuredBuffer nao exige stride multiplo de 16).
-        static_assert(sizeof(FRTInstanceGeo) == 84, "FRTInstanceGeo deve casar com o HLSL (84B)");
+        static_assert(sizeof(FRTInstanceGeo) == 100, "FRTInstanceGeo deve casar com o HLSL (100B)");
     }
 
     static_assert(FRaytracingScene::kInstanceSlots == FCommandQueue::kFramesInFlight,
@@ -196,6 +197,9 @@ namespace Smile {
 
                 g.AlphaCutoff     = MC.AlphaCutoff;
                 g.RoughnessFactor = MC.RoughnessFactor;
+                // Mesmo dado do G-buffer: tint RGB + intensidade em A. Folhagem importada recebe
+                // 0.6 no loader; materiais editados preservam o valor autorado no RT.
+                g.SubsurfaceColor = MC.SubsurfaceColor;
                 // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
                 // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
                 // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na

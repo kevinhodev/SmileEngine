@@ -86,7 +86,7 @@ namespace Smile {
             SetUpscaler(EUpscaler::DLSS);
         R.ApplyUpscalerScale();
         // Depois do ApplyUpscalerScale: ele pode disparar RecreateInternalTargets (que ja
-        // reconcilia), e ai isto vira no-op. Sair do NRD devolve os ~336 MB das duas instancias.
+        // reconcilia), e ai isto vira no-op. Sair do NRD devolve os pools do RELAX; RR nao os usa.
         R.ReconcileNrdAllocation();
     }
 
@@ -526,6 +526,7 @@ namespace Smile {
     }
     bool FRenderSettings::GetGIHalfRes() const { return R.ReSTIRGI.GetHalfRes(); }
 
+
     void FRenderSettings::SetUseReSTIRDI(bool _V) {
         if (_V == R.UseReSTIRDI) return;
         // Os reservoirs do DI so caem na borda de SUBIDA; o resto cai sempre.
@@ -688,6 +689,13 @@ namespace Smile {
     }
     void FRenderSettings::SetGIInterleavedUpdates(bool _V) {
         R.DDGI.SetInterleavedUpdates(_V);
+    }
+
+    u32 FRenderSettings::GetGIUpdateRayBudget() const {
+        return R.DDGI.GetUpdateRayBudget();
+    }
+    void FRenderSettings::SetGIUpdateRayBudget(u32 _V) {
+        R.DDGI.SetUpdateRayBudget(_V);
     }
 
     bool FRenderSettings::GetGIProbeCompaction() const {

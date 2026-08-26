@@ -3,18 +3,22 @@
 #include <cmath>
 
 namespace Smile {
-    void FCamera::Update(const CameraInput& _Input, f32 _DeltaTime) {
-        Yaw   += _Input.Look.X;
-        Pitch  = Clamp(Pitch + _Input.Look.Y, -89.0f, 89.0f);
-
-        f32 YawRad   = Yaw   * ToRad;
-        f32 PitchRad = Pitch * ToRad;
-
-        Vec3 Forward = {
+    Vec3 FCamera::GetForward() const {
+        const f32 PitchRad = Pitch * ToRad;
+        const f32 YawRad   = Yaw   * ToRad;
+        return {
             std::cos(PitchRad) * std::sin(YawRad),
             std::sin(PitchRad),
             std::cos(PitchRad) * std::cos(YawRad)
         };
+    }
+
+    void FCamera::Update(const CameraInput& _Input, f32 _DeltaTime) {
+        Yaw   += _Input.Look.X;
+        Pitch  = Clamp(Pitch + _Input.Look.Y, -89.0f, 89.0f);
+
+        const f32 YawRad = Yaw * ToRad;
+        const Vec3 Forward = GetForward();
 
         Vec3 Right = { std::cos(YawRad), 0.0f, -std::sin(YawRad) };
 
@@ -26,13 +30,7 @@ namespace Smile {
     }
 
     Mat44 FCamera::GetViewMatrix() const {
-        f32 PitchRad = Pitch * ToRad;
-        f32 YawRad   = Yaw   * ToRad;
-        Vec3 Forward = {
-            std::cos(PitchRad) * std::sin(YawRad),
-            std::sin(PitchRad),
-            std::cos(PitchRad) * std::cos(YawRad)
-        };
+        const Vec3 Forward = GetForward();
         return Mat44::LookAtLH(Position, Position + Forward, Vec3::UnitY());
     }
 }

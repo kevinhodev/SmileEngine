@@ -9,20 +9,36 @@ Rectangle {
     property string iconName: ""
     property bool active: false
     property bool dropDown: false
+    // Rotulo que carrega DADO (valor de snap, contagem) vai em mono; texto de comando fica sans.
+    property bool monoLabel: false
+    // Ponto SEMANTICO a esquerda do rotulo (ambar = luz, azul = info, verde = ok). Existe
+    // para o botao poder sinalizar um estado sem recorrer ao accent, que e reservado a
+    // selecao/ativo/dirty — e o caso do seletor de modo de visualizacao (Lit).
+    property color dotColor: "transparent"
+    // Rotulo em texto principal: o controle esta "cheio" (carrega um valor escolhido) sem
+    // estar no estado ativo do accent.
+    property bool strongLabel: false
+    // Sem chip: so texto e chevron, com o hover marcando a area clicavel. A referencia usa
+    // isto nos controles que abrem MENU (Perspectiva, Mostrar) e reserva a moldura para os
+    // que exibem um VALOR vigente (Local, snaps, Lit).
+    property bool flat: false
     property bool enabledVisual: true
     property string tip: ""
     property string tipShortcut: ""
 
     signal tapped()
 
-    implicitWidth: contents.implicitWidth + 14
-    implicitHeight: 22
-    radius: 5
+    implicitWidth: contents.implicitWidth + 13
+    implicitHeight: 24
+    radius: Theme.radiusControl
     opacity: enabledVisual ? 1.0 : 0.42
-    color: active ? Theme.greenBg
-                  : (hover.hovered && enabledVisual ? Theme.controlHover : "#1a1c17")
-    border.color: active ? Theme.greenBorder
-                         : (hover.hovered && enabledVisual ? "#393b32" : "#2d2f28")
+    color: active ? Theme.accentBg
+         : hover.hovered && enabledVisual ? Theme.surfaceRaised
+         : flat ? "transparent"
+         : Theme.surface
+    border.color: active ? Theme.accentBorder
+                : flat ? "transparent"
+                : (hover.hovered && enabledVisual ? Theme.hairlineStrong : Theme.hairline)
     border.width: 1
 
     Row {
@@ -30,21 +46,30 @@ Rectangle {
         anchors.centerIn: parent
         spacing: 5
 
+        Rectangle {
+            visible: control.dotColor.a > 0
+            anchors.verticalCenter: parent.verticalCenter
+            width: 6; height: 6; radius: 3
+            color: control.dotColor
+        }
+
         ToolbarIcon {
             visible: control.iconName !== ""
             width: 14; height: 14
             anchors.verticalCenter: parent.verticalCenter
             name: control.iconName
-            color: control.active ? Theme.green : "#a7a397"
+            color: control.active ? Theme.accent : Theme.textSecondary
         }
 
         Text {
             visible: control.label !== ""
             anchors.verticalCenter: parent.verticalCenter
             text: control.label
-            color: control.active ? Theme.greenText : Theme.textNormal
-            font.family: Theme.fontFamily
-            font.pixelSize: 11
+            color: control.active ? Theme.accent
+                 : control.strongLabel ? Theme.textPrimary
+                 : Theme.textSecondary
+            font.family: control.monoLabel ? Theme.fontMono : Theme.fontFamily
+            font.pixelSize: control.monoLabel ? 10 : 11
             renderType: Text.NativeRendering
         }
 
@@ -52,7 +77,7 @@ Rectangle {
             visible: control.dropDown
             width: 10; height: 7
             anchors.verticalCenter: parent.verticalCenter
-            property color strokeColor: control.active ? Theme.green : "#858176"
+            property color strokeColor: control.active ? Theme.accent : Theme.textMuted
             onStrokeColorChanged: requestPaint()
             onPaint: {
                 const ctx = getContext("2d")

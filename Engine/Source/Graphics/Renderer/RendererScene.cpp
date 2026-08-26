@@ -457,6 +457,8 @@ namespace Smile {
                               RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV());
 
         SetupNrdIndirect();
+        Reflections.ConfigureLocalDenoiserResources(
+            Backend->Device.Native(), Backend->SRVHeap, NeedsLocalReflectionDenoiser());
 
         // Depois do NRD: o SRV do ReSTIR nasce acima e o da OUT do NRD so existe apos o
         // SetupNrdPack. Registrar antes deixava a saida do denoiser fora da lista p/ sempre.
@@ -488,6 +490,19 @@ namespace Smile {
         return Denoiser == EDenoiser::NRD && UseReSTIRDI;
     }
 
+    bool Renderer::NeedsLocalReflectionDenoiser() const {
+        switch (Denoiser) {
+            case EDenoiser::NRD:
+                return !(WantNrdIndirect() && Nrd.IsReady() &&
+                         Reflections.HasNrdSpecResources());
+            case EDenoiser::DLSS_RR:
+                return !(DlssRR.IsInitialized() && RRGuides.IsReady());
+            case EDenoiser::None:
+            default:
+                return true;
+        }
+    }
+
     void Renderer::SetupNrdDirect() {
         if (!WantNrdDirect()) { NrdDirect.ReleaseResources(); return; }
         const u32 ReliableVelocitySlot = TemporalMotion.IsReady()
@@ -507,7 +522,12 @@ namespace Smile {
     }
 
     void Renderer::SetupNrdIndirect() {
-        if (!WantNrdIndirect()) { Nrd.ReleaseResources(); return; }
+        Reflections.SetupNrdSpec(
+            Backend->Device.Native(), Backend->SRVHeap, nullptr, nullptr);
+        if (!WantNrdIndirect()) {
+            Nrd.ReleaseResources();
+            return;
+        }
         Nrd.SetupForResize(Backend->Device.Native(), RenderWidth(), RenderHeight());
         if (!Nrd.IsReady()) return;
         ReSTIRGI.SetupNrdPack(Backend->Device.Native(), Backend->SRVHeap,
@@ -523,11 +543,20 @@ namespace Smile {
 
     void Renderer::ReconcileNrdAllocation() {
         if (!Initialized || RenderWidth() == 0 || RenderHeight() == 0) return;
-        if (WantNrdIndirect() == Nrd.IsReady() && WantNrdDirect() == NrdDirect.IsReady()) return;
+        const bool WantsIndirect = WantNrdIndirect();
+        const bool IndirectMismatch = WantsIndirect != Nrd.IsReady() ||
+            (WantsIndirect && Nrd.IsReady() && !Reflections.HasNrdSpecResources());
+        const bool DirectMismatch = WantNrdDirect() != NrdDirect.IsReady();
+        const bool LocalMismatch =
+            NeedsLocalReflectionDenoiser() != Reflections.HasLocalDenoiserResources();
+        if (!IndirectMismatch && !DirectMismatch && !LocalMismatch) return;
         // Os packs guardam descriptors dos recursos NRD; eles nao podem mudar em voo.
         Backend->DirectQueue.Flush();
-        SetupNrdDirect();
-        SetupNrdIndirect();
+        if (DirectMismatch) SetupNrdDirect();
+        if (IndirectMismatch) SetupNrdIndirect();
+        // Calculado depois do setup: se o NRD falhou, preserva/recria o local como fallback.
+        Reflections.ConfigureLocalDenoiserResources(
+            Backend->Device.Native(), Backend->SRVHeap, NeedsLocalReflectionDenoiser());
         // A OUT do NRD entra e sai da lista do visualizador junto com a alocacao.
         RegisterDebugTargets();
     }

@@ -4,8 +4,10 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/DescriptorHeap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
+#include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Environment/HDREnvironment.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
+#include <array>
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <string>
@@ -14,8 +16,6 @@
 namespace Smile {
     class FCommandQueue;
     class FTextureSRVHeap;
-    class FMaterial;
-
     // Preview offscreen do Editor de Materiais (ate 1024x1024): primitiva unica com o FMaterial
     // selecionado, forward PBR isolado (sol fixo + IBL) e fundo do env cube. Tem um
     // FHDREnvironment PROPRIO — carregar HDRI aqui NAO liga IBL na cena principal (o
@@ -101,6 +101,7 @@ namespace Smile {
             Vec4  SunDirIntensity;
             Vec4  SunColor;
             Vec4  IBLParams;
+            Vec4  PreviewParams; // x = material Blend
         };
         struct alignas(256) FSkyCB {
             Vec4 CamRight;   // xyz + tan(fovX/2)
@@ -108,6 +109,8 @@ namespace Smile {
             Vec4 CamForward; // xyz + rotacao do env
             Vec4 Params;     // x = mip, y = intensidade
         };
+        static_assert(sizeof(FMeshCB) == 256);
+        static_assert(sizeof(FSkyCB) == 256);
 
         ComPtr<ID3D12Resource>      ColorTarget;
         ComPtr<ID3D12Resource>      DepthTarget;
@@ -116,6 +119,7 @@ namespace Smile {
 
         ComPtr<ID3D12RootSignature> MeshRootSig;
         ComPtr<ID3D12PipelineState> MeshPSO;
+        ComPtr<ID3D12PipelineState> MeshBlendPSO;
         ComPtr<ID3D12RootSignature> SkyRootSig;
         ComPtr<ID3D12PipelineState> SkyPSO;
 
@@ -127,6 +131,10 @@ namespace Smile {
             u64 FenceValue = 0;
             u32 Size = 0;
             u32 RowPitch = 0;
+            u32 MaterialTableStart = 0xFFFFFFFFu;
+            std::array<ComPtr<ID3D12Resource>, kMaterialTextureSlots> TextureRefs;
+            ComPtr<ID3D12Resource> MeshVertexRef;
+            ComPtr<ID3D12Resource> MeshIndexRef;
             bool Pending = false;
         };
 

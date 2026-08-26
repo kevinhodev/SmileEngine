@@ -19,10 +19,8 @@ namespace Smile {
     class FGpuProfiler;
     class FTextureSRVHeap;
 
-    // Constantes do Specular GI (b0 do trace E do composite). O prefixo (InvViewProj, CameraPos,
-    // ScreenParams, ReflectParams) e IDENTICO ao CompositeCB -> os dois passes compartilham o
-    // MESMO buffer (o composite le so o prefixo). Bate campo-a-campo com ReflectionCB
-    // (ReflectionTrace.cs.hlsl) e CompositeCB (ReflectionComposite.ps.hlsl).
+    // O prefixo ate ReflectParams e compartilhado por ReflectionCB e CompositeCB; mantenha os
+    // layouts sincronizados com os shaders.
     struct alignas(256) ReflectionConstants {
         Mat44 InvViewProj;       // FULL inverse view-proj (row-major)
         Vec4  CameraPos;         // xyz = camera world
@@ -35,8 +33,8 @@ namespace Smile {
         Vec4  SunColor;          // rgb = sun color, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;       // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
                                  // (so sombras no hit; origem do raio usa offset robusto)
-        Vec4  HalfScreenParams;  // halfW, halfH, 1/halfW, 1/halfH (trace e half-res; Fase 2b)
-        Mat44 PrevViewProj;      // VP (sem jitter) do frame anterior — reprojeção do temporal (Fase 3)
+        Vec4  HalfScreenParams;  // halfW, halfH, 1/halfW, 1/halfH
+        Mat44 PrevViewProj;      // VP sem jitter do frame anterior
         Vec4  PrevCameraPos;     // xyz = camera anterior; w = numero de transforms temporais
         Vec4  TemporalParams;    // x=maxFramesAccumulated, y=neighborhoodClampScale(γ), z=spatialRadius, w=mirrorMaxRoughness
         Vec4  DebugParams;       // x = modo de debug do reflexo (0=off, 1=acumulacao, 2=mascara espelho)
@@ -55,10 +53,8 @@ namespace Smile {
         Vec4  ReGIRResources;
         Mat44 ViewProj;          // current world -> clip; water contact SSR
         Vec4  WaterEnvironmentParams; // x=atmosphere, y=intensity, z=env max mip, w=scene max mip
-        // Parameterizacao do sky-view LUT p/ o ShadeSky do HitShading.hlsli, vinda do
-        // FAtmosphere (fonte unica). Anexado no FIM p/ nao deslocar offset nenhum — os shaders
-        // de trace que nao usam a cauda da agua declaram ViewProj/WaterEnvironmentParams como
-        // preenchimento p/ alcancar este offset (convencao ja existente nesses arquivos).
+        // Cauda compartilhada pelos traces de opacos e agua; novos campos entram no fim para
+        // preservar os offsets dos shaders existentes.
         Vec4  SkyParams;         // x = view height (km), y = raio do planeta (km), zw = livres
         // World radiance cache (FRadianceCacheShaderParams). Contrato por NOME com o
         // RC_UNPACK_PARAMS do RadianceCache.hlsli; anexado no FIM como o SkyParams.
@@ -68,6 +64,8 @@ namespace Smile {
         // Cascatas do DDGI, para o gather do 2o bounce no HitShading. Mesmo bloco dos outros
         // quatro cbuffers; o GIGridMinSpacing continua sendo a GROSSA (peso do volume).
         FDDGICascadeConstants GICascades;
+        Vec4 EnvironmentSky;
+        Vec4 EnvironmentGround;
     };
     static_assert(offsetof(ReflectionConstants, GICascades) == 688,
                   "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
@@ -79,11 +77,12 @@ namespace Smile {
                   "WaterEnvironmentParams divergiu do ReflectionCB da agua");
     static_assert(offsetof(ReflectionConstants, SkyParams) == 624,
                   "SkyParams deve permanecer anexado ao fim do ReflectionCB");
+    static_assert(offsetof(ReflectionConstants, EnvironmentSky) == 832,
+                  "o ambiente deve permanecer anexado ao fim do ReflectionCB");
 
-    // Specular GI — reflexoes ray-traced (DXR inline), esqueleto estilo Lumen Reflections.
-    // Fase 1: mirror, full-res, sem denoise. Passe de compute (trace, sombreado pelo MESMO
-    // HitShading.hlsli do DDGI) -> composite aditivo no HDR. Reusa a geometria/atlas do DDGI.
-    // No-op sem DXR/DDGI pronto. So roda sem MSAA (G-buffer single-sample).
+    // Specular GI via DXR inline: trace half-res, resolve/mirror full-res, composite no HDR e
+    // denoise Local, NRD ou DLSS-RR. A agua possui trace e history separados.
+    // No-op sem DXR ou com G-buffer indisponivel.
     class FReflections : public FRenderPass {
     public:
         // --- Contrato de passe (RenderPass.h) ---
@@ -98,14 +97,9 @@ namespace Smile {
         void Initialize(ID3D12Device* Device);
         void RecreatePipelines(ID3D12Device* Device);
 
-        // (Re)cria a textura de saida (radiancia) no tamanho da tela e (re)monta as tabelas de
-        // descritores. Chamar no setup da cena e em TODO resize (depth/gbuffer recriados). Os
-        // slots vem do RaytracingScene (TLAS + InstanceGeo), Atmosphere (skyview), Renderer
-        // (depth, gbuffer, BRDF LUT) e do fallback indireto.
-        //
-        // O fallback chega como CONTRATO (FGIFallbackBindings): sem volume DDGI os tres slots sao
-        // os neutros do Renderer e o passe continua chegando a IsReady(). Reflexao nao precisa de
-        // sonda para existir — o gather do DDGI e so o terminador do 2o bounce dela.
+        // Recria recursos dependentes da resolucao e tabelas com slots de cena. O fallback deve
+        // fornecer descriptors validos, reais ou neutros; DDGI e apenas o terminador opcional do
+        // segundo bounce. O caller configura o pacote local apos decidir o backend efetivo.
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
                             u32 TlasSlot, u32 SkyViewSlot, u32 InstanceSlot,
                             const FGIFallbackBindings& Fallback,
@@ -130,8 +124,8 @@ namespace Smile {
                             u32 PunctualLightCount, u32 TemporalInstanceCount,
                             bool MotionHistoryValid);
 
-        // F5: copia o SRV do buffer de luzes puntuais do frame pro t8 da tabela de trace DO
-        // FrameSlot (compartilhada pelo trace glossy e pelo mirror; versionada por frame em voo).
+        // Copia o SRV das luzes para o t8 da tabela deste FrameSlot, compartilhada por glossy e
+        // mirror e versionada por frame em voo.
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                   u32 StagingSlot, u32 FrameSlot);
 
@@ -155,13 +149,18 @@ namespace Smile {
         // tabela do composite-NRD. Chamar apos SetupForResize e Nrd.SetupForResize.
         void SetupNrdSpec(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                           ID3D12Resource* NrdInSpec, ID3D12Resource* NrdOutSpec);
+        // Histories do denoiser local sao residentes apenas quando nenhum backend externo efetivo
+        // os substitui. O caller deve drenar a fila antes de mudar o ownership dos descriptors.
+        void ConfigureLocalDenoiserResources(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                             bool Required);
+        bool HasLocalDenoiserResources() const { return LocalDenoiserReady; }
+        bool HasNrdSpecResources() const;
         // Empacota o especular (Resolved -> IN_SPEC do NRD). Caller transicionou a IN_SPEC p/ UAV
         // (Nrd.TransitionInputsToWrite) e o Resolved ja esta NON_PIXEL (fim do RecordTrace c/ UseNrd).
         void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
-        // Sem reflexoes ativas: escreve sinal especular ZERO valido na IN_SPEC. O RELAX combinado
-        // (DIFFUSE_SPECULAR) le a IN_SPEC todo frame; textura recem-criada nunca escrita = conteudo
-        // indefinido entrando no historico. Caller ja transicionou p/ UAV (TransitionInputsToWrite).
+        // Escreve um sinal especular zero valido quando RELAX combinado nao recebe reflexoes.
+        // Caller ja transicionou a IN_SPEC para UAV.
         void RecordNrdSpecZero(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
         // Instrumentacao de timer no trace half-res (ver FShaderTimer): kInvalidSlot desliga e o
@@ -180,25 +179,32 @@ namespace Smile {
         // a origem da cascata fina segue a camera. Dono = Renderer, fonte = FDDGI.
         void SetGICascades(const FDDGICascadeConstants& C) { GICascadesCPU = C; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
-        // SEM o bit de update — o Renderer publica ShaderParams(false) aqui. A radiancia que este
-        // passe produz vale para UMA direcao de espelho e o cache nao guarda direcao; grava-la
-        // envenenaria as celulas para o DDGI e o ReSTIR GI. Consultar continua valido.
+        // Sem update: radiancia especular e direcional, enquanto o cache e nao-direcional.
+        // Consultas continuam validas.
         void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).
         void SetSkyParams(f32 ViewHeightKm, f32 BottomRadiusKm) {
             SkyLutParams = { ViewHeightKm, BottomRadiusKm, 0.0f, 0.0f };
         }
-        // Limpa o historico temporal PROPRIO (caminho legado, sem NRD) no proximo RecordTrace.
+        // Limpa os histories locais no proximo RecordTrace.
         void InvalidateHistory()  { NeedsHistoryClear = true; NeedsWaterHistoryClear = true; }
 
-        void SetUseNrd(bool V) { UseNrd = V; }
+        void SetUseNrd(bool V) {
+            if (UseNrd == V) return;
+            UseNrd = V;
+            // O retorno ao local nao pode reutilizar frames anteriores ao backend externo.
+            NeedsHistoryClear = true;
+        }
         bool GetUseNrd() const { return UseNrd; }
 
-        // Modo "cru" p/ o DLSS Ray Reconstruction: como no UseNrd, o RecordTrace PARA no Resolved (sem
-        // Temporal/Spatial nem NRD), mas o RecordComposite compoe o Resolved DIRETO (ruidoso, linear) —
-        // o RR faz o denoise. Ligar com SetUseNrd(false) (senao o composite tentaria a OUT_SPEC do NRD).
-        void SetRawSpec(bool V) { RawSpec = V; }
+        // DLSS-RR consome o Resolved cru e substitui Temporal/Spatial. UseNrd deve estar falso.
+        void SetRawSpec(bool V) {
+            if (RawSpec == V) return;
+            RawSpec = V;
+            NeedsHistoryClear = true;
+            NeedsWaterHistoryClear = true;
+        }
         bool GetRawSpec() const { return RawSpec; }
 
         // SRV shader-visivel do Resolved (radiancia especular crua + hitDist no .a). O guides pass do RR
@@ -219,13 +225,7 @@ namespace Smile {
         f32  GetMaxRoughness() const  { return MaxRoughnessToTrace; }
         void SetRoughnessFade(f32 V)  { RoughnessFadeLength = V; }
         f32  GetRoughnessFade() const { return RoughnessFadeLength; }
-        // Back-face culling NOS RAIOS DE REFLEXAO. Politica por passe, no lugar da chave global
-        // que existia na TLAS: o Lumen culla no passe de reflexao
-        // (LumenReflectionHardwareRayTracing.usf:181) e NAO culla no gather do ReSTIR
-        // (LumenReSTIRGather.usf:315) — os dois regimes convivem porque a ray flag e por raio.
-        // Default OFF = comportamento historico da Smile (nada cullava, ja que a TLAS marcava
-        // tudo como two-sided). Ligar aproxima da UE e precisa de A/B proprio: reflexo de contato
-        // e de parede sao os lugares onde muda.
+        // Politica por raio de reflexao; nao altera a TLAS nem os gathers de GI. Default off.
         void SetBackfaceCull(bool V) { BackfaceCull = V; }
         bool GetBackfaceCull() const { return BackfaceCull; }
 
@@ -246,6 +246,7 @@ namespace Smile {
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
+        void ReleaseLocalDenoiserResources(FTextureSRVHeap& SRVHeap);
         void CreateConstantBuffer(ID3D12Device* Device);
         void CreateCompositePipeline(ID3D12Device* Device);
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,
@@ -253,13 +254,12 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FComputePipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
-        // Gemea instrumentada do trace (FShaderTimer): mesmas tabelas + slot falso da NVAPI.
-        // PSO separada e nao um if no CB — a instrumentacao custa registrador no passe quente.
+        // Variante instrumentada separada para nao onerar registradores do passe normal.
         FComputePipeline TracePSOTimed;
         FComputePipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
         FComputePipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
         FComputePipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
-        FComputePipeline SpatialPSO;  // 3 SRV [histCurr, gbuf, depth], 1 UAV [denoised]
+        FComputePipeline SpatialPSO;  // 4 SRV [histCurr, gbuf, depth, resolved], 1 UAV [histOther]
         FComputePipeline NrdPackPSO;  // 3 SRV [resolved, gbuf, depth], 1 UAV [NRD IN_SPEC] (NRD)
         FComputePipeline WaterTracePSO;    // 15 SRV [cena + water + copies + env], 2 UAV
         FComputePipeline WaterTemporalPSO; // 5 SRV, 1 UAV; historico exclusivo da agua
@@ -267,15 +267,14 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> CompositePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> WaterCompositePSO;
 
-        // Trace -> Radiance(half) + RayData(half). Resolve -> Resolved(full, denoise espacial+upsample).
-        // Temporal -> History[curr] (acumulado; ping-pong). Composite le History[curr]. RGBA16F.
+        // Trace usa tres sinais half-res; resolve e motion sao full-res. Todos usam RGBA16F.
+        // Temporal acumula em History[curr]; spatial filtra em History[prev]; composite le prev.
         Microsoft::WRL::ComPtr<ID3D12Resource> Radiance;
         Microsoft::WRL::ComPtr<ID3D12Resource> RayData;
         Microsoft::WRL::ComPtr<ID3D12Resource> RayMotion;
         Microsoft::WRL::ComPtr<ID3D12Resource> Resolved;
         Microsoft::WRL::ComPtr<ID3D12Resource> ResolvedMotion;
         Microsoft::WRL::ComPtr<ID3D12Resource> History[2];
-        Microsoft::WRL::ComPtr<ID3D12Resource> Denoised; // saida do spatial; lida pelo composite
         Microsoft::WRL::ComPtr<ID3D12Resource> WaterResolved;
         Microsoft::WRL::ComPtr<ID3D12Resource> WaterMotion;
         Microsoft::WRL::ComPtr<ID3D12Resource> WaterHistory[2];
@@ -285,7 +284,6 @@ namespace Smile {
         D3D12_RESOURCE_STATES ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES HistoryState[2] = { D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON };
-        D3D12_RESOURCE_STATES DenoisedState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES WaterResolvedState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES WaterMotionState = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES WaterHistoryState[2] = {
@@ -301,29 +299,25 @@ namespace Smile {
         u32 ResolvedMotionUAVSlot = kInvalidSlot;
         u32 HistorySRVSlot[2]   = { kInvalidSlot, kInvalidSlot };
         u32 HistoryUAVSlot[2]   = { kInvalidSlot, kInvalidSlot };
-        u32 DenoisedSRVSlot     = kInvalidSlot;
-        u32 DenoisedUAVSlot     = kInvalidSlot;
         u32 TraceUAVTable       = kInvalidSlot; // 3 UAVs [radiance, raydata, raymotion]
         u32 ResolvedUAVTable    = kInvalidSlot; // 2 UAVs [resolved, resolvedmotion]
-        // 8 SRVs [TLAS,skyview,inst,irrad,verts,idx,depth,gbuf] + t8 (luzes, por frame). Uma
-        // tabela por frame em voo: o t8 muda todo frame e a do frame anterior ainda pode estar
-        // sendo lida pela GPU (descriptor versioning).
+        // Tabelas de trace sao versionadas porque luzes e snapshots temporais mudam por frame.
         static constexpr u32 kTraceTables = 2; // == FCommandQueue::kFramesInFlight (assert no .cpp)
         u32 TraceTable[kTraceTables] = { kInvalidSlot, kInvalidSlot };
         u32 ResolveTableStart   = kInvalidSlot; // 5 SRVs [radiance, raydata, motion, depth, gbuf]
-        // Por paridade (curr=0/1): temporal le History[1-curr] e escreve History[curr]; composite
-        // le History[curr]. 2 tabelas pre-montadas (sem CopyDescriptors por frame).
+        // Temporal le History[prev] e escreve History[curr]; spatial le curr e escreve prev.
+        // O composite da paridade curr le prev. Tabelas pre-montadas evitam copias por frame.
         u32 TemporalTable[2]    = { kInvalidSlot, kInvalidSlot }; // + resolved motion
-        u32 SpatialTable[2]     = { kInvalidSlot, kInvalidSlot }; // 3 SRVs [hist[curr], gbuf, depth]
-        u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 5 SRVs [denoised, gbuf, depth, brdfLut, gbufC]
-        // NRD unificado: pack especular + composite lendo a OUT_SPEC do NRD em vez do Denoised caseiro.
+        u32 SpatialTable[2]     = { kInvalidSlot, kInvalidSlot }; // 4 SRVs [hist[curr], gbuf, depth, resolved]
+        u32 CompositeTable[2]   = { kInvalidSlot, kInvalidSlot }; // 6 SRVs [hist filtrado + material]
+        // NRD unificado: pack especular + composite lendo a OUT_SPEC em vez do history local.
         u32 SpecPackSrvTable    = kInvalidSlot;                   // 3 SRVs [resolved, gbuf, depth]
         u32 SpecPackUAVSlot     = kInvalidSlot;                   // UAV da IN_SPEC do NRD
         ID3D12Resource* NrdInSpec = nullptr;                      // nao-owned (FNrdDenoiser); p/ o clear
         u32 NrdOutSpecSRV       = kInvalidSlot;                   // SRV da OUT_SPEC do NRD
-        u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 5 SRVs [nrdOutSpec, gbuf, depth, brdfLut, gbufC]
+        u32 CompositeTableNrd[2] = { kInvalidSlot, kInvalidSlot };// 6 SRVs [+ GBufferA]
         // RR: composite lendo o Resolved CRU (parity-independente — Resolved nao faz ping-pong).
-        u32 CompositeTableRaw    = kInvalidSlot;                  // 5 SRVs [resolved, gbuf, depth, brdfLut, gbufC]
+        u32 CompositeTableRaw    = kInvalidSlot;                  // 6 SRVs [+ GBufferA]
         u32 WaterResolvedSRVSlot = kInvalidSlot;
         u32 WaterResolvedUAVSlot = kInvalidSlot;
         u32 WaterMotionSRVSlot   = kInvalidSlot;
@@ -362,11 +356,12 @@ namespace Smile {
         f32  GIMaxRayDist = 0.0f;
 
         u32  Width = 0, Height = 0;          // full-res (resolve, composite)
-        u32  HalfWidth = 0, HalfHeight = 0;  // half-res (trace; Fase 2b)
+        u32  HalfWidth = 0, HalfHeight = 0;  // dominio half-res do trace
         u32  TimerSlot  = kInvalidSlot;      // alvo de timer vigente (kInvalidSlot = captura off)
         bool TraceTimed = false;             // permutacao instrumentada criada com sucesso
         bool Initialized = false;
         bool Ready       = false;
+        bool LocalDenoiserReady = false;
 
         // Tunaveis.
         bool Enabled             = true;
@@ -382,7 +377,7 @@ namespace Smile {
         bool BackfaceCull        = false; // culling nos raios de reflexao (ver setter)
         bool UseNrd              = false; // denoise via NRD RELAX especular (unificado c/ o GI)
         bool RawSpec             = false; // reflexao crua p/ o DLSS Ray Reconstruction (denoise = RR)
-        // Temporal (Fase 3).
+        // Denoiser local.
         bool Temporal            = true;  // acumulacao temporal (off = só resolve espacial)
         f32  MaxFrames           = 12.0f; // frames acumulados (Lumen default)
         f32  NeighborhoodGamma   = 1.0f;  // γ do neighborhood clamp (↑ = menos ruido, + ghosting)

@@ -122,6 +122,7 @@ smile_editor_domain(Profiling
 
 smile_editor_domain(Debugging
     DebugTargetsBridge
+    ReSTIRDebugBridge
 )
 
 smile_editor_assets("UI\\QML\\Shell"
@@ -132,6 +133,7 @@ smile_editor_assets("UI\\QML\\Shell"
 )
 
 smile_editor_assets("UI\\QML\\Scene"
+    Qml/InspectorPanel.qml
     Qml/MaterialsWindow.qml
     Qml/SceneOutlinerPanel.qml
     Qml/TimeOfDayWindow.qml
@@ -139,6 +141,7 @@ smile_editor_assets("UI\\QML\\Scene"
 
 smile_editor_assets("UI\\QML\\Scene\\Inspectors"
     Qml/Scene/CloudsInspector.qml
+    Qml/Scene/LightInspector.qml
     Qml/Scene/OceanInspector.qml
     Qml/Scene/WeatherInspector.qml
 )
@@ -150,6 +153,7 @@ smile_editor_assets("UI\\QML\\Rendering"
 
 smile_editor_assets("UI\\QML\\Debugging"
     Qml/DebugTargetsWindow.qml
+    Qml/ReSTIRDebugWindow.qml
 )
 
 smile_editor_assets("UI\\QML\\Profiling"
@@ -163,17 +167,26 @@ smile_editor_assets("UI\\QML\\Shared"
     Qml/components/BipolarSliderRow.qml
     Qml/components/Chip.qml
     Qml/components/ColorRow.qml
+    Qml/components/HsvColorPicker.qml
+    Qml/components/FramelessTitleBar.qml
+    Qml/components/DockPanelHeader.qml
     Qml/components/InspectorSectionHeader.qml
     Qml/components/PairedScrubRow.qml
+    Qml/components/PresetRow.qml
     Qml/components/PrimarySliderRow.qml
     Qml/components/ScrubField.qml
+    Qml/components/AxisField.qml
     Qml/components/ScrubRow.qml
+    Qml/components/SectionHeader.qml
     Qml/components/SliderRow.qml
+    Qml/components/StatRow.qml
     Qml/components/StepperRow.qml
+    Qml/components/SwitchRow.qml
     Qml/components/Theme.qml
     Qml/components/Toggle.qml
     Qml/components/ToggleRow.qml
     Qml/components/ToolbarButton.qml
+    Qml/components/VectorRow.qml
     Qml/components/ToolbarIcon.qml
     Qml/components/ToolTip.qml
     Qml/components/WindowButton.qml

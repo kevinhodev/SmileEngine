@@ -46,6 +46,27 @@ target_compile_definitions(SmileEditor
 # O Editor depende do build dos shaders para que os .cso existam em runtime
 add_dependencies(SmileEditor Shaders)
 
+if(BUILD_TESTING)
+    find_program(QMLLINT_EXECUTABLE qmllint HINTS "${Qt6_DIR}/../../../bin")
+    if(QMLLINT_EXECUTABLE)
+        set(SMILE_EDITOR_QML_FILES "")
+        foreach(asset IN LISTS SMILE_EDITOR_ASSET_FILES)
+            if(asset MATCHES "\\.qml$")
+                list(APPEND SMILE_EDITOR_QML_FILES
+                    "${CMAKE_CURRENT_SOURCE_DIR}/${asset}")
+            endif()
+        endforeach()
+
+        add_test(NAME SmileEditor.QmlLint
+            COMMAND "${QMLLINT_EXECUTABLE}"
+                -I "${CMAKE_CURRENT_SOURCE_DIR}/Qml"
+                -I "${CMAKE_CURRENT_SOURCE_DIR}/Qml/components"
+                ${SMILE_EDITOR_QML_FILES}
+        )
+        set_tests_properties(SmileEditor.QmlLint PROPERTIES LABELS "Editor;QML")
+    endif()
+endif()
+
 # Pos-build: copia DLLs do Qt para o lado do executavel via windeployqt
 # Necessario para o exe rodar standalone (Qt6Core.dll, Qt6Gui.dll, plataformas, estilos, etc.)
 if(WIN32)
@@ -130,4 +151,3 @@ if(WIN32)
         endif()
     endforeach()
 endif()
-

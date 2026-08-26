@@ -11,6 +11,7 @@ cbuffer PreviewCB : register(b0) {
     float4 SunDirIntensity; // xyz = direcao PARA o sol, w = intensidade
     float4 SunColor;
     float4 IBLParams;       // x = intensidade, y = rotacao do env (rad), z = mip max, w = enabled
+    float4 PreviewParams;   // x = material Blend
 };
 
 #include "../MaterialCB.hlsli"
@@ -188,6 +189,7 @@ float4 main(PSInput input) : SV_Target {
     float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.Sample(MaterialSampler, UV)
                                        : float4(1.0f, 1.0f, 1.0f, 1.0f);
     float3 BaseColor    = BaseColorFactor.rgb * AlbedoSample.rgb;
+    float  SurfaceAlpha = saturate(BaseColorFactor.a * AlbedoSample.a);
     if (AlphaTest)
         MaterialAlphaClip(AlbedoSample.a);
 
@@ -319,5 +321,7 @@ float4 main(PSInput input) : SV_Target {
     float3 Color = Direct + Ambient + Emissive;
     Color = ACESFilm(Color);
     Color = pow(Color, 1.0f / 2.2f);
+    if (PreviewParams.x > 0.5f)
+        return float4(Color * SurfaceAlpha, SurfaceAlpha);
     return float4(Color, 1.0f);
 }

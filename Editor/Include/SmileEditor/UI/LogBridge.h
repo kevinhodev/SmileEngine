@@ -19,6 +19,12 @@ namespace SmileEditor {
         Q_PROPERTY(int count READ Count NOTIFY StatsChanged)
         Q_PROPERTY(qulonglong droppedCount READ DroppedCount NOTIFY StatsChanged)
         Q_PROPERTY(qulonglong evictedCount READ EvictedCount NOTIFY StatsChanged)
+        // Contagem POR NIVEL do que esta no historico agora (os chips de filtro da faixa de
+        // comando). Nao e um total da sessao: o teto FIFO expulsa linhas antigas, e mostrar
+        // "Erros · 3" com os tres ja evictados prometeria uma filtragem que nao existe mais.
+        Q_PROPERTY(int infoCount READ InfoCount NOTIFY StatsChanged)
+        Q_PROPERTY(int warnCount READ WarnCount NOTIFY StatsChanged)
+        Q_PROPERTY(int errorCount READ ErrorCount NOTIFY StatsChanged)
 
     public:
         enum Roles {
@@ -37,6 +43,9 @@ namespace SmileEditor {
         int Count() const { return static_cast<int>(Entries.size()); }
         qulonglong DroppedCount() const { return DroppedCount_; }
         qulonglong EvictedCount() const { return EvictedCount_; }
+        int InfoCount() const  { return LevelCounts[0]; }
+        int WarnCount() const  { return LevelCounts[1]; }
+        int ErrorCount() const { return LevelCounts[2]; }
 
         // QAbstractListModel
         int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -44,6 +53,7 @@ namespace SmileEditor {
         QHash<int, QByteArray> roleNames() const override;
 
         // Acoes do menu (⋮) do console, chamadas pelo QML.
+        Q_INVOKABLE int MatchCount(const QString& level, const QString& search) const;
         Q_INVOKABLE void CopyAll() const;  // copia todo o log (texto plano) pro clipboard
         Q_INVOKABLE void RequestClose();   // pede o fechamento do dock (emite CloseRequested)
 
@@ -68,6 +78,10 @@ namespace SmileEditor {
 
         // Drena a fila concorrente em um unico lote; roda sempre na thread da GUI.
         void DrainPending();
+        // Recontagem varrendo Entries (teto de 500) em vez de contadores incrementais: a
+        // eviction remove pela frente, e um contador incremental teria de saber o nivel de
+        // cada linha removida — a varredura custa menos que carregar esse estado.
+        void RecountLevels();
 
         QVector<Entry> Entries;
 
@@ -81,5 +95,6 @@ namespace SmileEditor {
 
         qulonglong DroppedCount_ = 0; // pressao na fila: nunca chegou ao model
         qulonglong EvictedCount_ = 0; // FIFO normal: saiu pelo teto de historico
+        int        LevelCounts[3] = { 0, 0, 0 }; // INFO, WARN, ERR
     };
 }

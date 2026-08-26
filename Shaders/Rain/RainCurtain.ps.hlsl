@@ -14,6 +14,11 @@ struct VSOutput {
     float2 uv  : TEXCOORD0;
 };
 
+struct PSOutput {
+    float4 color    : SV_Target0;
+    float4 velocity : SV_Target1;
+};
+
 // Um layer de streaks: colunas verticais de ~0.14 m no arco do cilindro, cada coluna com
 // presenca/fase/offset proprios (hash). "presence" controla quantas colunas tem gota ativa.
 float StreakPattern(float u, float v, float presence) {
@@ -32,7 +37,7 @@ float StreakPattern(float u, float v, float presence) {
     return body * prof * prof;
 }
 
-float4 main(VSOutput input) : SV_Target {
+PSOutput main(VSOutput input) {
     // F4: CurtainParams.x ja vem pre-multiplicado pelo RainAmount INSTANTANEO no CPU —
     // RainParams0.x agora e o molhado acumulado (Wetness) e nao serve pra cortina.
     const float rain = CurtainParams.x;
@@ -76,6 +81,8 @@ float4 main(VSOutput input) : SV_Target {
                                                             // senao vira shimmer subpixel)
     float3 acc  = 0.0f;
     float  accA = 0.0f;
+    float2 accVelocity = 0.0f;
+    float  velocityWeight = 0.0f;
 
     // singularidade do zenite: olhando reto p/ cima o UV cilindrico degenera num starburst
     // radial (bug do A/B) — fade suave; horiz > 0.2 (ate ~78 graus de elevacao) intacto
@@ -136,8 +143,24 @@ float4 main(VSOutput input) : SV_Target {
         if (s <= 0.001f) continue;
 
         const float a = s * alphaL[i];
-        acc  += tint * a * (1.0f - accA);
-        accA += a * (1.0f - accA);
+        const float contribution = a * (1.0f - accA);
+        acc  += tint * contribution;
+        accA += contribution;
+
+        // A fase de um streak no frame anterior estava speed*dt metros acima. Projetar
+        // esse mesmo ponto/mesma fase nas matrizes sem jitter produz o MV que o RR espera.
+        const float dt = max(CameraWorldPos.w - PrevCameraWorldPos.w, 0.0f);
+        float4 curClip  = mul(float4(wall, 1.0f), RainViewProjNoJitter);
+        float4 prevClip = mul(float4(wall + float3(0.0f, speed * dt, 0.0f), 1.0f),
+                              PrevRainViewProj);
+        if (curClip.w > 1e-4f && prevClip.w > 1e-4f) {
+            float2 curNdc  = curClip.xy / curClip.w;
+            float2 prevNdc = prevClip.xy / prevClip.w;
+            float2 curUv   = float2(curNdc.x * 0.5f + 0.5f, 0.5f - curNdc.y * 0.5f);
+            float2 prevUv  = float2(prevNdc.x * 0.5f + 0.5f, 0.5f - prevNdc.y * 0.5f);
+            accVelocity += (curUv - prevUv) * contribution;
+            velocityWeight += contribution;
+        }
     }
 
     // ---- Veu de chuva distante (haze sem streak, atras dos cilindros) ----
@@ -149,5 +172,12 @@ float4 main(VSOutput input) : SV_Target {
     }
 
     if (accA <= 0.0015f) discard;
-    return float4(acc, accA * 0.6f); // premultiplicado; a chuva vela pouco o fundo
+    PSOutput o;
+    const float colorAlpha = accA * 0.6f;
+    o.color = float4(acc, colorAlpha); // premultiplicado; a chuva vela pouco o fundo
+    // O veu distante nao tem uma superficie rastreavel; preserve o MV do fundo nele. Apenas
+    // os streaks geometricos pesam no segundo RTV.
+    o.velocity = float4(velocityWeight > 1e-5f ? accVelocity / velocityWeight : float2(0.0f, 0.0f),
+                        0.0f, min(colorAlpha, velocityWeight));
+    return o;
 }

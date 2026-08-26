@@ -114,6 +114,11 @@ namespace Smile {
         u32  DDGIRaysPerProbe    = 0;
         bool DDGIAdaptiveRays    = false;
         bool DDGIInterleavedUpdates = false;
+        u32  DDGIUpdateRayBudget = 0;
+        bool DDGIUpdateBudgetEffective = false;
+        u32  DDGIEffectiveProbeBudget = 0;
+        u32  DDGIScheduledProbeCount = 0;
+        u32  DDGIScheduledProbeStart = 0;
         bool DDGIProbeCompaction = false;
         bool DDGIProbeCompactionEffective = false;
         u32  DDGIActiveProbeCount = 0;
@@ -354,11 +359,11 @@ namespace Smile {
         // uma CURVA nestes numeros — `srcCache` subindo e `srcDdgi` caindo conforme o cache
         // aquece —, e curva nao se confere em painel volatil.
         //
-        // DOIS EIXOS: `cache + ddgi + zero == total` (quem forneceu) e `ineligible` (por que nao
-        // foi o cache), que cruza com DDGI e com zero — nunca com cache. Quanto da inelegibilidade
+        // DOIS EIXOS: `cache + ddgi + environment + zero == total` (quem forneceu) e `ineligible` (por que nao
+        // foi o cache), que cruza com DDGI, ambiente e zero — nunca com cache. Quanto da inelegibilidade
         // caiu no DDGI e interseccao, e nao sai destes numeros: leia os dois eixos como marginais.
         u32 CacheSrcTotal = 0, CacheSrcCache = 0, CacheSrcDDGI = 0;
-        u32 CacheSrcZero = 0, CacheSrcIneligible = 0;
+        u32 CacheSrcEnvironment = 0, CacheSrcZero = 0, CacheSrcIneligible = 0;
 
         // Semente com que ESTE frame amostrou. Tem de bater com o N do aquecimento; se nao bater,
         // o contrato de warm-up quebrou em algum lugar e o manifesto denuncia.

@@ -1,5 +1,8 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
+import "components" as C
 
 // Barra de menus do editor (Arquivo/Janela/Ajuda), estilo escuro. Liga em `menuBridge`
 // (MenuBridge, propriedade obrigatoria). Popups usam popupType Window pra escapar do QQuickWidget fino
@@ -15,15 +18,16 @@ MenuBar {
         padding: 0
         contentItem: Text {
             text: mbi.text
-            color: "#c8c2b4"
+            color: C.Theme.textSecondary
+            font.family: C.Theme.fontFamily
             font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             leftPadding: 10; rightPadding: 10
         }
         background: Rectangle {
-            radius: 5
-            color: mbi.highlighted ? "#23241d" : "transparent"
+            radius: C.Theme.radiusControl
+            color: mbi.highlighted ? C.Theme.surfaceRaised : "transparent"
         }
     }
     background: Rectangle { color: "transparent" }
@@ -59,7 +63,7 @@ MenuBar {
                 anchors.horizontalCenter: parent.left
                 anchors.horizontalCenterOffset: mi.padX + mi.checkW / 2
                 anchors.verticalCenter: parent.verticalCenter
-                text: "✓"; color: "#5b9dff"; font.pixelSize: 12
+                text: "✓"; color: C.Theme.accent; font.pixelSize: 12
             }
             Text {
                 id: label
@@ -67,8 +71,8 @@ MenuBar {
                 anchors.leftMargin: mi.padX + mi.checkW
                 anchors.verticalCenter: parent.verticalCenter
                 text: mi.text
-                color: mi.enabled ? "#c8c2b4" : "#5a5950"
-                font.pixelSize: 12
+                color: mi.enabled ? C.Theme.textNormal : C.Theme.textDisabled
+                font.pixelSize: 13
             }
             Text {
                 id: shortcut
@@ -77,17 +81,18 @@ MenuBar {
                 anchors.rightMargin: mi.padX
                 anchors.verticalCenter: parent.verticalCenter
                 text: mi.shortcutText
-                color: "#6c6a61"; font.pixelSize: 11
+                color: C.Theme.textMuted; font.pixelSize: 11
+                font.family: C.Theme.fontMono
             }
         }
-        background: Rectangle { color: mi.highlighted ? "#2a2b24" : "transparent" }
+        background: Rectangle { color: mi.highlighted ? C.Theme.surfaceRaised : "transparent" }
     }
 
     component MSep: MenuSeparator {
         // padding minimo (bem menor que o default): so o suficiente pra linha de 1px aparecer.
         // O grosso da folga vertical ja vem da altura dos itens vizinhos (26px).
         topPadding: 4; bottomPadding: 4; leftPadding: 0; rightPadding: 0
-        contentItem: Rectangle { implicitHeight: 1; color: "#2a2b24" }
+        contentItem: Rectangle { implicitHeight: 1; color: C.Theme.hairline }
     }
 
     // ---- Menu escuro (popup como janela propria, largura pelo conteudo) ----
@@ -102,13 +107,14 @@ MenuBar {
             var w = 0;
             for (var i = 0; i < dm.count; ++i) {
                 var it = dm.itemAt(i);
-                if (it && it.contentItem)
-                    w = Math.max(w, it.contentItem.implicitWidth);
+                if (it)
+                    w = Math.max(w, it.implicitWidth);
             }
             return w;
         }
         background: Rectangle {
-            color: "#1b1c17"; border.color: "#33342c"; border.width: 1; radius: 6
+            color: C.Theme.surface; border.color: C.Theme.hairlineStrong; border.width: 1
+            radius: C.Theme.radiusCard
         }
     }
 
@@ -116,43 +122,53 @@ MenuBar {
         title: "Arquivo"
         // Qt.callLater: deixa o popup (janela on-top) fechar ANTES do QFileDialog modal, que
         // senao bloqueia o loop dentro do handler e prende o menu aberto por cima de tudo.
-        MItem { text: "Carregar Cena…";  shortcutText: "Ctrl+O";       onTriggered: Qt.callLater(menuBridge.loadScene) }
-        MItem { text: "Adicionar Cena…"; shortcutText: "Ctrl+Shift+O"; onTriggered: Qt.callLater(menuBridge.addScene) }
+        MItem { text: "Carregar Cena…";  shortcutText: "Ctrl+O";       onTriggered: Qt.callLater(menuBar.menuBridge.loadScene) }
+        MItem { text: "Adicionar Cena…"; shortcutText: "Ctrl+Shift+O"; onTriggered: Qt.callLater(menuBar.menuBridge.addScene) }
         MSep {}
-        MItem { text: "Sair";            shortcutText: "Ctrl+Q";       onTriggered: menuBridge.quit() }
+        MItem { text: "Sair";            shortcutText: "Ctrl+Q";       onTriggered: menuBar.menuBridge.quit() }
     }
 
     DarkMenu {
         title: "Janela"
         MItem {
             text: "Console"; checkColumn: true
-            markVisible: menuBridge.consoleVisible // estado real do dock (pode fechar sozinho)
-            onTriggered: menuBridge.toggleConsole()
+            markVisible: menuBar.menuBridge.consoleVisible // estado real do dock (pode fechar sozinho)
+            onTriggered: menuBar.menuBridge.toggleConsole()
         }
         MItem {
             text: "Time of Day"; checkColumn: true
-            markVisible: menuBridge.timeOfDayVisible
-            onTriggered: menuBridge.toggleTimeOfDay()
+            markVisible: menuBar.menuBridge.timeOfDayVisible
+            onTriggered: menuBar.menuBridge.toggleTimeOfDay()
         }
         MItem {
             text: "Cena"; checkColumn: true
-            markVisible: menuBridge.lightsVisible
-            onTriggered: menuBridge.toggleLights()
+            markVisible: menuBar.menuBridge.lightsVisible
+            onTriggered: menuBar.menuBridge.toggleLights()
+        }
+        MItem {
+            text: "Inspector"; checkColumn: true
+            markVisible: menuBar.menuBridge.inspectorVisible
+            onTriggered: menuBar.menuBridge.toggleInspector()
         }
         MItem {
             text: "Mini Profiler"; checkColumn: true
-            markVisible: menuBridge.statsVisible
-            onTriggered: menuBridge.toggleStats()
+            markVisible: menuBar.menuBridge.statsVisible
+            onTriggered: menuBar.menuBridge.toggleStats()
         }
         MItem {
             text: "Render targets"; checkColumn: true; shortcutText: "Ctrl+Shift+T"
-            markVisible: menuBridge.debugTargetsVisible
-            onTriggered: menuBridge.toggleDebugTargets()
+            markVisible: menuBar.menuBridge.debugTargetsVisible
+            onTriggered: menuBar.menuBridge.toggleDebugTargets()
+        }
+        MItem {
+            text: "ReSTIR Lab"; checkColumn: true; shortcutText: "Ctrl+Shift+R"
+            markVisible: menuBar.menuBridge.restirVisible
+            onTriggered: menuBar.menuBridge.toggleReSTIR()
         }
         MItem {
             text: "Materiais"; checkColumn: true
-            markVisible: menuBridge.materialsVisible
-            onTriggered: menuBridge.toggleMaterials()
+            markVisible: menuBar.menuBridge.materialsVisible
+            onTriggered: menuBar.menuBridge.toggleMaterials()
         }
     }
 
@@ -160,7 +176,7 @@ MenuBar {
         title: "Opções"
         MItem {
             text: "Configurações…"; shortcutText: "Ctrl+,"
-            onTriggered: menuBridge.openSettings()
+            onTriggered: menuBar.menuBridge.openSettings()
         }
     }
 

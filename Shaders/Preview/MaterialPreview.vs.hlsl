@@ -8,6 +8,7 @@ cbuffer PreviewCB : register(b0) {
     float4 SunDirIntensity; // xyz = direcao PARA o sol, w = intensidade
     float4 SunColor;        // rgb
     float4 IBLParams;       // x = intensidade, y = rotacao do env (rad), z = mip max do specular, w = enabled
+    float4 PreviewParams;   // x = material Blend
 };
 
 struct VSInput {

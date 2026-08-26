@@ -31,9 +31,9 @@ Item {
         anchors.left: parent.left
         y: 0
         text: root.label
-        color: Theme.textNormal
+        color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: 11
     }
 
     Text {
@@ -100,7 +100,7 @@ Item {
                 width: Math.abs(slider.visualPosition - root.centerPosition) * parent.width
                 height: parent.height
                 radius: 1
-                color: Theme.green
+                color: Theme.accent
             }
 
             Rectangle {
@@ -119,7 +119,7 @@ Item {
             height: 10
             radius: 5
             color: Theme.knob
-            border.color: Theme.green
+            border.color: Theme.accent
             border.width: 1.3
         }
     }

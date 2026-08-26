@@ -38,7 +38,7 @@ namespace Smile {
         TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 12, 2, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 5, 1, false);
-        SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 3, 1, false);
+        SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 4, 1, false);
         NrdPackPSO.Initialize(_Device, "ReflectionNrdPack.cs_6_0.cso", 3, 1, false);
         WaterTracePSO.Initialize(_Device, "WaterReflectionTrace.cs_6_6.cso", 15, 2, true);
         WaterTemporalPSO.Initialize(_Device, "WaterReflectionTemporal.cs_6_0.cso", 5, 1, false);
@@ -149,7 +149,112 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&WaterCompositePSO)));
     }
 
+    void FReflections::ReleaseLocalDenoiserResources(FTextureSRVHeap& _SRVHeap) {
+        auto Free = [&](u32& Slot, u32 Count) {
+            if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
+        };
+        Free(HistorySRVSlot[0], 1); Free(HistorySRVSlot[1], 1);
+        Free(HistoryUAVSlot[0], 1); Free(HistoryUAVSlot[1], 1);
+        Free(TemporalTable[0], 5); Free(TemporalTable[1], 5);
+        Free(SpatialTable[0], 4); Free(SpatialTable[1], 4);
+        Free(CompositeTable[0], 6); Free(CompositeTable[1], 6);
+        History[0].Reset(); History[1].Reset();
+        HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
+        FrameParity = CurrParity = 0;
+        NeedsHistoryClear = true;
+        LocalDenoiserReady = false;
+    }
+
+    void FReflections::ConfigureLocalDenoiserResources(ID3D12Device* _Device,
+                                                        FTextureSRVHeap& _SRVHeap,
+                                                        bool _Required) {
+        if (!_Required) {
+            ReleaseLocalDenoiserResources(_SRVHeap);
+            return;
+        }
+        if (LocalDenoiserReady || !Ready || Width == 0 || Height == 0 ||
+            ResolvedSRVSlot == kInvalidSlot || ResolvedMotionSRVSlot == kInvalidSlot ||
+            DepthSlotCached == kInvalidSlot || GBufferSlotCached == kInvalidSlot ||
+            GBufferCSlotCached == kInvalidSlot || GBufferASlotCached == kInvalidSlot ||
+            BRDFLutSlotCached == kInvalidSlot)
+            return;
+
+        History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                    "Reflexoes · historico local");
+        History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
+                                    "Reflexoes · historico local");
+        HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
+        Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        Srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Srv.Format                  = kRadianceFormat;
+        Srv.Texture2D.MipLevels     = 1;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC Uav{};
+        Uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        Uav.Format        = kRadianceFormat;
+        for (u32 i = 0; i < 2; ++i) {
+            HistorySRVSlot[i] = _SRVHeap.Allocate(1);
+            HistoryUAVSlot[i] = _SRVHeap.Allocate(1);
+            _SRVHeap.CreateSRV(_Device, History[i].Get(), Srv, HistorySRVSlot[i]);
+            _SRVHeap.CreateUAV(_Device, History[i].Get(), Uav, HistoryUAVSlot[i]);
+        }
+
+        UINT Five = 5; UINT Ones[5] = { 1,1,1,1,1 };
+        for (u32 curr = 0; curr < 2; ++curr) {
+            const u32 prev = 1u - curr;
+            TemporalTable[curr] = _SRVHeap.Allocate(5);
+            D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TemporalTable[curr]);
+            D3D12_CPU_DESCRIPTOR_HANDLE TSrc[5] = {
+                _SRVHeap.CpuHandleStaging(ResolvedSRVSlot),
+                _SRVHeap.CpuHandleStaging(GBufferSlotCached),
+                _SRVHeap.CpuHandleStaging(DepthSlotCached),
+                _SRVHeap.CpuHandleStaging(HistorySRVSlot[prev]),
+                _SRVHeap.CpuHandleStaging(ResolvedMotionSRVSlot),
+            };
+            _Device->CopyDescriptors(1, &TDst, &Five, 5, TSrc, Ones,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            SpatialTable[curr] = _SRVHeap.Allocate(4);
+            D3D12_CPU_DESCRIPTOR_HANDLE SDst = _SRVHeap.CpuHandle(SpatialTable[curr]);
+            D3D12_CPU_DESCRIPTOR_HANDLE SSrc[4] = {
+                _SRVHeap.CpuHandleStaging(HistorySRVSlot[curr]),
+                _SRVHeap.CpuHandleStaging(GBufferSlotCached),
+                _SRVHeap.CpuHandleStaging(DepthSlotCached),
+                _SRVHeap.CpuHandleStaging(ResolvedSRVSlot),
+            };
+            UINT Four = 4; UINT FourOnes[4] = { 1,1,1,1 };
+            _Device->CopyDescriptors(1, &SDst, &Four, 4, SSrc, FourOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            CompositeTable[curr] = _SRVHeap.Allocate(6);
+            D3D12_CPU_DESCRIPTOR_HANDLE CDst = _SRVHeap.CpuHandle(CompositeTable[curr]);
+            D3D12_CPU_DESCRIPTOR_HANDLE CSrc[6] = {
+                _SRVHeap.CpuHandleStaging(HistorySRVSlot[prev]),
+                _SRVHeap.CpuHandleStaging(GBufferSlotCached),
+                _SRVHeap.CpuHandleStaging(DepthSlotCached),
+                _SRVHeap.CpuHandleStaging(BRDFLutSlotCached),
+                _SRVHeap.CpuHandleStaging(GBufferCSlotCached),
+                _SRVHeap.CpuHandleStaging(GBufferASlotCached),
+            };
+            UINT Six = 6; UINT SixOnes[6] = { 1,1,1,1,1,1 };
+            _Device->CopyDescriptors(1, &CDst, &Six, 6, CSrc, SixOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+        FrameParity = CurrParity = 0;
+        NeedsHistoryClear = true;
+        LocalDenoiserReady = true;
+    }
+
+    bool FReflections::HasNrdSpecResources() const {
+        return NrdInSpec && SpecPackUAVSlot != kInvalidSlot &&
+               NrdOutSpecSRV != kInvalidSlot &&
+               CompositeTableNrd[0] != kInvalidSlot &&
+               CompositeTableNrd[1] != kInvalidSlot;
+    }
+
     void FReflections::ReleaseResize(FTextureSRVHeap& _SRVHeap) {
+        ReleaseLocalDenoiserResources(_SRVHeap);
         auto Free = [&](u32& Slot, u32 Count) {
             if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
         };
@@ -160,16 +265,10 @@ namespace Smile {
         Free(ResolvedUAVSlot, 1);
         Free(ResolvedMotionSRVSlot, 1);
         Free(ResolvedMotionUAVSlot, 1);
-        Free(HistorySRVSlot[0], 1); Free(HistorySRVSlot[1], 1);
-        Free(HistoryUAVSlot[0], 1); Free(HistoryUAVSlot[1], 1);
-        Free(DenoisedSRVSlot, 1); Free(DenoisedUAVSlot, 1);
         Free(TraceUAVTable, 3);
         Free(ResolvedUAVTable, 2);
         for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 12);
         Free(ResolveTableStart, 5);
-        Free(TemporalTable[0], 5); Free(TemporalTable[1], 5);
-        Free(SpatialTable[0], 3); Free(SpatialTable[1], 3);
-        Free(CompositeTable[0], 6); Free(CompositeTable[1], 6);
         Free(SpecPackSrvTable, 3);
         Free(SpecPackUAVSlot, 1);
         Free(NrdOutSpecSRV, 1);
@@ -191,8 +290,6 @@ namespace Smile {
         RayMotion.Reset();
         Resolved.Reset();
         ResolvedMotion.Reset();
-        History[0].Reset(); History[1].Reset();
-        Denoised.Reset();
         WaterResolved.Reset(); WaterMotion.Reset();
         WaterHistory[0].Reset(); WaterHistory[1].Reset();
         RadianceState = D3D12_RESOURCE_STATE_COMMON;
@@ -200,8 +297,6 @@ namespace Smile {
         RayMotionState = D3D12_RESOURCE_STATE_COMMON;
         ResolvedState = D3D12_RESOURCE_STATE_COMMON;
         ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
-        HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
-        DenoisedState = D3D12_RESOURCE_STATE_COMMON;
         WaterResolvedState = WaterMotionState = D3D12_RESOURCE_STATE_COMMON;
         WaterHistoryState[0] = WaterHistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
         Ready = false;
@@ -223,12 +318,13 @@ namespace Smile {
         const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
         const u32 _DistSlot      = _Fallback.DistanceAtlasSRV;
         const u32 _ProbeDataSlot = _Fallback.ProbeDataSRV;
-        // Os tres do fallback entram na validacao mesmo com Available == false: "sem volume" quer
-        // dizer slot NEUTRO, nunca invalido. Chegar invalido significa que o Renderer nao criou os
-        // recursos neutros, e ai o certo e nao montar tabela nenhuma — nunca montar com um buraco,
-        // que e o que kInvalidSlot vira dentro do CopyDescriptors.
+        // Ausencia de DDGI exige descriptors neutros validos; kInvalidSlot nunca pode entrar no
+        // CopyDescriptors.
         if (_Width == 0 || _Height == 0 || _TlasSlot == kInvalidSlot ||
-            _InstanceSlot == kInvalidSlot || _VelocitySlot == kInvalidSlot ||
+            _SkyViewSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot ||
+            _DepthSlot == kInvalidSlot || _GBufferSlot == kInvalidSlot ||
+            _GBufferCSlot == kInvalidSlot || _BRDFLutSlot == kInvalidSlot ||
+            _GBufferASlot == kInvalidSlot || _VelocitySlot == kInvalidSlot ||
             _SceneColorSlot == kInvalidSlot || _SceneDepthSlot == kInvalidSlot ||
             _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot ||
             _IrradSlot == kInvalidSlot || _DistSlot == kInvalidSlot ||
@@ -243,8 +339,7 @@ namespace Smile {
             ? _SceneColorMipCount - 1 : 0);
         DepthSlotCached = _DepthSlot; GBufferSlotCached = _GBufferSlot; BRDFLutSlotCached = _BRDFLutSlot;
         GBufferCSlotCached = _GBufferCSlot; GBufferASlotCached = _GBufferASlot;
-        // Rotulos separados por ETAPA (meia-res / resolve / historico / agua): e o agrupamento que
-        // responde "onde estao os MB", ja que todos usam o mesmo formato e so mudam de resolucao.
+        // Rotulos por etapa tornam a residencia de VRAM identificavel no debugger.
         Radiance = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
                                   "Reflexoes · meia-res");
         RayData  = CreateUAVTex2D(_Device, HalfWidth, HalfHeight, kRadianceFormat,
@@ -254,11 +349,6 @@ namespace Smile {
         Resolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · resolve");
         ResolvedMotion = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
                                         "Reflexoes · resolve");
-        History[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
-                                    "Reflexoes · historico");
-        History[1] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
-                                    "Reflexoes · historico");
-        Denoised   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · denoise");
         WaterResolved = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · agua");
         WaterMotion   = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat, "Reflexoes · agua");
         WaterHistory[0] = CreateUAVTex2D(_Device, Width, Height, kRadianceFormat,
@@ -267,11 +357,8 @@ namespace Smile {
                                          "Reflexoes · agua");
         RadianceState = RayDataState = RayMotionState = ResolvedState =
             ResolvedMotionState = D3D12_RESOURCE_STATE_COMMON;
-        HistoryState[0] = HistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
-        DenoisedState = D3D12_RESOURCE_STATE_COMMON;
         WaterResolvedState = WaterMotionState = D3D12_RESOURCE_STATE_COMMON;
         WaterHistoryState[0] = WaterHistoryState[1] = D3D12_RESOURCE_STATE_COMMON;
-        NeedsHistoryClear = true; FrameParity = 0;
         NeedsWaterHistoryClear = true; WaterFrameParity = WaterCurrParity = 0;
         WaterUseRaw = false;
 
@@ -291,9 +378,6 @@ namespace Smile {
         ResolvedUAVSlot = _SRVHeap.Allocate(1);
         ResolvedMotionSRVSlot = _SRVHeap.Allocate(1);
         ResolvedMotionUAVSlot = _SRVHeap.Allocate(1);
-        HistorySRVSlot[0] = _SRVHeap.Allocate(1); HistorySRVSlot[1] = _SRVHeap.Allocate(1);
-        HistoryUAVSlot[0] = _SRVHeap.Allocate(1); HistoryUAVSlot[1] = _SRVHeap.Allocate(1);
-        DenoisedSRVSlot = _SRVHeap.Allocate(1); DenoisedUAVSlot = _SRVHeap.Allocate(1);
         WaterResolvedSRVSlot = _SRVHeap.Allocate(1); WaterResolvedUAVSlot = _SRVHeap.Allocate(1);
         WaterMotionSRVSlot = _SRVHeap.Allocate(1); WaterMotionUAVSlot = _SRVHeap.Allocate(1);
         WaterHistorySRVSlot[0] = _SRVHeap.Allocate(1); WaterHistorySRVSlot[1] = _SRVHeap.Allocate(1);
@@ -305,12 +389,6 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, Resolved.Get(), Uav, ResolvedUAVSlot);
         _SRVHeap.CreateSRV(_Device, ResolvedMotion.Get(), Srv, ResolvedMotionSRVSlot);
         _SRVHeap.CreateUAV(_Device, ResolvedMotion.Get(), Uav, ResolvedMotionUAVSlot);
-        _SRVHeap.CreateSRV(_Device, History[0].Get(), Srv, HistorySRVSlot[0]);
-        _SRVHeap.CreateSRV(_Device, History[1].Get(), Srv, HistorySRVSlot[1]);
-        _SRVHeap.CreateUAV(_Device, History[0].Get(), Uav, HistoryUAVSlot[0]);
-        _SRVHeap.CreateUAV(_Device, History[1].Get(), Uav, HistoryUAVSlot[1]);
-        _SRVHeap.CreateSRV(_Device, Denoised.Get(), Srv, DenoisedSRVSlot);
-        _SRVHeap.CreateUAV(_Device, Denoised.Get(), Uav, DenoisedUAVSlot);
         _SRVHeap.CreateSRV(_Device, WaterResolved.Get(), Srv, WaterResolvedSRVSlot);
         _SRVHeap.CreateUAV(_Device, WaterResolved.Get(), Uav, WaterResolvedUAVSlot);
         _SRVHeap.CreateSRV(_Device, WaterMotion.Get(), Srv, WaterMotionSRVSlot);
@@ -333,12 +411,8 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, WaterResolved.Get(), Uav, WaterTraceUAVTable);
         _SRVHeap.CreateUAV(_Device, WaterMotion.Get(), Uav, WaterTraceUAVTable + 1);
 
-        // t0..t7 fixos; t8 = luzes; t9 = transform atual<->anterior; t10/t11 = superficies
-        // atual/anterior. As tres ultimas entradas sao versionadas pelo FrameSlot.
-        // Uma tabela por frame em voo: o t8 muda todo frame e a tabela do frame anterior ainda
-        // pode estar sendo lida pela GPU (descriptor versioning). t4/t5 eram os merged VB/IB,
-        // aposentados pelo bindless (InstanceGeo); hoje levam o atlas de distancia e o ProbeData
-        // do DDGI, que o ShadeSurfaceHit usa no gather completo do 2o bounce.
+        // t0..t7 sao fixos; t8 leva luzes e t9..t11 os snapshots temporais versionados.
+        // Os slots t4/t5 liberados pelo bindless levam distance atlas e probe data do DDGI.
         D3D12_CPU_DESCRIPTOR_HANDLE TSrc[8] = {
             _SRVHeap.CpuHandleStaging(_TlasSlot),
             _SRVHeap.CpuHandleStaging(_SkyViewSlot),
@@ -414,48 +488,6 @@ namespace Smile {
         _Device->CopyDescriptors(1, &RDst, &RDstCount, 5, RSrc, RSrcCounts,
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        UINT Five = 5; UINT Ones[5] = { 1,1,1,1,1 };
-        for (u32 curr = 0; curr < 2; ++curr) {
-            const u32 prev = 1u - curr;
-            TemporalTable[curr] = _SRVHeap.Allocate(5);
-            D3D12_CPU_DESCRIPTOR_HANDLE TDst2 = _SRVHeap.CpuHandle(TemporalTable[curr]);
-            D3D12_CPU_DESCRIPTOR_HANDLE TSrc2[5] = {
-                _SRVHeap.CpuHandleStaging(ResolvedSRVSlot),
-                _SRVHeap.CpuHandleStaging(_GBufferSlot),
-                _SRVHeap.CpuHandleStaging(_DepthSlot),
-                _SRVHeap.CpuHandleStaging(HistorySRVSlot[prev]),
-                _SRVHeap.CpuHandleStaging(ResolvedMotionSRVSlot),
-            };
-            _Device->CopyDescriptors(1, &TDst2, &Five, 5, TSrc2, Ones,
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-            // Spatial le o History[curr] (recem-acumulado) + gbuf + depth -> Denoised.
-            SpatialTable[curr] = _SRVHeap.Allocate(3);
-            D3D12_CPU_DESCRIPTOR_HANDLE SDst = _SRVHeap.CpuHandle(SpatialTable[curr]);
-            D3D12_CPU_DESCRIPTOR_HANDLE SSrc[3] = {
-                _SRVHeap.CpuHandleStaging(HistorySRVSlot[curr]),
-                _SRVHeap.CpuHandleStaging(_GBufferSlot),
-                _SRVHeap.CpuHandleStaging(_DepthSlot),
-            };
-            UINT Three = 3;
-            _Device->CopyDescriptors(1, &SDst, &Three, 3, SSrc, Ones, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-            // Composite le o Denoised (saida do spatial), nao mais o History[curr] direto.
-            // t4 = GBufferC (metallic saiu do B.a na dieta do G-buffer).
-            CompositeTable[curr] = _SRVHeap.Allocate(6);
-            D3D12_CPU_DESCRIPTOR_HANDLE CDst2 = _SRVHeap.CpuHandle(CompositeTable[curr]);
-            D3D12_CPU_DESCRIPTOR_HANDLE CSrc2[6] = {
-                _SRVHeap.CpuHandleStaging(DenoisedSRVSlot),
-                _SRVHeap.CpuHandleStaging(_GBufferSlot),
-                _SRVHeap.CpuHandleStaging(_DepthSlot),
-                _SRVHeap.CpuHandleStaging(_BRDFLutSlot),
-                _SRVHeap.CpuHandleStaging(_GBufferCSlot),
-                _SRVHeap.CpuHandleStaging(_GBufferASlot), // t5 = BaseColor
-            };
-            UINT Six = 6; UINT OnesC[6] = { 1,1,1,1,1,1 };
-            _Device->CopyDescriptors(1, &CDst2, &Six, 6, CSrc2, OnesC, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        }
-
         // NRD: tabela do pack especular [Resolved, GBuffer, Depth]. A UAV da IN_SPEC e a SRV da
         // OUT_SPEC sao montadas em SetupNrdSpec (dependem dos recursos do FNrdDenoiser).
         SpecPackSrvTable = _SRVHeap.Allocate(3);
@@ -468,8 +500,7 @@ namespace Smile {
         UINT Three2 = 3; UINT Ones3[3] = { 1,1,1 };
         _Device->CopyDescriptors(1, &PDst, &Three2, 3, PSrc, Ones3, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        // RR: composite lendo o Resolved CRU (ruidoso) — mesma tabela do caseiro, mas com o Resolved
-        // no lugar do Denoised. Parity-independente (Resolved nao faz ping-pong), entao uma tabela so.
+        // RR le o Resolved cru; como ele nao faz ping-pong, uma tabela basta.
         CompositeTableRaw = _SRVHeap.Allocate(6);
         D3D12_CPU_DESCRIPTOR_HANDLE RawDst = _SRVHeap.CpuHandle(CompositeTableRaw);
         D3D12_CPU_DESCRIPTOR_HANDLE RawSrc[6] = {
@@ -483,6 +514,7 @@ namespace Smile {
         UINT RawSix = 6; UINT RawOnes[6] = { 1,1,1,1,1,1 };
         _Device->CopyDescriptors(1, &RawDst, &RawSix, 6, RawSrc, RawOnes, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+        UINT Five = 5; UINT Ones[5] = { 1,1,1,1,1 };
         for (u32 curr = 0; curr < 2; ++curr) {
             const u32 prev = 1u - curr;
             WaterTemporalTable[curr] = _SRVHeap.Allocate(5);
@@ -542,11 +574,14 @@ namespace Smile {
         // Idempotente: o NRD agora e alocado sob demanda (Renderer::ReconcileNrdAllocation) e
         // isto e re-chamado a cada toggle, nao so depois de um ReleaseResize.
         {
-            auto FreeIf = [&](u32& Slot) {
-                if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, 1); Slot = kInvalidSlot; }
+            auto FreeIf = [&](u32& Slot, u32 Count) {
+                if (Slot != kInvalidSlot) { _SRVHeap.Free(Slot, Count); Slot = kInvalidSlot; }
             };
-            FreeIf(SpecPackUAVSlot);
-            FreeIf(NrdOutSpecSRV);
+            FreeIf(SpecPackUAVSlot, 1);
+            FreeIf(NrdOutSpecSRV, 1);
+            FreeIf(CompositeTableNrd[0], 6);
+            FreeIf(CompositeTableNrd[1], 6);
+            NrdInSpec = nullptr;
         }
         if (!Ready || !_NrdInSpec || !_NrdOutSpec) return;
 
@@ -558,7 +593,7 @@ namespace Smile {
         Uav.Format        = kRadianceFormat; // RGBA16F (== IoFormat IO_SPEC_RADIANCE_HITDIST)
         _SRVHeap.CreateUAV(_Device, _NrdInSpec, Uav, SpecPackUAVSlot);
 
-        // SRV da OUT_SPEC do NRD (o composite le aqui em vez do Denoised caseiro).
+        // SRV da OUT_SPEC do NRD (o composite le aqui em vez do history local).
         NrdOutSpecSRV = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
         Srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -567,8 +602,8 @@ namespace Smile {
         Srv.Texture2D.MipLevels     = 1;
         _SRVHeap.CreateSRV(_Device, _NrdOutSpec, Srv, NrdOutSpecSRV);
 
-        // Composite-NRD: [OUT_SPEC, GBuffer, Depth, BRDFLut, GBufferC]. Identico p/ as 2 paridades
-        // (a OUT do NRD nao e ping-pong), entao CurrParity nao importa neste caminho.
+        // Composite-NRD: [OUT_SPEC, GBufferB, Depth, BRDFLut, GBufferC, GBufferA].
+        // OUT_SPEC nao faz ping-pong, portanto as duas paridades sao equivalentes.
         UINT Six = 6; UINT Ones[6] = { 1,1,1,1,1,1 };
         for (u32 i = 0; i < 2; ++i) {
             CompositeTableNrd[i] = _SRVHeap.Allocate(6);
@@ -644,11 +679,8 @@ namespace Smile {
                                 FRayEpsilonProfile::kOriginAngularMinRatio };
         CPU.GIDistParams    = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                                 GIHit.SkipModePacked() };
-        // .w fica em ZERO de proposito: e o piso de roughness do hit secundario, e ele so vale
-        // p/ quem guarda a radiancia num cache nao-direcional (DDGI e ReSTIR GI). Aqui o hit e
-        // sombreado p/ uma visada conhecida e consumido uma vez so — clampar borraria
-        // espelho-no-espelho. Os shaders de reflexao tambem passam 0 na unha; esta linha existe
-        // p/ o `.w` nao ser preenchido por engano num refactor do GIBiasParams.
+        // O piso de roughness e zero porque este sinal preserva direcao; clampa-lo borraria
+        // reflexoes recursivas.
         CPU.GIBiasParams    = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes, 0.0f };
         CPU.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         CPU.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
@@ -659,6 +691,10 @@ namespace Smile {
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
+        CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
+                                      GIHit.EnvironmentSky.Z, 0.0f };
+        CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
+                                      GIHit.EnvironmentGround.Z, 0.0f };
         CPU.HalfScreenParams = { (f32)HalfWidth, (f32)HalfHeight,
                                  1.0f / (f32)HalfWidth, 1.0f / (f32)HalfHeight };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(ReflectionConstants),
@@ -755,10 +791,10 @@ namespace Smile {
         _CL->Dispatch(FGX, FGY, 1);
         if (_Profiler) _Profiler->End(_CL);
 
-        // NRD/RR: para no Resolved (radiancia crua + hitDist). O denoise fica a cargo do NRD
-        // (RecordNrdPack -> Nrd.Denoise) ou do DLSS Ray Reconstruction (RawSpec: o composite le o
-        // Resolved cru). Deixa o Resolved legivel por compute (NON_PIXEL) e pula Temporal/Spatial.
-        if (UseNrd || RawSpec) {
+        // Backends externos param no Resolved e pulam Temporal/Spatial; NRD le por compute e
+        // DLSS-RR pelo composite cru.
+        const bool StopAtResolved = (UseNrd && HasNrdSpecResources()) || RawSpec || !LocalDenoiserReady;
+        if (StopAtResolved) {
             Transition(_CL, Resolved.Get(), ResolvedState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Transition(_CL, ResolvedMotion.Get(), ResolvedMotionState,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -794,19 +830,19 @@ namespace Smile {
         _CL->Dispatch(FGX, FGY, 1);
         if (_Profiler) _Profiler->End(_CL);
 
-        // Denoise espacial pos-temporal: History[curr] (acumulado) -> Denoised. Limpa as bordas
-        // (acumulacao baixa) sem borrar o interior convergido. O History[curr] segue intacto p/
-        // virar History[prev] no proximo frame (sem feedback do blur na acumulacao).
+        // Denoise espacial pos-temporal: History[curr] (acumulado) -> History[prev] (filtrado).
+        // O acumulado em curr segue intacto e vira o input temporal do proximo frame; o spatial
+        // reutiliza prev apenas depois que o temporal terminou de le-lo neste frame.
         if (_Profiler) _Profiler->Begin(_CL, "Filtro espacial");
         Transition(_CL, History[curr].Get(), HistoryState[curr], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        Transition(_CL, Denoised.Get(),      DenoisedState,      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Transition(_CL, History[prev].Get(), HistoryState[prev], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         SpatialPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(SpatialTable[curr]));
-        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(DenoisedUAVSlot));
+        _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(HistoryUAVSlot[prev]));
         _CL->Dispatch(FGX, FGY, 1);
 
-        Transition(_CL, Denoised.Get(), DenoisedState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Transition(_CL, History[prev].Get(), HistoryState[prev], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         if (_Profiler) _Profiler->End(_CL);
         FrameParity ^= 1u;
     }
@@ -907,15 +943,19 @@ namespace Smile {
         _CL->SetPipelineState(CompositePSO.Get());
         _CL->SetGraphicsRootConstantBufferView(0, CBAddr());
         u32 CompTable;
-        if (RawSpec && CompositeTableRaw != kInvalidSlot) {
-            // RR: compoe o Resolved CRU. Veio NON_PIXEL do RecordTrace (p/ o compute do specHitDist);
-            // aqui e um PS -> transiciona p/ PIXEL. O caller ja rodou o extract do specHitDist antes.
+        const bool NrdCompositeReady = UseNrd && HasNrdSpecResources();
+        const bool UseRawComposite = RawSpec || (!NrdCompositeReady && !LocalDenoiserReady);
+        if (UseRawComposite && CompositeTableRaw != kInvalidSlot) {
+            // RR e fallback sem backend externo/local compoem o Resolved cru. O recurso veio
+            // NON_PIXEL do RecordTrace e passa a ser lido pelo pixel shader.
             Transition(_CL, Resolved.Get(), ResolvedState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             CompTable = CompositeTableRaw;
-        } else {
-            CompTable = (UseNrd && CompositeTableNrd[CurrParity] != kInvalidSlot)
-                      ? CompositeTableNrd[CurrParity] : CompositeTable[CurrParity];
-        }
+        } else if (NrdCompositeReady)
+            CompTable = CompositeTableNrd[CurrParity];
+        else if (LocalDenoiserReady && CompositeTable[CurrParity] != kInvalidSlot)
+            CompTable = CompositeTable[CurrParity];
+        else
+            return;
         _CL->SetGraphicsRootDescriptorTable(1, _SRVHeap.GpuHandle(CompTable));
         _CL->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         _CL->DrawInstanced(3, 1, 0, 0);

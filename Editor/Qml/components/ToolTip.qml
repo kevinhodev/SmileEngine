@@ -53,17 +53,17 @@ QQC.ToolTip {
             anchors.verticalCenter: parent.verticalCenter
             implicitWidth: shortcutLabel.implicitWidth + 10
             implicitHeight: 17
-            radius: 4
-            color: "#171d25"
-            border.color: Theme.blueBorder
+            radius: Theme.radiusChip
+            color: Theme.surfaceRaised
+            border.color: Theme.hairlineStrong
             border.width: 1
 
             Text {
                 id: shortcutLabel
                 anchors.centerIn: parent
                 text: tip.shortcut
-                color: "#8dbbff"
-                font.family: Theme.fontFamily
+                color: Theme.textSecondary
+                font.family: Theme.fontMono
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
                 renderType: Text.NativeRendering
@@ -78,15 +78,15 @@ QQC.ToolTip {
         Rectangle {
             anchors.fill: parent
             anchors.topMargin: 2
-            radius: 6
-            color: "#050605"
+            radius: Theme.radiusCard
+            color: "#000000"
             opacity: 0.55
         }
         Rectangle {
             anchors.fill: parent
-            radius: 6
-            color: "#20221c"
-            border.color: "#3b3d34"
+            radius: Theme.radiusCard
+            color: Theme.surface
+            border.color: Theme.hairlineStrong
             border.width: 1
         }
         Rectangle {
@@ -95,7 +95,7 @@ QQC.ToolTip {
             width: 2
             height: parent.height - 14
             radius: 1
-            color: Theme.blue
+            color: Theme.accent
             opacity: 0.9
         }
     }

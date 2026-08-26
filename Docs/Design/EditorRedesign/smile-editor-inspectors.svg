@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="780" viewBox="0 0 700 780">
+  <!-- Signal Graphite - inspectors contextuais: grupo vs componente de ambiente -->
+  <style>
+    .sans { font-family: Inter, 'Segoe UI', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace; }
+    .tp { fill: #F2F2F0; }
+    .ts { fill: #A0A0A8; }
+    .tm { fill: #5F5F66; }
+    .tacc { fill: #FF6B2C; }
+    .hdr { fill: #A0A0A8; font-size: 10px; letter-spacing: 1.6px; font-weight: 600; }
+    text { dominant-baseline: middle; }
+  </style>
+  <defs>
+    <symbol id="i-chevd" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-chevr" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M6.5 19a4.5 4.5 0 0 1-.68-8.95A7 7 0 0 1 19.4 11 4 4 0 0 1 18 19z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 4h6v5l2.5 3.5h-11L9 9z"/></g></symbol>
+  </defs>
+
+  <rect x="0" y="0" width="700" height="780" fill="#09090A"/>
+
+  <!-- ================= PAINEL 1: grupo ================= -->
+  <text x="16" y="24" class="mono tm" font-size="10" letter-spacing="1.2">SELE&#199;&#195;O: GRUPO (PASTA NA &#193;RVORE)</text>
+  <g transform="translate(16,40)">
+    <rect x="0" y="0" width="320" height="700" fill="#111113" stroke="#26262B"/>
+    <text x="16" y="17" class="mono hdr">INSPECTOR</text>
+    <use href="#i-pin" x="290" y="9" width="15" height="15" color="#5F5F66"/>
+    <rect x="0" y="32" width="320" height="1" fill="#26262B"/>
+    <!-- card de selecao -->
+    <rect x="14" y="44" width="292" height="54" rx="4" fill="#18181B" stroke="#26262B"/>
+    <rect x="26" y="56" width="30" height="30" rx="3" fill="rgba(255,107,44,0.12)" stroke="rgba(255,107,44,0.45)"/>
+    <use href="#i-folder" x="33" y="63" width="16" height="16" color="#FF6B2C"/>
+    <text x="68" y="66" class="sans tp" font-size="14" font-weight="600">BistroExterior</text>
+    <text x="68" y="84" class="mono tm" font-size="9.5" letter-spacing="0.6">GRUPO &#183; 1 591 OBJETOS &#183; 1.24M TRI</text>
+    <!-- TRANSFORM -->
+    <text x="16" y="126" class="mono hdr">TRANSFORM</text>
+    <text x="304" y="126" text-anchor="end" class="mono tm" font-size="9">PIV&#212; DO GRUPO</text>
+    <text x="16" y="150" class="sans tm" font-size="11">Posi&#231;&#227;o</text>
+    <g>
+      <rect x="14" y="160" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="14" y="160" width="2" height="26" fill="#FF5C5C"/>
+      <text x="24" y="174" class="mono tm" font-size="10">X</text>
+      <text x="98" y="174" text-anchor="end" class="mono tp" font-size="11">-12.400</text>
+      <rect x="114" y="160" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="114" y="160" width="2" height="26" fill="#46D68C"/>
+      <text x="124" y="174" class="mono tm" font-size="10">Y</text>
+      <text x="198" y="174" text-anchor="end" class="mono tp" font-size="11">0.000</text>
+      <rect x="214" y="160" width="92" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+      <rect x="214" y="160" width="2" height="26" fill="#6FA8FF"/>
+      <text x="224" y="174" class="mono tm" font-size="10">Z</text>
+      <text x="298" y="174" text-anchor="end" class="mono tp" font-size="11">8.250</text>
+    </g>
+    <rect x="14" y="204" width="292" height="1" fill="#26262B"/>
+    <!-- LOTE -->
+    <text x="16" y="226" class="mono hdr">A&#199;&#213;ES EM LOTE</text>
+    <text x="16" y="252" class="sans ts" font-size="12">Vis&#237;veis</text>
+    <text x="306" y="252" text-anchor="end" class="mono tp" font-size="11">1 589 / 1 591</text>
+    <g>
+      <rect x="14" y="268" width="64" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+      <text x="46" y="281" text-anchor="middle" class="mono ts" font-size="9.5">ISOLAR</text>
+      <rect x="86" y="268" width="72" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+      <text x="122" y="281" text-anchor="middle" class="mono ts" font-size="9.5">OCULTAR</text>
+      <rect x="166" y="268" width="80" height="24" rx="3" fill="#18181B" stroke="#26262B"/>
+      <text x="206" y="281" text-anchor="middle" class="mono ts" font-size="9.5">DUPLICAR</text>
+    </g>
+    <text x="16" y="316" class="sans ts" font-size="12.5">Projeta sombras</text>
+    <text x="236" y="316" text-anchor="end" class="mono tm" font-size="9">MISTO</text>
+    <rect x="276" y="308" width="30" height="16" rx="8" fill="#18181B" stroke="rgba(255,107,44,0.5)"/>
+    <rect x="287" y="314" width="8" height="4" rx="1" fill="#FF6B2C"/>
+    <text x="16" y="344" class="sans ts" font-size="12.5">Din&#226;mico</text>
+    <rect x="276" y="336" width="30" height="16" rx="8" fill="#18181B" stroke="#333338"/>
+    <circle cx="284" cy="344" r="6" fill="#5F5F66"/>
+    <rect x="14" y="366" width="292" height="1" fill="#26262B"/>
+    <!-- MATERIAIS USADOS -->
+    <text x="16" y="388" class="mono hdr">MATERIAIS USADOS</text>
+    <text x="304" y="388" text-anchor="end" class="mono tm" font-size="10">12</text>
+    <rect x="14" y="402" width="14" height="14" rx="2" fill="#7A5A44" stroke="#333338"/>
+    <text x="38" y="410" class="sans ts" font-size="12">M_Facade_Paris</text>
+    <text x="306" y="410" text-anchor="end" class="mono tm" font-size="10">214 objs</text>
+    <rect x="14" y="428" width="14" height="14" rx="2" fill="#8C2F2A" stroke="#333338"/>
+    <text x="38" y="436" class="sans ts" font-size="12">M_Awning_Red</text>
+    <text x="306" y="436" text-anchor="end" class="mono tm" font-size="10">36 objs</text>
+    <rect x="14" y="454" width="14" height="14" rx="2" fill="#41535A" stroke="#333338"/>
+    <text x="38" y="462" class="sans ts" font-size="12">M_Glass_Cafe</text>
+    <text x="306" y="462" text-anchor="end" class="mono tm" font-size="10">18 objs</text>
+    <text x="38" y="488" class="mono tm" font-size="10.5">+ 9 materiais&#8230;</text>
+    <rect x="14" y="508" width="292" height="1" fill="#26262B"/>
+    <!-- ESTATISTICAS -->
+    <text x="16" y="530" class="mono hdr">ESTAT&#205;STICAS</text>
+    <text x="304" y="530" text-anchor="end" class="mono tm" font-size="9">AGREGADO</text>
+    <text x="16" y="556" class="sans ts" font-size="12">Objetos</text>
+    <text x="306" y="556" text-anchor="end" class="mono tp" font-size="11">1 591</text>
+    <text x="16" y="582" class="sans ts" font-size="12">Tri&#226;ngulos</text>
+    <text x="306" y="582" text-anchor="end" class="mono tp" font-size="11">1 243 812</text>
+    <text x="16" y="608" class="sans ts" font-size="12">VRAM geometria</text>
+    <text x="306" y="608" text-anchor="end" class="mono tp" font-size="11">142.3 MB</text>
+    <text x="16" y="634" class="sans ts" font-size="12">Draw calls</text>
+    <text x="306" y="634" text-anchor="end" class="mono tp" font-size="11">38</text>
+    <rect x="0" y="666" width="320" height="1" fill="#26262B"/>
+    <text x="16" y="683" class="mono tm" font-size="9.5">toggles em lote aplicam aos 1 591 filhos</text>
+  </g>
+
+  <!-- ================= PAINEL 2: componente de ambiente ================= -->
+  <text x="364" y="24" class="mono tm" font-size="10" letter-spacing="1.2">SELE&#199;&#195;O: COMPONENTE DE AMBIENTE</text>
+  <g transform="translate(364,40)">
+    <rect x="0" y="0" width="320" height="700" fill="#111113" stroke="#26262B"/>
+    <text x="16" y="17" class="mono hdr">INSPECTOR</text>
+    <use href="#i-pin" x="290" y="9" width="15" height="15" color="#5F5F66"/>
+    <rect x="0" y="32" width="320" height="1" fill="#26262B"/>
+    <!-- card de selecao com toggle master -->
+    <rect x="14" y="44" width="292" height="54" rx="4" fill="#18181B" stroke="#26262B"/>
+    <rect x="26" y="56" width="30" height="30" rx="3" fill="rgba(255,107,44,0.12)" stroke="rgba(255,107,44,0.45)"/>
+    <use href="#i-cloud" x="33" y="63" width="16" height="16" color="#FF6B2C"/>
+    <text x="68" y="66" class="sans tp" font-size="14" font-weight="600">Nuvens Volum&#233;tricas</text>
+    <text x="68" y="84" class="mono tm" font-size="9.5" letter-spacing="0.6">AMBIENTE &#183; TEMPO REAL</text>
+    <rect x="264" y="63" width="30" height="16" rx="8" fill="#FF6B2C"/>
+    <circle cx="286" cy="71" r="6" fill="#F2F2F0"/>
+    <!-- preset -->
+    <text x="16" y="126" class="sans ts" font-size="12">Preset</text>
+    <rect x="140" y="113" width="166" height="26" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="152" y="126" class="sans tp" font-size="12">Personalizado</text>
+    <use href="#i-chevd" x="286" y="119" width="13" height="13" color="#5F5F66"/>
+    <!-- sliders primarios -->
+    <text x="16" y="160" class="sans ts" font-size="12.5">Cobertura</text>
+    <rect x="256" y="150" width="50" height="20" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="160" text-anchor="end" class="mono tp" font-size="11">45%</text>
+    <rect x="14" y="180" width="292" height="3" rx="1.5" fill="#26262B"/>
+    <rect x="14" y="180" width="131" height="3" rx="1.5" fill="#FF6B2C"/>
+    <rect x="140" y="175" width="10" height="13" rx="2" fill="#F2F2F0"/>
+    <text x="16" y="208" class="sans ts" font-size="12.5">Densidade</text>
+    <rect x="256" y="198" width="50" height="20" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="208" text-anchor="end" class="mono tp" font-size="11">4.00</text>
+    <rect x="14" y="228" width="292" height="3" rx="1.5" fill="#26262B"/>
+    <rect x="14" y="228" width="115" height="3" rx="1.5" fill="#FF6B2C"/>
+    <rect x="124" y="223" width="10" height="13" rx="2" fill="#F2F2F0"/>
+    <rect x="14" y="250" width="292" height="1" fill="#26262B"/>
+    <!-- FORMA E DETALHE (expandida) -->
+    <use href="#i-chevd" x="14" y="264" width="13" height="13" color="#5F5F66"/>
+    <text x="34" y="271" class="mono hdr">FORMA E DETALHE</text>
+    <text x="16" y="298" class="sans ts" font-size="12">Eros&#227;o</text>
+    <rect x="230" y="288" width="76" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="299" text-anchor="end" class="mono tp" font-size="11">45%</text>
+    <rect x="231" y="307" width="34" height="2" fill="#FF6B2C"/>
+    <text x="16" y="330" class="sans ts" font-size="12">Varia&#231;&#227;o dos picos</text>
+    <rect x="230" y="320" width="76" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="331" text-anchor="end" class="mono tp" font-size="11">100%</text>
+    <rect x="231" y="339" width="74" height="2" fill="#FF6B2C"/>
+    <!-- bipolar -->
+    <text x="16" y="364" class="sans ts" font-size="12">Tipo da nuvem</text>
+    <text x="306" y="364" text-anchor="end" class="mono tp" font-size="11">Equilibrado</text>
+    <rect x="14" y="382" width="292" height="3" rx="1.5" fill="#26262B"/>
+    <rect x="159" y="378" width="2" height="11" fill="#5F5F66"/>
+    <rect x="155" y="377" width="10" height="13" rx="2" fill="#F2F2F0"/>
+    <text x="14" y="402" class="mono tm" font-size="9">CAMADAS</text>
+    <text x="306" y="402" text-anchor="end" class="mono tm" font-size="9">VERTICAL</text>
+    <rect x="14" y="418" width="292" height="1" fill="#26262B"/>
+    <!-- CAMADA E MOVIMENTO (recolhida) -->
+    <use href="#i-chevr" x="14" y="430" width="13" height="13" color="#5F5F66"/>
+    <text x="34" y="437" class="mono hdr">CAMADA E MOVIMENTO</text>
+    <text x="304" y="437" text-anchor="end" class="mono tm" font-size="10">2.0&#8211;5.0 KM</text>
+    <rect x="14" y="454" width="292" height="1" fill="#26262B"/>
+    <!-- LUZ E ATMOSFERA (expandida) -->
+    <use href="#i-chevd" x="14" y="466" width="13" height="13" color="#5F5F66"/>
+    <text x="34" y="473" class="mono hdr">LUZ E ATMOSFERA</text>
+    <text x="16" y="500" class="sans ts" font-size="12">Dispers&#227;o frontal</text>
+    <rect x="230" y="490" width="76" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="501" text-anchor="end" class="mono tp" font-size="11">0.80</text>
+    <rect x="231" y="509" width="63" height="2" fill="#FF6B2C"/>
+    <text x="16" y="532" class="sans ts" font-size="12">Silver lining</text>
+    <rect x="230" y="522" width="76" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="533" text-anchor="end" class="mono tp" font-size="11">50%</text>
+    <rect x="231" y="541" width="38" height="2" fill="#FF6B2C"/>
+    <text x="16" y="564" class="sans ts" font-size="12">Luz ambiente</text>
+    <rect x="230" y="554" width="76" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="565" text-anchor="end" class="mono tp" font-size="11">&#215;1.00</text>
+    <rect x="231" y="573" width="25" height="2" fill="#FF6B2C"/>
+    <text x="16" y="596" class="sans ts" font-size="12.5">Sombras no mundo</text>
+    <rect x="276" y="588" width="30" height="16" rx="8" fill="#FF6B2C"/>
+    <circle cx="298" cy="596" r="6" fill="#F2F2F0"/>
+    <text x="16" y="626" class="sans ts" font-size="12">Intensidade da sombra</text>
+    <rect x="230" y="616" width="76" height="22" rx="3" fill="#18181B" stroke="#26262B"/>
+    <text x="298" y="627" text-anchor="end" class="mono tp" font-size="11">70%</text>
+    <rect x="231" y="635" width="53" height="2" fill="#FF6B2C"/>
+    <rect x="14" y="650" width="292" height="1" fill="#26262B"/>
+    <!-- DISTRIBUICAO (recolhida) -->
+    <use href="#i-chevr" x="14" y="660" width="13" height="13" color="#5F5F66"/>
+    <text x="34" y="667" class="mono hdr">DISTRIBUI&#199;&#195;O</text>
+    <text x="304" y="667" text-anchor="end" class="mono tm" font-size="10">SEED 4217</text>
+    <rect x="0" y="682" width="320" height="1" fill="#26262B"/>
+    <!-- footer -->
+    <text x="16" y="692" class="mono tm" font-size="9.5">componente de ambiente &#183; tempo real</text>
+  </g>
+
+  <!-- legenda inferior -->
+  <text x="16" y="764" class="mono tm" font-size="9.5">SIGNAL GRAPHITE &#183; INSPECTORS CONTEXTUAIS &#183; O CONTE&#218;DO SE ADAPTA AO TIPO DA SELE&#199;&#195;O</text>
+</svg>

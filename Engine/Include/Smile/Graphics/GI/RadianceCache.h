@@ -178,15 +178,16 @@ namespace Smile {
         // FONTE do terminal do render (quarto regime, `Sf`). Os de miss dizem por que a consulta
         // errou; estes dizem o que respondeu DEPOIS dela, que e a curva do gate da Fase 5.
         //
-        // DOIS EIXOS: `Cache + DDGI + Zero == Total` responde QUEM FORNECEU a radiancia, e
-        // `Ineligible` responde POR QUE nao foi o cache — ele CRUZA com os tres, nao compete.
+        // DOIS EIXOS: `Cache + DDGI + Environment + Zero == Total` responde a FONTE, e
+        // `Ineligible` responde POR QUE nao foi o cache — ele CRUZA com os quatro, nao compete.
         // A primeira igualdade e o teste do instrumento; a segunda cruza com `MissShort+MissCone`.
         u32 SrcTotal      = 0; // todo hit sombreado; o denominador
         u32 SrcCache      = 0;
         u32 SrcDDGI       = 0; // o cache errou e o volume respondeu
-        u32 SrcZero       = 0; // o cache errou e nao havia volume: zero explicito
+        u32 SrcEnvironment = 0; // o cache errou e o ambiente respondeu
+        u32 SrcZero       = 0; // o cache errou e o terminador era Black
         // Nem chegou a consultar: segmento menor que a celula ou cone mais estreito que ela. Estes
-        // raios estao TAMBEM em `SrcDDGI` ou `SrcZero` — nunca em `SrcCache`, por construcao.
+        // raios estao TAMBEM em `SrcDDGI`, `SrcEnvironment` ou `SrcZero` — nunca em `SrcCache`, por construcao.
         //
         // Ele mede quanto dos hits o cache NAO PODE atender por geometria, e so isso. Quanto disso
         // caiu especificamente no DDGI e interseccao, e interseccao nao sai de totais marginais:
@@ -525,6 +526,9 @@ namespace Smile {
         // detalhe — sem ela o regime seria um quinto, e regime que ninguem compara nao serve.
         void SetStatsSourceEnabled(bool V) { StatsSource = V; InvalidateStatsSnapshot(); }
         bool GetStatsSourceEnabled() const { return StatsSource; }
+        // Os knobs continuam pedidos/persistidos, mas os flags caros somem quando nenhuma janela
+        // de debug os consome.
+        void SetInstrumentationActive(bool V) { InstrumentationActive = V; }
 
         // Os passes de trace escrevem por atomico bindless e leem o Resolved; ambos precisam do
         // recurso em UNORDERED_ACCESS / NON_PIXEL. Chamar antes de gravar os traces do frame.
@@ -737,6 +741,7 @@ namespace Smile {
         bool StatsEnabled = false;
         bool StatsDetail  = false;
         bool StatsSource  = false;
+        bool InstrumentationActive = false;
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
         // Tabela de 3 UAVs CONTIGUOS (o range do root param 2 e um so). Os indices bindless

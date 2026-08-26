@@ -120,8 +120,8 @@ namespace Smile {
         ffxQuery(&P->Context, &JitterDesc.header);
     }
 
-    void FFsrPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
-        if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity) return;
+    bool FFsrPass::Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& In) {
+        if (!P || !P->Created || !Cmd || !In.Color || !In.Depth || !In.Velocity) return false;
 
         TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         P->OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -161,12 +161,14 @@ namespace Smile {
         D.flags                   = 0;
 
         ffxReturnCode_t Rc = ffxDispatch(&P->Context, &D.header);
-        if (Rc != FFX_API_RETURN_OK)
+        const bool Success = Rc == FFX_API_RETURN_OK;
+        if (!Success)
             LogError("FSR: ffxDispatch falhou (codigo " + std::to_string(Rc) + ")");
 
         TransitionResource(Cmd, P->Output.Get(), P->OutputState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         P->OutputState   = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        P->FirstDispatch = false;
+        if (Success) P->FirstDispatch = false;
+        return Success;
     }
 
     ID3D12Resource* FFsrPass::OutputResource() const { return P ? P->Output.Get() : nullptr; }
@@ -188,7 +190,7 @@ namespace Smile {
     void FFsrPass::Shutdown() {}
     bool FFsrPass::IsInitialized() const { return false; }
     void FFsrPass::GetJitter(u32, f32& OutX, f32& OutY) const { OutX = OutY = 0.0f; }
-    void FFsrPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) {}
+    bool FFsrPass::Dispatch(ID3D12GraphicsCommandList*, const FUpscaleParams&) { return false; }
     ID3D12Resource* FFsrPass::OutputResource() const { return nullptr; }
     u32             FFsrPass::OutputSRVSlot() const { return 0xFFFFFFFFu; }
     f32 FFsrPass::RenderRatioForQuality(int) const { return 1.0f; }

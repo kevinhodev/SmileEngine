@@ -26,11 +26,12 @@ namespace Smile {
 
     // Layout de cascatas compartilhado por C++/HLSL; a ordem integra a ABI do cbuffer.
     struct alignas(16) FDDGICascadeConstants {
-        // xy = cascatas/sondas por cascata; zw = sondas agendadas/intervalo da grossa.
+        // xy = cascatas/sondas por cascata; z = universo candidato; w = intervalo temporal.
         Vec4 Params{ 1.0f, 0.0f, 0.0f, 1.0f };
         Vec4 GridMinSpacing[4]{ { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f },
                                 { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } };
-        // Offset toroidal em celulas; explicito porque o GridMin grosso nao alinha à grade.
+        // Offset toroidal em celulas (xyz). Os w das tres primeiras entradas carregam o centro
+        // continuo compartilhado do blend, sem aumentar a ABI do bloco.
         Vec4 ScrollOffset[4]{};
     };
     static_assert(sizeof(FDDGICascadeConstants) == 144,
@@ -78,6 +79,8 @@ namespace Smile {
         Vec4 CascadeScrollDelta[4];
         // x = lista compacta de sondas ativas habilitada neste update.
         Vec4 ProbeCompactionParams;
+        Vec4 EnvironmentSky;    // rgb = irradiancia integrada do hemisferio superior
+        Vec4 EnvironmentGround; // rgb = irradiancia integrada do hemisferio inferior
     };
     static_assert(offsetof(DDGIConstants, CascadeScrollDelta) == 528,
                   "o delta de scroll segue o bloco de cascatas, no fim do DDGICB");
@@ -93,6 +96,8 @@ namespace Smile {
                   "o bloco de cascatas deve permanecer anexado ao fim do DDGICB");
     static_assert(offsetof(DDGIConstants, ProbeCompactionParams) == 592,
                   "a compactacao deve permanecer anexada depois dos deltas de scroll");
+    static_assert(offsetof(DDGIConstants, EnvironmentSky) == 608,
+                  "o ambiente deve permanecer anexado ao fim do DDGICB");
 
     // Menor numero de updates que deixa no maximo Residual do historico.
     constexpr u32 DDGIFramesForResidual(f32 _H, f32 _Residual) {
@@ -141,7 +146,7 @@ namespace Smile {
                            u32 TlasSRVSlot, u32 SkyViewSRVSlot, u32 InstanceGeoSRVSlot);
 
         // Deve rodar antes de qualquer consumidor do frame capturar CascadeConstants().
-        void PrepareCascadePlacement(const Vec3& CameraPos);
+        void PrepareCascadePlacement(const Vec3& CameraPos, const Vec3& CameraForward);
 
         void UpdatePerFrame(u32 FrameSlot, const Vec3& DirToSun, f32 SunIntensity,
                             const Vec3& SunColor, u32 FrameIndex, u32 PunctualLightCount = 0);
@@ -178,6 +183,19 @@ namespace Smile {
         bool GetInterleavedUpdates() const { return InterleavedUpdates; }
         u32  ScheduledCascadeCount() const { return ScheduledCascadeCount_; }
         u32  LastUpdatedCascadeCount() const { return LastUpdatedCascadeCount_; }
+        u32  ScheduledCascadeMask() const { return ScheduledCascadeMask_; }
+        u32  ScheduledProbeCount() const { return ScheduledProbeCount_; }
+        u32  ScheduledProbeStart() const { return ScheduledProbeStart_; }
+        // Zero preserva o scheduler legado. Um valor positivo limita o pior caso de ray queries
+        // por update; a conversao para probes usa o teto atual de raios por sonda.
+        void SetUpdateRayBudget(u32 V) {
+            if (UpdateRayBudget_ == V) return;
+            UpdateRayBudget_ = V;
+            ProbeWorkCursor_ = 0;
+        }
+        u32 GetUpdateRayBudget() const { return UpdateRayBudget_; }
+        bool UpdateBudgetEffective() const { return UpdateBudgetEffective_; }
+        u32 EffectiveProbeBudget() const { return EffectiveProbeBudget_; }
         u64  UpdateSerial() const { return UpdateSerial_; }
         u64  LastForcedUpdateSerial() const { return LastForcedUpdateSerial_; }
         bool ScheduledFullWasForced() const { return ScheduledFullForced_; }
@@ -197,6 +215,12 @@ namespace Smile {
         bool LastUpdateUsedProbeCompaction() const { return LastUpdateUsedProbeCompaction_; }
         u32  LastActiveProbeCount() const { return LastActiveProbeCount_; }
         u32  LastCompactedProbeCapacity() const { return LastCompactedProbeCapacity_; }
+        u32  LastSelectedRayCount() const { return LastSelectedRayCount_; }
+        u32  LastNewProbeCount() const { return LastNewProbeCount_; }
+        u32  LastRegionalProbeCount() const { return LastRegionalProbeCount_; }
+        u32  LastFollowUpProbeCount() const { return LastFollowUpProbeCount_; }
+        u32  LastQuotaProbeCount() const { return LastQuotaProbeCount_; }
+        u32  LastRoundRobinProbeCount() const { return LastRoundRobinProbeCount_; }
         static constexpr u32 ProbeWakeInterval() { return kProbeWakeInterval; }
         u64  LastProbeWakeSerial() const { return LastProbeWakeSerial_; }
 
@@ -223,6 +247,9 @@ namespace Smile {
                                         static_cast<f32>(Cs.Scroll[1]),
                                         static_cast<f32>(Cs.Scroll[2]), 0.0f };
             }
+            C.ScrollOffset[0].W = CascadeBlendCenter_.X;
+            C.ScrollOffset[1].W = CascadeBlendCenter_.Y;
+            C.ScrollOffset[2].W = CascadeBlendCenter_.Z;
             return C;
         }
         Vec3 GridCount() const { return Vec3{ (f32)CountX, (f32)CountY, (f32)CountZ }; }
@@ -349,8 +376,13 @@ namespace Smile {
 
         // A classificacao escreve ProbeData e ProbeRayCount mesmo sem relocacao.
         void TriggerReclassify() {
-            if (Ready && RelocateFramesLeft < kReclassifyFrames)
-                RelocateFramesLeft = kReclassifyFrames;
+            if (!Ready) return;
+            u32 Frames = kReclassifyFrames;
+            if (UpdateRayBudget_ > 0 && NumProbes > 0) {
+                const u32 BudgetProbes = std::max(UpdateRayBudget_ / kRaysPerProbe, 1u);
+                Frames = std::max(Frames, (NumProbes + BudgetProbes - 1u) / BudgetProbes);
+            }
+            if (RelocateFramesLeft < Frames) RelocateFramesLeft = Frames;
         }
         void ScheduleUpdate();
         void Transition(ID3D12GraphicsCommandList* CL, ID3D12Resource* Res,
@@ -428,15 +460,22 @@ namespace Smile {
             int  PrevOriginCells[3]{ 0, 0, 0 };
         };
         FCascade Cascades[kMaxCascades]{};
+        Vec3 CascadeBlendCenter_{};
         u32  CascadeCount_    = 1;
-        static constexpr f32 kCascadeSpacingRatio = 4.0f;
-        u32  DesiredCascades  = 2;
+        static constexpr f32 kCascadeSpacingRatio = 2.0f;
+        static constexpr f32 kCascadeForwardOffsetFraction = 0.5f;
+        static constexpr u32 kNewProbeRays = 64;
+        static constexpr u32 kCascadeQuotaDivisor = 8; // 12,5% do budget normal, dividido por nivel
+        u32  DesiredCascades  = 3;
         int  CountX = 0, CountY = 0, CountZ = 0;
         u32  ProbesPerCascade_ = 0;
         u32  NumProbes   = 0; // TOTAL = ProbesPerCascade_ * CascadeCount_
-        // Prefixo agendado neste frame; AtlasParams.w continua sendo a capacidade total.
+        // O universo candidato continua separado da janela circular realmente executada.
+        u32  CandidateProbeCount_ = 0;
         u32  ScheduledProbeCount_ = 0;
+        u32  ScheduledProbeStart_ = 0;
         u32  ScheduledCascadeCount_ = 1;
+        u32  ScheduledCascadeMask_ = 1;
         u32  LastUpdatedCascadeCount_ = 0;
         u32  CascadeUpdateAge_[kMaxCascades]{};
         u64  UpdateSerial_ = 0;
@@ -444,13 +483,34 @@ namespace Smile {
         bool InterleavedUpdates = true;
         bool CoarseDue_ = true;
         bool ScheduledFullForced_ = false;
+        u32  UpdateRayBudget_ = 131'072;
+        u32  EffectiveProbeBudget_ = 0;
+        u32  ProbeWorkCursor_ = 0;
+        u32  CascadeWorkCursor_[kMaxCascades]{};
+        bool UpdateBudgetEffective_ = false;
         bool ProbeCompaction = true;
         bool ProbeCompactionThisUpdate_ = false;
         bool LastUpdateUsedProbeCompaction_ = false;
         static constexpr u32 kProbeWakeInterval = 240;
         static constexpr u32 kProbeWakeUpdates  = 2;
         u64 LastProbeWakeSerial_ = 0;
+        struct FSelectionCounters {
+            u32 ActiveProbeCount = 0;
+            u32 SelectedRayCount = 0;
+            u32 NewProbeCount = 0;
+            u32 RegionalProbeCount = 0;
+            u32 FollowUpProbeCount = 0;
+            u32 QuotaProbeCount = 0;
+            u32 RoundRobinProbeCount = 0;
+        };
+        static_assert(sizeof(FSelectionCounters) == 7 * sizeof(u32));
         u32 LastActiveProbeCount_ = 0;
+        u32 LastSelectedRayCount_ = 0;
+        u32 LastNewProbeCount_ = 0;
+        u32 LastRegionalProbeCount_ = 0;
+        u32 LastFollowUpProbeCount_ = 0;
+        u32 LastQuotaProbeCount_ = 0;
+        u32 LastRoundRobinProbeCount_ = 0;
         u32 LastCompactedProbeCapacity_ = 0;
         bool CompactionReadbackIssued_[kTraceTables]{};
         u32 CompactionReadbackCapacity_[kTraceTables]{};

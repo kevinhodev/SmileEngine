@@ -13,6 +13,8 @@ struct VSOut {
     float2 uv    : TEXCOORD0;
     float3 color : TEXCOORD1; // tint por particula (fwd scatter, ja inclui tudo menos alpha)
     float  alpha : TEXCOORD2;
+    float4 curClip  : TEXCOORD3;
+    float4 prevClip : TEXCOORD4;
 };
 
 VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
@@ -22,6 +24,10 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float  speed;
     float2 h1;
     float3 p = RainParticlePos(iid, speed, h1); // conta compartilhada com o splash (F5b)
+    float prevSpeed;
+    float2 prevH1;
+    float3 prevP = RainParticlePosAt(iid, PrevCameraWorldPos.xyz, PrevCameraWorldPos.w,
+                                     prevSpeed, prevH1);
 
     // colisao/oclusao pelo heightmap: abaixo do teto local = ja bateu (ou area coberta)
     float kill = 0.0f;
@@ -47,13 +53,25 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const float cv = (k & 2u) ? 1.0f : -1.0f;
     float3 wp = p + right * (cu * wid) + axis * (cv * len * 0.5f);
 
+    float3 prevToCam = PrevCameraWorldPos.xyz - prevP;
+    float  prevDist  = max(length(prevToCam), 1e-3f);
+    float3 prevRight = normalize(cross(axis, prevToCam / prevDist) + 1e-5f);
+    float3 prevWp = prevP + prevRight * (cu * wid) + axis * (cv * len * 0.5f);
+
+    // Quando o box procedural faz wrap entre frames nao existe uma trajetoria continua.
+    // Zerar apenas esse MV evita uma linha cruzando a tela no frame da dobra.
+    const float maxTravel = speed * max(CameraWorldPos.w - PrevCameraWorldPos.w, 0.0f) + 0.5f;
+    if (length(prevP - p) > maxTravel) prevWp = wp;
+
     // fades: borda do box (esconde o pop do wrap) e muito-perto da camera; kill colapsa
     float edge = saturate((boxR - length(p.xz - CameraWorldPos.xz)) / (boxR * 0.15f));
     float nearF = saturate((dist - 0.35f) * 2.0f);
     float a = 0.32f * edge * nearF * (1.0f - kill);
-    if (a <= 0.001f) wp = p; // quad degenerado: rasterizador descarta
+    if (a <= 0.001f) { wp = p; prevWp = p; } // quad degenerado: rasterizador descarta
 
     o.pos = mul(float4(wp, 1.0f), RainViewProj);
+    o.curClip  = mul(float4(wp, 1.0f), RainViewProjNoJitter);
+    o.prevClip = mul(float4(prevWp, 1.0f), PrevRainViewProj);
     o.uv  = float2(cu * 0.5f + 0.5f, cv * 0.5f + 0.5f);
 
     // mesmo tint da cortina (key dessaturada c/ forward scatter + ambient do ceu)

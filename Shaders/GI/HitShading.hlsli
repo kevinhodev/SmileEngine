@@ -40,6 +40,9 @@ struct FHitShadeParams {
     // Piso de roughness do hit — SO para quem guarda a radiancia num cache NAO-DIRECIONAL
     // (DDGI e ReSTIR GI). 0 = desligado, que e o que as reflexoes usam. Ver o uso abaixo.
     float  RoughnessMin;       float CacheRayRoughness;
+    // Irradiancia integrada usada apenas quando o terminador explicito e Environment.
+    float3 EnvironmentSky;
+    float3 EnvironmentGround;
     // World radiance cache. CacheRayRoughness e a roughness do lobo que GEROU este raio, nao a
     // do material atingido. Negativo = transporte difuso; reflexoes usam o gate de cone SHaRC.
     FRadianceCacheParams Cache;
@@ -152,11 +155,10 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
     // Fallback indireto — alcancavel SO depois do miss do cache, que e o que a Fase 5 pede e o que
     // a ordem acima ja garantia desde a Fase 2.
     //
-    // `ddgiAnswered` separa "o volume cobriu este ponto" de "nao havia volume e o indireto foi zero
-    // explicito". A radiancia devolvida nao distingue os dois — um DDGI legitimamente escuro
-    // tambem sai preto —, e e essa diferenca que o gate de saida da fase le.
-    bool ddgiAnswered;
-    const float3 indirect = PT_SampleIndirectFallback(S, rayDir, P, ddgiAnswered);
+    // A fonte e devolvida junto porque radiancia preta nao distingue DDGI escuro, Environment
+    // escuro e Black. O enum casa diretamente com o bloco contiguo RC_STAT_SRC_*.
+    uint fallbackSource;
+    const float3 indirect = PT_SampleIndirectFallback(S, rayDir, P, fallbackSource);
 
     // DOIS EIXOS ORTOGONAIS, e nao uma particao so. Foi assim que o primeiro corte errou: ele
     // punha `inelegivel` como se fosse ALTERNATIVA a `ddgi`, e um raio inelegivel que recebe
@@ -165,22 +167,16 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
     // e erraram, escondendo o resto dentro do outro contador: 8,4% de DDGI ao lado de 21,7% de
     // inelegiveis que tambem consumiam DDGI.
     //
-    //   QUEM FORNECEU:   CACHE + DDGI + ZERO == TOTAL
+    //   QUEM FORNECEU:   CACHE + DDGI + ENVIRONMENT + ZERO == TOTAL
     //   POR QUE NAO O CACHE: INELIGIBLE == missShort + missCone
     //
     // O `outSource` responde a PRIMEIRA pergunta — e a radiancia que esta na tela —, e por isso
-    // nao existe cor de "inelegivel": ela nao e uma fonte. Quem quiser o motivo le o contador, que
-    // continua contando a mesma populacao de sempre e continua batendo com os misses do `Sd`.
-    if (ddgiAnswered) {
-        RC_CountSource(P.Cache, RC_STAT_SRC_DDGI);
-        outSource = RC_SRC_DDGI;
-    } else {
-        RC_CountSource(P.Cache, RC_STAT_SRC_ZERO);
-        outSource = RC_SRC_ZERO;
-    }
-    // Eixo separado — e com nome proprio, para o call site nao parecer uma quarta classe de fonte.
+    // nao existe cor de "inelegivel": ela nao e uma fonte. Quem quiser o motivo le o contador.
+    RC_CountSource(P.Cache, RC_STAT_SRC_CACHE + fallbackSource);
+    outSource = fallbackSource;
+    // Eixo separado — e com nome proprio, para o call site nao parecer uma classe de fonte.
     // Contado DEPOIS da reconvergencia: aqui a wave volta inteira e o `WaveActiveCountBits` de
-    // dentro conta so as lanes inelegiveis. Esta lane ja foi contada acima, em DDGI ou ZERO; sao
+    // dentro conta so as lanes inelegiveis. A lane ja foi contada em DDGI, Environment ou Zero;
     // duas chamadas em dois eixos, e nao duas classes para a mesma pergunta.
     if (srcIneligible) RC_CountEligibility(P.Cache);
 

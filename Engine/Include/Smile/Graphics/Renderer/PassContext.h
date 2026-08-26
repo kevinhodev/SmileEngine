@@ -57,6 +57,7 @@ namespace Smile {
         static constexpr u32 kNoSlot = 0xFFFFFFFFu;
         u32             Slot       = kNoSlot;
         const FGpuMesh* Mesh       = nullptr;
+        FMaterial*      Mat        = nullptr;
         Mat44           Model      = Mat44::Identity();
         int             Renderable = -1;    // indice em Scene.Renderables(); -1 = nada
     };

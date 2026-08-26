@@ -1,13 +1,28 @@
+/* Widgets Qt do editor no conceito "Signal Graphite" (Docs/Design/EditorRedesign).
+   O grosso da UI e QML e le os tokens de Qml/components/Theme.qml; este arquivo cobre o
+   que ainda e widget nativo — separadores de dock, scroll areas, dialogos de arquivo.
+   Os hex aqui repetem os do Theme de proposito: QSS nao le o singleton QML. */
 * {
-    font-family: "Segoe UI", "Inter", "Arial";
+    font-family: "Inter", "Segoe UI", "Arial";
     font-size: 12px;
-    color: #ddd8ca;
-    selection-background-color: #d49a11;
-    selection-color: #0a0a09;
+    color: #C9C9CF;
+    selection-background-color: #FF6B2C;
+    selection-color: #09090A;
 }
 
 QMainWindow#SmileMainWindow {
-    background: #080909;
+    background: #09090A;
+}
+
+QStatusBar#EditorStatusBar {
+    background: #111113;
+    border: none;
+    margin: 0;
+    padding: 0;
+}
+
+QStatusBar#EditorStatusBar::item {
+    border: none;
 }
 
 QWidget {
@@ -15,65 +30,32 @@ QWidget {
 }
 
 QToolTip {
-    color: #f3ead2;
-    background-color: #151512;
-    border: 1px solid #3a3321;
+    color: #F2F2F0;
+    background-color: #18181B;
+    border: 1px solid #333338;
     border-radius: 4px;
     padding: 6px 8px;
 }
 
-QWidget#SmileTopBar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #151615, stop:1 #0b0c0c);
-    border-bottom: 1px solid #24231f;
-}
-
-QLabel#SmileBrandLabel {
-    color: #f4efe3;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 0 8px 0 0;
-}
-
-QMenuBar#SmileMenuBar {
-    background: transparent;
-    color: #d8d3c5;
-    font-size: 12px;
-    spacing: 3px;
-    padding: 0;
-}
-
-QMenuBar#SmileMenuBar::item {
-    background: transparent;
-    border-radius: 4px;
-    padding: 3px 8px;
-}
-
-QMenuBar#SmileMenuBar::item:selected,
-QMenuBar#SmileMenuBar::item:pressed {
-    background: #20211f;
-    color: #ffd35d;
-}
-
 QMenu {
-    background: #111210;
-    color: #ded8c9;
-    border: 1px solid #302b1f;
+    background: #18181B;
+    color: #C9C9CF;
+    border: 1px solid #333338;
     padding: 6px;
 }
 
 QMenu::item {
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 7px 28px 7px 12px;
 }
 
 QMenu::item:selected {
-    background: #2a2416;
-    color: #ffd35d;
+    background: #1F1F23;
+    color: #F2F2F0;
 }
 
 QMenu::item:disabled {
-    color: #615f58;
+    color: #5F5F66;
 }
 
 QComboBox::drop-down {
@@ -87,73 +69,50 @@ QComboBox::down-arrow {
     height: 0;
 }
 
+/* O separador fica na cor do shell, invisivel: quem desenha a divisa e a hairline de 1 px
+   na borda de cada painel QML (a mesma linha que o conceito usa como elemento de identidade).
+   Pintar a faixa inteira de #26262B daria um fio de 3 px, grosso demais ao lado dela.
+   A largura existe so para o cursor de resize ter onde pegar; o hover acende no accent
+   porque arrastar e uma acao. */
 QMainWindow::separator {
-    background: #20211f;
-    width: 5px;
-    height: 5px;
+    background: #111113;
+    width: 3px;
+    height: 3px;
 }
 
 QMainWindow::separator:hover {
-    background: #3b311a;
+    background: #FF6B2C;
 }
 
+/* Docks nao tem moldura nem raio: cada painel QML fecha a propria borda com hairline, e uma
+   segunda borda aqui viraria fio duplo. A title bar nativa e substituida por um widget de
+   altura zero no MainWindow. */
 QDockWidget {
-    background: #10110f;
-    color: #f1eadc;
-    border: 1px solid #272720;
-    border-radius: 6px;
-}
-
-QDockWidget::title {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #171816, stop:1 #10110f);
-    color: #f1eadc;
-    text-align: left;
-    padding: 8px 34px 8px 12px;
-    border-bottom: 1px solid #292820;
-}
-
-QDockWidget::close-button,
-QDockWidget::float-button {
-    background: #2b2b27;
-    border: 1px solid #34342f;
-    border-radius: 4px;
-    subcontrol-origin: margin;
-    subcontrol-position: top right;
-    width: 18px;
-    height: 18px;
-}
-
-QDockWidget::close-button:hover,
-QDockWidget::float-button:hover {
-    background: #463916;
-    border-color: #c28b14;
-}
-
-QDockWidget::float-button {
-    right: 24px;
+    background: #111113;
+    color: #F2F2F0;
+    border: none;
 }
 
 QAbstractScrollArea,
 QScrollArea {
-    background: #10110f;
+    background: #111113;
     border: none;
 }
 
 QScrollBar:vertical {
-    background: #0c0d0c;
+    background: transparent;
     width: 9px;
     margin: 0;
 }
 
 QScrollBar::handle:vertical {
-    background: #34342d;
+    background: #333338;
     border-radius: 4px;
     min-height: 28px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #5c4515;
+    background: #5F5F66;
 }
 
 QScrollBar::add-line:vertical,
@@ -165,11 +124,11 @@ QScrollBar::sub-page:vertical {
 }
 
 QGroupBox {
-    background: rgba(18, 19, 17, 220);
-    color: #d8a926;
+    background: #18181B;
+    color: #A0A0A8;
     font-weight: 600;
-    border: 1px solid #292a24;
-    border-radius: 6px;
+    border: 1px solid #26262B;
+    border-radius: 4px;
     margin-top: 14px;
     padding-top: 12px;
 }
@@ -179,12 +138,12 @@ QGroupBox::title {
     subcontrol-position: top left;
     left: 10px;
     padding: 0 5px;
-    color: #e0ad29;
-    background: #10110f;
+    color: #A0A0A8;
+    background: #111113;
 }
 
 QLabel {
-    color: #d8d3c5;
+    color: #C9C9CF;
 }
 
 QLineEdit,
@@ -193,10 +152,10 @@ QPlainTextEdit,
 QDoubleSpinBox,
 QSpinBox,
 QComboBox {
-    background: #181916;
-    color: #e5dfd2;
-    border: 1px solid #2a2b26;
-    border-radius: 4px;
+    background: #18181B;
+    color: #F2F2F0;
+    border: 1px solid #26262B;
+    border-radius: 3px;
     padding: 4px 7px;
 }
 
@@ -206,8 +165,8 @@ QPlainTextEdit:focus,
 QDoubleSpinBox:focus,
 QSpinBox:focus,
 QComboBox:focus {
-    border-color: #b47e0d;
-    background: #1d1d19;
+    border-color: #FF6B2C;
+    background: #1F1F23;
 }
 
 QDoubleSpinBox::up-button,
@@ -220,57 +179,46 @@ QSpinBox::down-button {
 
 QPushButton,
 QToolButton {
-    background: #191a17;
-    color: #ddd8ca;
-    border: 1px solid #2c2c26;
-    border-radius: 5px;
+    background: #18181B;
+    color: #C9C9CF;
+    border: 1px solid #26262B;
+    border-radius: 3px;
     padding: 5px 10px;
 }
 
 QPushButton:hover,
 QToolButton:hover {
-    background: #24221a;
-    border-color: #9c7012;
-    color: #ffd35d;
+    background: #1F1F23;
+    border-color: #333338;
+    color: #F2F2F0;
 }
 
 QPushButton:pressed,
 QToolButton:pressed,
 QToolButton:checked {
-    background: #3a2b10;
-    border-color: #d49a11;
-    color: #ffd35d;
+    background: rgba(255, 107, 44, 0.12);
+    border-color: rgba(255, 107, 44, 0.45);
+    color: #FF6B2C;
 }
 
 QCheckBox {
-    color: #c7c1b3;
+    color: #A0A0A8;
     spacing: 7px;
 }
 
 QCheckBox::indicator {
     width: 14px;
     height: 14px;
-    border: 1px solid #34342f;
-    border-radius: 3px;
-    background: #22231f;
+    border: 1px solid #333338;
+    border-radius: 2px;
+    background: #18181B;
 }
 
 QCheckBox::indicator:hover {
-    border-color: #b47e0d;
+    border-color: #5F5F66;
 }
 
 QCheckBox::indicator:checked {
-    background: #d49a11;
-    border-color: #ffc847;
-}
-
-QStatusBar#SmileStatusBar {
-    background: #090a0a;
-    color: #bdb7aa;
-    border-top: 1px solid #1e1f1c;
-}
-
-QStatusBar#SmileStatusBar QLabel#FooterStatsLabel {
-    color: #cbc6b9;
-    padding-right: 8px;
+    background: #FF6B2C;
+    border-color: #FF6B2C;
 }

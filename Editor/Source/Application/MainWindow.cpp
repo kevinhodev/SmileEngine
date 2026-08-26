@@ -22,6 +22,7 @@
 #include "SmileEditor/Scene/MaterialsBridge.h"
 #include "SmileEditor/Profiling/StatsBridge.h"
 #include "SmileEditor/Debugging/DebugTargetsBridge.h"
+#include "SmileEditor/Debugging/ReSTIRDebugBridge.h"
 #include "SmileEditor/UI/WindowBridge.h"
 #include "SmileEditor/Viewport/ViewportWidget.h"
 #include "SmileEditor/Application/DarkTheme.h"
@@ -54,6 +55,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QProcess>
+#include <QQmlEngine>
 #include <QQuickWidget>
 #include <QShortcut>
 #include <QSizePolicy>
@@ -78,6 +80,11 @@ namespace SmileEditor {
 
         setDockNestingEnabled(true);
         setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
+        // A faixa inferior atravessa a janela inteira, por baixo dos docks laterais. Sem isto o
+        // Qt entrega os cantos as areas esquerda/direita e o console nasce espremido entre o
+        // outliner e o inspector — o oposto da faixa cheia que o conceito pede.
+        setCorner(Qt::BottomLeftCorner,  Qt::BottomDockWidgetArea);
+        setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
 
         // O sink deve existir antes de qualquer host QML emitir logs.
         ConsoleLog = new LogBridge(this);
@@ -96,6 +103,9 @@ namespace SmileEditor {
         } SinkRollback;
 
         WindowBr   = new WindowBridge(this);
+        // A MainBar e o rodape permanente leem a mesma mensagem; a ponte precisa existir antes
+        // da criacao dos dois componentes QML.
+        StatusBr   = new StatusBridge(this);
         Menus      = new MenuBridge(this);
         TodBridge  = new TimeOfDayBridge(this);
         CloudsBr   = new CloudsBridge(this);
@@ -117,6 +127,16 @@ namespace SmileEditor {
         RenderBr   = new RenderSettingsBridge(this);
         StatsBr    = new StatsBridge(this);
         DebugTargetsBr = new DebugTargetsBridge(this);
+        // Um provider por engine compartilhada. Tanto a janela geral quanto o ReSTIR Lab
+        // consomem a mesma QImage/readback; registrar por janela duplicaria ownership.
+        if (!_QmlEngine.imageProvider(QStringLiteral("debugtargetpreview"))) {
+            _QmlEngine.addImageProvider(
+                QStringLiteral("debugtargetpreview"),
+                new DebugTargetPreviewImageProvider(DebugTargetsBr));
+        }
+        ReSTIRBr = new ReSTIRDebugBridge(RenderBr, DebugTargetsBr, this);
+        connect(ReSTIRBr, &ReSTIRDebugBridge::OpenWindowRequested,
+                this, &MainWindow::ShowReSTIR);
 
         // Mudanças externas invalidam os mesmos bindings usados pela UI.
         connect(RenderSettingsCtrl, &RenderSettingsController::GISettingsChanged,
@@ -139,7 +159,7 @@ namespace SmileEditor {
         connect(OceanBr, &OceanBridge::SettingsChanged,
                 OutlinerBr, &SceneOutlinerBridge::Refresh);
 
-        connect(OutlinerBr, &SceneOutlinerBridge::DirtyChanged,
+        connect(OutlinerBr, &SceneOutlinerBridge::SceneChanged,
                 SceneDoc, &SceneDocument::markDirty);
 
         connect(MaterialsBr, &MaterialsBridge::VisibilityChanged,
@@ -149,11 +169,10 @@ namespace SmileEditor {
         });
 
         CreateTopBar();
+        CreateStatusBar();
         setCentralWidget(CreateViewportChrome());
         CreateDocks();
         WireMenuActions();
-
-        CreateStatusBar();
 
         // Persistência e captura publicam o resultado assíncrono na barra de status.
         if (CameraBookmarksBr && StatusBr) {
@@ -272,6 +291,7 @@ namespace SmileEditor {
                     ActiveViewport = TargetViewport;
                     if (StatsBr) StatsBr->SetViewport(TargetViewport);
                     if (DebugTargetsBr) DebugTargetsBr->SetViewport(TargetViewport);
+                    if (ReSTIRBr) ReSTIRBr->SetViewport(TargetViewport);
                 }
             }
         }
@@ -290,6 +310,12 @@ namespace SmileEditor {
             if (Menus) Menus->SetDebugTargetsVisible(Shown);
             // Ocultar pausa o readback, mas preserva a seleção.
             if (DebugTargetsBr) DebugTargetsBr->SetPreviewEnabled(Shown);
+        }
+        if (ReSTIRDlg && _Obj == ReSTIRDlg &&
+            (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
+            const bool Shown = _Event->type() == QEvent::Show;
+            if (Menus) Menus->SetReSTIRVisible(Shown);
+            if (ReSTIRBr) ReSTIRBr->SetWindowVisible(Shown);
         }
         if (MaterialsDlg && _Obj == MaterialsDlg &&
             (_Event->type() == QEvent::Show || _Event->type() == QEvent::Hide)) {
@@ -378,7 +404,10 @@ namespace SmileEditor {
         QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("MainBar.qml"),
             { { QStringLiteral("windowBridge"), WindowBr },
-              { QStringLiteral("menuBridge"),   Menus } },
+              { QStringLiteral("menuBridge"),   Menus },
+              { QStringLiteral("sceneDoc"),     SceneDoc },
+              { QStringLiteral("mcpModel"),     McpBr },
+              { QStringLiteral("statusModel"),  StatusBr } },
             this,
             { { QStringLiteral("smilelogo"), new SmileLogoImageProvider() } });
         Bar->setObjectName("MainBar");
@@ -397,18 +426,23 @@ namespace SmileEditor {
     }
 
     void MainWindow::CreateStatusBar() {
-        StatusBr = new StatusBridge(this);
-        QQuickWidget* Bar = CreateQmlPanel(*SharedQmlEngine,
-            QStringLiteral("StatusBar.qml"),
-            { { QStringLiteral("statusModel"), StatusBr } },
-            this);
-        Bar->setObjectName("StatusBar");
+        auto* Bar = new QStatusBar(this);
+        Bar->setObjectName(QStringLiteral("EditorStatusBar"));
+        Bar->setSizeGripEnabled(false);
+        Bar->setContentsMargins(0, 0, 0, 0);
+        Bar->setFixedHeight(30);
 
-        QStatusBar* Sb = statusBar();
-        Sb->setObjectName("SmileStatusBar");
-        Sb->setSizeGripEnabled(false);
-        Sb->setContentsMargins(0, 0, 0, 0);
-        Sb->addWidget(Bar, 1);
+        QQuickWidget* Metrics = CreateQmlPanel(*SharedQmlEngine,
+            QStringLiteral("StatusBar.qml"),
+            { { QStringLiteral("statusModel"), StatusBr },
+              { QStringLiteral("statsModel"),  StatsBr } },
+            Bar);
+        Metrics->setObjectName(QStringLiteral("StatusBarPanel"));
+        Metrics->setFixedHeight(30);
+        Metrics->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        Bar->addWidget(Metrics, 1);
+
+        setStatusBar(Bar);
     }
 
     void MainWindow::BeginSceneLoad(const QString& _Path, bool _Additive) {
@@ -535,6 +569,9 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::ToggleLightsRequested, this, [this]() {
             if (LightsDock) LightsDock->setVisible(!LightsDock->isVisible());
         });
+        connect(Menus, &MenuBridge::ToggleInspectorRequested, this, [this]() {
+            if (InspectorDock) InspectorDock->setVisible(!InspectorDock->isVisible());
+        });
         connect(Menus, &MenuBridge::ToggleStatsRequested, this, [this]() {
             if (StatsDlg && StatsDlg->isVisible()) StatsDlg->hide();
             else                                   ShowStats();
@@ -542,6 +579,10 @@ namespace SmileEditor {
         connect(Menus, &MenuBridge::ToggleDebugTargetsRequested, this, [this]() {
             if (DebugTargetsDlg && DebugTargetsDlg->isVisible()) DebugTargetsDlg->hide();
             else                                                 ShowDebugTargets();
+        });
+        connect(Menus, &MenuBridge::ToggleReSTIRRequested, this, [this]() {
+            if (ReSTIRDlg && ReSTIRDlg->isVisible()) ReSTIRDlg->hide();
+            else                                     ShowReSTIR();
         });
         connect(Menus, &MenuBridge::ToggleMaterialsRequested, this, [this]() {
             if (MaterialsDlg && MaterialsDlg->isVisible()) MaterialsDlg->hide();
@@ -570,6 +611,7 @@ namespace SmileEditor {
         AddShortcut(QKeySequence(tr("Ctrl+O")),       [this]{ Menus->loadScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+O")), [this]{ Menus->addScene(); });
         AddShortcut(QKeySequence(tr("Ctrl+Shift+T")), [this]{ Menus->toggleDebugTargets(); });
+        AddShortcut(QKeySequence(tr("Ctrl+Shift+R")), [this]{ Menus->toggleReSTIR(); });
         AddShortcut(QKeySequence(tr("Ctrl+,")),       [this]{ ShowSettings(); });
         AddShortcut(QKeySequence::Quit,               [this]{ close(); });
         AddShortcut(QKeySequence(tr("Alt+1")), [this] {
@@ -603,6 +645,7 @@ namespace SmileEditor {
             ActiveViewport = _Viewport;
             if (StatsBr) StatsBr->SetViewport(_Viewport);
             if (DebugTargetsBr) DebugTargetsBr->SetViewport(_Viewport);
+            if (ReSTIRBr) ReSTIRBr->SetViewport(_Viewport);
         }
     }
 
@@ -629,6 +672,9 @@ namespace SmileEditor {
         ToolbarProperties.insert(
             QStringLiteral("debugModel"),
             QVariant::fromValue(static_cast<QObject*>(DebugTargetsBr)));
+        ToolbarProperties.insert(
+            QStringLiteral("restirModel"),
+            QVariant::fromValue(static_cast<QObject*>(ReSTIRBr)));
 
         QQuickWidget* Toolbar = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("ViewportToolbar.qml"),
@@ -669,12 +715,12 @@ namespace SmileEditor {
         connect(ConsoleLog, &LogBridge::CloseRequested, ConsoleDock, &QDockWidget::close);
 
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
-        Console->setMinimumHeight(82);
-        resizeDocks({ ConsoleDock }, { 124 }, Qt::Vertical);
+        Console->setMinimumHeight(102); // faixa de comando + 2 linhas de log
+        resizeDocks({ ConsoleDock }, { 146 }, Qt::Vertical);
 
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
 
-        // Cena / Scene Outliner.
+        // Cena / Scene Outliner — dock ESQUERDO no split outliner|viewport|inspector.
         LightsDock = new QDockWidget(tr("Cena"), this);
         LightsDock->setObjectName("SceneOutlinerDock");
         LightsDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -685,11 +731,9 @@ namespace SmileEditor {
         QQuickWidget* OutlinerPanel = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("SceneOutlinerPanel.qml"),
             { { QStringLiteral("outlinerModel"), OutlinerBr },
-              { QStringLiteral("sceneDoc"),       SceneDoc },
+              { QStringLiteral("sceneDoc"),      SceneDoc },
               { QStringLiteral("lightsModel"),   LightsBr },
-              { QStringLiteral("cloudsModel"),   CloudsBr },
-              { QStringLiteral("weatherModel"),  WeatherBr },
-              { QStringLiteral("oceanModel"),    OceanBr } },
+              { QStringLiteral("cloudsModel"),   CloudsBr } },
             LightsDock);
         OutlinerPanel->setObjectName("SceneOutlinerPanel");
         LightsDock->setWidget(OutlinerPanel);
@@ -699,11 +743,43 @@ namespace SmileEditor {
         LightsDock->setTitleBarWidget(OutlinerEmptyTitleBar);
         connect(OutlinerBr, &SceneOutlinerBridge::CloseRequested, LightsDock, &QDockWidget::close);
 
-        addDockWidget(Qt::RightDockWidgetArea, LightsDock);
-        OutlinerPanel->setMinimumWidth(300);
-        resizeDocks({ LightsDock }, { 340 }, Qt::Horizontal);
+        addDockWidget(Qt::LeftDockWidgetArea, LightsDock);
+        OutlinerPanel->setMinimumWidth(272);
 
         connect(LightsDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetLightsVisible);
+
+        // Inspector — dock DIREITO. Saiu de dentro do outliner na migracao para o Signal
+        // Graphite: o painel unico empilhava arvore e propriedades numa coluna so, e as duas
+        // disputavam a mesma altura justamente quando havia mais de uma para ver.
+        InspectorDock = new QDockWidget(tr("Inspector"), this);
+        InspectorDock->setObjectName("InspectorDock");
+        InspectorDock->setAllowedAreas(Qt::RightDockWidgetArea);
+        InspectorDock->setFeatures(QDockWidget::DockWidgetClosable);
+
+        QQuickWidget* Inspector = CreateQmlPanel(*SharedQmlEngine,
+            QStringLiteral("InspectorPanel.qml"),
+            { { QStringLiteral("outlinerModel"), OutlinerBr },
+              { QStringLiteral("lightsModel"),   LightsBr },
+              { QStringLiteral("cloudsModel"),   CloudsBr },
+              { QStringLiteral("weatherModel"),  WeatherBr },
+              { QStringLiteral("oceanModel"),    OceanBr } },
+            InspectorDock);
+        Inspector->setObjectName("InspectorPanel");
+        InspectorDock->setWidget(Inspector);
+
+        auto* InspectorEmptyTitleBar = new QWidget(InspectorDock);
+        InspectorEmptyTitleBar->setFixedHeight(0);
+        InspectorDock->setTitleBarWidget(InspectorEmptyTitleBar);
+
+        addDockWidget(Qt::RightDockWidgetArea, InspectorDock);
+        Inspector->setMinimumWidth(288);
+
+        connect(InspectorDock, &QDockWidget::visibilityChanged,
+                Menus, &MenuBridge::SetInspectorVisible);
+
+        // Um resizeDocks por eixo, com os dois docks juntos: chamadas separadas se anulam,
+        // porque a segunda redistribui a largura que a primeira acabou de fixar.
+        resizeDocks({ LightsDock, InspectorDock }, { 296, 320 }, Qt::Horizontal);
     }
 
     void MainWindow::OnRendererReady() {
@@ -718,6 +794,10 @@ namespace SmileEditor {
         if (RenderBr) {
             RenderBr->SetRenderer(Viewport->GetRenderer());
             RenderBr->SetViewport(Viewport);
+        }
+        if (ReSTIRBr) {
+            ReSTIRBr->SetRenderer(Viewport->GetRenderer());
+            ReSTIRBr->SetViewport(Viewport);
         }
 
         if (CloudsBr) {
@@ -821,6 +901,7 @@ namespace SmileEditor {
                 QStringLiteral("SettingsWindow.qml"),
                 { { QStringLiteral("viewportModel"), Viewport },
                   { QStringLiteral("renderModel"), RenderBr },
+                  { QStringLiteral("restirModel"), ReSTIRBr },
                   { QStringLiteral("cameraBookmarks"), CameraBookmarksBr },
                   { QStringLiteral("capture"), CaptureBr },
                   { QStringLiteral("settingsWindow"), SettingsWindowBridge } },
@@ -953,9 +1034,7 @@ namespace SmileEditor {
                 QStringLiteral("DebugTargetsWindow.qml"),
                 { { QStringLiteral("debugModel"), DebugTargetsBr },
                   { QStringLiteral("debugWindow"), DebugWindowBridge } },
-                Dialog,
-                { { QStringLiteral("debugtargetpreview"),
-                    new DebugTargetPreviewImageProvider(DebugTargetsBr) } });
+                Dialog);
             Panel->setObjectName(QStringLiteral("DebugTargetsWindowPanel"));
 
             auto* DialogLayout = new QVBoxLayout(Dialog);
@@ -978,6 +1057,50 @@ namespace SmileEditor {
         }
         DebugTargetsDlg->raise();
         DebugTargetsDlg->activateWindow();
+    }
+
+    void MainWindow::ShowReSTIR() {
+        if (!ReSTIRDlg) {
+            auto* Dialog = new QDialog(this);
+            Dialog->setObjectName(QStringLiteral("ReSTIRDebugWindow"));
+            Dialog->setWindowTitle(tr("ReSTIR Lab — SmileEngine"));
+            Dialog->setWindowIcon(windowIcon());
+            Dialog->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
+                                   Qt::WindowMinimizeButtonHint |
+                                   Qt::WindowMaximizeButtonHint);
+            Dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+            Dialog->resize(1180, 780);
+            Dialog->setMinimumSize(940, 620);
+
+            auto* ReSTIRWindowBridge = new WindowBridge(Dialog, Dialog);
+            QQuickWidget* Panel = CreateQmlPanel(*SharedQmlEngine,
+                QStringLiteral("ReSTIRDebugWindow.qml"),
+                { { QStringLiteral("restirModel"), ReSTIRBr },
+                  { QStringLiteral("debugModel"), DebugTargetsBr },
+                  { QStringLiteral("restirWindow"), ReSTIRWindowBridge } },
+                Dialog);
+            Panel->setObjectName(QStringLiteral("ReSTIRDebugWindowPanel"));
+
+            auto* DialogLayout = new QVBoxLayout(Dialog);
+            DialogLayout->setContentsMargins(0, 0, 0, 0);
+            DialogLayout->setSpacing(0);
+            DialogLayout->addWidget(Panel);
+
+            Dialog->installEventFilter(this);
+            ReSTIRDlg = Dialog;
+        }
+
+        if (ReSTIRDlg->isMinimized()) ReSTIRDlg->showNormal();
+        else                          ReSTIRDlg->show();
+
+        if (!ReSTIRDlg->property("smilePositioned").toBool()) {
+            const QPoint Center = geometry().center();
+            ReSTIRDlg->move(Center.x() - ReSTIRDlg->width() / 2,
+                            Center.y() - ReSTIRDlg->height() / 2);
+            ReSTIRDlg->setProperty("smilePositioned", true);
+        }
+        ReSTIRDlg->raise();
+        ReSTIRDlg->activateWindow();
     }
 
     void MainWindow::ShowMaterials() {

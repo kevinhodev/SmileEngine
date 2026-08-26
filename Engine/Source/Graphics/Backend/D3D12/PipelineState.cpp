@@ -395,6 +395,17 @@ namespace Smile {
             PremulBlend.RenderTarget[RT].BlendOpAlpha = D3D12_BLEND_OP_MAX;
             PremulBlend.RenderTarget[RT].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
         }
+        // Velocity translucida: alpha-weighted sobre o MV do opaco visivel por baixo. O formato
+        // armazena apenas RG, mas o SrcBlend usa o alpha ainda presente na saida do pixel shader.
+        PremulBlend.RenderTarget[3] = BlendDesc.RenderTarget[0];
+        PremulBlend.RenderTarget[3].BlendEnable   = TRUE;
+        PremulBlend.RenderTarget[3].SrcBlend      = D3D12_BLEND_SRC_ALPHA;
+        PremulBlend.RenderTarget[3].DestBlend     = D3D12_BLEND_INV_SRC_ALPHA;
+        PremulBlend.RenderTarget[3].BlendOp       = D3D12_BLEND_OP_ADD;
+        PremulBlend.RenderTarget[3].SrcBlendAlpha = D3D12_BLEND_ONE;
+        PremulBlend.RenderTarget[3].DestBlendAlpha = D3D12_BLEND_ZERO;
+        PremulBlend.RenderTarget[3].RenderTargetWriteMask =
+            D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN;
 
         D3D12_DEPTH_STENCIL_DESC DepthReadOnly = DepthLess;
         DepthReadOnly.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -402,11 +413,11 @@ namespace Smile {
         PSODesc.PS                = { ForwardBlendPSBlob.data(), ForwardBlendPSBlob.size() };
         PSODesc.BlendState        = PremulBlend;
         PSODesc.DepthStencilState = DepthReadOnly;
-        PSODesc.NumRenderTargets  = 3;
+        PSODesc.NumRenderTargets  = 4;
         PSODesc.RTVFormats[0]     = DXGI_FORMAT_R16G16B16A16_FLOAT;
         PSODesc.RTVFormats[1]     = DXGI_FORMAT_R8_UNORM;
         PSODesc.RTVFormats[2]     = DXGI_FORMAT_R8_UNORM;
-        PSODesc.RTVFormats[3]     = DXGI_FORMAT_UNKNOWN;
+        PSODesc.RTVFormats[3]     = DXGI_FORMAT_R16G16_FLOAT;
         PSODesc.RTVFormats[4]     = DXGI_FORMAT_UNKNOWN;
         ComPtr<ID3D12PipelineState> NewPSOForwardBlend;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOForwardBlend)));

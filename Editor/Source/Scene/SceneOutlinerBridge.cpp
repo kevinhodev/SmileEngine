@@ -27,6 +27,12 @@ namespace SmileEditor {
         };
 
         constexpr double kToRad = 3.14159265358979 / 180.0;
+
+        // Mesmo piso do GizmoController: abaixo disso a matriz colapsa e a normal vai junto.
+        constexpr float kMinMeshScale = 0.001f;
+
+        constexpr int kInitialVisibleMeshes = 5;
+        constexpr int kVisibleMeshPage      = 50;
     }
 
     SceneOutlinerBridge::SceneOutlinerBridge(QObject* _Parent)
@@ -55,6 +61,7 @@ namespace SmileEditor {
         if (!_Additive) {
             Assets.clear();
             AssetExpanded.clear();
+            AssetVisibleLimits.clear();
             Assets.push_back({ Info.completeBaseName(), 0, Count });
             AssetExpanded.push_back(true);
             // Persistencia acompanha a cena principal (mesma convencao do .lights.json).
@@ -247,7 +254,24 @@ namespace SmileEditor {
                 F.HasEye   = true;
                 F.Enabled  = AnyVisible;
                 Folders.push_back(F);
-                if (Expanded) Folders += Children;
+                if (Expanded) {
+                    const int ChildCount = static_cast<int>(Children.size());
+                    const int VisibleCount = Searching
+                        ? ChildCount
+                        : std::min(ChildCount,
+                                   AssetVisibleLimits.value(A, kInitialVisibleMeshes));
+                    for (int I = 0; I < VisibleCount; ++I)
+                        Folders.push_back(Children[I]);
+
+                    if (!Searching && VisibleCount < Children.size()) {
+                        FRow More;
+                        More.Kind     = KMore;
+                        More.Depth    = 2;
+                        More.Count    = Children.size() - VisibleCount;
+                        More.SceneIdx = A;
+                        Folders.push_back(More);
+                    }
+                }
             }
 
             if (!Searching || !Folders.isEmpty()) {
@@ -336,6 +360,10 @@ namespace SmileEditor {
         if (SearchText == _V) return;
         SearchText = _V;
         Rebuild();
+        if (SearchText.isEmpty()) {
+            const int Row = RevealSelection();
+            if (Row >= 0) emit ScrollToRequested(Row);
+        }
         emit FiltersChanged();
     }
 
@@ -475,11 +503,96 @@ namespace SmileEditor {
         Smile::FRenderable& R = List[static_cast<size_t>(Sel)];
         if (R.Mobility == Want) return;
         R.Mobility = Want;
-        // Nos DOIS sentidos: virar dinamico tira o objeto do mapa estatico, virar estatico o
-        // coloca la. Qualquer um dos dois muda o conteudo cacheado.
         Renderer->GetScene().BumpStaticCastersVersion();
-        MarkDirty();
+        emit SceneChanged();
         emit SelectionChanged();
+    }
+
+    // ---- Transform da mesh selecionada ----
+    void SceneOutlinerBridge::WriteMeshTransform(int _Component, double _Value) {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        if (!RendererAccess) return;
+        auto& List = Renderer->GetScene().Renderables();
+        const int Sel = Renderer->GetSelectedObject();
+        if (Sel < 0 || Sel >= static_cast<int>(List.size())) return;
+
+        Smile::FRenderable& R = List[static_cast<size_t>(Sel)];
+        const Smile::Vec3 OldMin = R.AABBMin;
+        const Smile::Vec3 OldMax = R.AABBMax;
+        const bool IsRotation = _Component >= 3 && _Component <= 5;
+        const float V = static_cast<float>(IsRotation ? _Value * kToRad : _Value);
+
+        switch (_Component) {
+            case 0: R.Transform.Position.X = V; break;
+            case 1: R.Transform.Position.Y = V; break;
+            case 2: R.Transform.Position.Z = V; break;
+            case 3: R.Transform.RotationEuler.X = V; break;
+            case 4: R.Transform.RotationEuler.Y = V; break;
+            case 5: R.Transform.RotationEuler.Z = V; break;
+            case 6: R.Transform.Scale.X = std::max(V, kMinMeshScale); break;
+            case 7: R.Transform.Scale.Y = std::max(V, kMinMeshScale); break;
+            case 8: R.Transform.Scale.Z = std::max(V, kMinMeshScale); break;
+            default: return;
+        }
+        // Com o elo ligado, escrever um eixo da escala escreve os tres.
+        if (ScaleLocked && _Component >= 6) {
+            const float S = std::max(V, kMinMeshScale);
+            R.Transform.Scale = Smile::Vec3{ S, S, S };
+        }
+
+        R.RefreshWorldBounds();
+        Renderer->GetScene().BumpTransformsVersion();
+        if (R.Mobility == Smile::EMobility::Static)
+            Renderer->GetScene().BumpStaticCastersVersion();
+        Renderer->NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
+        Renderer->NotifyGIRegionChanged(R.AABBMin, R.AABBMax, Smile::EGIRegionChange::Geometry);
+
+        emit SceneChanged();
+        emit TransformChanged();
+    }
+
+    double SceneOutlinerBridge::ReadMeshTransform(int _Component) const {
+        const auto R = SelMesh(Renderer);
+        if (!R) return _Component >= 6 ? 1.0 : 0.0;
+        switch (_Component) {
+            case 0: return R->Transform.Position.X;
+            case 1: return R->Transform.Position.Y;
+            case 2: return R->Transform.Position.Z;
+            case 3: return R->Transform.RotationEuler.X / kToRad;
+            case 4: return R->Transform.RotationEuler.Y / kToRad;
+            case 5: return R->Transform.RotationEuler.Z / kToRad;
+            case 6: return R->Transform.Scale.X;
+            case 7: return R->Transform.Scale.Y;
+            case 8: return R->Transform.Scale.Z;
+            default: return 0.0;
+        }
+    }
+
+    double SceneOutlinerBridge::MeshPosX() const   { return ReadMeshTransform(0); }
+    double SceneOutlinerBridge::MeshPosY() const   { return ReadMeshTransform(1); }
+    double SceneOutlinerBridge::MeshPosZ() const   { return ReadMeshTransform(2); }
+    double SceneOutlinerBridge::MeshRotX() const   { return ReadMeshTransform(3); }
+    double SceneOutlinerBridge::MeshRotY() const   { return ReadMeshTransform(4); }
+    double SceneOutlinerBridge::MeshRotZ() const   { return ReadMeshTransform(5); }
+    double SceneOutlinerBridge::MeshScaleX() const { return ReadMeshTransform(6); }
+    double SceneOutlinerBridge::MeshScaleY() const { return ReadMeshTransform(7); }
+    double SceneOutlinerBridge::MeshScaleZ() const { return ReadMeshTransform(8); }
+
+    void SceneOutlinerBridge::SetMeshPosX(double _V)   { WriteMeshTransform(0, _V); }
+    void SceneOutlinerBridge::SetMeshPosY(double _V)   { WriteMeshTransform(1, _V); }
+    void SceneOutlinerBridge::SetMeshPosZ(double _V)   { WriteMeshTransform(2, _V); }
+    void SceneOutlinerBridge::SetMeshRotX(double _V)   { WriteMeshTransform(3, _V); }
+    void SceneOutlinerBridge::SetMeshRotY(double _V)   { WriteMeshTransform(4, _V); }
+    void SceneOutlinerBridge::SetMeshRotZ(double _V)   { WriteMeshTransform(5, _V); }
+    void SceneOutlinerBridge::SetMeshScaleX(double _V) { WriteMeshTransform(6, _V); }
+    void SceneOutlinerBridge::SetMeshScaleY(double _V) { WriteMeshTransform(7, _V); }
+    void SceneOutlinerBridge::SetMeshScaleZ(double _V) { WriteMeshTransform(8, _V); }
+
+    void SceneOutlinerBridge::SetMeshScaleLocked(bool _V) {
+        if (ScaleLocked == _V) return;
+        ScaleLocked = _V;
+        emit ScaleLockChanged();
     }
 
     // ---- Acoes ----
@@ -490,14 +603,28 @@ namespace SmileEditor {
         if (R.Kind == KGroup && R.SceneIdx >= 0 && R.SceneIdx < 3) {
             GroupExpanded[R.SceneIdx] = !GroupExpanded[R.SceneIdx];
         } else if (R.Kind == KAsset) {
-            if (R.SceneIdx >= 0 && R.SceneIdx < AssetExpanded.size())
+            if (R.SceneIdx >= 0 && R.SceneIdx < AssetExpanded.size()) {
                 AssetExpanded[R.SceneIdx] = !AssetExpanded[R.SceneIdx];
-            else
+                if (!AssetExpanded[R.SceneIdx])
+                    AssetVisibleLimits.remove(R.SceneIdx);
+            } else {
                 return; // pasta residual "Outros": sem estado persistente
+            }
         } else {
             return;
         }
         Rebuild();
+    }
+
+    void SceneOutlinerBridge::showMore(int _Row) {
+        if (_Row < 0 || _Row >= Rows.size() || !SearchText.isEmpty()) return;
+        const FRow& R = Rows[_Row];
+        if (R.Kind != KMore || R.SceneIdx < 0) return;
+
+        const int Current = AssetVisibleLimits.value(R.SceneIdx, kInitialVisibleMeshes);
+        AssetVisibleLimits.insert(R.SceneIdx, Current + kVisibleMeshPage);
+        Rebuild();
+        emit ScrollToRequested(std::min(_Row, static_cast<int>(Rows.size()) - 1));
     }
 
     void SceneOutlinerBridge::selectRow(int _Row) {
@@ -553,9 +680,9 @@ namespace SmileEditor {
 
         ShiftAssetRangesAfterRemoval(Index);
         CachedSelMesh = -1;
-        // A visibilidade persistida e por indice dentro do asset; com a lista deslocada o json
-        // salvo antes da remocao ja nao descreve esta cena.
+        // A remoção desloca os índices relativos usados pelo sidecar de visibilidade.
         MarkDirty();
+        emit SceneChanged();
         Rebuild();
         emit SelectionChanged();
         Smile::LogInfo("Objeto removido da cena: " + Name.toStdString());
@@ -581,6 +708,7 @@ namespace SmileEditor {
         CachedSelMesh = NewIndex;
 
         MarkDirty();
+        emit SceneChanged();
         Rebuild();
         RevealSelection();
         emit SelectionChanged();
@@ -650,6 +778,7 @@ namespace SmileEditor {
             Renderer->NotifyGIRegionChanged(RegionMin, RegionMax, Smile::EGIRegionChange::Geometry);
         Renderer->Settings().MarkSceneContentDirty();
         MarkDirty();
+        emit SceneChanged();
         Rebuild();
     }
 
@@ -713,12 +842,35 @@ namespace SmileEditor {
         }
         if (SelMesh >= 0) {
             if (!GroupExpanded[GMeshes]) { GroupExpanded[GMeshes] = true; Changed = true; }
-            for (int A = 0; A < Assets.size() && A < AssetExpanded.size(); ++A) {
-                if (SelMesh >= Assets[A].Begin && SelMesh < Assets[A].End &&
-                    !AssetExpanded[A]) {
+            const auto& Renderables = Renderer->GetScene().Renderables();
+            const int Total = static_cast<int>(Renderables.size());
+            QVector<FAssetRange> Ranges = Assets;
+            const int Known = Ranges.isEmpty() ? 0 : Ranges.last().End;
+            if (Known < Total)
+                Ranges.push_back({ QStringLiteral("Outros"), Known, Total });
+
+            for (int A = 0; A < Ranges.size(); ++A) {
+                const FAssetRange& Range = Ranges[A];
+                if (SelMesh < Range.Begin || SelMesh >= std::min(Range.End, Total)) continue;
+
+                if (A < AssetExpanded.size() && !AssetExpanded[A]) {
                     AssetExpanded[A] = true;
                     Changed = true;
                 }
+
+                if (SearchText.isEmpty()) {
+                    int SelectedOrdinal = 0;
+                    for (int I = Range.Begin; I <= SelMesh && I < Total; ++I)
+                        if (!Renderables[static_cast<size_t>(I)].RaytracingOnly)
+                            ++SelectedOrdinal;
+
+                    const int Current = AssetVisibleLimits.value(A, kInitialVisibleMeshes);
+                    if (SelectedOrdinal > Current) {
+                        AssetVisibleLimits.insert(A, SelectedOrdinal);
+                        Changed = true;
+                    }
+                }
+                break;
             }
         }
         const int Need = SelLight >= 0 ? GLuzes : GMeshes;
@@ -740,6 +892,11 @@ namespace SmileEditor {
         const int Cur = selectedRowIndex();
         int I = Cur < 0 ? (Dir > 0 ? 0 : (int)Rows.size() - 1) : Cur + Dir;
         for (; I >= 0 && I < Rows.size(); I += Dir) {
+            if (Rows[I].Kind == KMore && Dir > 0) {
+                showMore(I);
+                selectStep(_Delta);
+                return;
+            }
             if ((Rows[I].Kind == KEnv &&
                  (Rows[I].SceneIdx == EnvNuvens || Rows[I].SceneIdx == EnvClima ||
                   Rows[I].SceneIdx == EnvOceano)) ||
@@ -875,8 +1032,18 @@ namespace SmileEditor {
             if (!Rows.isEmpty())
                 emit dataChanged(index(0), index((int)Rows.size() - 1), { RSelected });
             emit SelectionChanged();
+            emit TransformChanged();
             const int Row = RevealSelection(); // expande o caminho se estiver colapsado
             if (Row >= 0) emit ScrollToRequested(Row);
+        }
+
+        // Gizmo arrastando: os campos do Inspector acompanham. Chaveado pela versao dos
+        // transforms, e nao emitido a cada frame, porque cada leitura das nove propriedades
+        // retoma o lock do renderer — de graca so quando alguem realmente moveu algo.
+        const Smile::u64 XfVersion = Scene.TransformsVersion();
+        if (XfVersion != CachedTransformsVersion) {
+            CachedTransformsVersion = XfVersion;
+            if (SelMesh >= 0) emit TransformChanged();
         }
 
         // Toggles de ambiente mudaram por fora (SettingsWindow etc.).

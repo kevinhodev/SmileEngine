@@ -6,8 +6,7 @@
 namespace Smile { class Renderer; }
 
 namespace SmileEditor {
-    // Estado autoral e valores derivados do ciclo solar/lunar. TimeChanged separa o relogio dos
-    // knobs estaticos para evitar reavaliar todo o painel a cada frame.
+    // Expoe o ciclo solar/lunar ao QML com acesso sincronizado ao renderer.
     class TimeOfDayBridge : public QObject {
         Q_OBJECT
         Q_PROPERTY(bool available READ Available NOTIFY AvailableChanged)
@@ -25,11 +24,9 @@ namespace SmileEditor {
         Q_PROPERTY(double moonDiskSize READ MoonDiskSize WRITE SetMoonDiskSize NOTIFY StateChanged)
         Q_PROPERTY(double moonDiskBrightness READ MoonDiskBrightness WRITE SetMoonDiskBrightness NOTIFY StateChanged)
         Q_PROPERTY(double starIntensity READ StarIntensity WRITE SetStarIntensity NOTIFY StateChanged)
-        // Clima pertence ao WeatherBridge.
-        // Sol manual (TOD desligado): az/el em graus, escreve via Renderer::SetSunAzimuthElevation.
+        // Controle manual usado quando o ciclo esta desligado.
         Q_PROPERTY(double manualAzimuthDeg READ ManualAzimuthDeg WRITE SetManualAzimuthDeg NOTIFY StateChanged)
         Q_PROPERTY(double manualElevationDeg READ ManualElevationDeg WRITE SetManualElevationDeg NOTIFY StateChanged)
-        // Derivados (leitura, seguem o relogio).
         Q_PROPERTY(double sunElevationDeg READ SunElevationDeg NOTIFY TimeChanged)
         Q_PROPERTY(double sunAzimuthDeg READ SunAzimuthDeg NOTIFY TimeChanged)
         Q_PROPERTY(double moonElevationDeg READ MoonElevationDeg NOTIFY TimeChanged)
@@ -38,7 +35,7 @@ namespace SmileEditor {
     public:
         explicit TimeOfDayBridge(QObject* parent = nullptr);
 
-        void SetRenderer(RendererHandle R); // MainWindow chama no RendererInitialized
+        void SetRenderer(RendererHandle R);
 
         bool   Available() const { return static_cast<bool>(Renderer); }
         bool   Enabled() const;
@@ -78,23 +75,24 @@ namespace SmileEditor {
         void SetManualAzimuthDeg(double V);
         void SetManualElevationDeg(double V);
 
-        // Elevacao (graus) de sol/lua numa hora arbitraria do dia corrente — curva do arco do ceu.
+        // Amostras usadas pelo arco do ceu.
         Q_INVOKABLE double sunElevationAt(double hours) const;
         Q_INVOKABLE double moonElevationAt(double hours) const;
 
     public slots:
-        void Refresh(); // FrameReady: emite TimeChanged se o relogio andou desde o ultimo frame
+        void Refresh();
 
     signals:
         void AvailableChanged();
         void StateChanged();
         void TimeChanged();
+        void SolarPathChanged();
 
     private:
-        void SyncManualFromRenderer(); // az/el manuais a partir do SunDir atual do Renderer
+        void SyncManualFromRenderer();
 
         RendererHandle Renderer;
-        double ManualAz = 60.0;  // defaults ate o renderer existir
+        double ManualAz = 60.0;
         double ManualEl = 35.0;
         double LastEmittedHours = -1.0;
         int LastEmittedDay = -1;

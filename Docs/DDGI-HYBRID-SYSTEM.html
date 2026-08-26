@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmileEngine — DDGI híbrido: estado consolidado</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101311;
+      --panel: #171b18;
+      --panel-2: #1d221e;
+      --line: #343b35;
+      --text: #edf2ed;
+      --muted: #aab5ab;
+      --accent: #8ad69a;
+      --accent-2: #73b7dd;
+      --warn: #e3be72;
+      --danger: #e58b86;
+      --ok-bg: #17271b;
+      --warn-bg: #2a2418;
+      --info-bg: #17242a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.55; }
+    a { color: var(--accent-2); }
+    code { font: 0.92em Consolas, "Cascadia Code", monospace; color: #ccebd2; }
+    .page { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 44px 0 70px; }
+    header { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 24px; }
+    h1 { font-size: clamp(26px, 4vw, 42px); line-height: 1.08; margin: 0 0 10px; letter-spacing: -0.035em; }
+    h2 { margin: 42px 0 15px; font-size: 22px; letter-spacing: -0.015em; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    p { margin: 0 0 12px; }
+    .subtitle { color: var(--muted); max-width: 760px; margin: 0; }
+    .build { text-align: right; color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .status-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 24px 0 0; }
+    .stat { border-top: 2px solid var(--accent); background: var(--panel); padding: 13px 14px; min-height: 82px; }
+    .stat strong { display: block; font-size: 21px; line-height: 1.25; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .callout { padding: 14px 16px; border-left: 3px solid var(--accent); background: var(--ok-bg); margin: 18px 0; }
+    .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+    .callout.info { border-color: var(--accent-2); background: var(--info-bg); }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .card { background: var(--panel); border: 1px solid var(--line); padding: 16px; }
+    .card p:last-child { margin-bottom: 0; }
+    .tag { display: inline-block; border: 1px solid var(--line); padding: 2px 8px; margin: 0 5px 5px 0; border-radius: 999px; color: var(--muted); font-size: 12px; }
+    .tag.active { color: var(--accent); border-color: #467750; }
+    .tag.optional { color: var(--warn); border-color: #77643d; }
+    .tag.off { color: var(--danger); border-color: #744844; }
+    .flow { background: var(--panel); border: 1px solid var(--line); padding: 10px; overflow-x: auto; }
+    svg { display: block; min-width: 940px; width: 100%; height: auto; }
+    .svg-box { fill: var(--panel-2); stroke: var(--line); stroke-width: 1.5; }
+    .svg-box.active { stroke: var(--accent); }
+    .svg-title { fill: var(--text); font: 600 14px Inter, sans-serif; }
+    .svg-copy { fill: var(--muted); font: 12px Inter, sans-serif; }
+    .svg-arrow { fill: none; stroke: var(--accent-2); stroke-width: 2; marker-end: url(#arrow); }
+    .step-list { counter-reset: priority; display: grid; gap: 9px; }
+    .step { counter-increment: priority; display: grid; grid-template-columns: 34px 1fr auto; gap: 11px; align-items: center; background: var(--panel); border: 1px solid var(--line); padding: 11px 13px; }
+    .step::before { content: counter(priority); display: grid; place-items: center; width: 28px; height: 28px; background: var(--accent); color: #0d160f; font-weight: 800; border-radius: 50%; }
+    .step small { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; background: var(--panel-2); }
+    td:first-child { font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    .good { color: var(--accent); }
+    .warning { color: var(--warn); }
+    ul { margin: 8px 0 0; padding-left: 21px; }
+    li + li { margin-top: 6px; }
+    .image-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    figure { margin: 0; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
+    figure img { display: block; width: 100%; height: auto; }
+    figcaption { color: var(--muted); font-size: 12px; padding: 8px 4px 2px; }
+    .files td:first-child { width: 31%; font-family: Consolas, monospace; font-size: 12px; }
+    footer { border-top: 1px solid var(--line); margin-top: 42px; padding-top: 16px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 780px) {
+      header { grid-template-columns: 1fr; }
+      .build { text-align: left; }
+      .status-strip, .grid-2, .grid-3, .image-row { grid-template-columns: 1fr; }
+      .step { grid-template-columns: 34px 1fr; }
+      .step small { grid-column: 2; }
+    }
+    @media print {
+      :root { color-scheme: light; --bg: #fff; --panel: #f6f7f6; --panel-2: #ecefec; --line: #ccd3cd; --text: #172019; --muted: #526057; --ok-bg: #edf7ef; --warn-bg: #fff7e5; --info-bg: #edf7fb; }
+      .page { width: 100%; padding: 0; }
+      h2 { break-after: avoid; }
+      .card, .step, figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div>
+      <h1>DDGI híbrido da SmileEngine</h1>
+      <p class="subtitle">Estado consolidado do sistema que combina clipmaps/cascatas inspirados em <strong>Assassin's Creed Shadows</strong> com seleção de trabalho e orçamento inspirados no scheduler da <strong>idTech</strong>.</p>
+    </div>
+    <div class="build">24 ago 2026<br><code>feature/editor-signal-graphite</code><br><code>95d426b + working tree</code></div>
+  </header>
+
+  <section class="status-strip" aria-label="Resumo numérico">
+    <div class="stat"><strong>3</strong><span>cascatas móveis</span></div>
+    <div class="stat"><strong>13.248</strong><span>probes totais no Bistro</span></div>
+    <div class="stat"><strong>131.072</strong><span>raios por update, teto normal</span></div>
+    <div class="stat"><strong>~1,53 ms</strong><span>DDGI medido após a correção</span></div>
+  </section>
+
+  <div class="callout">
+    <strong>Configuração recomendada atual:</strong> DDGI como primário e fallback, 3 cascatas, compaction ligada, orçamento de 131.072 raios, 64 raios por probe e modos adaptativos desligados até passarem por A/B próprio.
+  </div>
+
+  <h2>Visão do sistema</h2>
+  <div class="flow">
+    <svg viewBox="0 0 1120 390" role="img" aria-label="Fluxo do DDGI desde eventos até os consumidores">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#73b7dd"/></marker>
+      </defs>
+      <rect class="svg-box" x="20" y="25" width="220" height="92" rx="8"/>
+      <text class="svg-title" x="38" y="52">Entrada e eventos</text>
+      <text class="svg-copy" x="38" y="75">câmera + direção</text><text class="svg-copy" x="38" y="95">objeto/luz mudou</text>
+
+      <rect class="svg-box active" x="300" y="25" width="230" height="92" rx="8"/>
+      <text class="svg-title" x="318" y="52">3 clipmaps DDGI</text>
+      <text class="svg-copy" x="318" y="75">2,00 m · 4,01 m · 8,02 m</text><text class="svg-copy" x="318" y="95">snap toroidal + blend contínuo</text>
+
+      <rect class="svg-box active" x="590" y="25" width="250" height="92" rx="8"/>
+      <text class="svg-title" x="608" y="52">Scheduler GPU orçado</text>
+      <text class="svg-copy" x="608" y="75">prioridades + quota + round-robin</text><text class="svg-copy" x="608" y="95">contador atômico em raios</text>
+
+      <rect class="svg-box" x="900" y="25" width="200" height="92" rx="8"/>
+      <text class="svg-title" x="918" y="52">Trace + atualização</text>
+      <text class="svg-copy" x="918" y="75">irradiância + distância</text><text class="svg-copy" x="918" y="95">relocation/classificação</text>
+
+      <path class="svg-arrow" d="M240 71 H298"/><path class="svg-arrow" d="M530 71 H588"/><path class="svg-arrow" d="M840 71 H898"/>
+
+      <rect class="svg-box" x="175" y="205" width="230" height="105" rx="8"/>
+      <text class="svg-title" x="193" y="232">Atlas persistente</text>
+      <text class="svg-copy" x="193" y="255">histerese temporal</text><text class="svg-copy" x="193" y="275">slots preservados no scroll</text><text class="svg-copy" x="193" y="295">Chebyshev + probes ativas</text>
+
+      <rect class="svg-box active" x="465" y="205" width="230" height="105" rx="8"/>
+      <text class="svg-title" x="483" y="232">Amostragem cascaded</text>
+      <text class="svg-copy" x="483" y="255">nível mais fino disponível</text><text class="svg-copy" x="483" y="275">blend de borda em 2,5 células</text><text class="svg-copy" x="483" y="295">fallback para nível seguinte</text>
+
+      <rect class="svg-box" x="755" y="190" width="300" height="135" rx="8"/>
+      <text class="svg-title" x="773" y="217">Consumidores</text>
+      <text class="svg-copy" x="773" y="241">deferred e foliage front/back</text><text class="svg-copy" x="773" y="263">reflexões / terminal de bounce</text><text class="svg-copy" x="773" y="285">volumetric fog</text><text class="svg-copy" x="773" y="307">debug de probes e capturas</text>
+
+      <path class="svg-arrow" d="M1000 117 V155 H290 V203"/><path class="svg-arrow" d="M405 257 H463"/><path class="svg-arrow" d="M695 257 H753"/>
+    </svg>
+  </div>
+
+  <h2>O que veio de cada referência</h2>
+  <div class="grid-3">
+    <article class="card">
+      <h3>Assassin's Creed Shadows</h3>
+      <span class="tag active">ativo</span>
+      <p>Mais níveis com salto menor entre eles, volumes seguindo a câmera e prioridade para regiões recém-expostas. Na SmileEngine isso virou 3 níveis com razão espacial <strong>2×</strong>.</p>
+    </article>
+    <article class="card">
+      <h3>idTech</h3>
+      <span class="tag active">ativo</span>
+      <p>Trabalho limitado por orçamento e ordenado por utilidade. A lista de probes é compactada na GPU e o custo é reservado em <strong>raios</strong>, não apenas em quantidade de probes.</p>
+    </article>
+    <article class="card">
+      <h3>Reservoir splatting</h3>
+      <span class="tag off">fora do build atual</span>
+      <p>O experimento anterior permanece recuperável em <code>stash@{0}</code>: <em>wip: ReSTIR GI reservoir splatting before DDGI scheduler</em>. Não participa das imagens nem dos tempos atuais.</p>
+    </article>
+  </div>
+  <div class="callout info">
+    <strong>“Escala de iluminação por probe” não foi integrada como multiplicador de radiância.</strong> Hoje existem estado, offset/relocation, histerese e contagem de raios por probe. Isso evita confundir uma ideia discutida do paper com algo realmente presente no build.
+  </div>
+
+  <h2>Cascatas e scroll</h2>
+  <table>
+    <thead><tr><th>Nível</th><th>Espaçamento no Bistro</th><th>Função</th><th>Comportamento</th></tr></thead>
+    <tbody>
+      <tr><td>0 — fina</td><td>~2,0045 m</td><td>Detalhe e contato próximos</td><td>Segue câmera; maior frequência de scroll.</td></tr>
+      <tr><td>1 — média</td><td>~4,0091 m</td><td>Ponte entre detalhe e alcance</td><td>Evita o salto visual antigo de 4×.</td></tr>
+      <tr><td>2 — grossa</td><td>~8,0182 m</td><td>Cobertura distante e fallback</td><td>Também segue a câmera; não fica presa à AABB da cena.</td></tr>
+    </tbody>
+  </table>
+  <div class="grid-2" style="margin-top:14px">
+    <article class="card"><h3>Posicionamento</h3><p>O centro acompanha a câmera com deslocamento frontal limitado a 50% da meia-extensão fina. A câmera continua dentro da região segura, mas há mais cobertura na direção em que ela olha.</p></article>
+    <article class="card"><h3>Estabilidade</h3><p>A grade física é snapada em células inteiras e usa armazenamento toroidal, preservando histórico. O centro usado para escolher/blendar cascatas é contínuo, evitando a borda “pular” junto com o snap.</p></article>
+    <article class="card"><h3>Transição</h3><p>O shader escolhe o nível mais fino válido e mistura com o seguinte nas últimas 2,5 células. Sair da fina cai na média; sair da média cai na grossa.</p></article>
+    <article class="card"><h3>Custo estrutural</h3><p>Grade por cascata: <code>23 × 8 × 24 = 4.416</code> probes. Com três níveis são <code>13.248</code> slots, mas o scheduler não atualiza todos a cada frame.</p></article>
+  </div>
+
+  <h2>Scheduler atual — ordem real de prioridade</h2>
+  <div class="step-list">
+    <div class="step"><div><strong>Probes recém-expostas</strong><br><small>As lâminas que entraram pelo scroll precisam nascer antes de qualquer manutenção.</small></div><small>64 raios</small></div>
+    <div class="step"><div><strong>Invalidação regional</strong><br><small>Probes dentro das AABBs de geometria/luz alterada absorvem a mudança rapidamente.</small></div><small>urgente, mas orçada</small></div>
+    <div class="step"><div><strong>Follow-up</strong><br><small>Segunda passagem para probes novas/relocadas antes de voltarem ao fluxo normal.</small></div><small>qualidade temporal</small></div>
+    <div class="step"><div><strong>Quota por cascata</strong><br><small>12,5% do orçamento normal é dividido entre os níveis para nenhuma cascata passar fome.</small></div><small>progresso garantido</small></div>
+    <div class="step"><div><strong>Round-robin</strong><br><small>O restante do orçamento mantém todo o volume convergindo ao longo do tempo.</small></div><small>cursor circular</small></div>
+  </div>
+  <div class="callout warn">
+    O teto padrão é <strong>131.072 raios</strong>, equivalente a no máximo 2.048 probes regulares × 64 raios. Reset global de histórico ou substituição integral da grade após teleporte/cut pode deliberadamente executar o caminho completo; scroll e invalidação regional permanecem orçados.
+  </div>
+  <p>A compaction descarta trabalho inativo e monta a lista na GPU. Por isso, apesar do limite permitir 2.048 probes regulares, as capturas estáticas selecionaram aproximadamente 900–1.000 probes e consumiram em geral 50–65 mil raios. Há ainda uma auditoria periódica a cada 240 updates para probes inativas não ficarem esquecidas.</p>
+
+  <h2>Invalidação regional — por que ela é necessária</h2>
+  <div class="grid-2">
+    <article class="card"><h3>Sem invalidação</h3><p>O atlas guarda 98% do valor anterior. Depois que um objeto se move, sombra e bounce antigos podem continuar “impressos” por muitos frames, mesmo que TLAS e G-buffer já estejam corretos.</p></article>
+    <article class="card"><h3>Com invalidação</h3><p>As AABBs antiga e nova são unidas/conservadas. Apenas probes próximas entram na prioridade regional; irradiância usa histerese 0,90 e distância 0,95 até o histórico antigo cair abaixo de 3%.</p></article>
+  </div>
+  <ul>
+    <li>Mudança geométrica atualiza bounds, TLAS e as regiões antiga e nova.</li>
+    <li>Irradiância regional converge em cerca de 34 updates; distância, em cerca de 69.</li>
+    <li>Geometria também agenda reclassificação/relocation depois da janela regional.</li>
+    <li>Isso evita reset global, pico de custo e reconvergência visível da cena inteira.</li>
+  </ul>
+
+  <h2>Problemas encontrados e correções</h2>
+  <table>
+    <thead><tr><th>Sintoma</th><th>Causa</th><th>Correção atual</th></tr></thead>
+    <tbody>
+      <tr><td>Iluminação mudava ao caminhar com 2 cascatas</td><td>Salto espacial grande, grossa alinhada à cena e borda dependente do snap.</td><td>3 cascatas, razão 2×, todas seguindo câmera, blend contínuo e deslocamento frontal.</td></tr>
+      <tr><td>Picos ao manter todos os níveis atualizados</td><td>Trabalho proporcional às 13.248 probes.</td><td>Scheduler orçado, compaction GPU, quota e round-robin.</td></tr>
+      <tr><td>Objeto movido deixava iluminação velha</td><td>Atlas temporal não sabia quais regiões ficaram inválidas.</td><td>Invalidação AABB antiga+nova, prioridade regional e reclassificação.</td></tr>
+      <tr><td>Folhagem virava silhueta preta após scroll</td><td>Primeiro passe de 16 raios era instável em cards alpha/two-sided e na heurística de backface.</td><td>Probes novas voltaram a 64 raios; o orçamento limita quantas estreiam.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Validação consolidada</h2>
+  <div class="grid-3">
+    <article class="card"><h3>Build</h3><p class="good">Release e shaders passaram.</p><p>O caminho DDGI, consumidores e MCP foram recompilados após a correção de foliage.</p></article>
+    <article class="card"><h3>Scroll reproduzível</h3><p class="good">Sem faixa ou foliage preta.</p><p>5 m em passos de 0,5 m, cruzando células das três cascatas. Pico observado: exatamente 131.072 raios.</p></article>
+    <article class="card"><h3>Objeto dinâmico</h3><p class="good">Regional, sem reset global.</p><p>Vespa movida 1,5 m e restaurada: 371 probes regionais, 75.456 raios e imagem estável.</p></article>
+  </div>
+  <div class="grid-2" style="margin-top:14px">
+    <article class="card"><h3>Performance pós-fix</h3><p>DDGI: <strong>1,512 / 1,547 ms</strong>. Frame científico: <strong>20,456 / 20,604 ms</strong>, 1298×775, cena Bistro, mesmas condições do relatório.</p></article>
+    <article class="card"><h3>A/B do scheduler</h3><p>O orçamento produziu imagem essencialmente igual ao legado. Antes da correção final, o DDGI mediu aproximadamente <strong>1,30 ms</strong> orçado contra <strong>4,56 ms</strong> no caminho legado.</p></article>
+  </div>
+
+  <div class="image-row" style="margin-top:14px">
+    <figure>
+      <img src="../build/bin/Release/Captures/BistroExterior_game_N128_PdFd-gi-ddgi-rdiA0M8-cmp-refl-rcUQC4D1KV1R50T_20260824-012855.png" alt="Folhagem estável na câmera de referência">
+      <figcaption>Referência após warm-up: foliage preservando luz indireta.</figcaption>
+    </figure>
+    <figure>
+      <img src="../build/bin/Release/Captures/BistroExterior_game_N0_PdFd-gi-ddgi-rdiA0M8-cmp-refl-rcUQC4D1KV1R50T_20260824-012859-2.png" alt="Folhagem estável após scroll de cascata">
+      <figcaption>Passo 8 do percurso: scroll já ocorreu e a iluminação continua estável.</figcaption>
+    </figure>
+  </div>
+
+  <h2>Controles e receitas rápidas</h2>
+  <table>
+    <thead><tr><th>Controle</th><th>Atual</th><th>Como interpretar</th></tr></thead>
+    <tbody>
+      <tr><td><code>cascadeCount</code></td><td>3</td><td>1/2/3 no painel ou MCP. Trocar recria o volume e zera a convergência.</td></tr>
+      <tr><td><code>updateRayBudget</code></td><td>131072</td><td><code>0</code> ativa o scheduler legado; valor positivo ativa o caminho orçado.</td></tr>
+      <tr><td><code>probeCompaction</code></td><td>on</td><td>Necessária para a lista priorizada e para evitar trace de probes inativas.</td></tr>
+      <tr><td><code>interleavedUpdates</code></td><td>on</td><td>Mantido por compatibilidade; com budget positivo todas as cascatas entram na seleção.</td></tr>
+      <tr><td><code>adaptiveRays</code></td><td>off</td><td>Disponível entre 16–64 raios por probe, mas ainda não é a configuração validada.</td></tr>
+      <tr><td><code>adaptiveHysteresis</code></td><td>off</td><td>Detector automático existe, porém eventos regionais são hoje a resposta confiável.</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:12px">Via MCP: <code>smile_gi_configure</code>, <code>smile_gi_status</code>, <code>smile_camera_set</code>, <code>smile_scene_objects</code>, <code>smile_scene_object_set_position</code> e <code>smile_capture_frame</code>.</p>
+
+  <h2>Arquivos que mandam no sistema</h2>
+  <table class="files">
+    <tbody>
+      <tr><td>Engine/Include/Smile/Graphics/GI/DDGI.h</td><td>Defaults, constantes, estado, telemetria e API pública.</td></tr>
+      <tr><td>Engine/Source/Graphics/GI/DDGI.cpp</td><td>Placement das cascatas, scheduler, invalidation, dispatch e readback.</td></tr>
+      <tr><td>Shaders/GI/DDGICompactBuild.cs.hlsl</td><td>Cinco fases de seleção e reserva atômica do orçamento em raios.</td></tr>
+      <tr><td>Shaders/GI/DDGITrace.cs.hlsl</td><td>Trace por probe e distribuição de raios.</td></tr>
+      <tr><td>Shaders/GI/DDGIUpdate*.cs.hlsl</td><td>Atualização dos atlas de irradiância/distância e histerese regional.</td></tr>
+      <tr><td>Shaders/GI/DDGICommon.hlsli</td><td>Scroll toroidal, seleção/blend de cascatas, bias e sampling.</td></tr>
+      <tr><td>Shaders/DeferredLighting.ps.hlsl</td><td>Uso em superfícies e foliage front/back.</td></tr>
+      <tr><td>Shaders/Fog/VolumetricFogScattering.cs.hlsl</td><td>Iluminação ambiente volumétrica via cascatas.</td></tr>
+      <tr><td>Editor/Qml/SettingsWindow.qml</td><td>Controles de cascatas e modos adaptativos; ajuda textual precisa ser atualizada.</td></tr>
+      <tr><td>Tools/SmileMCP/src/index.ts</td><td>Automação de câmera, GI, objeto dinâmico, captura e telemetria.</td></tr>
+      <tr><td>Tools/SmileMCP/scripts/gi-*-validation.mjs</td><td>Regressões reproduzíveis de budget, scroll e invalidação.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>O que ainda está pendente</h2>
+  <ul>
+    <li><span class="warning">Atualizar a explicação no painel:</span> ela ainda fala em 2 cascatas, razão 4× e grossa presa à cena; o código atual usa 3, razão 2× e todas camera-relative.</li>
+    <li>Comparação específica com a implementação local da Flax continua como investigação futura; nenhuma lógica da Flax foi integrada.</li>
+    <li>Reservoir splatting está guardado em <code>stash@{0}</code>, não descartado.</li>
+    <li>Raios e histerese adaptativos continuam opcionais/off até validação visual e de performance dedicada.</li>
+    <li>O trabalho atual está no working tree e ainda não foi consolidado em commit; preservar antes de trocar/resetar branch.</li>
+  </ul>
+
+  <div class="callout info">
+    <strong>Resumo em uma frase:</strong> hoje temos um DDGI de 3 clipmaps móveis e suavemente misturados, atualizado por uma fila GPU priorizada e limitada em raios, com invalidação local para cena dinâmica e 64 raios confiáveis na estreia de probes — bonito, estável e sem pagar o volume inteiro todo frame.
+  </div>
+
+  <footer>
+    Fontes: código vivo da SmileEngine, relatório <code>gi-update-budget-bistroexterior-2026-08-24T04-23-08-222Z.json</code> e capturas reproduzíveis de 24/08/2026. Este documento descreve o working tree atual, não apenas o commit base.
+  </footer>
+</main>
+</body>
+</html>

@@ -274,6 +274,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.ReGIRPad           = 0u;
     P.SkyViewHeightKm    = SkyParams.x;
     P.SkyBottomRKm       = SkyParams.y;
+    P.EnvironmentSky     = 0.0f;
+    P.EnvironmentGround  = 0.0f;
     // Cache NAO-direcional, e este passe e justamente quem o alimenta: o piso de roughness do
     // secundario vale aqui com mais forca que em qualquer consumidor. Ver PT_LoadHitMaterial.
     P.RoughnessMin       = GIBiasParams.w;

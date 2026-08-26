@@ -493,6 +493,53 @@ namespace Smile {
         FrameParity = Prev;
     }
 
+    bool FReSTIRDI::RecordPixelDebugCopy(ID3D12GraphicsCommandList* CL,
+                                          ID3D12Resource* Destination,
+                                          u32 X, u32 Y, u64 OutputOffset,
+                                          u64 WeightOffset, u64 ReservoirOffset) {
+        if (!Ready || !CL || !Destination || Width == 0 || Height == 0) return false;
+
+        X = std::min(X, Width - 1u);
+        Y = std::min(Y, Height - 1u);
+        // Record() escreve P e, ao terminar, deixa FrameParity apontando para o histórico
+        // que será lido no próximo frame. Portanto o reservoir recém-produzido é 1-P.
+        const u32 Current = 1u - FrameParity;
+        const D3D12_RESOURCE_STATES OutputBefore = OutputState;
+        const D3D12_RESOURCE_STATES WeightBefore = ResWState[Current];
+        const D3D12_RESOURCE_STATES ReservoirBefore = ResBState[Current];
+        Transition(CL, Output.Get(), OutputState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Transition(CL, ResW[Current].Get(), ResWState[Current],
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Transition(CL, ResB[Current].Get(), ResBState[Current],
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+        auto CopyTexel = [&](ID3D12Resource* Resource, DXGI_FORMAT Format, u64 Offset) {
+            D3D12_TEXTURE_COPY_LOCATION Src{};
+            Src.pResource = Resource;
+            Src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            Src.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION Dst{};
+            Dst.pResource = Destination;
+            Dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            Dst.PlacedFootprint.Offset = Offset;
+            Dst.PlacedFootprint.Footprint.Format = Format;
+            Dst.PlacedFootprint.Footprint.Width = 1;
+            Dst.PlacedFootprint.Footprint.Height = 1;
+            Dst.PlacedFootprint.Footprint.Depth = 1;
+            Dst.PlacedFootprint.Footprint.RowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+            const D3D12_BOX Box{ X, Y, 0, X + 1u, Y + 1u, 1 };
+            CL->CopyTextureRegion(&Dst, 0, 0, 0, &Src, &Box);
+        };
+        CopyTexel(Output.Get(), kOutputFormat, OutputOffset);
+        CopyTexel(ResW[Current].Get(), kResWFormat, WeightOffset);
+        CopyTexel(ResB[Current].Get(), kResBFormat, ReservoirOffset);
+
+        Transition(CL, Output.Get(), OutputState, OutputBefore);
+        Transition(CL, ResW[Current].Get(), ResWState[Current], WeightBefore);
+        Transition(CL, ResB[Current].Get(), ResBState[Current], ReservoirBefore);
+        return true;
+    }
+
     void FReSTIRDI::RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap) {
         if (!NrdReady) return;
         NrdPackPSO.Bind(CL);

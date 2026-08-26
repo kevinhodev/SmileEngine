@@ -9,7 +9,7 @@
 
 #include <optional>
 
-namespace Smile { class Renderer; }
+namespace Smile { class Renderer; struct FRenderable; }
 
 namespace SmileEditor {
     class ViewportWidget;
@@ -79,6 +79,9 @@ namespace SmileEditor {
     // fixar preset/TOD — exatamente a captura sem regime declarado que o protocolo proibe.
     struct FProfileOverrides {
         std::optional<double> TimeOfDayHours;
+        std::optional<double> RainAmount;
+        // 0=DLAA, 1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance.
+        std::optional<int>  UpscalerQuality;
         std::optional<int>  DIAnalyticCandidates;
         std::optional<int>  DIMeshCandidates;
         std::optional<bool> DIMeshLightsInPool;
@@ -119,6 +122,17 @@ namespace SmileEditor {
         double YawDeg   = 0.0;
     };
 
+    struct FSceneObjectSnapshot {
+        int     Index = -1;
+        quint64 Id = 0;
+        QString Name;
+        bool    Visible = false;
+        bool    Dynamic = false;
+        double  X = 0.0, Y = 0.0, Z = 0.0;
+        double  BoundsMinX = 0.0, BoundsMinY = 0.0, BoundsMinZ = 0.0;
+        double  BoundsMaxX = 0.0, BoundsMaxY = 0.0, BoundsMaxZ = 0.0;
+    };
+
     // Campos opcionais para o comando incremental de GI. Diferente de profile_configure, este
     // comando nao estabelece um regime inteiro: ele muda somente os eixos declarados, o que o
     // torna apropriado para a matriz de politica e para provocar a invalidacao durante captura.
@@ -128,6 +142,7 @@ namespace SmileEditor {
         std::optional<Smile::EIndirectFallback> IndirectFallback;
         std::optional<int>  CascadeCount;
         std::optional<bool> InterleavedUpdates;
+        std::optional<int>  UpdateRayBudget;
         std::optional<bool> ProbeCompaction;
         std::optional<bool> HalfRes;
         std::optional<bool> AdaptiveRays;
@@ -165,10 +180,22 @@ namespace SmileEditor {
         int  AdaptiveMinRays = 0;
         int  AdaptiveMaxRays = 0;
         bool InterleavedUpdates = false;
+        int  UpdateRayBudget = 0;
+        bool UpdateBudgetEffective = false;
+        int  EffectiveProbeBudget = 0;
+        int  ScheduledProbeCount = 0;
+        int  ScheduledProbeStart = 0;
+        int  ScheduledCascadeMask = 0;
         bool ProbeCompaction = false;
         bool ProbeCompactionEffective = false;
         int  ActiveProbeCount = 0;
         int  CompactedProbeCapacity = 0;
+        int  SelectedRayCount = 0;
+        int  NewProbeCount = 0;
+        int  RegionalProbeCount = 0;
+        int  FollowUpProbeCount = 0;
+        int  QuotaProbeCount = 0;
+        int  RoundRobinProbeCount = 0;
         int  ProbeWakeInterval = 0;
         quint64 LastProbeWakeSerial = 0;
         int  ScheduledCascadeCount = 0;
@@ -203,6 +230,10 @@ namespace SmileEditor {
         std::optional<FCameraPoseSnapshot> CameraSnapshot(QString& Error) const;
         std::optional<FCameraPoseSnapshot> SetCameraPose(
             const FCameraPoseSnapshot& Pose, bool CameraCut, QString& Error);
+        QVector<FSceneObjectSnapshot> SceneObjects(
+            const QString& NameContains, int Limit, QString& Error) const;
+        std::optional<FSceneObjectSnapshot> SetSceneObjectPosition(
+            int Index, double X, double Y, double Z, QString& Error);
         std::optional<FGIStatusSnapshot> GIStatus(QString& Error) const;
         std::optional<FGIStatusSnapshot> ApplyGIOverrides(
             const FGIOverrides& Overrides, QString& Error);
@@ -218,6 +249,8 @@ namespace SmileEditor {
     private:
         static FRenderSettingsSnapshot CollectSettings(const Smile::Renderer& Renderer);
         static FCameraPoseSnapshot CollectCamera(const Smile::Renderer& Renderer);
+        static FSceneObjectSnapshot CollectSceneObject(
+            const Smile::FRenderable& Renderable, int Index);
         static FGIStatusSnapshot CollectGIStatus(const Smile::Renderer& Renderer);
 
         RendererHandle  Renderer;

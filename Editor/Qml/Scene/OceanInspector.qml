@@ -1,11 +1,10 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import "../components" as C
-import ".." as UI
 
-C.Card {
+// Conteudo contextual do oceano. Identidade e estado principal vivem no InspectorPanel.
+Column {
     id: root
 
     required property var model
@@ -14,9 +13,7 @@ C.Card {
     property bool spectrumExpanded: true
     property bool geometryExpanded: false
 
-    title: "Oceano FFT"
-    iconName: "waves"
-    contentSpacing: 8
+    spacing: 6
     opacity: model.available ? 1 : 0.45
 
     function markCustom() { presetIndex = 0 }
@@ -42,114 +39,11 @@ C.Card {
         }
     }
 
-    headerItem: [
-        Row {
-            spacing: 5
-            Rectangle {
-                anchors.verticalCenter: parent.verticalCenter
-                width: 6; height: 6; radius: 3
-                color: root.model.enabled ? C.Theme.green : C.Theme.textMuted
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.model.enabled ? "Ativo" : "Oculto"
-                color: root.model.enabled ? C.Theme.greenText : C.Theme.textMuted
-                font.family: C.Theme.fontFamily
-                font.pixelSize: 9
-                font.weight: Font.DemiBold
-            }
-        }
-    ]
-
-    Text {
+    C.PresetRow {
         width: parent.width
-        text: root.model.enabled
-              ? "Espectro físico em três cascatas · alterações em tempo real"
-              : "Selecione o olho na árvore para exibir a superfície"
-        color: C.Theme.textMuted
-        font.family: C.Theme.fontFamily
-        font.pixelSize: 9
-        wrapMode: Text.WordWrap
-    }
-
-    Item {
-        width: parent.width
-        height: 29
-
-        Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Preset"
-            color: C.Theme.textSecondary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-        }
-
-        ComboBox {
-            id: presetCombo
-            anchors.right: parent.right
-            width: Math.min(182, parent.width * 0.62)
-            height: 28
-            model: ["Personalizado", "Água calma", "Brisa costeira", "Mar aberto", "Tempestade"]
-            currentIndex: root.presetIndex
-            onActivated: index => root.applyPreset(index)
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-
-            contentItem: Text {
-                leftPadding: 10; rightPadding: 24
-                verticalAlignment: Text.AlignVCenter
-                text: presetCombo.displayText
-                color: C.Theme.textNormal
-                font: presetCombo.font
-                elide: Text.ElideRight
-            }
-            indicator: UI.LucideIcon {
-                anchors.right: parent.right; anchors.rightMargin: 7
-                anchors.verticalCenter: parent.verticalCenter
-                name: "chevron-down"; size: 11
-                color: C.Theme.textSecondary
-            }
-            background: Rectangle {
-                radius: 6
-                color: presetCombo.hovered ? C.Theme.controlHover : "#111209"
-                border.color: presetCombo.activeFocus ? C.Theme.green : C.Theme.controlBorder
-                border.width: 1
-            }
-            popup: Popup {
-                y: presetCombo.height + 3
-                width: presetCombo.width
-                implicitHeight: contentItem.implicitHeight + 8
-                padding: 4
-                contentItem: ListView {
-                    clip: true
-                    implicitHeight: contentHeight
-                    model: presetCombo.popup.visible ? presetCombo.delegateModel : null
-                    currentIndex: presetCombo.highlightedIndex
-                }
-                background: Rectangle {
-                    radius: 6; color: "#181a15"
-                    border.color: C.Theme.controlBorder; border.width: 1
-                }
-            }
-            delegate: ItemDelegate {
-                id: presetDelegate
-                required property int index
-                required property var modelData
-                width: presetCombo.width - 8; height: 26
-                highlighted: presetCombo.highlightedIndex === index
-                contentItem: Text {
-                    text: presetDelegate.modelData
-                    color: presetDelegate.highlighted ? C.Theme.textPrimary : C.Theme.textNormal
-                    font.family: C.Theme.fontFamily; font.pixelSize: 10
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    radius: 4
-                    color: presetDelegate.highlighted ? C.Theme.greenBg : "transparent"
-                }
-            }
-        }
+        options: ["Personalizado", "Água calma", "Brisa costeira", "Mar aberto", "Tempestade"]
+        currentIndex: root.presetIndex
+        onActivated: index => root.applyPreset(index)
     }
 
     C.PrimarySliderRow {

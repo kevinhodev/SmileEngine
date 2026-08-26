@@ -1,41 +1,117 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import "components" as C
 
-// Barra de status do editor. `statusModel` (StatusBridge) e dependencia explicita da raiz:
-// esquerda = mensagem transiente; direita = stats por frame (FPS/Frame/meshes/ocean).
+// Rodape permanente da janela principal. Nao pertence a nenhum dock: fechar console, outliner
+// ou inspector libera espaco para o viewport sem esconder os instrumentos de desempenho.
 Rectangle {
-    id: bar
+    id: root
+
     required property var statusModel
-    color: "#141511"
-    implicitWidth: 800
-    implicitHeight: 22
+    required property var statsModel
 
-    // fio sutil no topo, separando do viewport
-    Rectangle { anchors { left: parent.left; right: parent.right; top: parent.top }
-                height: 1; color: "#24251f" }
+    color: C.Theme.shell
+    implicitWidth: 700
+    implicitHeight: 30
 
-    // ---- Mensagem (esquerda) ----
-    Text {
-        anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter
-                  right: stats.left; rightMargin: 12 }
-        text: statusModel.message
-        color: "#9a958a"
-        font.pixelSize: 11
-        elide: Text.ElideRight
+    component Metric: Row {
+        id: metric
+
+        property string label
+        property string value
+        spacing: 7
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: metric.label
+            color: C.Theme.textMuted
+            font.family: C.Theme.fontMono
+            font.pixelSize: 9
+            font.letterSpacing: 0.5
+            renderType: Text.QtRendering
+            renderTypeQuality: Text.HighRenderTypeQuality
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: metric.value
+            color: C.Theme.textPrimary
+            font.family: C.Theme.fontMono
+            font.pixelSize: 10
+            renderType: Text.QtRendering
+            renderTypeQuality: Text.HighRenderTypeQuality
+        }
     }
 
-    // ---- Stats (direita) ----
-    Text {
-        id: stats
-        anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
-        color: "#b9b5aa"
-        font.family: "Consolas"
-        font.pixelSize: 11
-        text: {
-            var s = "FPS: " + statusModel.fps.toFixed(1)
-                  + "   |   Frame: " + statusModel.frameMs.toFixed(2) + " ms"
-            if (statusModel.sceneText !== "") s += "   |   " + statusModel.sceneText
-            if (statusModel.oceanText !== "") s += "   |   " + statusModel.oceanText
-            return s
+    Rectangle {
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        height: 1
+        color: C.Theme.hairline
+    }
+
+    // Estado. Verde = pronto; com mensagem transiente, ela assume a leitura e o ponto vira ambar.
+    Row {
+        id: statusRow
+
+        anchors.left: parent.left
+        anchors.leftMargin: 16
+        anchors.right: metricsRow.left
+        anchors.rightMargin: 16
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 10
+
+        Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: 6
+            height: 6
+            radius: 3
+            color: root.statusModel.message !== "" ? C.Theme.amber : C.Theme.green
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.max(0, statusRow.width - 16)
+            text: root.statusModel.message !== "" ? root.statusModel.message : "PRONTO"
+            color: root.statusModel.message !== "" ? C.Theme.textSecondary : C.Theme.green
+            font.family: C.Theme.fontMono
+            font.pixelSize: 10
+            font.letterSpacing: root.statusModel.message !== "" ? 0 : 1
+            elide: Text.ElideRight
+            renderType: Text.QtRendering
+            renderTypeQuality: Text.HighRenderTypeQuality
+        }
+    }
+
+    Row {
+        id: metricsRow
+
+        anchors.right: parent.right
+        anchors.rightMargin: 16
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 22
+
+        // Locale do sistema nos dois lados: gpuFrameText e vramUsageText ja chegam formatados.
+        Metric {
+            label: "FPS"
+            value: root.statsModel.fps.toLocaleString(Qt.locale(), 'f', 1)
+        }
+        Metric {
+            label: "FRAME"
+            value: root.statsModel.frameTimeMs.toLocaleString(Qt.locale(), 'f', 2) + " ms"
+        }
+        Metric {
+            visible: root.width > 1100 && root.statsModel.gpuFrameText !== ""
+            label: "GPU"
+            value: root.statsModel.gpuFrameText
+        }
+        Metric {
+            visible: root.width > 1280
+            label: "MESHES"
+            value: root.statsModel.visibleDrawCount + "/" + root.statsModel.totalDrawCount
+        }
+        Metric {
+            visible: root.width > 1440
+            label: "MEM"
+            value: root.statsModel.vramUsageText
         }
     }
 }

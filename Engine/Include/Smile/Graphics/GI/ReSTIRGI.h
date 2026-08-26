@@ -63,6 +63,8 @@ namespace Smile {
         // ScreenParams é full-res; estes campos descrevem o domínio interno.
         Vec4 TraceScreenParams; // W, H, 1/W, 1/H internos
         Vec4 ResolutionParams;  // x=escala (1/2), yz=fase 2x2, w=half-res efetivo
+        Vec4 EnvironmentSky;
+        Vec4 EnvironmentGround;
     };
     static_assert(offsetof(ReSTIRGIConstants, GICascades) == 560,
                   "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
@@ -72,6 +74,9 @@ namespace Smile {
                   "SkyParams deve permanecer anexado ao fim do ReSTIRCB");
     static_assert(offsetof(ReSTIRGIConstants, TraceScreenParams) == 704,
                   "resolucao interna deve permanecer anexada depois das cascatas");
+    static_assert(offsetof(ReSTIRGIConstants, EnvironmentSky) == 736,
+                  "o ambiente deve permanecer anexado ao fim do ReSTIRCB");
+
 
     // Final gather difuso: trace/temporal, reuso espacial e resolve.
     // Reservoir {x2,n2,Lo,M,W} em duas texturas ping-pong.
@@ -118,6 +123,7 @@ namespace Smile {
 
         // kInvalidSlot seleciona a PSO normal, sem instrumentação.
         void SetTimerSlot(u32 Slot) { TimerSlot = Slot; }
+        void SetDebugExecutionEnabled(bool V) { DebugExecutionEnabled = V; }
         bool HasTimerPipeline() const { return TraceTimed; }
 
         // Cria as tabelas de pack depois do setup do passe e do NRD.
@@ -130,6 +136,7 @@ namespace Smile {
 
         void SetUseNrd(bool V) { UseNrd = V; }
         bool GetUseNrd() const { return UseNrd; }
+
 
         void SetRayEpsilons(const FRayEpsilonProfile& P) { RayEps = P; }
         void SetGIHitSampling(const FGIHitSampling& S) { GIHit = S; }
@@ -152,6 +159,12 @@ namespace Smile {
         u32  GITexSRVSlot() const { return IsNrdOutput() ? NrdOutSRV : GITexSRV; }
         u32  GITexRawSRVSlot() const { return GITexSRV; }
         u32  NrdOutSRVSlot() const   { return NrdOutSRV; }
+        // Snapshot 1x1 da saída full-res e do reservoir final. Full e trace usam coordenadas
+        // separadas porque o GI pode operar em meia resolução intercalada.
+        bool RecordPixelDebugCopy(ID3D12GraphicsCommandList* CL, ID3D12Resource* Destination,
+                                  u32 FullX, u32 FullY, u32 TraceX, u32 TraceY,
+                                  u64 OutputOffset, u64 Reservoir0Offset,
+                                  u64 Reservoir1Offset);
 
         // Limpa reservoirs e reconstrução no próximo frame.
         void InvalidateHistory()   { NeedsClear = true; ReconstructionHistoryValid = false; }
@@ -264,6 +277,7 @@ namespace Smile {
         u32  FrameParity = 0;
         u32  TimerSlot   = kInvalidSlot; // alvo de timer vigente (kInvalidSlot = captura off)
         bool TraceTimed  = false;        // permutacao instrumentada criada com sucesso
+        bool DebugExecutionEnabled = false;
         bool NeedsClear  = false;
         bool ReconstructionHistoryValid = false;
         bool Initialized = false;

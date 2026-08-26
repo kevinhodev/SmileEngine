@@ -3,6 +3,7 @@
 #include "Smile/Graphics/Debug/GpuProfiler.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Renderer/Renderer.h"
+#include "Smile/Scene/Scene.h"
 
 #include <cmath>
 
@@ -85,6 +86,26 @@ namespace SmileEditor {
         };
     }
 
+    FSceneObjectSnapshot RenderSettingsController::CollectSceneObject(
+        const Smile::FRenderable& _Renderable, int _Index) {
+        return FSceneObjectSnapshot{
+            _Index,
+            static_cast<quint64>(_Renderable.Id),
+            QString::fromStdString(_Renderable.Name),
+            _Renderable.Visible,
+            _Renderable.Mobility == Smile::EMobility::Dynamic,
+            _Renderable.Transform.Position.X,
+            _Renderable.Transform.Position.Y,
+            _Renderable.Transform.Position.Z,
+            _Renderable.AABBMin.X,
+            _Renderable.AABBMin.Y,
+            _Renderable.AABBMin.Z,
+            _Renderable.AABBMax.X,
+            _Renderable.AABBMax.Y,
+            _Renderable.AABBMax.Z,
+        };
+    }
+
     FGIStatusSnapshot RenderSettingsController::CollectGIStatus(
         const Smile::Renderer& _Renderer) {
         const auto& Settings = _Renderer.Settings();
@@ -111,10 +132,22 @@ namespace SmileEditor {
         Out.AdaptiveMinRays        = DDGI.GetMinRays();
         Out.AdaptiveMaxRays        = DDGI.GetMaxRays();
         Out.InterleavedUpdates     = DDGI.GetInterleavedUpdates();
+        Out.UpdateRayBudget        = static_cast<int>(DDGI.GetUpdateRayBudget());
+        Out.UpdateBudgetEffective  = DDGI.UpdateBudgetEffective();
+        Out.EffectiveProbeBudget   = static_cast<int>(DDGI.EffectiveProbeBudget());
+        Out.ScheduledProbeCount    = static_cast<int>(DDGI.ScheduledProbeCount());
+        Out.ScheduledProbeStart    = static_cast<int>(DDGI.ScheduledProbeStart());
+        Out.ScheduledCascadeMask   = static_cast<int>(DDGI.ScheduledCascadeMask());
         Out.ProbeCompaction        = DDGI.GetProbeCompaction();
         Out.ProbeCompactionEffective = DDGI.LastUpdateUsedProbeCompaction();
         Out.ActiveProbeCount       = static_cast<int>(DDGI.LastActiveProbeCount());
         Out.CompactedProbeCapacity = static_cast<int>(DDGI.LastCompactedProbeCapacity());
+        Out.SelectedRayCount       = static_cast<int>(DDGI.LastSelectedRayCount());
+        Out.NewProbeCount          = static_cast<int>(DDGI.LastNewProbeCount());
+        Out.RegionalProbeCount     = static_cast<int>(DDGI.LastRegionalProbeCount());
+        Out.FollowUpProbeCount     = static_cast<int>(DDGI.LastFollowUpProbeCount());
+        Out.QuotaProbeCount        = static_cast<int>(DDGI.LastQuotaProbeCount());
+        Out.RoundRobinProbeCount   = static_cast<int>(DDGI.LastRoundRobinProbeCount());
         Out.ProbeWakeInterval      = static_cast<int>(DDGI.ProbeWakeInterval());
         Out.LastProbeWakeSerial    = DDGI.LastProbeWakeSerial();
         Out.ScheduledCascadeCount  = static_cast<int>(DDGI.ScheduledCascadeCount());
@@ -180,7 +213,7 @@ namespace SmileEditor {
 
             if (_Preset == EProfilePreset::GameplayRR) {
                 Result.Preset = QStringLiteral("gameplay_rr");
-                Settings.SetUpscalerQuality(0);
+                Settings.SetUpscalerQuality(_Overrides.UpscalerQuality.value_or(0));
                 Settings.SetDenoiser(Smile::EDenoiser::DLSS_RR);
             } else {
                 const bool UseNrd = _Preset == EProfilePreset::ControlledNrd;
@@ -210,6 +243,8 @@ namespace SmileEditor {
             // Muda o DOMINIO amostrado: o setter forca rebuild da tabela e limpa historico.
             if (_Overrides.DIMeshCompactSupport)
                 Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);
+            if (_Overrides.RainAmount)
+                Settings.SetRainAmount(static_cast<float>(*_Overrides.RainAmount));
 
             auto& Tod = Access->GetTimeOfDay();
             Tod.Enabled   = true;
@@ -324,6 +359,73 @@ namespace SmileEditor {
         return CollectCamera(*Access);
     }
 
+    QVector<FSceneObjectSnapshot> RenderSettingsController::SceneObjects(
+        const QString& _NameContains, int _Limit, QString& _Error) const {
+        _Error.clear();
+        QVector<FSceneObjectSnapshot> Out;
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return Out;
+        }
+        auto Access = Renderer.Lock();
+        if (!Access || !Access->IsInitialized()) {
+            _Error = QStringLiteral("renderer ainda nao esta inicializado");
+            return Out;
+        }
+        const auto& Objects = Access->GetScene().Renderables();
+        Out.reserve(std::min(_Limit, static_cast<int>(Objects.size())));
+        for (int Index = 0; Index < static_cast<int>(Objects.size()) && Out.size() < _Limit;
+             ++Index) {
+            const auto& Object = Objects[static_cast<size_t>(Index)];
+            if (Object.RaytracingOnly) continue;
+            const QString Name = QString::fromStdString(Object.Name);
+            if (!_NameContains.isEmpty() &&
+                !Name.contains(_NameContains, Qt::CaseInsensitive)) continue;
+            Out.append(CollectSceneObject(Object, Index));
+        }
+        return Out;
+    }
+
+    std::optional<FSceneObjectSnapshot> RenderSettingsController::SetSceneObjectPosition(
+        int _Index, double _X, double _Y, double _Z, QString& _Error) {
+        _Error.clear();
+        if (!std::isfinite(_X) || !std::isfinite(_Y) || !std::isfinite(_Z) ||
+            std::abs(_X) > 1'000'000.0 || std::abs(_Y) > 1'000'000.0 ||
+            std::abs(_Z) > 1'000'000.0) {
+            _Error = QStringLiteral("posicao do objeto fora dos limites do protocolo");
+            return std::nullopt;
+        }
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+        auto Access = Renderer.Lock();
+        if (!Access || !Access->IsInitialized()) {
+            _Error = QStringLiteral("renderer ainda nao esta inicializado");
+            return std::nullopt;
+        }
+        auto& Objects = Access->GetScene().Renderables();
+        if (_Index < 0 || _Index >= static_cast<int>(Objects.size()) ||
+            Objects[static_cast<size_t>(_Index)].RaytracingOnly) {
+            _Error = QStringLiteral("indice de objeto invalido");
+            return std::nullopt;
+        }
+
+        auto& Object = Objects[static_cast<size_t>(_Index)];
+        const Smile::Vec3 OldMin = Object.AABBMin;
+        const Smile::Vec3 OldMax = Object.AABBMax;
+        Object.Transform.Position = {
+            static_cast<float>(_X), static_cast<float>(_Y), static_cast<float>(_Z) };
+        Object.RefreshWorldBounds();
+        Access->GetScene().BumpTransformsVersion();
+        if (Object.Mobility == Smile::EMobility::Static)
+            Access->GetScene().BumpStaticCastersVersion();
+        Access->NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
+        Access->NotifyGIRegionChanged(Object.AABBMin, Object.AABBMax,
+                                      Smile::EGIRegionChange::Geometry);
+        return CollectSceneObject(Object, _Index);
+    }
+
     std::optional<FGIStatusSnapshot> RenderSettingsController::GIStatus(QString& _Error) const {
         _Error.clear();
         if (!Renderer) {
@@ -362,6 +464,9 @@ namespace SmileEditor {
                     static_cast<Smile::u32>(*_Overrides.CascadeCount));
             if (_Overrides.InterleavedUpdates)
                 Settings.SetGIInterleavedUpdates(*_Overrides.InterleavedUpdates);
+            if (_Overrides.UpdateRayBudget)
+                Settings.SetGIUpdateRayBudget(
+                    static_cast<Smile::u32>(*_Overrides.UpdateRayBudget));
             if (_Overrides.ProbeCompaction)
                 Settings.SetGIProbeCompaction(*_Overrides.ProbeCompaction);
             if (_Overrides.HalfRes)

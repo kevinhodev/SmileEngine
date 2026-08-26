@@ -10,6 +10,7 @@ namespace Smile {
 
         void  Update(const CameraInput& Input, f32 DeltaTime);
         Mat44 GetViewMatrix() const;
+        Vec3  GetForward() const;
 
         Vec3 GetPosition() const { return Position; }
         f32  GetPitch()    const { return Pitch; }

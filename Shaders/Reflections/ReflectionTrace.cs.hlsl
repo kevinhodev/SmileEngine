@@ -45,6 +45,8 @@ cbuffer ReflectionCB : register(b0) {
     // 6.2b-ii: scroll toroidal, em CELULAS, por cascata (xyz). Espelha o ScrollOffset do
     // FDDGICascadeConstants — o bloco e copiado campo-a-campo, entao a ORDEM e o contrato.
     float4 GICascadeScrollOffset[4];
+    float4 EnvironmentSky;
+    float4 EnvironmentGround;
 };
 
 // Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a
@@ -179,6 +181,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.ReGIRPad           = 0u;
         P.SkyViewHeightKm    = SkyParams.x;
         P.SkyBottomRKm       = SkyParams.y;
+    P.EnvironmentSky     = EnvironmentSky.rgb;
+    P.EnvironmentGround  = EnvironmentGround.rgb;
         // ZERO de proposito: a reflexao sombreia o hit p/ uma visada conhecida e consome uma vez
         // so, sem reuso — o piso que o DDGI/ReSTIR precisam borraria espelho-no-espelho aqui.
         P.RoughnessMin       = 0.0f;

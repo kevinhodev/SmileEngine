@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QColor>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QPointer>
@@ -40,9 +41,9 @@ namespace SmileEditor {
 
                 QObject::connect(&Debounce, &QTimer::timeout, this, [this]() { Reload(); });
                 QObject::connect(&Watcher, &QFileSystemWatcher::fileChanged,
-                                 this, [this](const QString&) { Debounce.start(); });
+                                 this, [this](const QString& _Path) { QueueReload(_Path); });
                 QObject::connect(&Watcher, &QFileSystemWatcher::directoryChanged,
-                                 this, [this](const QString&) { Debounce.start(); });
+                                 this, [this](const QString& _Path) { QueueReload(_Path); });
             }
 
             void Register(QQuickWidget* _Widget,
@@ -73,9 +74,19 @@ namespace SmileEditor {
             }
 
         private:
+            void QueueReload(const QString& _Path) {
+                ChangedPaths.insert(QDir::cleanPath(_Path));
+                Debounce.start();
+            }
+
             void Rearm() {
                 for (const QString& RootDir : RootDirs) {
-                    const QStringList Dirs{ RootDir, QDir(RootDir).filePath("components") };
+                    QStringList Dirs{ RootDir };
+                    QDirIterator DirIt(RootDir,
+                                       QDir::Dirs | QDir::NoDotAndDotDot,
+                                       QDirIterator::Subdirectories);
+                    while (DirIt.hasNext()) Dirs.push_back(QDir::cleanPath(DirIt.next()));
+
                     for (const QString& Dir : Dirs) {
                         if (!QFileInfo::exists(Dir)) continue;
                         if (!Watcher.directories().contains(Dir)) Watcher.addPath(Dir);
@@ -96,16 +107,29 @@ namespace SmileEditor {
                 if (Panels.isEmpty()) return;
 
                 Rearm(); // save atomico pode remover o watch do arquivo substituido
-                Smile::LogInfo("QML hot-reload compartilhado: recarregando " +
-                               std::to_string(Panels.size()) + " painel(is)");
+                QStringList Changes = ChangedPaths.values();
+                ChangedPaths.clear();
+                Changes.sort();
+                Smile::LogInfo("QML hot-reload compartilhado: descarregando " +
+                               std::to_string(Panels.size()) + " painel(is); alterado: " +
+                               Changes.join(QStringLiteral(", ")).toStdString());
 
                 for (const FQmlPanelRegistration& Panel : Panels)
                     Panel.Widget->setSource(QUrl());
 
+                // A limpeza so descarta componentes sem instancias vivas. A troca para URL vazia
+                // agenda parte da destruicao internamente; concluir no proximo ciclo garante que
+                // nenhuma arvore antiga ainda retenha tipos do cache.
+                QTimer::singleShot(0, this, [this]() { FinishReload(); });
+            }
+
+            void FinishReload() {
+                // Singletons QML tambem mantem tipos vivos; precisam cair antes do cache.
+                Engine->clearSingletons();
                 Engine->clearComponentCache();
-                Engine->clearSingletons(); // Theme.qml tambem pode ter sido alterado
 
                 for (const FQmlPanelRegistration& Panel : Panels) {
+                    if (Panel.Widget.isNull()) continue;
                     // Nao dependemos de setInitialProperties sobreviver a troca de source.
                     if (!Panel.InitialProperties.isEmpty())
                         Panel.Widget->setInitialProperties(Panel.InitialProperties);
@@ -115,6 +139,7 @@ namespace SmileEditor {
                             Smile::LogError("QML hot-reload [" + Panel.File.toStdString() + "]: " +
                                             Err.toString().toStdString());
                 }
+                Smile::LogInfo("QML hot-reload compartilhado: recarga concluida");
             }
 
             QQmlEngine* Engine = nullptr;
@@ -122,6 +147,7 @@ namespace SmileEditor {
             QTimer Debounce;
             QVector<FQmlPanelRegistration> Panels;
             QSet<QString> RootDirs;
+            QSet<QString> ChangedPaths;
         };
 
         FQmlHotReloadCoordinator* HotReloadCoordinator(QQmlEngine& _Engine) {

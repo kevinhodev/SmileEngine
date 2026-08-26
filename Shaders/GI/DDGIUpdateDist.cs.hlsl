@@ -70,13 +70,16 @@ static const uint4 kBorderOffsets[DDGI_BORDER_COUNT] = {
 [numthreads(DDGI_DIST_TILE, DDGI_DIST_TILE, 1)]
 void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int numProbes = (int)AtlasParams.w;
-    int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    int candidateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    int scheduledProbes = clamp((int)ProbeCompactionParams.z, 1, candidateProbes);
     const bool compact = ProbeCompactionParams.x > 0.5f;
-    const int workProbes = compact ? min((int)ActiveProbeCount[0], updateProbes) : updateProbes;
+    const int workProbes = compact ? min((int)ActiveProbeCount[0], numProbes)
+                                   : scheduledProbes;
     int workIdx = DDGI_ProbeFromGroup(Gid.xy, max(workProbes, 1));
     if (workIdx >= workProbes) return;
-    int probeIdx = compact ? (int)ActiveProbeIndices[workIdx] : workIdx;
-    if (probeIdx >= updateProbes) return;
+    int probeIdx = compact ? (int)ActiveProbeIndices[workIdx]
+                           : ((int)ProbeCompactionParams.y + workIdx) % candidateProbes;
+    if (probeIdx >= candidateProbes || probeIdx >= numProbes) return;
 
     int3 count = (int3)GridCountRays.xyz;
     int  cascade  = DDGI_CascadeOfProbe(probeIdx, count);
@@ -118,7 +121,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     int2   texel = tileOrigin + local;
     float2 prev  = DistAtlas[texel];
     // Momentos usam histerese propria; sonda nova/relocada descarta o historico espacial antigo.
-    const float temporalInterval = (cascade > 0) ? max(GICascadeParams.w, 1.0f) : 1.0f;
+    const float temporalInterval = (ProbeCompactionParams.w > 0.5f || cascade > 0)
+                                 ? max(GICascadeParams.w, 1.0f) : 1.0f;
     const float temporalHyst = pow(saturate(DistAtlasParams.w), temporalInterval);
     float  hyst  = (newlyExposed || ProbeData[probeIdx].w >= 1.0f) ? 0.0f : temporalHyst;
     // A caixa e compartilhada, mas a janela e a histerese pertencem ao atlas de distancia.

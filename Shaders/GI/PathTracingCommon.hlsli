@@ -99,6 +99,7 @@ struct FHitSurface {
 struct FHitMaterial {
     float3 DiffuseColor;
     float3 SpecularColor;
+    float3 TransColor; // BaseColor * (SubsurfaceColor.rgb * intensidade.a), igual ao deferred
     float  Roughness;
     float  Alpha; // roughness^2
     float  A2;    // alpha^2
@@ -232,6 +233,7 @@ FHitMaterial PT_LoadHitMaterial(InstanceGeo geo, float2 uv, float albedoLOD, flo
     FHitMaterial M;
     M.DiffuseColor  = albedo * (1.0f - metallic);
     M.SpecularColor = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    M.TransColor    = albedo * geo.SubsurfaceColor.rgb * geo.SubsurfaceColor.a;
     M.Roughness     = roughness;
     M.Alpha         = roughness * roughness;
     M.A2            = M.Alpha * M.Alpha;
@@ -256,16 +258,22 @@ float3 PT_LoadHitEmissive(InstanceGeo geo, float2 uv, float albedoLOD) {
 // --------------------------------------------------------------------------------------------
 // Origem dos shadow rays: hitPos deslocado pela normal de FACE. Uma funcao so porque os tres
 // sitios que a calculavam tinham de concordar — e o do ReGIR ja tinha divergido uma vez.
-float3 PT_ShadowRayOrigin(FHitSurface S, FHitShadeParams P) {
-    return S.Pos + S.OffsetN * max(P.ShadowRayBias, RayEpsA.w);
+float3 PT_ShadowRayOrigin(FHitSurface S, float3 outgoingDir, FHitShadeParams P) {
+    // O caminho antigo só emitia raios para o hemisfério frontal. Transmissão de folha também
+    // consulta luz atrás do plano; nesse caso o offset precisa atravessar para o mesmo lado da
+    // luz, senão o card two-sided se auto-oclui imediatamente.
+    const float side = (dot(S.OffsetN, outgoingDir) >= 0.0f) ? 1.0f : -1.0f;
+    return S.Pos + S.OffsetN * side * max(P.ShadowRayBias, RayEpsA.w);
 }
 
 float3 PT_ShadeDirectSun(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams P) {
     float ndl = saturate(dot(S.ShadingN, P.SunDir));
     float vis = 1.0f;
-    if (ndl > 0.0f) {
+    // A BRDF de folhagem tem suporte no hemisfério traseiro. Testar só N.L descartava o sol
+    // antes que FoliageTransmission pudesse avaliá-lo.
+    if (ndl > 0.0f || any(M.TransColor > 0.0f)) {
         RayDesc sray;
-        sray.Origin    = PT_ShadowRayOrigin(S, P);
+        sray.Origin    = PT_ShadowRayOrigin(S, P.SunDir, P);
         sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
         sray.TMin      = RayEpsB.x;
         sray.TMax      = P.MaxRayDist;
@@ -275,7 +283,7 @@ float3 PT_ShadeDirectSun(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParam
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
     }
     return BRDF_Direct(S.ShadingN, V, P.SunDir, P.SunColor * P.SunIntensity * vis,
-                       M.DiffuseColor, M.SpecularColor, M.Roughness, M.A2, 0.0f);
+                       M.DiffuseColor, M.SpecularColor, M.Roughness, M.A2, M.TransColor);
 }
 
 // ACUMULA em `directLighting` em vez de devolver o proprio termo, e isso e deliberado: a soma
@@ -293,7 +301,8 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
     bool regirHandled = false;
     [branch] if (P.ReGIREnabled) {
         regirHandled = ReGIRSelectPunctual(
-            S.Pos, S.ShadingN, V, M.DiffuseColor, M.SpecularColor, M.Roughness, M.A2,
+            S.Pos, S.ShadingN, V, M.DiffuseColor, M.SpecularColor, M.TransColor,
+            M.Roughness, M.A2,
             P.ReGIRGridMin, P.ReGIRInvCellSize, P.ReGIRGridCount,
             P.ReGIRSlotsPerCell, (uint)P.ReGIRSampleCount, P.ReGIRSlotsSRV,
             P.ReGIRAverageSRV, P.FrameIndex, (uint)P.NumLights,
@@ -301,7 +310,8 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
     }
 
     if (regirHandled && regirLight != REGIR_INVALID_LIGHT) {
-        const float3 lorg = PT_ShadowRayOrigin(S, P);
+        const float3 lightDir = normalize(SceneLights[regirLight].PosInvRadius.xyz - S.Pos);
+        const float3 lorg = PT_ShadowRayOrigin(S, lightDir, P);
         const float3 toL = SceneLights[regirLight].PosInvRadius.xyz - lorg;
         const float lenL = max(length(toL), 1e-4f);
         const float lTMax = lenL - kLightRayEndMargin;
@@ -322,7 +332,8 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
       [loop] for (int li = 0; li < P.NumLights; ++li) {
         float3 Ll; float distL;
         float3 contrib = HitPunctualBRDF(SceneLights[li], S.Pos, S.ShadingN, V,
-                                         M.DiffuseColor, M.SpecularColor, M.Roughness, M.A2,
+                                         M.DiffuseColor, M.SpecularColor, M.TransColor,
+                                         M.Roughness, M.A2,
                                          Ll, distL);
         if (dot(contrib, float3(0.2126f, 0.7152f, 0.0722f)) < 1e-3f) continue;
 
@@ -330,7 +341,7 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
         // hitPos+N*b mas direcao/TMax calculados de hitPos, origem/direcao/comprimento
         // descreviam segmentos diferentes — com luz proxima (b=0.2!) o erro angular e grande.
         // O shading (contrib) continua medido do hitPos real; so o raio usa o segmento efetivo.
-        float3 lorg = PT_ShadowRayOrigin(S, P);
+        float3 lorg = PT_ShadowRayOrigin(S, Ll, P);
         float3 toL  = (S.Pos + Ll * distL) - lorg;
         float  lenL = max(length(toL), 1e-4f);
 
@@ -359,51 +370,35 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
 }
 
 // --------------------------------------------------------------------------------------------
-// Fallback indireto (DDGI)
+// Fallback indireto (DDGI / Environment / Black)
 // --------------------------------------------------------------------------------------------
-// A IRRADIANCIA crua do volume, sem a BRDF ambiente — quem compoe e o PT_ComposeIndirect. Separado
-// porque a Fase 5 troca a FONTE (cache no lugar do volume) sem trocar a composicao, e a Fase 3 nao
-// pode chamar isto de jeito nenhum: o updater alimentado por DDGI so esconderia um sinal cuja
-// origem continuaria sendo DDGI.
-float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P) {
-    // 2o bounce com o gather COMPLETO — Chebyshev, bias de superficie, offset de relocacao e
-    // skip de sonda inativa —, o mesmo que o deferred usa. Antes aqui era a trilinear pura, e
-    // isso era o pior lugar possivel para vazar: o resultado do hit volta para o atlas do DDGI,
-    // que reamostra com hysteresis 0,99, entao o leak se REALIMENTA frame a frame. O Flax
-    // tambem usa o sampler completo no bounce do surface atlas.
-    //
-    // O papel de "direcao da camera" no bias e do raio: quem observa este ponto e a origem do
-    // raio, entao V = -rayDir. Sem isso o termo de view empurraria o ponto para uma direcao sem
-    // relacao com a visada e o bias perderia o sentido geometrico.
-    // O bias em si e calculado DENTRO do wrapper, uma vez por cascata — ele escala com o
-    // espacamento e no blend as duas cascatas querem valores diferentes.
-    float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
-    // Fora do volume o gather clampa e estende a ultima fileira de sondas ao infinito. Na tela
-    // isso e substituido pelo ambiente hemisferico; aqui a radiancia do hit REALIMENTA o atlas,
-    // entao extrapolar seria pior — a borda se reinjetaria. Sem o ambiente colorido do deferred
-    // (nao existe no CB de um passe de RT), o hit desvanece o indireto para ZERO: escurece o
-    // bounce distante em vez de inventar luz. O direto do hit (sol e puntuais) segue inteiro.
-    // GIDistParams.w carrega DUAS coisas (ver FGIHitSampling::SkipModePacked): o skipMode de
-    // sonda inativa nos dois bits baixos e, no bit 2, o gate de MEDICAO — "corte o DDGI como
-    // terminador e me diga quanto muda". Com o gate ligado nao ha gather nenhum: o volW vai a
-    // zero e o custo do tap tambem sai, o que mantem a medicao honesta tambem no profiler.
+// A IRRADIANCIA crua do terminador, sem a BRDF ambiente — quem compoe e o PT_ComposeIndirect.
+// Environment e exclusivo: nao muda o fade historico do modo DDGI fora do volume.
+//
+// outSource e parte do resultado porque radiancia preta nao distingue um DDGI escuro, ambiente
+// escuro e Black. Os valores RC_SRC_* espelham os contadores de fonte.
+float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P,
+                                 out uint outSource) {
     const uint giHitFlags = (uint)GIDistParams.w;
-    const bool termOff    = (giHitFlags & 4u) != 0u;
-    float volW = termOff ? 0.0f
-                         : DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
+
+    // Bit 3: irradiancia hemisferica integrada no CPU a partir da atmosfera. Ela ja esta na
+    // unidade esperada por PT_ComposeIndirect, portanto nao usa SkyIntensity nem amostra a LUT
+    // direcional como se fosse uma integral difusa.
+    if ((giHitFlags & 8u) != 0u) {
+        const float hemi = saturate(S.ShadingN.y * 0.5f + 0.5f);
+        outSource = RC_SRC_ENVIRONMENT;
+        return lerp(P.EnvironmentGround, P.EnvironmentSky, hemi);
+    }
+
+    // 2o bounce com o gather completo — Chebyshev, bias, relocacao, cascatas e skip de sonda.
+    // O bit 2 fecha os taps tanto para o gate de medicao quanto quando DDGI nao e o fallback.
+    const bool termOff = (giHitFlags & 4u) != 0u;
+    const float volW = termOff ? 0.0f
+        : DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z);
     float3 indirect = float3(0.0f, 0.0f, 0.0f);
     if (volW > 0.0f) {
-        // Tiles por linha (empacotamento 2D; ver DDGI_TileOrigin) derivado do par
-        // (largura, tile) do atlas de distancia, que ja chega aqui pelo contrato de NOME do
-        // GIDistParams — os cinco shaders que incluem este arquivo o declaram, entao nao ha
-        // campo novo a plumbar nem estado duplicado a dessincronizar.
+        const float2 distInvSize = float2(1.0f / GIDistParams.y, 1.0f / GIDistParams.z);
         const int tilesPerRow = DDGI_TilesPerRow(GIDistParams.y, (int)GIDistParams.x);
-        // Wrapper com selecao e blend de cascata. O bias NAO entra pronto — ver a nota no
-        // wrapper: ele escala com o espacamento e cada cascata quer o seu.
-        //
-        // O fallback deste caller e PRETO, e nao ambiente hemisferico: nao existe cor de ambiente
-        // no cbuffer de um passe de RT. Por isso o volW continua aqui fora, e o wrapper devolve
-        // so a irradiancia do DDGI.
         indirect = SampleDDGIIrradianceChebCascaded(
             IrradAtlas, GIDistAtlas, LinearClamp, S.Pos, S.ShadingN, -rayDir,
             GICascadeGridMinSpacing, GICascadeScrollOffset, (int)GICascadeParams.x, P.Count,
@@ -412,23 +407,13 @@ float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P
             GIBiasParams.x, GIBiasParams.y);
         if (volW < 1.0f) indirect *= volW;
     }
+    outSource = (volW > 0.0f) ? RC_SRC_DDGI : RC_SRC_ZERO;
     return indirect;
 }
 
-// Overload que devolve TAMBEM quem respondeu. Existe para a telemetria de fonte da Fase 5 poder
-// separar "o volume cobriu este ponto" de "nao havia volume e o indireto foi zero explicito" —
-// duas coisas que a radiancia devolvida nao distingue (um DDGI legitimamente escuro tambem sai
-// preto). `volW` e o unico lugar onde essa diferenca existe, e ela morria dentro da funcao.
-//
-// Sem duplicar corpo: quem responde e o mesmo bloco de cima. `termOff` conta como NAO respondido,
-// e corretamente — o gate de medicao existe justamente para tirar o DDGI do terminal.
-float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P,
-                                 out bool outDDGIAnswered) {
-    const uint giHitFlags = (uint)GIDistParams.w;
-    const bool termOff    = (giHitFlags & 4u) != 0u;
-    outDDGIAnswered = !termOff &&
-                      DDGI_VolumeWeight(S.Pos, P.GridMin, P.Spacing, P.Count, GIBiasParams.z) > 0.0f;
-    return PT_SampleIndirectFallback(S, rayDir, P);
+float3 PT_SampleIndirectFallback(FHitSurface S, float3 rayDir, FHitShadeParams P) {
+    uint ignoredSource;
+    return PT_SampleIndirectFallback(S, rayDir, P, ignoredSource);
 }
 
 // O atlas fornece irradiancia difusa, nao uma distribuicao direcional que permita integrar

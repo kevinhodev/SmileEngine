@@ -146,7 +146,32 @@ namespace SmileEditor {
             emit RowsAppended();
         }
 
-        if (StatsDirty) emit StatsChanged();
+        if (StatsDirty) {
+            RecountLevels();
+            emit StatsChanged();
+        }
+    }
+
+    void LogBridge::RecountLevels() {
+        LevelCounts[0] = LevelCounts[1] = LevelCounts[2] = 0;
+        for (const Entry& E : Entries) {
+            if (E.Tag == QLatin1String("ERR"))       ++LevelCounts[2];
+            else if (E.Tag == QLatin1String("WARN")) ++LevelCounts[1];
+            else                                     ++LevelCounts[0];
+        }
+    }
+
+    int LogBridge::MatchCount(const QString& _Level, const QString& _Search) const {
+        const QString Search = _Search.trimmed();
+        int Matches = 0;
+        for (const Entry& E : Entries) {
+            if (!_Level.isEmpty() && E.Tag != _Level) continue;
+            if (!Search.isEmpty()
+                && !E.Tag.contains(Search, Qt::CaseInsensitive)
+                && !E.Message.contains(Search, Qt::CaseInsensitive)) continue;
+            ++Matches;
+        }
+        return Matches;
     }
 
     void LogBridge::Clear() {
@@ -166,6 +191,7 @@ namespace SmileEditor {
         }
         DroppedCount_ = 0;
         EvictedCount_ = 0;
+        RecountLevels();
         emit StatsChanged();
     }
 

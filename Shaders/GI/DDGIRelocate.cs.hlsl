@@ -26,9 +26,12 @@ cbuffer DDGICB : register(b0) {
     float4 GICascadeGridMinSpacing[4];
     float4 GICascadeScrollOffset[4];
     float4 GICascadeScrollDelta[4];
+    float4 ProbeCompactionParams;
 };
 
 Texture2D<float4> ProbesTrace  : register(t0);
+Buffer<uint>      ActiveProbeIndices : register(t2);
+Buffer<uint>      ActiveProbeCount   : register(t3);
 RWBuffer<float4>  ProbeData     : register(u0); 
 RWBuffer<uint>    ProbeRayCount : register(u1); 
 
@@ -41,10 +44,17 @@ uint DDGI_DesiredRays(float closestFront, float spacing, int minRays, int maxRay
 
 [numthreads(RELOCATE_GROUP, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
-    int probeIdx  = (int)DTid.x;
     int numProbes = (int)AtlasParams.w;
-    int updateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
-    if (probeIdx >= updateProbes) return;
+    int candidateProbes = clamp((int)GICascadeParams.z, 1, numProbes);
+    int scheduledProbes = clamp((int)ProbeCompactionParams.z, 1, candidateProbes);
+    const bool compact = ProbeCompactionParams.x > 0.5f;
+    const int workProbes = compact ? min((int)ActiveProbeCount[0], numProbes)
+                                   : scheduledProbes;
+    int workIdx = (int)DTid.x;
+    if (workIdx >= workProbes) return;
+    int probeIdx = compact ? (int)ActiveProbeIndices[workIdx]
+                           : ((int)ProbeCompactionParams.y + workIdx) % candidateProbes;
+    if (probeIdx >= candidateProbes || probeIdx >= numProbes) return;
 
     int  maxRays  = (int)MiscParams.z;
     int  minRays  = (int)MiscParams.w;

@@ -47,13 +47,15 @@ namespace Smile {
         // Avalia o DLSS no command list: slGetNewFrameToken + slSetConstants + slSetTagForFrame +
         // slDLSSSetOptions + slEvaluateFeature(kFeatureDLSS), e RESTAURA o estado do CL no fim
         // (eDisableCLStateTracking e default). Output em PIXEL_SHADER_RESOURCE no fim.
-        void Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) override;
+        bool Dispatch(ID3D12GraphicsCommandList* Cmd, const FUpscaleParams& P) override;
 
         ID3D12Resource* OutputResource() const override;
         u32             OutputSRVSlot() const override;
 
-        // Razoes nominais padrao do DLSS (iguais as do FSR): 1.0 / 1.5 / 1.7 / 2.0 / 3.0.
+        // Consulta a resolucao otima do modo no Streamline; razoes nominais so como fallback.
         f32 RenderRatioForQuality(int Quality) const override;
+        void RenderSizeForQuality(int Quality, u32 DisplayWidth, u32 DisplayHeight,
+                                  u32& OutWidth, u32& OutHeight) const override;
 
         u32 RenderW()  const override;
         u32 RenderH()  const override;

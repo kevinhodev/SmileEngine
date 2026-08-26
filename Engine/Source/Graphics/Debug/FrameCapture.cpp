@@ -545,6 +545,16 @@ namespace Smile {
                      << Bool(_State.DDGIAdaptiveRays) << ",\n";
                 File << "  \"ddgiInterleavedUpdates\": "
                      << Bool(_State.DDGIInterleavedUpdates) << ",\n";
+                File << "  \"ddgiUpdateRayBudget\": "
+                     << _State.DDGIUpdateRayBudget << ",\n";
+                File << "  \"ddgiUpdateBudgetEffective\": "
+                     << Bool(_State.DDGIUpdateBudgetEffective) << ",\n";
+                File << "  \"ddgiEffectiveProbeBudget\": "
+                     << _State.DDGIEffectiveProbeBudget << ",\n";
+                File << "  \"ddgiScheduledProbeCount\": "
+                     << _State.DDGIScheduledProbeCount << ",\n";
+                File << "  \"ddgiScheduledProbeStart\": "
+                     << _State.DDGIScheduledProbeStart << ",\n";
                 File << "  \"ddgiProbeCompaction\": "
                      << Bool(_State.DDGIProbeCompaction) << ",\n";
                 File << "  \"ddgiProbeCompactionEffective\": "
@@ -748,8 +758,9 @@ namespace Smile {
                 File << "  \"cacheStatsSource\": "      << Bool(_State.CacheStatsSource) << ",\n";
                 File << "  \"srcTotal\": "              << _State.CacheSrcTotal      << ",\n";
                 File << "  \"srcCache\": "              << _State.CacheSrcCache      << ",\n";
-                File << "  \"srcDdgi\": "               << _State.CacheSrcDDGI       << ",\n";
-                File << "  \"srcNoDdgiZero\": "         << _State.CacheSrcZero       << ",\n";
+                File << "  \"srcDdgi\": "               << _State.CacheSrcDDGI        << ",\n";
+                File << "  \"srcEnvironment\": "        << _State.CacheSrcEnvironment << ",\n";
+                File << "  \"srcNoDdgiZero\": "         << _State.CacheSrcZero        << ",\n";
                 File << "  \"srcIneligible\": "         << _State.CacheSrcIneligible << ",\n";
                 File << "  \"cameraX\": " << _State.CameraPos[0] << ",\n";
                 File << "  \"cameraY\": " << _State.CameraPos[1] << ",\n";

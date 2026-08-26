@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
+#include "Smile/Math/Math.h"
 
 namespace Smile {
     // Parametros do gather COMPLETO do DDGI (Chebyshev + bias de superficie + skip de sonda
@@ -63,7 +64,16 @@ namespace Smile {
         // ligado o experimento.
         bool FallbackAvailable = true;
 
-        // O que o shader le em GIDistParams.w: SkipMode nos dois bits baixos + o gate no bit 2.
+        // Irradiancia hemisferica ja integrada pelo FAtmosphere e resolvida uma vez no inicio
+        // do frame. Environment e uma politica EXCLUSIVA: nao preenche automaticamente a borda
+        // do DDGI, portanto o modo historico continua desvanecendo para preto fora do volume.
+        // Sky/Ground ja chegam com chuva e intensidade global aplicadas.
+        bool EnvironmentFallback = false;
+        Vec3 EnvironmentSky{};
+        Vec3 EnvironmentGround{};
+
+        // O que o shader le em GIDistParams.w: SkipMode nos dois bits baixos, gate do DDGI no
+        // bit 2 e selecao do ambiente no bit 3.
         // Empacotar aqui, e nao em cada dono, e o que garante que os cinco shaders que incluem o
         // HitShading vejam o MESMO valor — a alternativa era um float4 novo em cinco cbuffers
         // para carregar um booleano.
@@ -71,7 +81,8 @@ namespace Smile {
         // As DUAS razoes fecham o mesmo bit porque o efeito pedido e identico: volW = 0, sem tap
         // nenhum no atlas. O shader nao precisa distinguir "cortado para medir" de "nao existe".
         f32 SkipModePacked() const {
-            return SkipMode + ((TerminatorOff || !FallbackAvailable) ? 4.0f : 0.0f);
+            return SkipMode + ((TerminatorOff || !FallbackAvailable) ? 4.0f : 0.0f)
+                            + (EnvironmentFallback ? 8.0f : 0.0f);
         }
     };
 }

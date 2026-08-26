@@ -27,7 +27,7 @@
 #define INSTGEO_FLAG_ROUGHMAP  64u // tem mapa Roughness separado (RoughMapIndex valido; R=rough)
 #define INSTGEO_FLAG_TRANSLUCENT 128u // material Blend; usado pelo BvhDebug
 
-// Layout de 84 bytes espelhado por FRTInstanceGeo.
+// Layout de 100 bytes espelhado por FRTInstanceGeo.
 struct InstanceGeo {
     float4 BaseColor;
     uint   VertexSrv;
@@ -44,6 +44,9 @@ struct InstanceGeo {
     uint   MrMapIndex;
     uint   MetalMapIndex; // mapa Metalness separado (slot +6); valido sob INSTGEO_FLAG_METALMAP
     uint   RoughMapIndex; // mapa Roughness separado (slot +7); valido sob INSTGEO_FLAG_ROUGHMAP
+    // tint.rgb + intensidade.a. O hit de RT reconstrói o mesmo
+    // TransColor = BaseColor * (rgb * a) usado pelo deferred.
+    float4 SubsurfaceColor;
 };
 
 struct DDGIVertex {
@@ -243,12 +246,21 @@ int  DDGI_GlobalProbeFromGeo(int3 cGeo, int3 scroll, int cascade, int3 count) {
 }
 
 #define DDGI_MAX_CASCADES 4
+// Cards alpha/two-sided fazem a heuristica de backface ficar instavel com 16 raios e podem
+// zerar setores inteiros do atlas, visivel como folhagem preta apos scroll. A estreia precisa
+// da distribuicao cheia; o scheduler continua limitando quantas probes estreiam por update.
+#define DDGI_NEW_PROBE_RAYS 64
 // Largura do blend fino->grosso em celulas da cascata de origem.
 #define DDGI_CASCADE_BLEND_CELLS 2.5f
 
+// A selecao segue a camera de forma CONTINUA, enquanto a grade real continua snapada para
+// preservar o historico toroidal. Uma celula de guarda mantem a caixa continua dentro da
+// cobertura da grade real em qualquer fase do snap (que usa floor e pode atrasar < 1 celula).
 // Mede a posicao crua para o bias nao deslocar a selecao entre cascatas.
-float DDGI_CascadeWeight(float3 rawPos, float3 gridMin, float spacing, int3 count) {
-    float3 gridMax = gridMin + (float3)(count - 1) * spacing;
+float DDGI_CascadeWeight(float3 rawPos, float3 blendCenter, float spacing, int3 count) {
+    float3 extent  = 0.5f * (float3)(count - 1) * spacing;
+    float3 gridMin = blendCenter - extent + spacing;
+    float3 gridMax = blendCenter + extent - spacing;
     float  margin  = 0.5f * spacing;
     float3 inside  = min(rawPos - (gridMin - margin), (gridMax + margin) - rawPos);
     float  d       = min(inside.x, min(inside.y, inside.z));
@@ -262,13 +274,18 @@ struct DDGICascadeChoice {
     float PrimaryWeight;
 };
 
+float3 DDGI_CascadeBlendCenter(float4 scrolls[DDGI_MAX_CASCADES]) {
+    return float3(scrolls[0].w, scrolls[1].w, scrolls[2].w);
+}
+
 // Escolhe a cascata mais fina; a grossa nao desvanece e serve de fallback.
-DDGICascadeChoice DDGI_SelectCascade(float3 rawPos, float4 cascades[DDGI_MAX_CASCADES],
+DDGICascadeChoice DDGI_SelectCascade(float3 rawPos, float3 blendCenter,
+                                     float4 cascades[DDGI_MAX_CASCADES],
                                      int cascadeCount, int3 count) {
     DDGICascadeChoice ch;
     const int coarse = max(cascadeCount - 1, 0);
     for (int c = 0; c < coarse; ++c) {
-        float w = DDGI_CascadeWeight(rawPos, cascades[c].xyz, cascades[c].w, count);
+        float w = DDGI_CascadeWeight(rawPos, blendCenter, cascades[c].w, count);
         if (w > 0.0f) {
             ch.Primary = c; ch.Next = c + 1; ch.PrimaryWeight = w;
             return ch;
@@ -496,7 +513,8 @@ float3 SampleDDGIIrradianceCascaded(
         float4 cascades[DDGI_MAX_CASCADES], float4 scrolls[DDGI_MAX_CASCADES],
         int cascadeCount, int3 count,
         int tile, float2 atlasInvSize, int tilesPerRow) {
-    DDGICascadeChoice ch = DDGI_SelectCascade(rawPos, cascades, cascadeCount, count);
+    DDGICascadeChoice ch = DDGI_SelectCascade(
+        rawPos, DDGI_CascadeBlendCenter(scrolls), cascades, cascadeCount, count);
     float3 primary = SampleDDGIIrradiance(atlas, samp, rawPos, N,
                                           cascades[ch.Primary].xyz, cascades[ch.Primary].w,
                                           count, tile, atlasInvSize, tilesPerRow, ch.Primary,
@@ -519,7 +537,8 @@ float3 SampleDDGIIrradianceChebCascaded(
         int irrTile, float2 irrInvSize, int distTile, float2 distInvSize,
         Buffer<float4> probeData, uint skipMode, int tilesPerRow,
         float biasScale, float biasMax) {
-    DDGICascadeChoice ch = DDGI_SelectCascade(rawPos, cascades, cascadeCount, count);
+    DDGICascadeChoice ch = DDGI_SelectCascade(
+        rawPos, DDGI_CascadeBlendCenter(scrolls), cascades, cascadeCount, count);
 
     float3 primary = SampleDDGIIrradianceCheb(
         irrAtlas, distAtlas, samp, rawPos, N,

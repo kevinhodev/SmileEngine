@@ -1,22 +1,14 @@
+/* O viewport e a superficie mais escura do conceito (#09090A), sem moldura e sem raio: a
+   toolbar em cima e as hairlines dos docks ja delimitam a area de render. */
 QFrame#ViewportPanel {
-    background: #0b0c0c;
-    border: 1px solid #262720;
-    border-radius: 6px;
+    background: #09090A;
+    border: none;
 }
 
 QWidget#MainViewport {
-    background: #050606;
-    border-radius: 6px;
+    background: #09090A;
 }
 
 QWidget#ConsolePanel {
-    background: #10110f;
-}
-
-QTextEdit#LogOutput {
-    background: #10110f;
-    color: #c8c2b4;
-    border: 1px solid #24251f;
-    border-radius: 5px;
-    padding: 6px;
+    background: #111113;
 }

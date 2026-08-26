@@ -30,6 +30,21 @@ namespace SmileEditor {
         Q_PROPERTY(int meshVerts READ MeshVerts NOTIFY SelectionChanged)
         Q_PROPERTY(QString meshVramText READ MeshVramText NOTIFY SelectionChanged)
         Q_PROPERTY(QStringList meshFlags READ MeshFlags NOTIFY SelectionChanged)
+        // Transform da mesh selecionada. O gizmo ja escreve direto em Renderables()[i].Transform;
+        // estas propriedades sao a mesma edicao pelo teclado, para o Inspector. Nove escalares
+        // em vez de tres Vec3 porque o QML edita um campo por vez e um setter de vetor faria
+        // cada digito reescrever os outros dois eixos.
+        Q_PROPERTY(double meshPosX READ MeshPosX WRITE SetMeshPosX NOTIFY TransformChanged)
+        Q_PROPERTY(double meshPosY READ MeshPosY WRITE SetMeshPosY NOTIFY TransformChanged)
+        Q_PROPERTY(double meshPosZ READ MeshPosZ WRITE SetMeshPosZ NOTIFY TransformChanged)
+        Q_PROPERTY(double meshRotX READ MeshRotX WRITE SetMeshRotX NOTIFY TransformChanged)
+        Q_PROPERTY(double meshRotY READ MeshRotY WRITE SetMeshRotY NOTIFY TransformChanged)
+        Q_PROPERTY(double meshRotZ READ MeshRotZ WRITE SetMeshRotZ NOTIFY TransformChanged)
+        Q_PROPERTY(double meshScaleX READ MeshScaleX WRITE SetMeshScaleX NOTIFY TransformChanged)
+        Q_PROPERTY(double meshScaleY READ MeshScaleY WRITE SetMeshScaleY NOTIFY TransformChanged)
+        Q_PROPERTY(double meshScaleZ READ MeshScaleZ WRITE SetMeshScaleZ NOTIFY TransformChanged)
+        // Escala uniforme: o elo do Inspector escreve os tres eixos de uma vez.
+        Q_PROPERTY(bool meshScaleLocked READ MeshScaleLocked WRITE SetMeshScaleLocked NOTIFY ScaleLockChanged)
         Q_PROPERTY(bool meshVisible READ MeshVisible NOTIFY SelectionChanged)
         // Mobilidade (ver Smile::EMobility). Gravavel: e a unica propriedade de mesh que o
         // painel edita, e ela vai para o .smap junto com transform e visibilidade.
@@ -39,7 +54,14 @@ namespace SmileEditor {
 
     public:
         // Tipos de linha (role `kind` no delegate).
-        enum ERowKind { KGroup = 0, KEnv = 1, KLight = 2, KAsset = 3, KMesh = 4 };
+        enum ERowKind {
+            KGroup = 0,
+            KEnv = 1,
+            KLight = 2,
+            KAsset = 3,
+            KMesh = 4,
+            KMore = 5
+        };
         Q_ENUM(ERowKind)
 
         // Grupos (id em `sceneIdx` quando kind == KGroup) / filtro dos chips (0 = Tudo).
@@ -104,9 +126,21 @@ namespace SmileEditor {
         bool    MeshVisible() const;
         bool    MeshDynamic() const;
         void    SetMeshDynamic(bool V);
+        double  MeshPosX() const;   void SetMeshPosX(double V);
+        double  MeshPosY() const;   void SetMeshPosY(double V);
+        double  MeshPosZ() const;   void SetMeshPosZ(double V);
+        double  MeshRotX() const;   void SetMeshRotX(double V);
+        double  MeshRotY() const;   void SetMeshRotY(double V);
+        double  MeshRotZ() const;   void SetMeshRotZ(double V);
+        double  MeshScaleX() const; void SetMeshScaleX(double V);
+        double  MeshScaleY() const; void SetMeshScaleY(double V);
+        double  MeshScaleZ() const; void SetMeshScaleZ(double V);
+        bool    MeshScaleLocked() const { return ScaleLocked; }
+        void    SetMeshScaleLocked(bool V);
         bool    Dirty() const { return VisDirty; }
 
         Q_INVOKABLE void toggleExpand(int row);
+        Q_INVOKABLE void showMore(int row);      // amplia o lote da pasta indicado por KMore
         Q_INVOKABLE void selectRow(int row);    // ambiente/luz/mesh: selecao exclusiva
         // Pasta aplica visibilidade ao range inteiro do asset.
         Q_INVOKABLE void toggleEye(int row);
@@ -132,9 +166,12 @@ namespace SmileEditor {
         void AvailableChanged();
         void StructureChanged();
         void SelectionChanged();
+        void TransformChanged();
+        void ScaleLockChanged();
         void FiltersChanged();
         void EnvChanged();
         void DirtyChanged();
+        void SceneChanged();
         void CloseRequested();
         void ScrollToRequested(int row); // selecao veio do viewport: QML rola ate a linha
 
@@ -165,6 +202,10 @@ namespace SmileEditor {
         void ApplyRows(QVector<FRow>&& NewRows);
         bool MatchesSearch(const QString& Name) const;
         void MarkDirty();
+        // Um acessor por componente (0-2 posicao, 3-5 rotacao, 6-8 escala) em vez de nove
+        // pares de metodos com o mesmo corpo.
+        void   WriteMeshTransform(int Component, double Value);
+        double ReadMeshTransform(int Component) const;
         bool LoadVisibility(); // le o JsonPath e aplica Visible/terreno nos assets presentes
         // Garante que a linha da selecao exista na lista flat (expande grupo/pasta e
         // reseta o chip de filtro se preciso). Retorna a linha, ou -1 se a busca a esconde.
@@ -173,8 +214,11 @@ namespace SmileEditor {
         RendererHandle Renderer;
         QVector<FRow>        Rows;
         QVector<FAssetRange> Assets;
+        QHash<int, int>       AssetVisibleLimits; // indice do asset -> meshes reveladas
         QString JsonPath;          // <cena>.visibility.json da cena principal (nao-aditiva)
         bool    VisDirty = false;
+        bool    ScaleLocked = true;   // elo da escala uniforme (Inspector)
+        Smile::u64 CachedTransformsVersion = 0;
         QVector<bool>        AssetExpanded;      // paralelo a Assets
         bool    GroupExpanded[3] = { true, true, true };
         QString SearchText;

@@ -168,6 +168,7 @@ struct ForwardBlendOutput {
     float4 Color       : SV_Target0;
     float  Reactive    : SV_Target1;
     float  Composition : SV_Target2;
+    float4 Velocity    : SV_Target3;
 };
 
 ForwardBlendOutput main(PSInput input) {
@@ -177,7 +178,8 @@ ForwardBlendOutput main(PSInput input) {
     float3 V   = normalize(CameraPosition.xyz - input.worldPos);
     float  NoV = saturate(dot(N, V));
 
-    float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.Sample(MaterialSampler, input.uv)
+    const float MipBias = RenderParams.x;
+    float4 AlbedoSample = HasAlbedoMap ? AlbedoMap.SampleBias(MaterialSampler, input.uv, MipBias)
                                        : float4(1.0f, 1.0f, 1.0f, 1.0f);
     float3 BaseColor = BaseColorFactor.rgb * AlbedoSample.rgb;
     float  Alpha     = saturate(BaseColorFactor.a * AlbedoSample.a);
@@ -185,12 +187,12 @@ ForwardBlendOutput main(PSInput input) {
     float Metallic  = MetallicFactor;
     float Roughness = RoughnessFactor;
     if (HasMetallicRoughnessMap) {
-        float4 MR = MetallicRoughnessMap.Sample(MaterialSampler, input.uv);
+        float4 MR = MetallicRoughnessMap.SampleBias(MaterialSampler, input.uv, MipBias);
         if (SpecularPacking) { Roughness *= MR.g; Metallic *= MR.b; }
         else                 { Metallic  *= MR.r; Roughness *= MR.g; }
     }
-    if (HasMetalnessMap) Metallic  *= MetalnessMap.Sample(MaterialSampler, input.uv).r;
-    if (HasRoughnessMap) Roughness *= RoughnessMap.Sample(MaterialSampler, input.uv).r;
+    if (HasMetalnessMap) Metallic  *= MetalnessMap.SampleBias(MaterialSampler, input.uv, MipBias).r;
+    if (HasRoughnessMap) Roughness *= RoughnessMap.SampleBias(MaterialSampler, input.uv, MipBias).r;
     Roughness = max(Roughness, 0.04f);
 
     float3 DiffuseColor  = BaseColor * (1.0f - Metallic);
@@ -270,5 +272,12 @@ ForwardBlendOutput main(PSInput input) {
     // conservador que o FSR deve rejeitar/reduzir no historico temporal.
     Out.Reactive = OutAlpha;
     Out.Composition = OutAlpha;
+    const float2 CurNDC  = input.curClip.xy  / input.curClip.w;
+    const float2 PrevNDC = input.prevClip.xy / input.prevClip.w;
+    const float2 CurUV   = float2(CurNDC.x  * 0.5f + 0.5f, 0.5f - CurNDC.y  * 0.5f);
+    const float2 PrevUV  = float2(PrevNDC.x * 0.5f + 0.5f, 0.5f - PrevNDC.y * 0.5f);
+    // O alpha no componente W alimenta o SrcAlpha do blend do RTV RG16, mesclando o movimento
+    // da superficie translucida com o movimento opaco que continua visivel por baixo.
+    Out.Velocity = float4(CurUV - PrevUV, 0.0f, OutAlpha);
     return Out;
 }

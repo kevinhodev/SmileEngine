@@ -19,6 +19,7 @@ Item {
     property real fieldRatio: 0.58
 
     signal moved(real value)
+    signal committed(real value)
 
     width: parent.width
     height: 28
@@ -30,10 +31,10 @@ Item {
         anchors.right: field.left
         anchors.rightMargin: 10
         text: root.label
-        color: Theme.textNormal
+        color: Theme.textMuted
         elide: Text.ElideRight
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: 11
     }
 
     Rectangle {
@@ -63,5 +64,6 @@ Item {
         suffix: root.suffix
         interactive: root.interactive
         onMoved: value => root.moved(value)
+        onCommitted: value => root.committed(value)
     }
 }

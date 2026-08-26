@@ -19,6 +19,14 @@ namespace Smile {
                         u32 NumSRVs, u32 NumUAVs, bool HeapDirectlyIndexed = false,
                         bool NvApiExtnSlot = false);
 
+        // Mesmo layout configuravel, com um bloco adicional de root constants. O bloco ocupa
+        // o root param 3 e o registrador informado (normalmente b1); callers existentes mantem
+        // os indices 0=CBV, 1=SRV e 2=UAV.
+        void InitializeWithConstants(ID3D12Device* Device, const std::string& CSOName,
+                                     u32 NumSRVs, u32 NumUAVs, u32 Num32BitConstants,
+                                     u32 ConstantsRegister = 1,
+                                     bool HeapDirectlyIndexed = false);
+
         // Indice do root param do slot da NVAPI no layout configuravel.
         static constexpr u32 kNvApiRootParam = 3;
 
@@ -28,6 +36,10 @@ namespace Smile {
         ID3D12PipelineState* GetPSO()           const { return PSO.Get(); }
 
     private:
+        void InitializeConfigured(ID3D12Device* Device, const std::string& CSOName,
+                                  u32 NumSRVs, u32 NumUAVs, u32 Num32BitConstants,
+                                  u32 ConstantsRegister, bool HeapDirectlyIndexed,
+                                  bool NvApiExtnSlot);
         void CreatePipeline(ID3D12Device* Device, const std::string& CSOName,
                             const D3D12_ROOT_SIGNATURE_DESC& RootSignatureDesc);
 

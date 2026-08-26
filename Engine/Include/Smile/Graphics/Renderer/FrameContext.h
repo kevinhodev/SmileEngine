@@ -60,6 +60,7 @@ namespace Smile {
         Mat44 ViewProjection{};
         Mat44 ViewProjUnjittered{};
         Vec3  CameraPosition{};
+        Vec3  CameraForward{ 0.0f, 0.0f, 1.0f };
 
         // Jitter em pixels e o sinal de Y (o FSR/DLSS invertem em relacao ao TAA proprio).
         f32   JitterPxX = 0.0f;
@@ -106,7 +107,7 @@ namespace Smile {
         // --- Reconstrucao temporal ------------------------------------------------------
         bool UpscaleActive = false; // ha upscaler ativo (FSR/DLSS/RR) — nullptr = nativo
         bool TAAActive     = false; // TAA proprio; exclusivo com o upscaler
-        bool RRMode        = false; // DLSS Ray Reconstruction: substitui NRD + SR num eval
+        bool RRMode        = false; // DLSS RR: denoise neural + SR no mesmo evaluate
 
         // --- Iluminacao indireta --------------------------------------------------------
         bool ReflectionsActive   = false;

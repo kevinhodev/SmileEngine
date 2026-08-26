@@ -4,6 +4,7 @@
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/Logger.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -37,13 +38,21 @@ namespace SmileEditor {
 
     SceneDocument::SceneDocument(QObject* _Parent) : QObject(_Parent) {}
 
+    // Nome do arquivo COZIDO, nao do .smap: o breadcrumb mostra a cena que o usuario abriu.
+    // O MapPath so troca a extensao, entao o basename e o mesmo dos dois.
+    QString SceneDocument::SceneName() const {
+        if (MapPath.isEmpty()) return {};
+        return QFileInfo(MapPath).completeBaseName() + QStringLiteral(".sscene");
+    }
+
+    QString SceneDocument::SceneFolder() const {
+        if (MapPath.isEmpty()) return {};
+        return QFileInfo(MapPath).dir().dirName();
+    }
+
     void SceneDocument::SetRenderer(RendererHandle _R) { Renderer = _R; }
 
     void SceneDocument::OnSceneLoaded(const QString& _ScenePath, bool _Additive) {
-        // Rastro do caminho da camada autorada em toda carga. Barato (uma linha por cena) e paga
-        // caro: quando o save nao acontecia, a ausencia de "Mapa salvo" nao dizia se o problema
-        // era o arquivo, o renderer ou o botao — e era o botao (a propriedade sceneDoc nao estava
-        // declarada no QML, entao a chamada virava ReferenceError e morria calada).
         Smile::LogDebug("Mapa: carga de cena '" + _ScenePath.toStdString() +
                         "' aditiva=" + (_Additive ? "sim" : "nao") +
                         " renderer=" + (Renderer ? "pronto" : "ausente"));
@@ -54,6 +63,7 @@ namespace SmileEditor {
 
         const QFileInfo Info(_ScenePath);
         MapPath = Info.path() + "/" + Info.completeBaseName() + ".smap";
+        emit ScenePathChanged();
         if (IsDirty) { IsDirty = false; emit DirtyChanged(); }
 
         // Baseline ANTES de aplicar o .smap — e a foto do que o asset trouxe.

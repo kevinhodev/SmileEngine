@@ -53,6 +53,8 @@ namespace Smile {
         CreateMeshes(_Device);
         Env.Initialize(_Device, _CmdQueue, _SRVHeap);
         IBLTableStart = _SRVHeap.Allocate(3);
+        for (FReadbackSlot& Slot : ReadbackSlots)
+            Slot.MaterialTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
 
         Initialized = true;
         LogDebug("FMaterialPreview (preview offscreen ate 1024x1024, ring async x3) inicializado");
@@ -216,6 +218,23 @@ namespace Smile {
             PSODesc.DSVFormat             = kDepthFormat;
             PSODesc.SampleDesc            = { 1, 0 };
             SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&MeshPSO)));
+
+            // O preview compoe no proprio alvo LDR. O shader entrega cor premultiplicada e
+            // preserva o alpha do material; depth read-only casa com o passe Blend da cena.
+            D3D12_BLEND_DESC Premul = Blend;
+            Premul.RenderTarget[0].BlendEnable    = TRUE;
+            Premul.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
+            Premul.RenderTarget[0].DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
+            Premul.RenderTarget[0].BlendOp        = D3D12_BLEND_OP_ADD;
+            Premul.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+            Premul.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+            Premul.RenderTarget[0].BlendOpAlpha   = D3D12_BLEND_OP_ADD;
+            D3D12_DEPTH_STENCIL_DESC BlendDepth = Depth;
+            BlendDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+            PSODesc.BlendState        = Premul;
+            PSODesc.DepthStencilState = BlendDepth;
+            SMILE_HR(_Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&MeshBlendPSO)));
         }
 
         {
@@ -367,6 +386,7 @@ namespace Smile {
         MeshCB.IBLParams       = { 1.0f, _Params.EnvRotation,
                                    f32(FHDREnvironment::kSpecularMips - 1),
                                    Env.HasHDRLoaded() ? 1.0f : 0.0f };
+        MeshCB.PreviewParams   = { _Material.Blend ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
 
         const f32 TanHalf = std::tan(kFovY * 0.5f);
         const Vec3 Fwd    = { -Eye.X / _Params.Dist, -Eye.Y / _Params.Dist, -Eye.Z / _Params.Dist };
@@ -386,6 +406,20 @@ namespace Smile {
         std::memcpy(MappedCB + CBOffset + sizeof(FMeshCB), &SkyCB, sizeof(SkyCB));
         std::memcpy(MappedCB + CBOffset + sizeof(FMeshCB) + sizeof(FSkyCB),
                     &_Material.Constants, sizeof(MaterialConstants));
+
+        // A command list pode continuar em voo enquanto o editor troca texturas no material.
+        // Cada slot recebe descritores imutaveis e segura os recursos ate sua fence terminar.
+        std::array<u32, kMaterialTextureSlots> SourceSlots{};
+        for (u32 i = 0; i < kMaterialTextureSlots; ++i)
+            SourceSlots[i] = _Material.AlbedoDescriptorIndex() + i;
+        _SRVHeap.CopyTable(_Device, Slot.MaterialTableStart, SourceSlots);
+        FTexture* Textures[kMaterialTextureSlots] = {
+            _Material.Albedo, _Material.Normal, _Material.MetallicRoughness, _Material.AO,
+            _Material.Emissive, _Material.Height, _Material.Metalness, _Material.Roughness
+        };
+        for (u32 i = 0; i < kMaterialTextureSlots; ++i)
+            Slot.TextureRefs[i] = Textures[i] && Textures[i]->IsValid()
+                ? Textures[i]->Resource() : nullptr;
 
         ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
         Cl->SetDescriptorHeaps(1, Heaps);
@@ -421,13 +455,15 @@ namespace Smile {
         // Primitiva (ou mesh da cena) com o material.
         const int Prim = (_Params.Primitive >= 0 && _Params.Primitive < 4) ? _Params.Primitive : 0;
         const FGpuMesh& DrawMesh = UseSceneMesh ? *_SceneMesh : Meshes[Prim];
+        Slot.MeshVertexRef = DrawMesh.VertexResource();
+        Slot.MeshIndexRef  = DrawMesh.IndexResource();
         Cl->SetGraphicsRootSignature(MeshRootSig.Get());
-        Cl->SetPipelineState(MeshPSO.Get());
+        Cl->SetPipelineState(_Material.Blend ? MeshBlendPSO.Get() : MeshPSO.Get());
         Cl->SetGraphicsRootConstantBufferView(0, CBBase);
         Cl->SetGraphicsRootConstantBufferView(
             1, CBBase + sizeof(FMeshCB) + sizeof(FSkyCB));
         Cl->SetGraphicsRootDescriptorTable(
-            2, _SRVHeap.GpuHandle(_Material.AlbedoDescriptorIndex()));
+            2, _SRVHeap.GpuHandle(Slot.MaterialTableStart));
         if (IBLTableWritten)
             Cl->SetGraphicsRootDescriptorTable(3, _SRVHeap.GpuHandle(IBLTableStart));
         else
@@ -511,11 +547,15 @@ namespace Smile {
         Ready->FenceValue = 0;
         Ready->Size       = 0;
         Ready->RowPitch   = 0;
+        for (auto& Ref : Ready->TextureRefs) Ref.Reset();
+        Ready->MeshVertexRef.Reset();
+        Ready->MeshIndexRef.Reset();
         return true;
     }
 
     FPassShaderStems FMaterialPreview::ShaderStems() const {
-        static const char* const kStems[] = { "MaterialPreview.vs", "MaterialPreview.ps", "PreviewSky.ps" };
+        static const char* const kStems[] = { "MaterialPreview.vs", "MaterialPreview.ps",
+                                              "PreviewSky.ps", "PostProcess.vs" };
         return { kStems, static_cast<u32>(std::size(kStems)) };
     }
 

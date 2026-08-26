@@ -5,6 +5,7 @@
 #include <QMutex>
 #include <QPointer>
 #include <QQuickImageProvider>
+#include <QSet>
 #include <QStringList>
 #include <QVariantList>
 #include <array>
@@ -46,6 +47,7 @@ namespace SmileEditor {
 
         void SetViewport(ViewportWidget* viewport);
         void SetPreviewEnabled(bool enabled);
+        void SetPreviewConsumerActive(const QString& consumer, bool enabled);
         void NotifyResourcesChanged();
 
         QStringList GetDebugTargetNames() const;
@@ -119,6 +121,7 @@ namespace SmileEditor {
         mutable QMutex DebugPreviewMutex;
         int DebugPreviewSeq = 0;
         bool PreviewEnabled = false;
+        QSet<QString> PreviewConsumers;
         bool DebugProbeSessionActive = false;
         QStringList DebugProbePreviousTargets;
         int DebugProbePreviousColumns = 0;

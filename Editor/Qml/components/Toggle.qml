@@ -12,8 +12,8 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: height / 2
-        color: toggle.checked ? Theme.greenBorder : Theme.controlBg
-        border.color: toggle.checked ? Theme.green : Theme.controlBorder
+        color: toggle.checked ? Theme.accent : Theme.controlBg
+        border.color: toggle.checked ? Theme.accent : Theme.controlBorder
         border.width: 1
         Rectangle {
             width: 10

@@ -36,6 +36,7 @@ namespace SmileEditor {
     class RenderSettingsBridge;
     class StatsBridge;
     class DebugTargetsBridge;
+    class ReSTIRDebugBridge;
 
     class MainWindow : public QMainWindow {
         Q_OBJECT
@@ -64,12 +65,13 @@ namespace SmileEditor {
         void ShowTimeOfDay();
         void ShowStats();
         void ShowDebugTargets();
+        void ShowReSTIR();
         void ShowMaterials();
 
     private:
         void CreateTopBar();
-        void WireMenuActions();
         void CreateStatusBar();
+        void WireMenuActions();
         void CreateDocks();
         QWidget* CreateViewportChrome();
         void RegisterViewport(ViewportWidget* viewport, QWidget* toolbar);
@@ -96,10 +98,12 @@ namespace SmileEditor {
         QPointer<QDialog>     TodDlg;
         QPointer<QDialog>     StatsDlg;
         QPointer<QDialog>     DebugTargetsDlg;
+        QPointer<QDialog>     ReSTIRDlg;
         LightsBridge*         LightsBr    = nullptr;
         SceneOutlinerBridge*  OutlinerBr  = nullptr;
         SceneDocument*        SceneDoc    = nullptr;
-        QDockWidget*          LightsDock  = nullptr;
+        QDockWidget*          LightsDock  = nullptr;    // outliner (dock esquerdo)
+        QDockWidget*          InspectorDock = nullptr;  // propriedades da selecao (dock direito)
         MaterialsBridge*      MaterialsBr = nullptr;
         CameraBookmarksBridge* CameraBookmarksBr = nullptr;
         CaptureBridge*        CaptureBr  = nullptr;
@@ -108,6 +112,7 @@ namespace SmileEditor {
         RenderSettingsBridge* RenderBr   = nullptr;
         StatsBridge*          StatsBr    = nullptr;
         DebugTargetsBridge*   DebugTargetsBr = nullptr;
+        ReSTIRDebugBridge*    ReSTIRBr = nullptr;
         QPointer<QDialog>     MaterialsDlg;
 
         QFileSystemWatcher*   StylesheetWatcher = nullptr;

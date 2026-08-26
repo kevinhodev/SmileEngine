@@ -310,7 +310,6 @@ namespace Smile {
                                     FrameState->TemporalSampleIndex, Lt.RainSkyDim, Vw.View,
                                     FrameState->PrevJitterUv - Vw.JitterUv, PrevSurfaceSlot, GILightCount);
         }
-
         // Cache e ReSTIR GI compartilham a mascara de sombra para produzir a mesma radiancia.
         if (Modes.RadianceCacheUpdateActive) {
             RadianceCache.SetUpdatePunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap,
@@ -363,8 +362,8 @@ namespace Smile {
             PostInputSRV = TemporalAA.DisplayOutputSRVSlot();
             FrameState->TAARanLastFrame = true;
         } else if (Modes.UpscaleActive && !RRPoisoned) {
-            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele denoisa a cor RUIDOSA
-            // (GI+reflexao pre-denoise) e faz o upscale num eval so, guiado pelos buffers de material.
+            // Modes.RRMode: o passe ativo e o proprio RR (ActiveUp == &DlssRR); ele recebe a cor
+            // ruidosa, denoise e upscale no mesmo evaluate.
             // MESMO predicado do bloco de sinal (Modes.RRMode, ja em escopo): recalcular so pelo Denoiser
             // divergia dele — os guides podiam nao estar prontos e este bloco tentava o eval do RR
             // enquanto o GI/reflexao ja tinham sido configurados como crus.
@@ -434,14 +433,16 @@ namespace Smile {
                 UpParams.WorldToView     = Vw.View;
             }
 
+            bool UpscaleSucceeded = false;
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList,
                                 IsRR ? "DLSS-RR" : (Upscaler == EUpscaler::DLSS ? "DLSS-SR" : "FSR"));
-                ActiveUp->Dispatch(CommandList, UpParams);
+                UpscaleSucceeded = ActiveUp->Dispatch(CommandList, UpParams);
             }
-            // Marque RR somente depois de um dispatch efetivo.
-            CaptureState->RRRanThisFrame = IsRR;
-            RRResetPending = false;   // reset consumido
+            // O reset e o output so sao consumidos depois de um evaluate completo. Em falha, o
+            // post recebe o HDR render-res deste frame e a proxima tentativa continua resetada.
+            CaptureState->RRRanThisFrame = IsRR && UpscaleSucceeded;
+            if (UpscaleSucceeded) RRResetPending = false;
 
             // Streamline com state tracking manual pode trocar heaps. Passes seguintes definem
             // root signature e PSO proprios, mas dependem deste rebind dos descriptor heaps.
@@ -459,10 +460,13 @@ namespace Smile {
             if (IsRR) GBuffer.AppendTransitions(Batch, D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
-            PostInput    = ActiveUp->OutputResource();
-            PostInputSRV = ActiveUp->OutputSRVSlot();
+            if (UpscaleSucceeded) {
+                PostInput    = ActiveUp->OutputResource();
+                PostInputSRV = ActiveUp->OutputSRVSlot();
+            }
             FrameState->TAARanLastFrame = false;
-            RRSkipLogged    = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
+            if (UpscaleSucceeded)
+                RRSkipLogged = false; // voltou a avaliar: rearma o aviso p/ a proxima vez
         } else {
             // Eval pulado por debug na cena: arma o reset p/ o proximo eval real nao reprojetar de
             // um historico interrompido (o RR ficou N frames sem ver a cena).
@@ -526,8 +530,10 @@ namespace Smile {
         if (Sel.Renderable >= 0 && Sel.Slot != FSelectionDraw::kNoSlot && Sel.Mesh
             && SelectionOutline.IsInitialized()) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "Contorno da seleção");
-            FSelectionOutline::FDrawItem Item{ Sel.Mesh, Sel.Model * Vw.ViewProjUnjittered };
-            SelectionOutline.RecordMask(CommandList, &Item, 1, FrameSlot);
+            FSelectionOutline::FDrawItem Item{
+                Sel.Mesh, Sel.Mat, Sel.Model * Vw.ViewProjUnjittered
+            };
+            SelectionOutline.RecordMask(CommandList, Backend->SRVHeap, &Item, 1, FrameSlot);
             auto BackRTV = Backend->SwapChain.CurrentRTV();
             SelectionOutline.RecordOutline(CommandList, Backend->SRVHeap, BackRTV,
                                            Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight(), FrameSlot);
@@ -630,11 +636,15 @@ namespace Smile {
             FBarrierBatch Batch;
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
             Batch.Flush(CommandList);
 
             Backend->DirectProfiler.Begin(CommandList, "Chuva — cortina/gotas");
-            auto RainRTV = Targets.HDRRTVHeap.CpuHandle(0);
-            CommandList->OMSetRenderTargets(1, &RainRTV, FALSE, nullptr);
+            const D3D12_CPU_DESCRIPTOR_HANDLE RainRTVs[] = {
+                Targets.HDRRTVHeap.CpuHandle(0), Targets.VelocityRTVHeap.CpuHandle(0)
+            };
+            CommandList->OMSetRenderTargets(2, RainRTVs, FALSE, nullptr);
             if (Weather.GetCurtainAmount() > 0.001f)
                 RainWetness.ExecuteCurtain(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot,
                                            RenderWidth(), RenderHeight());
@@ -644,6 +654,8 @@ namespace Smile {
 
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
         }
 
@@ -869,11 +881,11 @@ namespace Smile {
                 std::vector<FObjectPicker::FDrawItem> PickItems;
                 PickItems.reserve(VisibleScratch.size());
                 for (const FVisibleItem& V : VisibleScratch)
-                    PickItems.push_back({ V.R->Mesh,
+                    PickItems.push_back({ V.R->Mesh, V.Mat,
                                           ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
                                           V.SceneIndex + 1 });
-                ObjectPicker.RecordIDPass(CommandList, DSV, PickItems.data(), PickItems.size(),
-                                          RenderWidth(), RenderHeight());
+                ObjectPicker.RecordIDPass(CommandList, Backend->SRVHeap,
+                                          PickItems.data(), PickItems.size());
 
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
@@ -1050,7 +1062,6 @@ namespace Smile {
             auto HDR_RTV_Rebind = Targets.HDRRTVHeap.CpuHandle(0);
             CommandList->OMSetRenderTargets(1, &HDR_RTV_Rebind, FALSE, &DSV);
         }
-
         if (UseWater && Water.IsInitialized()) {
             FGpuScope Scope(Backend->DirectProfiler, CommandList, "Água — superfície");
 
@@ -1155,9 +1166,13 @@ namespace Smile {
                 if (V.Mat->Blend) { AnyBlend = true; break; }
             if (AnyBlend) {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Translúcidos");
-                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[3] = {
+                FBarrierBatch BlendBatch;
+                BlendBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+                BlendBatch.Flush(CommandList);
+                D3D12_CPU_DESCRIPTOR_HANDLE BlendRTVs[4] = {
                     Targets.HDRRTVHeap.CpuHandle(0), Targets.UpscaleMaskRTVHeap.CpuHandle(0),
-                    Targets.UpscaleMaskRTVHeap.CpuHandle(1) };
+                    Targets.UpscaleMaskRTVHeap.CpuHandle(1), Targets.VelocityRTVHeap.CpuHandle(0) };
                 CommandList->OMSetRenderTargets(_countof(BlendRTVs), BlendRTVs, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
@@ -1190,6 +1205,9 @@ namespace Smile {
                     Submit.BindMaterial(CommandList, Backend->SRVHeap, It->Mat);
                     Submit.DrawMesh(CommandList, It->R->Mesh);
                 }
+                BlendBatch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                BlendBatch.Flush(CommandList);
             }
         }
 
@@ -1601,8 +1619,11 @@ namespace Smile {
             const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
                                        Lt.KeyColor.Z * Lt.KeyInt };
             RainWetness.UpdatePerFrame(FrameSlot, Vw.InvViewProjFull, Vw.ViewProjection,
-                                       Vw.CameraPosition, FrameState->ElapsedTime, Weather, Lt.KeyDir,
-                                       KeyColorInt, Amb.Sky);
+                                       Vw.ViewProjUnjittered, FrameState->PrevViewProj,
+                                       Vw.CameraPosition, FrameState->PrevCameraPosition,
+                                       FrameState->ElapsedTime,
+                                       FrameState->ElapsedTime - FrameState->LastDeltaTime,
+                                       Weather, Lt.KeyDir, KeyColorInt, Amb.Sky);
             RainWetness.Execute(CommandList, Backend->SRVHeap, GBuffer, Targets.DepthBuffer.Get(), Targets.DepthSRVSlot,
                                 RenderWidth(), RenderHeight());
         }
@@ -1881,6 +1902,7 @@ namespace Smile {
 
         u32             SelectedSlot  = kInvalidSlot;
         const FGpuMesh* SelectedMesh  = nullptr;
+        FMaterial*      SelectedMat   = nullptr;
         Mat44           SelectedModel = Mat44::Identity();
         // Hasteado do loop: a selecao virou uma consulta (mesh OU luz), e o loop abaixo roda
         // por renderavel da cena.
@@ -1909,7 +1931,8 @@ namespace Smile {
                 std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                             &OC, sizeof(ObjectConstants));
                 if (static_cast<int>(si) == SelectedRenderable) {
-                    SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedModel = Model;
+                    SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedMat = Mat;
+                    SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
                 SceneState->PreviousModels[si] = Model;
@@ -1917,7 +1940,9 @@ namespace Smile {
         }
         // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a
         // consome ~1400 linhas abaixo, e recompor la exigiria varrer tudo de novo.
-        _Ctx.Selection = { SelectedSlot, SelectedMesh, SelectedModel, SelectedRenderable };
+        _Ctx.Selection = {
+            SelectedSlot, SelectedMesh, SelectedMat, SelectedModel, SelectedRenderable
+        };
 
         // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
         // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.

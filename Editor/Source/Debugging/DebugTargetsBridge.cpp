@@ -53,11 +53,21 @@ namespace SmileEditor {
     }
 
     void DebugTargetsBridge::SetPreviewEnabled(bool _Enabled) {
-        PreviewEnabled = _Enabled;
+        SetPreviewConsumerActive(QStringLiteral("debug-targets-window"), _Enabled);
+    }
+
+    void DebugTargetsBridge::SetPreviewConsumerActive(const QString& _Consumer, bool _Enabled) {
+        if (_Consumer.isEmpty()) return;
+        const bool WasEnabled = !PreviewConsumers.isEmpty();
+        if (_Enabled) PreviewConsumers.insert(_Consumer);
+        else          PreviewConsumers.remove(_Consumer);
+        const bool IsEnabled = !PreviewConsumers.isEmpty();
+        PreviewEnabled = IsEnabled;
+        if (WasEnabled == IsEnabled) return;
         if (!Renderer) return;
-        if (!_Enabled && DebugProbeSessionActive) ClearDebugProbeInspection();
-        Renderer->SetDebugPreviewEnabled(_Enabled);
-        if (_Enabled) InvalidatePreview();
+        if (!IsEnabled && DebugProbeSessionActive) ClearDebugProbeInspection();
+        Renderer->SetDebugPreviewEnabled(IsEnabled);
+        if (IsEnabled) InvalidatePreview();
     }
 
     void DebugTargetsBridge::NotifyResourcesChanged() {

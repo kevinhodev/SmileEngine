@@ -8,18 +8,14 @@
 
 namespace Smile {
     class FGpuMesh;
+    class FMaterial;
+    class FTextureSRVHeap;
 
     // Picking GPU por ID-buffer (estilo hit-proxy da Unreal), sob demanda e sem stall.
     //
-    // Fluxo: o editor pede um pick num pixel (RequestPick). No frame seguinte, APOS o passe
-    // principal (depth da cena ja escrito), o Renderer chama RecordIDPass: re-renderiza a
-    // geometria visivel num RT R32_UINT reusando o MVP do ObjectCB (b2) e testando depth-EQUAL
-    // contra o depth da cena — so o fragmento da superficie visivel passa, recortando ate a
-    // folhagem alpha-masked de graca (os furos das folhas nunca escreveram depth). O ID gravado
-    // e (indiceDoRenderavel + 1); 0 = vazio. Em seguida copia o texel sob o cursor p/ um buffer
-    // READBACK. Como a copia faz parte do frame F, ela so termina quando a GPU passa a fence de
-    // F; com kFramesInFlight=2 isso esta garantido 2 frames depois — TryResolve devolve o ID
-    // entao (indice = valor - 1; -1 = nada).
+    // O passe re-renderiza a geometria visivel em um ID buffer com depth proprio. Materiais
+    // masked repetem o alpha clip e blends ignoram fragmentos praticamente transparentes.
+    // O texel solicitado volta por readback sem bloquear a fila grafica.
     class FObjectPicker : public FRenderPass {
     public:
         // --- Contrato de passe (RenderPass.h) ---
@@ -29,6 +25,7 @@ namespace Smile {
 
         struct FDrawItem {
             const FGpuMesh*           Mesh;
+            const FMaterial*          Material;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCBAddress; // slot b2 desse renderavel (mesmo MVP do forward)
             u32                       ObjectId;        // indice do renderavel + 1 (0 reservado p/ vazio)
         };
@@ -40,16 +37,28 @@ namespace Smile {
         // Editor pede um pick no pixel (x,y) do backbuffer. Ignora se ja ha um pendente.
         void RequestPick(u32 X, u32 Y);
         bool HasPendingRequest() const { return State == EState::Requested; }
-        // Descarta a requisicao pendente sem gravar nada (ex.: MSAA ligado). Evita ficar preso.
-        void CancelPending() { if (State == EState::Requested) State = EState::Idle; }
+        // Requested pode ser removido imediatamente. Copied continua ocupando o readback ate a
+        // fence do frame, mas o resultado e descartado assim que ficar seguro.
+        void CancelPending() {
+            if (State == EState::Requested) {
+                State = EState::Idle;
+                DiscardResult = false;
+            } else if (State == EState::Copied) {
+                if (ReadyCountdown <= 0) {
+                    State = EState::Idle;
+                    ReadyCountdown = -1;
+                    DiscardResult = false;
+                } else {
+                    DiscardResult = true;
+                }
+            }
+        }
 
-        // Grava o passe de ID + a copia do texel. Chamar apos o passe principal, so quando
-        // HasPendingRequest(). SceneDSV = DSV (writable) do depth da cena; o PSO testa EQUAL com
-        // DepthWriteMask=ZERO, entao o depth pode ficar em DEPTH_WRITE (sem barrier).
+        // Grava um depth/ID proprio e copia o texel. Materiais masked repetem o alpha clip;
+        // translucidos escrevem apenas neste depth privado para o frontal continuar selecionavel.
         void RecordIDPass(ID3D12GraphicsCommandList* CmdList,
-                          D3D12_CPU_DESCRIPTOR_HANDLE SceneDSV,
-                          const FDrawItem* Items, size_t Count,
-                          u32 Width, u32 Height);
+                          FTextureSRVHeap& SRVHeap,
+                          const FDrawItem* Items, size_t Count);
 
         // Avanca o relogio interno (1x por frame, no topo do RenderFrame apos o BeginFrame).
         void Tick();
@@ -65,11 +74,14 @@ namespace Smile {
 
         enum class EState { Idle, Requested, Copied };
 
-        ComPtr<ID3D12Resource>      IDTarget;   // R32_UINT full-res
+        ComPtr<ID3D12Resource>      IDTarget;   // R32_UINT 1x1; viewport deslocado ate o cursor
         FDescriptorHeap             IDRTVHeap;  // 1 RTV
+        ComPtr<ID3D12Resource>      PickDepth;
+        FDescriptorHeap             PickDSVHeap;
         ComPtr<ID3D12Resource>      Readback;   // buffer READBACK (1 texel, row-pitch alinhado)
         ComPtr<ID3D12RootSignature> RootSig;
         ComPtr<ID3D12PipelineState> PSO;
+        ComPtr<ID3D12PipelineState> AlphaPSO;
 
         EState State          = EState::Idle;
         u32    PickX          = 0;
@@ -77,6 +89,7 @@ namespace Smile {
         int    ReadyCountdown = -1; // frames ate o readback ficar seguro (>=0 = aguardando)
         u32    TargetWidth    = 0;
         u32    TargetHeight   = 0;
+        bool   DiscardResult  = false;
         bool   Initialized    = false;
     };
 }

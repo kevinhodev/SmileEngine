@@ -64,7 +64,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const int3 count = (int3)GridCount.xyz;
 
     const DDGICascadeChoice choice =
-        DDGI_SelectCascade(worldPos, GICascadeGridMinSpacing, (int)GICascadeParams.x, count);
+        DDGI_SelectCascade(worldPos, DDGI_CascadeBlendCenter(GICascadeScrollOffset),
+                           GICascadeGridMinSpacing,
+                           (int)GICascadeParams.x, count);
     const bool hasBlend = (choice.Next != choice.Primary) && (choice.PrimaryWeight < 0.999f);
 
     uint  probeIndices[DDGI_POINT_PROBES];

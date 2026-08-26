@@ -23,6 +23,29 @@ namespace Smile {
     namespace {
         constexpr DXGI_FORMAT kAtlasFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
+        enum class EDDGISelectionMode : u32 {
+            NewlyExposed = 0,
+            RegionalInvalidation = 1,
+            FollowUp = 2,
+            CascadeQuota = 3,
+            RoundRobin = 4,
+            Legacy = 5,
+        };
+
+        struct FDDGISelectionPassConstants {
+            u32 Mode = 0;
+            u32 RayBudget = 0;
+            u32 RegularRayCost = 64;
+            u32 NewRayCost = 16;
+            u32 GlobalStart = 0;
+            u32 AllowInactive = 0;
+            u32 RegularWindow = 0;
+            u32 Padding = 0;
+            u32 CascadeCursor[4]{};
+            u32 CascadeQuota[4]{};
+        };
+        static_assert(sizeof(FDDGISelectionPassConstants) == 16 * sizeof(u32));
+
         ComPtr<ID3D12Resource> CreateTex2D(ID3D12Device* _Device, u32 _W, u32 _H,
                                            DXGI_FORMAT _Fmt, const char* _Label = nullptr) {
             return GpuResources::CreateTex2D(_Device, _W, _H, _Fmt,
@@ -102,6 +125,12 @@ namespace Smile {
         ActiveProbeDispatchArgsState = D3D12_RESOURCE_STATE_COMMON;
         LastUpdateUsedProbeCompaction_ = false;
         LastActiveProbeCount_ = 0;
+        LastSelectedRayCount_ = 0;
+        LastNewProbeCount_ = 0;
+        LastRegionalProbeCount_ = 0;
+        LastFollowUpProbeCount_ = 0;
+        LastQuotaProbeCount_ = 0;
+        LastRoundRobinProbeCount_ = 0;
         LastCompactedProbeCapacity_ = 0;
         for (u32 I = 0; I < kTraceTables; ++I) {
             CompactionReadbackIssued_[I] = false;
@@ -214,13 +243,20 @@ namespace Smile {
 
         ProbesPerCascade_ = static_cast<u32>(CountX) * CountY * CountZ;
         NumProbes         = ProbesPerCascade_ * CascadeCount_;
+        CandidateProbeCount_     = NumProbes;
         ScheduledProbeCount_     = NumProbes;
+        ScheduledProbeStart_     = 0;
         ScheduledCascadeCount_   = CascadeCount_;
+        ScheduledCascadeMask_    = (1u << CascadeCount_) - 1u;
         LastUpdatedCascadeCount_ = 0;
         UpdateSerial_            = 0;
         LastForcedUpdateSerial_  = 0;
         CoarseDue_               = true;
         ScheduledFullForced_     = false;
+        EffectiveProbeBudget_    = 0;
+        ProbeWorkCursor_         = 0;
+        for (u32 C = 0; C < kMaxCascades; ++C) CascadeWorkCursor_[C] = 0;
+        UpdateBudgetEffective_   = false;
         for (u32 C = 0; C < kMaxCascades; ++C) CascadeUpdateAge_[C] = 0;
 
         // O shader deriva TilesPerRow da largura; ambos os atlas usam a mesma grade.
@@ -250,13 +286,14 @@ namespace Smile {
             _Device, static_cast<UINT64>(NumProbes) * sizeof(u32), D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ActiveProbeCountBuf = CreateDefaultBuffer(
-            _Device, sizeof(u32), D3D12_RESOURCE_STATE_COMMON,
+            _Device, sizeof(FSelectionCounters), D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ActiveProbeDispatchArgsBuf = CreateDefaultBuffer(
             _Device, sizeof(D3D12_DISPATCH_ARGUMENTS), D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ActiveProbeCountReadback = GpuResources::CreateReadbackBuffer(
-            _Device, static_cast<u64>(FCommandQueue::kFramesInFlight) * sizeof(u32));
+            _Device, static_cast<u64>(FCommandQueue::kFramesInFlight) *
+                     sizeof(FSelectionCounters));
         void* ActiveReadback = nullptr;
         SMILE_HR(ActiveProbeCountReadback->Map(0, nullptr, &ActiveReadback));
         MappedActiveProbeCount = reinterpret_cast<u8*>(ActiveReadback);
@@ -312,7 +349,7 @@ namespace Smile {
         BufSrv.Buffer.StructureByteStride = 0;
         _SRVHeap.CreateSRV(_Device, ProbeRayCountBuf.Get(), BufSrv, ProbeRayCountSRVSlot);
         _SRVHeap.CreateSRV(_Device, ActiveProbeIndicesBuf.Get(), BufSrv, ActiveProbeIndicesSRVSlot);
-        BufSrv.Buffer.NumElements = 1;
+        BufSrv.Buffer.NumElements = sizeof(FSelectionCounters) / sizeof(u32);
         _SRVHeap.CreateSRV(_Device, ActiveProbeCountBuf.Get(), BufSrv, ActiveProbeCountSRVSlot);
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC BufUav{};
@@ -325,7 +362,7 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, ProbeRayCountBuf.Get(), BufUav, ProbeRayCountUAVSlot);
         BufUav.Buffer.NumElements = NumProbes;
         _SRVHeap.CreateUAV(_Device, ActiveProbeIndicesBuf.Get(), BufUav, ActiveProbeIndicesUAVSlot);
-        BufUav.Buffer.NumElements = 1;
+        BufUav.Buffer.NumElements = sizeof(FSelectionCounters) / sizeof(u32);
         _SRVHeap.CreateUAV(_Device, ActiveProbeCountBuf.Get(), BufUav, ActiveProbeCountUAVSlot);
         BufUav.Buffer.NumElements = 3;
         _SRVHeap.CreateUAV(_Device, ActiveProbeDispatchArgsBuf.Get(), BufUav,
@@ -470,16 +507,37 @@ namespace Smile {
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
-    void FDDGI::PrepareCascadePlacement(const Vec3& _CameraPos) {
-        if (!Ready || CascadeCount_ <= 1) return;
+    void FDDGI::PrepareCascadePlacement(const Vec3& _CameraPos, const Vec3& _CameraForward) {
+        if (!Ready) return;
 
-        // As cascatas finas seguem a camera; a grossa permanece alinhada à cena.
+        // Todas as cascatas seguem a camera, como clipmaps 3D. O deslocamento frontal mantem
+        // mais da regiao visivel dentro dos niveis finos; ele e limitado por eixo para a camera
+        // permanecer na metade interna do volume mesmo quando olha quase na vertical.
         const u32 Coarse = CoarseCascade();
-        for (u32 C = 0; C < Coarse; ++C) {
+        const Vec3 Forward = _CameraForward.NormalizedSafe(Vec3{ 0.0f, 0.0f, 1.0f });
+        f32 FineSpacing = Cascades[Coarse].Spacing;
+        for (u32 Step = Coarse; Step > 0; --Step) FineSpacing /= kCascadeSpacingRatio;
+        const Vec3 FineHalfExtent{
+            0.5f * static_cast<f32>(CountX - 1) * FineSpacing,
+            0.5f * static_cast<f32>(CountY - 1) * FineSpacing,
+            0.5f * static_cast<f32>(CountZ - 1) * FineSpacing
+        };
+        f32 ForwardOffset = kCascadeForwardOffsetFraction *
+                            std::min(FineHalfExtent.X, FineHalfExtent.Z);
+        const f32 FineExtents[3] = { FineHalfExtent.X, FineHalfExtent.Y, FineHalfExtent.Z };
+        const f32 Dirs[3]        = { Forward.X, Forward.Y, Forward.Z };
+        for (int A = 0; A < 3; ++A) {
+            const f32 AbsDir = std::abs(Dirs[A]);
+            if (AbsDir > 1e-4f)
+                ForwardOffset = std::min(ForwardOffset,
+                    kCascadeForwardOffsetFraction * FineExtents[A] / AbsDir);
+        }
+        const Vec3 Center = _CameraPos + Forward * ForwardOffset;
+        CascadeBlendCenter_ = Center;
+
+        for (u32 C = 0; C <= Coarse; ++C) {
             f32 Spacing = Cascades[Coarse].Spacing;
             for (u32 Step = Coarse; Step > C; --Step) Spacing /= kCascadeSpacingRatio;
-
-            const Vec3 Center = _CameraPos;
             // Snap em celulas inteiras mantem o historico toroidal estavel.
             auto SnapCells = [&](f32 CenterAxis, int Count) {
                 const f32 Extent = 0.5f * static_cast<f32>(Count - 1) * Spacing;
@@ -505,29 +563,60 @@ namespace Smile {
 
     void FDDGI::ScheduleUpdate() {
         ScheduledFullForced_ = false;
+        CandidateProbeCount_ = NumProbes;
+        ScheduledProbeStart_ = 0;
+        ScheduledCascadeMask_ = (1u << CascadeCount_) - 1u;
         ScheduledCascadeCount_ = CascadeCount_;
 
-        // O layout atual atualiza um prefixo; apenas duas cascatas aceitam intercalacao.
-        if (InterleavedUpdates && CascadeCount_ == 2) {
-            // Substituir toda a cascata fina força um update sincronizado da grossa.
-            const int Counts[3] = { CountX, CountY, CountZ };
-            bool FullFineReplacement = false;
-            for (u32 C = 0; C < CoarseCascade() && !FullFineReplacement; ++C) {
-                for (int A = 0; A < 3; ++A) {
-                    const int Delta = Cascades[C].OriginCells[A] - Cascades[C].PrevOriginCells[A];
-                    if (std::abs(Delta) >= std::max(Counts[A], 1)) {
-                        FullFineReplacement = true;
-                        break;
-                    }
-                }
+        const int Counts[3] = { CountX, CountY, CountZ };
+        bool FullFineReplacement = false;
+        for (u32 C = 0; C < CascadeCount_; ++C) {
+            for (int A = 0; A < 3; ++A) {
+                const int Delta = Cascades[C].OriginCells[A] - Cascades[C].PrevOriginCells[A];
+                if (C < CoarseCascade() && std::abs(Delta) >= std::max(Counts[A], 1))
+                    FullFineReplacement = true;
             }
-            const bool Urgent = HysteresisResetPending || InvalidateFramesLeft_ > 0 ||
-                                InvalidateDistFramesLeft_ > 0 || RelocateFramesLeft > 0 ||
-                                ReclassifyPending_ || FullFineReplacement;
-            ScheduledFullForced_ = Urgent;
-            ScheduledCascadeCount_ = (Urgent || CoarseDue_) ? 2u : 1u;
         }
-        ScheduledProbeCount_ = ProbesPerCascade_ * ScheduledCascadeCount_;
+        // Invalidação regional e reclassificação continuam dentro do budget. Apenas um reset
+        // global de histórico ou a substituição integral de uma grade (teleporte/cut) força o
+        // caminho completo.
+        const bool CommonUrgent = HysteresisResetPending || FullFineReplacement;
+
+        const u32 RaysPerBudgetProbe = static_cast<u32>(
+            AdaptiveRays ? std::max(MaxRays, 1) : kRaysPerProbe);
+        EffectiveProbeBudget_ = UpdateRayBudget_ > 0
+                              ? std::max(UpdateRayBudget_ / RaysPerBudgetProbe, 1u)
+                              : 0u;
+
+        if (UpdateRayBudget_ > 0) {
+            // Mudancas globais de validade furam o teto. Scroll fica no caminho orcado: o
+            // compactador anexa as laminas novas e follow-ups fora da janela circular.
+            const bool Urgent = CommonUrgent;
+            ScheduledFullForced_ = Urgent;
+            ScheduledProbeCount_ = Urgent
+                                 ? NumProbes
+                                 : std::min(EffectiveProbeBudget_, NumProbes);
+            ScheduledProbeStart_ = Urgent || NumProbes == 0
+                                  ? 0u : ProbeWorkCursor_ % NumProbes;
+            UpdateBudgetEffective_ = !Urgent && ScheduledProbeCount_ < NumProbes;
+
+            // A seleção prioritária examina todos os níveis e a quota garante progresso por
+            // cascata, ainda que o número final de probes seja limitado em raios.
+            ScheduledCascadeMask_ = (1u << CascadeCount_) - 1u;
+            ScheduledCascadeCount_ = CascadeCount_;
+            return;
+        }
+
+        UpdateBudgetEffective_ = false;
+        EffectiveProbeBudget_ = 0;
+        // Scheduler legado: o layout atualiza um prefixo e intercala apenas duas cascatas.
+        if (InterleavedUpdates && CascadeCount_ == 2) {
+            ScheduledFullForced_ = CommonUrgent;
+            ScheduledCascadeCount_ = (CommonUrgent || CoarseDue_) ? 2u : 1u;
+        }
+        CandidateProbeCount_ = ProbesPerCascade_ * ScheduledCascadeCount_;
+        ScheduledProbeCount_ = CandidateProbeCount_;
+        ScheduledCascadeMask_ = (1u << ScheduledCascadeCount_) - 1u;
     }
 
     void FDDGI::UpdatePerFrame(u32 _FrameSlot, const Vec3& _DirToSun, f32 _SunIntensity,
@@ -537,11 +626,19 @@ namespace Smile {
 
         // Reutilizar o slot garante que a leitura assincrona da contagem terminou.
         if (CompactionReadbackIssued_[FrameSlot] && MappedActiveProbeCount) {
-            u32 Count = 0;
-            std::memcpy(&Count, MappedActiveProbeCount +
-                        static_cast<size_t>(FrameSlot) * sizeof(u32), sizeof(u32));
+            FSelectionCounters Counters{};
+            std::memcpy(&Counters, MappedActiveProbeCount +
+                        static_cast<size_t>(FrameSlot) * sizeof(FSelectionCounters),
+                        sizeof(FSelectionCounters));
             LastCompactedProbeCapacity_ = CompactionReadbackCapacity_[FrameSlot];
-            LastActiveProbeCount_ = std::min(Count, LastCompactedProbeCapacity_);
+            LastActiveProbeCount_ = std::min(Counters.ActiveProbeCount,
+                                             LastCompactedProbeCapacity_);
+            LastSelectedRayCount_ = Counters.SelectedRayCount;
+            LastNewProbeCount_ = Counters.NewProbeCount;
+            LastRegionalProbeCount_ = Counters.RegionalProbeCount;
+            LastFollowUpProbeCount_ = Counters.FollowUpProbeCount;
+            LastQuotaProbeCount_ = Counters.QuotaProbeCount;
+            LastRoundRobinProbeCount_ = Counters.RoundRobinProbeCount;
             CompactionReadbackIssued_[FrameSlot] = false;
         }
 
@@ -552,8 +649,8 @@ namespace Smile {
             LastProbeWakeSerial_ = UpdateSerial_;
         }
         ScheduleUpdate();
-        ProbeCompactionThisUpdate_ = ProbeCompaction && DispatchCommandSignature &&
-                                     RelocateFramesLeft == 0 && !HysteresisResetPending;
+        ProbeCompactionThisUpdate_ = (ProbeCompaction || UpdateBudgetEffective_) &&
+                                     DispatchCommandSignature && !HysteresisResetPending;
         CPU.SunDirIntensity = { _DirToSun.X, _DirToSun.Y, _DirToSun.Z, _SunIntensity };
         CPU.SunColorHyst    = { _SunColor.X, _SunColor.Y, _SunColor.Z,
                                 HysteresisResetPending ? 0.0f : Hysteresis };
@@ -566,13 +663,14 @@ namespace Smile {
         CPU.InvalidateMaxHyst = { InvalidateMax_.X + Pad, InvalidateMax_.Y + Pad,
                                   InvalidateMax_.Z + Pad, kInvalidateHysteresis };
         CPU.Cascades = CascadeConstants();
-        // O prefixo agendado independe da capacidade total em AtlasParams.w.
-        CPU.Cascades.Params.Z = static_cast<f32>(ScheduledProbeCount_);
-        // Preserva a meia-vida temporal quando a grossa pula um update intercalado.
-        CPU.Cascades.Params.W = static_cast<f32>(
-            (InterleavedUpdates && CascadeCount_ == 2 && ScheduledCascadeCount_ == 2)
-                ? std::min(CascadeUpdateAge_[CoarseCascade()] + 1u, 2u)
-                : 1u);
+        // O universo candidato pode ser maior que a janela circular executada neste update.
+        CPU.Cascades.Params.Z = static_cast<f32>(CandidateProbeCount_);
+        // Preserva a meia-vida temporal tanto no round-robin quanto na grossa intercalada.
+        const u32 TemporalInterval = UpdateBudgetEffective_
+            ? (CandidateProbeCount_ + ScheduledProbeCount_ - 1u) / ScheduledProbeCount_
+            : ((InterleavedUpdates && CascadeCount_ == 2 && ScheduledCascadeCount_ == 2)
+                ? std::min(CascadeUpdateAge_[CoarseCascade()] + 1u, 2u) : 1u);
+        CPU.Cascades.Params.W = static_cast<f32>(TemporalInterval);
         const int Counts[3] = { CountX, CountY, CountZ };
         for (u32 i = 0; i < kMaxCascades; ++i) {
             const FCascade& Cs = Cascades[i < CascadeCount_ ? i : CoarseCascade()];
@@ -612,6 +710,10 @@ namespace Smile {
         CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
+        CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
+                                      GIHit.EnvironmentSky.Z, 0.0f };
+        CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
+                                      GIHit.EnvironmentGround.Z, 0.0f };
 
         const f32 EffMax = AdaptiveRays ? (f32)MaxRays : (f32)kRaysPerProbe;
         const f32 EffMin = AdaptiveRays ? (f32)std::min(MinRays, MaxRays) : (f32)kRaysPerProbe;
@@ -623,7 +725,9 @@ namespace Smile {
                                                                 : kRTMaskShadowFast),
                                 AdaptiveHysteresis ? 1.0f : 0.0f };
         CPU.ProbeCompactionParams = { ProbeCompactionThisUpdate_ ? 1.0f : 0.0f,
-                                      0.0f, 0.0f, 0.0f };
+                                      static_cast<f32>(ScheduledProbeStart_),
+                                      static_cast<f32>(ScheduledProbeCount_),
+                                      UpdateBudgetEffective_ ? 1.0f : 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(DDGIConstants),
                     &CPU, sizeof(DDGIConstants));
     }
@@ -682,6 +786,16 @@ namespace Smile {
                                    ActiveProbeIndicesBuf && ActiveProbeCountBuf &&
                                    ActiveProbeDispatchArgsBuf;
         LastUpdateUsedProbeCompaction_ = UseCompaction;
+        if (!UseCompaction) {
+            LastActiveProbeCount_ = std::min(ScheduledProbeCount_, CandidateProbeCount_);
+            LastSelectedRayCount_ = LastActiveProbeCount_ * kRaysPerProbe;
+            LastNewProbeCount_ = 0;
+            LastRegionalProbeCount_ = 0;
+            LastFollowUpProbeCount_ = 0;
+            LastQuotaProbeCount_ = 0;
+            LastRoundRobinProbeCount_ = LastActiveProbeCount_;
+            LastCompactedProbeCapacity_ = CandidateProbeCount_;
+        }
 
         auto UAVBarrier = [&](ID3D12Resource* Resource = nullptr) {
             D3D12_RESOURCE_BARRIER B{};
@@ -716,8 +830,57 @@ namespace Smile {
             _CL->SetComputeRootConstantBufferView(0, CBAddr());
             _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbeDataSRVSlot));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ActiveProbeBuildUAVStart));
-            _CL->Dispatch((UpdateProbes + 63) / 64, 1, 1);
-            UAVBarrier(); // publica lista e contagem antes do finalize e dos consumidores
+            const u32 CompactCandidates = UpdateBudgetEffective_
+                                        ? CandidateProbeCount_ : UpdateProbes;
+            FDDGISelectionPassConstants Selection{};
+            Selection.RayBudget = UpdateBudgetEffective_ ? UpdateRayBudget_ : 0u;
+            Selection.RegularRayCost = AdaptiveRays
+                                     ? static_cast<u32>(std::max(MaxRays, 1))
+                                     : kRaysPerProbe;
+            Selection.NewRayCost = kNewProbeRays;
+            Selection.GlobalStart = ScheduledProbeStart_;
+            Selection.AllowInactive = RelocateFramesLeft > 0 ? 1u : 0u;
+            Selection.RegularWindow = ScheduledProbeCount_;
+            for (u32 C = 0; C < kMaxCascades; ++C)
+                Selection.CascadeCursor[C] = CascadeWorkCursor_[C];
+
+            if (UpdateBudgetEffective_ && CascadeCount_ > 0) {
+                const u32 QuotaTotal = EffectiveProbeBudget_ / kCascadeQuotaDivisor;
+                const u32 QuotaBase = QuotaTotal / CascadeCount_;
+                const u32 QuotaRemainder = QuotaTotal % CascadeCount_;
+                for (u32 C = 0; C < CascadeCount_; ++C)
+                    Selection.CascadeQuota[C] = std::min(
+                        QuotaBase + (C < QuotaRemainder ? 1u : 0u), ProbesPerCascade_);
+            }
+
+            auto DispatchSelectionPhase = [&](EDDGISelectionMode Mode) {
+                Selection.Mode = static_cast<u32>(Mode);
+                _CL->SetComputeRoot32BitConstants(3, 16, &Selection, 0);
+                u32 PhaseCandidates = CompactCandidates;
+                if (Mode == EDDGISelectionMode::CascadeQuota) {
+                    PhaseCandidates = 0;
+                    for (u32 C = 0; C < CascadeCount_; ++C)
+                        PhaseCandidates += Selection.CascadeQuota[C];
+                } else if (Mode == EDDGISelectionMode::RoundRobin) {
+                    PhaseCandidates = Selection.RegularWindow;
+                }
+                if (PhaseCandidates > 0)
+                    _CL->Dispatch((PhaseCandidates + 63) / 64, 1, 1);
+                // As fases posteriores enxergam o budget consumido pelas anteriores.
+                UAVBarrier(ActiveProbeCountBuf.Get());
+            };
+            if (UpdateBudgetEffective_) {
+                if (ScrollDebut)
+                    DispatchSelectionPhase(EDDGISelectionMode::NewlyExposed);
+                if (CPU.InvalidateMin.W > 0.5f || CPU.MiscParams3.Y > 0.5f)
+                    DispatchSelectionPhase(EDDGISelectionMode::RegionalInvalidation);
+                if (ScrolledNow || RelocateFramesLeft > 0)
+                    DispatchSelectionPhase(EDDGISelectionMode::FollowUp);
+                DispatchSelectionPhase(EDDGISelectionMode::CascadeQuota);
+                DispatchSelectionPhase(EDDGISelectionMode::RoundRobin);
+            } else {
+                DispatchSelectionPhase(EDDGISelectionMode::Legacy);
+            }
 
             Transition(_CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -764,9 +927,11 @@ namespace Smile {
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             RelocatePSO.Bind(_CL);
             _CL->SetComputeRootConstantBufferView(0, CBAddr());
-            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(ProbesTraceSRVSlot));
+            _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(UpdateTableStart));
             _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ProbeDataUAVSlot)); 
-            _CL->Dispatch((UpdateProbes + 63) / 64, 1, 1);
+            const u32 RelocateCandidates = UseCompaction
+                                         ? CandidateProbeCount_ : UpdateProbes;
+            _CL->Dispatch((RelocateCandidates + 63) / 64, 1, 1);
             Transition(_CL, ProbeRayCountBuf.Get(), ProbeRayCountState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
 
@@ -776,12 +941,13 @@ namespace Smile {
                        D3D12_RESOURCE_STATE_COPY_SOURCE);
             _CL->CopyBufferRegion(
                 ActiveProbeCountReadback.Get(),
-                static_cast<UINT64>(FrameSlot) * sizeof(u32),
-                ActiveProbeCountBuf.Get(), 0, sizeof(u32));
+                static_cast<UINT64>(FrameSlot) * sizeof(FSelectionCounters),
+                ActiveProbeCountBuf.Get(), 0, sizeof(FSelectionCounters));
             Transition(_CL, ActiveProbeCountBuf.Get(), ActiveProbeCountState,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             CompactionReadbackIssued_[FrameSlot] = true;
-            CompactionReadbackCapacity_[FrameSlot] = UpdateProbes;
+            CompactionReadbackCapacity_[FrameSlot] = UpdateBudgetEffective_
+                                                   ? CandidateProbeCount_ : UpdateProbes;
         }
 
         // Agenda apos o cbuffer deste frame para o proximo trace usar todos os raios.
@@ -792,20 +958,38 @@ namespace Smile {
 
         LastUpdatedCascadeCount_ = ScheduledCascadeCount_;
         for (u32 C = 0; C < CascadeCount_; ++C) {
-            if (C < ScheduledCascadeCount_) CascadeUpdateAge_[C] = 0;
+            if ((ScheduledCascadeMask_ & (1u << C)) != 0) CascadeUpdateAge_[C] = 0;
             else if (CascadeUpdateAge_[C] < 0xFFFFFFFFu) ++CascadeUpdateAge_[C];
         }
         ++UpdateSerial_;
         if (ScheduledFullForced_) LastForcedUpdateSerial_ = UpdateSerial_;
-        CoarseDue_ = ScheduledCascadeCount_ < CascadeCount_;
+        if (UpdateRayBudget_ > 0) {
+            if (UpdateBudgetEffective_ && CandidateProbeCount_ > 0) {
+                ProbeWorkCursor_ = (ScheduledProbeStart_ + ScheduledProbeCount_) %
+                                   CandidateProbeCount_;
+                if (CascadeCount_ > 0 && ProbesPerCascade_ > 0) {
+                    const u32 QuotaTotal = EffectiveProbeBudget_ / kCascadeQuotaDivisor;
+                    const u32 QuotaBase = QuotaTotal / CascadeCount_;
+                    const u32 QuotaRemainder = QuotaTotal % CascadeCount_;
+                    for (u32 C = 0; C < CascadeCount_; ++C) {
+                        const u32 Quota = QuotaBase + (C < QuotaRemainder ? 1u : 0u);
+                        CascadeWorkCursor_[C] = (CascadeWorkCursor_[C] + Quota) %
+                                                ProbesPerCascade_;
+                    }
+                }
+            }
+        } else {
+            CoarseDue_ = ScheduledCascadeCount_ < CascadeCount_;
+        }
     }
 
     void FDDGI::CreatePipelines(ID3D12Device* _Device) {
         TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 11, 1, true);
         UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 4, 1);
         UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 4, 1);
-        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 1, 2);
-        CompactBuildPSO.Initialize(_Device, "DDGICompactBuild.cs_6_0.cso", 1, 2);
+        RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 4, 2);
+        CompactBuildPSO.InitializeWithConstants(
+            _Device, "DDGICompactBuild.cs_6_0.cso", 1, 2, 16, 1);
         CompactFinalizePSO.Initialize(_Device, "DDGICompactFinalize.cs_6_0.cso", 1, 1);
 
         D3D12_INDIRECT_ARGUMENT_DESC Arg{};
