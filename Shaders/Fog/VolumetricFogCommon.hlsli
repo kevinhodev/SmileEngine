@@ -31,7 +31,7 @@ cbuffer VolFogCB : register(b0) {
     row_major float4x4 PrevViewProj; // frame anterior, SEM jitter
     float4 PrevCamPos;     // xyz = camera do frame anterior
     float4 PrevCamForward; // xyz = frente do frame anterior (slice da história em view-Z)
-    float4 TemporalParams; // x = peso da história (0 = inválida/off), y = amostras em
+    float4 TemporalParams; // x = peso da historia (0 = invalida/off), y = amostras em
                            // history-miss, zw unused
     float4 FrameJitterOffsets[8]; // xyz = offset do voxel por amostra (Halton 2/3/5)
     // F3 — luzes puntuais (mesma lista FGPULight do deferred, root SRV):

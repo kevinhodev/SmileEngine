@@ -149,6 +149,18 @@ namespace SmileEditor {
         std::optional<bool> AdaptiveHysteresis;
     };
 
+    struct FVolFogOverrides {
+        std::optional<bool> Temporal;
+    };
+
+    struct FVolFogStatusSnapshot {
+        bool   Enabled         = false;
+        bool   Temporal        = false;
+        double MaxDistance     = 0.0;
+        double PhaseG          = 0.0;
+        double LightsIntensity = 0.0;
+    };
+
     struct FDDGICascadeSnapshot {
         int    Index = 0;
         double GridMinX = 0.0;
@@ -237,11 +249,15 @@ namespace SmileEditor {
         std::optional<FGIStatusSnapshot> GIStatus(QString& Error) const;
         std::optional<FGIStatusSnapshot> ApplyGIOverrides(
             const FGIOverrides& Overrides, QString& Error);
+        std::optional<FVolFogStatusSnapshot> VolFogStatus(QString& Error) const;
+        std::optional<FVolFogStatusSnapshot> ApplyVolFogOverrides(
+            const FVolFogOverrides& Overrides, QString& Error);
 
     signals:
         // Emitidos sempre depois de soltar o lock. Os bridges QML os repassam como NOTIFY das
         // propriedades que o controlador alterou por uma porta externa.
         void GISettingsChanged();
+        void VolFogSettingsChanged();
         void RenderSettingsChanged();
         void StatsChanged();
         void TimeOfDayChanged();
@@ -252,6 +268,7 @@ namespace SmileEditor {
         static FSceneObjectSnapshot CollectSceneObject(
             const Smile::FRenderable& Renderable, int Index);
         static FGIStatusSnapshot CollectGIStatus(const Smile::Renderer& Renderer);
+        static FVolFogStatusSnapshot CollectVolFogStatus(const Smile::Renderer& Renderer);
 
         RendererHandle  Renderer;
         ViewportWidget* Viewport = nullptr;

@@ -11,6 +11,7 @@ import {
   type GIConfigureOverrides,
   type ProfileOverrides,
   type ProfileSnapshot,
+  type VolFogConfigureOverrides,
 } from "./editor-bridge.js";
 import { SmileProject, discoverSmileRoot } from "./smile-project.js";
 
@@ -615,6 +616,67 @@ server.registerTool(
       ) as GIConfigureOverrides;
       return jsonResult(
         await editorBridge.configureGI(overrides, Math.round(timeoutSeconds * 1000)),
+      );
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_volfog_status",
+  {
+    title: "Read Smile volumetric fog state",
+    description:
+      "Le o estado efetivo do froxel fog e da acumulacao temporal do ambiente/indireto.",
+    inputSchema: {
+      timeoutSeconds: z.number().min(0.1).max(10).default(2),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      return jsonResult(
+        await editorBridge.volFogStatus(Math.round(input.timeoutSeconds * 1000)),
+      );
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "smile_volfog_configure",
+  {
+    title: "Configure Smile volumetric fog",
+    description:
+      "Muda somente os eixos informados e devolve readback. A luz direta permanece sempre no frame atual; apenas ambiente/indireto usa historico.",
+    inputSchema: {
+      temporal: z.boolean().nullish(),
+      timeoutSeconds: z.number().min(0.1).max(30).default(5),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const { timeoutSeconds, ...rest } = input;
+      const overrides = Object.fromEntries(
+        Object.entries(rest).filter(([, value]) => value !== null && value !== undefined),
+      ) as VolFogConfigureOverrides;
+      return jsonResult(
+        await editorBridge.configureVolFog(
+          overrides, Math.round(timeoutSeconds * 1000),
+        ),
       );
     } catch (error) {
       return errorResult(error);

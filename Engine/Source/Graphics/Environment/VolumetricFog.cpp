@@ -19,8 +19,42 @@ namespace Smile {
                                     kGridW, kGridH, kGridZ, 1, true);
         LightScatteringPP[1].Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                                     kGridW, kGridH, kGridZ, 1, true);
+        DirectScattering.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                kGridW, kGridH, kGridZ, 1, true);
         Integrated.Create(_Device, _SRVHeap, DXGI_FORMAT_R16G16B16A16_FLOAT,
                           kGridW, kGridH, kGridZ, 1, true);
+
+        // Scatter escreve dois UAVs e a integracao le dois SRVs na mesma tabela. Os
+        // descritores nativos de FVolumeTexture nao sao contiguos, entao criamos duas
+        // tabelas por alvo ping-pong: [historico/legado, direto do frame].
+        D3D12_UNORDERED_ACCESS_VIEW_DESC VolumeUAVDesc{};
+        VolumeUAVDesc.Format                = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        VolumeUAVDesc.ViewDimension         = D3D12_UAV_DIMENSION_TEXTURE3D;
+        VolumeUAVDesc.Texture3D.MipSlice    = 0;
+        VolumeUAVDesc.Texture3D.FirstWSlice = 0;
+        VolumeUAVDesc.Texture3D.WSize       = kGridZ;
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC VolumeSRVDesc{};
+        VolumeSRVDesc.Format                        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        VolumeSRVDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE3D;
+        VolumeSRVDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        VolumeSRVDesc.Texture3D.MipLevels           = 1;
+        VolumeSRVDesc.Texture3D.MostDetailedMip     = 0;
+        VolumeSRVDesc.Texture3D.ResourceMinLODClamp = 0.0f;
+
+        for (u32 i = 0; i < 2; ++i) {
+            ScatterUAVTable[i] = _SRVHeap.Allocate(2);
+            _SRVHeap.CreateUAV(_Device, LightScatteringPP[i].Resource(), VolumeUAVDesc,
+                               ScatterUAVTable[i]);
+            _SRVHeap.CreateUAV(_Device, DirectScattering.Resource(), VolumeUAVDesc,
+                               ScatterUAVTable[i] + 1);
+
+            IntegrateSRVTable[i] = _SRVHeap.Allocate(2);
+            _SRVHeap.CreateSRV(_Device, LightScatteringPP[i].Resource(), VolumeSRVDesc,
+                               IntegrateSRVTable[i]);
+            _SRVHeap.CreateSRV(_Device, DirectScattering.Resource(), VolumeSRVDesc,
+                               IntegrateSRVTable[i] + 1);
+        }
 
         // Conservative depth 160x90 R16F ping-pong (cur = min-Z deste frame; prev
         // alimenta o fixup da historia contra desoclusao com fog fantasma).
@@ -59,7 +93,7 @@ namespace Smile {
     // nada entre as duas posicoes toca esses tres.
     void FVolumetricFogPass::CreatePipelines(ID3D12Device* _Device) {
         SetupPSO.Initialize(_Device, "VolumetricFogSetup.cs_6_0.cso", 1, 1);
-        IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 1, 1);
+        IntegratePSO.Initialize(_Device, "VolumetricFogIntegrate.cs_6_0.cso", 2, 1);
         ConsDepthPSO.Initialize(_Device, "VolumetricFogConsDepth.cs_6_0.cso", 1, 1);
         auto CSO = LoadShaderBytecode("VolumetricFogScattering.cs_6_0.cso");
         D3D12_COMPUTE_PIPELINE_STATE_DESC Desc{};
@@ -72,7 +106,8 @@ namespace Smile {
         // Registers casam com VolumetricFogScattering: b0 = VolFogCB, b3/t11/s2 = CSM
         // (CSMCommon.hlsli), t0 = VBufferA, t1 = atlas de irradiancia do DDGI,
         // t2 = historia do scattering (ping-pong), t3 = lista FGPULight (root SRV),
-        // t18+t19 = atlas spot + cube array (slots contiguos, uma tabela), u0 = saida.
+        // t18+t19 = atlas spot + cube array (slots contiguos, uma tabela),
+        // u0 = parcela historica/legada e u1 = luz direta do frame atual.
         D3D12_DESCRIPTOR_RANGE VBufferRange{};
         VBufferRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         VBufferRange.NumDescriptors                    = 1;
@@ -103,7 +138,7 @@ namespace Smile {
 
         D3D12_DESCRIPTOR_RANGE UAVRange{};
         UAVRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-        UAVRange.NumDescriptors                    = 1;
+        UAVRange.NumDescriptors                    = 2;
         UAVRange.BaseShaderRegister                = 0;
         UAVRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -362,12 +397,13 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(VBufferA.UAVSlot(0)));
         _CommandList->Dispatch(GX, GY, GZ);
 
-        // 2) Light scattering (sol CSM + ambiente DDGI + blend temporal) -> alvo do
-        // ping-pong; a historia (frame anterior) entra em t2 como SRV.
+        // 2) Light scattering. O alvo ping-pong guarda apenas o ambiente/indireto
+        // temporal; DirectScattering recebe sol + point/spot do frame atual.
         FVolumeTexture& Target  = LightScatteringPP[CurrentScatter];
         FVolumeTexture& History = LightScatteringPP[1u - CurrentScatter];
         VBufferA.Transition(_CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Target.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        DirectScattering.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         History.Transition(_CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         _CommandList->SetComputeRootSignature(ScatterRootSig.Get());
         _CommandList->SetPipelineState(ScatterPSO.Get());
@@ -379,7 +415,7 @@ namespace Smile {
         _CommandList->SetComputeRootDescriptorTable(5, _SRVHeap.GpuHandle(History.SRVSlot()));
         _CommandList->SetComputeRootShaderResourceView(6, _LightsVA);
         _CommandList->SetComputeRootDescriptorTable(7, _SRVHeap.GpuHandle(_LocalShadowSRVSlot));
-        _CommandList->SetComputeRootDescriptorTable(8, _SRVHeap.GpuHandle(Target.UAVSlot(0)));
+        _CommandList->SetComputeRootDescriptorTable(8, _SRVHeap.GpuHandle(ScatterUAVTable[CurrentScatter]));
         _CommandList->SetComputeRootDescriptorTable(9, _SRVHeap.GpuHandle(_CloudShadowSRVSlot));
         _CommandList->SetComputeRootDescriptorTable(10, _SRVHeap.GpuHandle(ConsDepthSRV[ConsCur]));
         _CommandList->SetComputeRootDescriptorTable(11, _SRVHeap.GpuHandle(ConsDepthSRV[ConsPrev]));
@@ -387,10 +423,11 @@ namespace Smile {
 
         // 3) Integracao acumulada -> Integrated (o fog fullscreen le em PIXEL)
         Target.Transition(_CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        DirectScattering.Transition(_CommandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Integrated.Transition(_CommandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         IntegratePSO.Bind(_CommandList);
         _CommandList->SetComputeRootConstantBufferView(0, CBAddr());
-        _CommandList->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(Target.SRVSlot()));
+        _CommandList->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(IntegrateSRVTable[CurrentScatter]));
         _CommandList->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(Integrated.UAVSlot(0)));
         _CommandList->Dispatch((kGridW + 7) / 8, (kGridH + 7) / 8, 1);
 

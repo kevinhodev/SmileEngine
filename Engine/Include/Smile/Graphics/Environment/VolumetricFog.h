@@ -19,7 +19,9 @@ namespace Smile {
     // o volume integrado em t3 e EXCLUI o height fog analitico no alcance coberto; alem
     // dele o analitico continua. F2: jitter Halton + reprojecao temporal no scattering
     // (historia ping-pong, blend 0.9, supersampling em history-miss — receita da UE).
-    // F3 adiciona luzes puntuais.
+    // F3 adiciona luzes puntuais. A politica temporal separa a parcela
+    // ambiente/indireta (historica) da luz direta (sol + point/spot, frame atual),
+    // evitando arrastar feixes e halos quando luz ou camera se movem.
     class FVolumetricFogPass : public FRenderPass {
     public:
         // --- Contrato de passe (RenderPass.h) ---
@@ -157,12 +159,18 @@ namespace Smile {
         void CreateConstantBuffer(ID3D12Device* Device);
 
         FVolumeTexture VBufferA;             // (albedo*ext, ext) por froxel
-        FVolumeTexture LightScatteringPP[2]; // (luz espalhada, ext) — ping-pong temporal
+        FVolumeTexture LightScatteringPP[2]; // ambiente/indireto historico
+        FVolumeTexture DirectScattering;      // sol + point/spot deste frame, sem historia
         FVolumeTexture Integrated;           // (inscatter acumulado, transmitancia)
         u32  CurrentScatter = 0;             // indice escrito NESTE frame
 
+        // Tabelas duplicadas e contiguas exigidas por u0/u1 no scatter e t0/t1 na
+        // integracao. Cada indice aponta para o alvo ping-pong correspondente + Direct.
+        u32 ScatterUAVTable[2]   = { 0, 0 };
+        u32 IntegrateSRVTable[2] = { 0, 0 };
+
         FComputePipeline SetupPSO;     // b0 + t0 (unused) + u0
-        FComputePipeline IntegratePSO; // b0 + t0 (scattering) + u0
+        FComputePipeline IntegratePSO; // b0 + t0 (historico) + t1 (direto) + u0
         FComputePipeline ConsDepthPSO; // b0 + t0 (depth da cena) + u0
 
         // Conservative depth 160x90 R16F, ping-pong (prev alimenta o fixup da historia).

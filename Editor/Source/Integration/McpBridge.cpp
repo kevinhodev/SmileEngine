@@ -238,6 +238,16 @@ namespace SmileEditor {
             };
         }
 
+        QJsonObject SerializeVolFogStatus(const FVolFogStatusSnapshot& _Status) {
+            return QJsonObject{
+                { QStringLiteral("enabled"), _Status.Enabled },
+                { QStringLiteral("temporal"), _Status.Temporal },
+                { QStringLiteral("maxDistance"), _Status.MaxDistance },
+                { QStringLiteral("phaseG"), _Status.PhaseG },
+                { QStringLiteral("lightsIntensity"), _Status.LightsIntensity },
+            };
+        }
+
         QJsonObject SerializeSceneObject(const FSceneObjectSnapshot& _Object) {
             return QJsonObject{
                 { QStringLiteral("index"), _Object.Index },
@@ -545,6 +555,21 @@ namespace SmileEditor {
                 return;
             }
             HandleGIConfigure(_Socket, Id, Arguments.toObject());
+            return;
+        }
+        if (Command == QStringLiteral("volfog_status")) {
+            HandleVolFogStatus(_Socket, Id);
+            return;
+        }
+        if (Command == QStringLiteral("volfog_configure")) {
+            const QJsonValue Arguments = Request.value(QStringLiteral("arguments"));
+            if (!Arguments.isObject()) {
+                Reply(_Socket, Id, false,
+                      QJsonObject{ { QStringLiteral("error"),
+                                    QStringLiteral("arguments precisa ser objeto") } });
+                return;
+            }
+            HandleVolFogConfigure(_Socket, Id, Arguments.toObject());
             return;
         }
         if (Command == QStringLiteral("shutdown")) {
@@ -870,6 +895,51 @@ namespace SmileEditor {
         }
         Reply(_Socket, _Id, true,
               QJsonObject{ { QStringLiteral("result"), SerializeGIStatus(*Applied) } });
+    }
+
+    void McpBridge::HandleVolFogStatus(QLocalSocket* _Socket, const QString& _Id) {
+        if (!RenderSettings) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("controlador de render indisponivel") } });
+            return;
+        }
+        QString Error;
+        const auto Status = RenderSettings->VolFogStatus(Error);
+        if (!Status) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"), Error } });
+            return;
+        }
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"), SerializeVolFogStatus(*Status) } });
+    }
+
+    void McpBridge::HandleVolFogConfigure(QLocalSocket* _Socket, const QString& _Id,
+                                          const QJsonObject& _Arguments) {
+        if (!RenderSettings) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("controlador de render indisponivel") } });
+            return;
+        }
+        FVolFogOverrides Overrides;
+        const bool Valid = ReadOptionalBool(_Arguments, "temporal", Overrides.Temporal);
+        if (!Valid) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"),
+                                QStringLiteral("configuracao de volumetric fog invalida") } });
+            return;
+        }
+        QString Error;
+        const auto Applied = RenderSettings->ApplyVolFogOverrides(Overrides, Error);
+        if (!Applied) {
+            Reply(_Socket, _Id, false,
+                  QJsonObject{ { QStringLiteral("error"), Error } });
+            return;
+        }
+        Reply(_Socket, _Id, true,
+              QJsonObject{ { QStringLiteral("result"), SerializeVolFogStatus(*Applied) } });
     }
 
     void McpBridge::HandleCapture(QLocalSocket* _Socket, const QString& _Id,

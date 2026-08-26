@@ -86,6 +86,18 @@ namespace SmileEditor {
         };
     }
 
+    FVolFogStatusSnapshot RenderSettingsController::CollectVolFogStatus(
+        const Smile::Renderer& _Renderer) {
+        const auto& Settings = _Renderer.Settings();
+        return FVolFogStatusSnapshot{
+            Settings.GetUseVolumetricFog(),
+            Settings.GetVolFogTemporal(),
+            Settings.GetVolFogMaxDistance(),
+            Settings.GetVolFogPhaseG(),
+            Settings.GetVolFogLightsIntensity(),
+        };
+    }
+
     FSceneObjectSnapshot RenderSettingsController::CollectSceneObject(
         const Smile::FRenderable& _Renderable, int _Index) {
         return FSceneObjectSnapshot{
@@ -488,6 +500,47 @@ namespace SmileEditor {
         emit GISettingsChanged();
         emit RenderSettingsChanged();
         emit StatsChanged();
+        return Result;
+    }
+
+    std::optional<FVolFogStatusSnapshot> RenderSettingsController::VolFogStatus(
+        QString& _Error) const {
+        _Error.clear();
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+        auto Access = Renderer.Lock();
+        if (!Access || !Access->IsInitialized()) {
+            _Error = QStringLiteral("renderer ainda nao esta inicializado");
+            return std::nullopt;
+        }
+        return CollectVolFogStatus(*Access);
+    }
+
+    std::optional<FVolFogStatusSnapshot> RenderSettingsController::ApplyVolFogOverrides(
+        const FVolFogOverrides& _Overrides, QString& _Error) {
+        _Error.clear();
+        if (!Renderer) {
+            _Error = QStringLiteral("renderer ainda nao esta pronto");
+            return std::nullopt;
+        }
+
+        FVolFogStatusSnapshot Result;
+        {
+            auto Access = Renderer.Lock();
+            if (!Access || !Access->IsInitialized()) {
+                _Error = QStringLiteral("renderer ainda nao esta inicializado");
+                return std::nullopt;
+            }
+            auto& Settings = Access->Settings();
+            if (_Overrides.Temporal)
+                Settings.SetVolFogTemporal(*_Overrides.Temporal);
+            Result = CollectVolFogStatus(*Access);
+        }
+
+        emit VolFogSettingsChanged();
+        emit RenderSettingsChanged();
         return Result;
     }
 }

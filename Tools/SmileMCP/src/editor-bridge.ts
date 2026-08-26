@@ -182,6 +182,18 @@ export interface GIStatus {
   settings: Record<string, unknown>;
 }
 
+export interface VolFogConfigureOverrides {
+  temporal?: boolean;
+}
+
+export interface VolFogStatus {
+  enabled: boolean;
+  temporal: boolean;
+  maxDistance: number;
+  phaseG: number;
+  lightsIntensity: number;
+}
+
 // Overrides da regua da Fase 0. Knob de amostragem ausente PRESERVA o valor corrente; a hora
 // ausente usa 10:00 para manter o baseline historico. Todos ficam opcionais na borda para `null`
 // poder significar "nao informado" em payloads montados dinamicamente.
@@ -436,6 +448,19 @@ export class SmileEditorBridge {
     return this.validateGIStatus(result);
   }
 
+  async volFogStatus(timeoutMs = 2_000): Promise<VolFogStatus> {
+    const result = await this.request("volfog_status", {}, timeoutMs);
+    return this.validateVolFogStatus(result);
+  }
+
+  async configureVolFog(
+    overrides: VolFogConfigureOverrides,
+    timeoutMs = 5_000,
+  ): Promise<VolFogStatus> {
+    const result = await this.request("volfog_configure", { ...overrides }, timeoutMs);
+    return this.validateVolFogStatus(result);
+  }
+
   async shutdown(timeoutSeconds: number): Promise<Record<string, unknown>> {
     const accepted = await this.request("shutdown", {}, 5_000);
     const deadline = Date.now() + timeoutSeconds * 1000;
@@ -575,6 +600,23 @@ export class SmileEditorBridge {
       throw new Error("Estado de GI sem politica, DDGI ou readback obrigatorio.");
     }
     return status as GIStatus;
+  }
+
+  private validateVolFogStatus(result: unknown): VolFogStatus {
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("Estado do volumetric fog invalido retornado pelo editor.");
+    }
+    const status = result as Partial<VolFogStatus>;
+    if (
+      typeof status.enabled !== "boolean" ||
+      typeof status.temporal !== "boolean" ||
+      typeof status.maxDistance !== "number" ||
+      typeof status.phaseG !== "number" ||
+      typeof status.lightsIntensity !== "number"
+    ) {
+      throw new Error("Estado do volumetric fog sem readback obrigatorio.");
+    }
+    return status as VolFogStatus;
   }
 
   private samePath(left: string, right: string): boolean {

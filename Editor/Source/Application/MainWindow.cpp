@@ -141,6 +141,8 @@ namespace SmileEditor {
         // Mudanças externas invalidam os mesmos bindings usados pela UI.
         connect(RenderSettingsCtrl, &RenderSettingsController::GISettingsChanged,
                 RenderBr, &RenderSettingsBridge::GISettingsChanged);
+        connect(RenderSettingsCtrl, &RenderSettingsController::VolFogSettingsChanged,
+                RenderBr, &RenderSettingsBridge::VolFogSettingsChanged);
         connect(RenderSettingsCtrl, &RenderSettingsController::RenderSettingsChanged,
                 RenderBr, &RenderSettingsBridge::RenderSettingsChanged);
         connect(RenderSettingsCtrl, &RenderSettingsController::StatsChanged,

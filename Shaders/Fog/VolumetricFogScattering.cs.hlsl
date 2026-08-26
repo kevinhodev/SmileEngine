@@ -6,8 +6,9 @@
 // Sol (tap unico no CSM, receita dos sun shafts — penumbra nao e legivel em volume)
 // com fase HG + ambiente via DDGI (fallback: SkyAmbient da atmosfera).
 // F2: jitter Halton por frame + reprojecao temporal (historia ping-pong, blend 0.9)
-// + supersampling quando a historia falha (fora do frustum/primeiro frame) — receita
-// exata do LightScatteringCS da UE.
+// + supersampling quando a historia falha (fora do frustum/primeiro frame).
+// A luz direta (sol + point/spot) nunca entra no historico; apenas a parcela
+// ambiente/indireta de baixa frequencia reprojeta.
 // F3: luzes puntuais — MESMA lista FGPULight do deferred (root SRV t3) com atenuacao
 // identica (janela UE + bulbo Cry + cone quadratico), sombra por tap unico no atlas
 // spot / cube array (caminho linear de refZ do deferred, sem normal-offset) e bias de
@@ -36,7 +37,8 @@ Texture2D<float>  ConsDepth           : register(t5);  // min device-z por tile 
 Texture2D<float>  PrevConsDepth       : register(t6);  // idem, frame anterior (fixup da historia)
 SamplerState      LinearClamp         : register(s0);
 
-RWTexture3D<float4> LightScattering : register(u0);
+RWTexture3D<float4> LightScattering  : register(u0);
+RWTexture3D<float4> DirectScattering : register(u1);
 
 // Visibilidade do sol p/ ponto no ar: sampler volumetrico comum com crossfade entre
 // cascatas (sem normal-offset; acne de superficie nao existe no meio participante).
@@ -56,7 +58,7 @@ float VolFog_LocalBias(float viewZ) { return LightParamsVF.z + viewZ * 0.008f; }
 
 // Luz espalhada em direcao a camera num ponto do ar (posicao ja jitterada).
 // cellRadius = raio do froxel em mundo (bias do falloff perto do centro da luz).
-float3 VolFog_Lighting(float3 wp, float cellRadius) {
+float3 VolFog_DirectLighting(float3 wp, float cellRadius) {
     float3 dir = normalize(wp - CameraWorldPos.xyz); // camera -> ponto
 
     // Sol: radiancia da key light x visibilidade CSM x fase HG (lobo contra a luz).
@@ -167,6 +169,12 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
         lighting += Lp.ColorSourceRadius.rgb * (atten * phL * LightParamsVF.w);
     }
 
+    return lighting;
+}
+
+float3 VolFog_AmbientLighting(float3 wp) {
+    float3 dir = normalize(wp - CameraWorldPos.xyz); // camera -> ponto
+
     // Ambiente: DDGI amostrado "olhando" pra camera (direcao dominante do inscatter
     // forward) / pi — mesma escala do difuso em superficie. Fora do DDGI, SkyAmbient.
     //
@@ -198,7 +206,7 @@ float3 VolFog_Lighting(float3 wp, float cellRadius) {
     } else {
         amb = AmbientFallback.rgb;
     }
-    return lighting + amb * AlbedoAmb.w;
+    return amb * AlbedoAmb.w;
 }
 
 [numthreads(4, 4, 4)]
@@ -220,6 +228,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         float4 clipN  = mul(float4(wpNear, 1.0f), CurViewProj);
         if (clipN.w > 1e-4f && ConsDepth[id.xy] > clipN.z / clipN.w) {
             LightScattering[id] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            DirectScattering[id] = float4(0.0f, 0.0f, 0.0f, 0.0f);
             return;
         }
     }
@@ -256,21 +265,26 @@ void main(uint3 id : SV_DispatchThreadID) {
     float cellRadius = length(VolFog_WorldPos(id + uint3(1, 1, 1),
                                               float3(0.5f, 0.5f, 0.5f), unusedZ) - wpCenter);
 
-    float3 lighting = float3(0.0f, 0.0f, 0.0f);
+    float3 historyLighting = float3(0.0f, 0.0f, 0.0f);
     [loop] for (int s = 0; s < numSamples; ++s) {
         float viewZ;
         float3 wp = VolFog_WorldPos(id, FrameJitterOffsets[s].xyz, viewZ);
-        lighting += VolFog_Lighting(wp, cellRadius);
+        historyLighting += VolFog_AmbientLighting(wp);
     }
-    lighting /= (float)numSamples;
+    historyLighting /= (float)numSamples;
+
+    // A luz direta usa o centro deterministico do froxel: nao cintila com a sequencia
+    // Halton e, principalmente, nunca carrega fase/sombra/posicao antigas.
+    float3 currentDirectLighting = VolFog_DirectLighting(wpCenter, cellRadius);
 
     float4 matScatExt = VBufferA[id];
-    float4 result = float4(lighting * matScatExt.rgb, matScatExt.w);
+    float4 result = float4(historyLighting * matScatExt.rgb, matScatExt.w);
 
     if (histAlpha > 0.0f) {
         float4 hist = ScatteringHistory.SampleLevel(LinearClamp, histUV, 0.0f);
-        result = lerp(result, hist, histAlpha);
+        result.rgb = lerp(result.rgb, hist.rgb, histAlpha);
     }
 
     LightScattering[id] = result;
+    DirectScattering[id] = float4(currentDirectLighting * matScatExt.rgb, 0.0f);
 }

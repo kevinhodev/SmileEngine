@@ -67,6 +67,9 @@ namespace SmileEditor {
         void HandleGIStatus(QLocalSocket* Socket, const QString& Id);
         void HandleGIConfigure(QLocalSocket* Socket, const QString& Id,
                                const QJsonObject& Arguments);
+        void HandleVolFogStatus(QLocalSocket* Socket, const QString& Id);
+        void HandleVolFogConfigure(QLocalSocket* Socket, const QString& Id,
+                                   const QJsonObject& Arguments);
         void Reply(QLocalSocket* Socket, const QString& Id, bool Ok,
                    const QJsonObject& Payload);
 

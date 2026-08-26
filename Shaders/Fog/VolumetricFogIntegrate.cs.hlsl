@@ -6,8 +6,9 @@
 // Resultado[z] = (luz acumulada ate o fim do slice z, transmitancia acumulada) — o
 // fog apply amostra por (uv de tela, slice(dist)) e compoe sobre o analitico.
 
-Texture3D<float4>   LightScatteringTex : register(t0);
-RWTexture3D<float4> IntegratedTex      : register(u0);
+Texture3D<float4>   LightScatteringTex  : register(t0);
+Texture3D<float4>   DirectScatteringTex : register(t1);
+RWTexture3D<float4> IntegratedTex       : register(u0);
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -26,6 +27,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     [loop] for (int z = 0; z < kVolFogZ; ++z) {
         float4 scatExt = LightScatteringTex[uint3(id.xy, z)];
+        scatExt.rgb += DirectScatteringTex[uint3(id.xy, z)].rgb;
 
         // LightScatteringTex stores the medium at the cell center, but the
         // integrated result represents the END boundary of that cell. Using
