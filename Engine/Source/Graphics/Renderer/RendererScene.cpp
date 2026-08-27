@@ -71,7 +71,7 @@ namespace Smile {
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
         RaytracingScene.Build(Backend->Device, Backend->DirectQueue, Backend->SRVHeap,
-                              SceneState->Scene);
+                              SceneState->Scene, SceneState->Camera.GetPosition());
         SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
     }
 

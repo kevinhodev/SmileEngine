@@ -113,7 +113,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     float  maxT   = TraceParams.y;
 
     RayDesc ray;
-    ray.Origin    = probePos;
+    const float3 tlasOrigin = RadianceCacheCamCell.xyz;
+    ray.Origin    = RT_WorldToTlas(probePos, tlasOrigin);
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = maxT;
@@ -150,6 +151,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.EnvironmentGround  = EnvironmentGround.rgb;
     P.RoughnessMin       = GIBiasParams.w;
     P.CacheRayRoughness  = -1.0f;
+    P.TlasOrigin         = tlasOrigin;
     RC_UNPACK_PARAMS(P);
 
     float3 radiance;
@@ -158,7 +160,8 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         radiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                    q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                                   ray.Origin, ray.Direction, q.CommittedRayT(), P, signedDist);
+                                   RT_TlasToWorld(ray.Origin, tlasOrigin), ray.Direction,
+                                   q.CommittedRayT(), P, signedDist);
         // Distancia assinada curta torna o Chebyshev mais conservador perto de backfaces.
         if (signedDist < 0.0f) signedDist *= 0.2f;
     } else {

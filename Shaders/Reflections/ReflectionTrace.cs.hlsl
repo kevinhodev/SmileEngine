@@ -144,7 +144,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         // Offset robusto (so anti self-hit): o bias 0.2 na origem deslocava o reflexo de
         // contato e inflava o hitT entregue ao NRD/temporal.
         RayDesc ray;
-        ray.Origin    = OffsetRayGBuffer(worldPos, N, R, length(CameraPos.xyz - worldPos));
+        ray.Origin    = RT_WorldToTlas(
+            OffsetRayGBuffer(worldPos, N, R, length(CameraPos.xyz - worldPos)), CameraPos.xyz);
         ray.Direction = R;
         ray.TMin      = 0.0f;
         ray.TMax      = TraceParams.y;
@@ -187,6 +188,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         // so, sem reuso — o piso que o DDGI/ReSTIR precisam borraria espelho-no-espelho aqui.
         P.RoughnessMin       = 0.0f;
         P.CacheRayRoughness  = roughness;
+        P.TlasOrigin         = CameraPos.xyz;
         RC_UNPACK_PARAMS(P);
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
@@ -194,8 +196,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             outHitDist  = q.CommittedRayT();
             outRadiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                           q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                                          ray.Origin, ray.Direction, outHitDist, P, sd);
-            const float3 secondaryHit = ray.Origin + ray.Direction * outHitDist;
+                                          RT_TlasToWorld(ray.Origin, P.TlasOrigin),
+                                          ray.Direction, outHitDist, P, sd);
+            const float3 secondaryHit = RT_TlasToWorld(ray.Origin, P.TlasOrigin) +
+                                        ray.Direction * outHitDist;
             outMotion = ComputeGlossyMotion((uint2)fullPx, worldPos, N, secondaryHit,
                                             q.CommittedInstanceID(), roughness,
                                             SMILE_RNG_REFL_GLOSSY + 137u);

@@ -40,6 +40,7 @@ struct FHitShadeParams {
     // Piso de roughness do hit — SO para quem guarda a radiancia num cache NAO-DIRECIONAL
     // (DDGI e ReSTIR GI). 0 = desligado, que e o que as reflexoes usam. Ver o uso abaixo.
     float  RoughnessMin;       float CacheRayRoughness;
+    float3 TlasOrigin;         // camera em mundo; origem usada pelas matrizes da TLAS
     // Irradiancia integrada usada apenas quando o terminador explicito e Environment.
     float3 EnvironmentSky;
     float3 EnvironmentGround;

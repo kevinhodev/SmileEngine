@@ -70,7 +70,7 @@ bool DI_SelectedOccluded(float3 lightPoint, float3 x1, float3 n1, float3 L, floa
     if (len <= 1e-6f || tMax <= RayEpsB.x) return false;
 
     RayDesc ray;
-    ray.Origin = origin;
+    ray.Origin = RT_WorldToTlas(origin, CameraPos.xyz);
     ray.Direction = toLight / len;
     ray.TMin = RayEpsB.x;
     ray.TMax = tMax;

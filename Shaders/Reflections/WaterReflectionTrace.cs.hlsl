@@ -294,6 +294,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.EnvironmentGround = EnvironmentGround.rgb;
         // ZERO: hit direcional e consumido uma vez (ver ReflectionTrace.cs.hlsl).
         P.RoughnessMin = 0.0f;              P.CacheRayRoughness = roughness;
+        P.TlasOrigin = CameraPos.xyz;
         RC_UNPACK_PARAMS(P);
 
         float ssrConfidence;
@@ -310,8 +311,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         const float missingSSR = ssrHit ? (1.0f - ssrConfidence) : 1.0f;
         if (missingSSR > 0.01f) {
             RayDesc ray;
-            ray.Origin = OffsetRayGBuffer(worldPos, N, RLocal,
-                                          length(CameraPos.xyz - worldPos));
+            ray.Origin = RT_WorldToTlas(
+                OffsetRayGBuffer(worldPos, N, RLocal, length(CameraPos.xyz - worldPos)),
+                P.TlasOrigin);
             ray.Direction = RLocal;
             ray.TMin = 0.0f;
             ray.TMax = TraceParams.y;
@@ -326,7 +328,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 fallbackRadiance = ShadeSurfaceHit(
                     q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                     q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                    ray.Origin, ray.Direction, fallbackHitDist, P, secondaryDepth);
+                    RT_TlasToWorld(ray.Origin, P.TlasOrigin), ray.Direction,
+                    fallbackHitDist, P, secondaryDepth);
             }
         }
 

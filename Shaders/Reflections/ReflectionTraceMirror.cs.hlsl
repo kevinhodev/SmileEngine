@@ -126,7 +126,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     // Offset robusto (so anti self-hit): o bias 0.2 na origem deslocava o reflexo de contato
     // e inflava o hitT entregue ao NRD/temporal.
     RayDesc ray;
-    ray.Origin    = OffsetRayGBuffer(worldPos, N, R, length(CameraPos.xyz - worldPos));
+    ray.Origin    = RT_WorldToTlas(
+        OffsetRayGBuffer(worldPos, N, R, length(CameraPos.xyz - worldPos)), CameraPos.xyz);
     ray.Direction = R;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
@@ -163,6 +164,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     // ZERO: hit direcional e consumido uma vez (ver ReflectionTrace.cs.hlsl).
     P.RoughnessMin       = 0.0f;
     P.CacheRayRoughness  = roughness;
+    P.TlasOrigin         = CameraPos.xyz;
     RC_UNPACK_PARAMS(P);
 
     float3 radiance;
@@ -173,8 +175,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         hitDist  = q.CommittedRayT();
         radiance = ShadeSurfaceHit(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                    q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                                   ray.Origin, ray.Direction, hitDist, P, sd);
-        const float3 secondaryHit = ray.Origin + ray.Direction * hitDist;
+                                   RT_TlasToWorld(ray.Origin, P.TlasOrigin),
+                                   ray.Direction, hitDist, P, sd);
+        const float3 secondaryHit = RT_TlasToWorld(ray.Origin, P.TlasOrigin) +
+                                    ray.Direction * hitDist;
         glossyMotion = ComputeGlossyMotion(px, worldPos, N, secondaryHit,
                                            q.CommittedInstanceID(), roughness,
                                            SMILE_RNG_REFL_MIRROR + 137u);

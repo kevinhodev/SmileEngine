@@ -132,7 +132,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     // Offset numérico anti self-hit; x2 continua no hit real.
     RayDesc ray;
-    ray.Origin    = OffsetRayGBuffer(x1, N, dir, camDist);
+    ray.Origin    = RT_WorldToTlas(OffsetRayGBuffer(x1, N, dir, camDist), CameraPos.xyz);
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
@@ -168,6 +168,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // O cache é não direcional.
     P.RoughnessMin       = GIBiasParams.w;
     P.CacheRayRoughness  = -1.0f;
+    P.TlasOrigin         = CameraPos.xyz;
     RC_UNPACK_PARAMS(P);
 
     // Retrace descarta auto-interseção próxima; verso one-sided restante encerra o caminho.
@@ -203,19 +204,20 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         hitDist = q.CommittedRayT();
         n2 = HitGeomNormal(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                            q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(), ray.Direction);
-        x2 = ray.Origin + ray.Direction * hitDist;
+        x2 = RT_TlasToWorld(ray.Origin, P.TlasOrigin) + ray.Direction * hitDist;
         // Caminho morto contribui zero, mas continua sendo um hit para o NRD.
         uint srcKind = RC_SRC_KILLED; // sobrescrito pelo Ex quando o caminho nao morre
         Lo = killPath ? float3(0.0f, 0.0f, 0.0f)
                       : ShadeSurfaceHitEx(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
                                           q.CommittedTriangleBarycentrics(),
                                           q.CommittedWorldToObject3x4(),
-                                          ray.Origin, ray.Direction, hitDist, P, sd, srcKind);
+                                          RT_TlasToWorld(ray.Origin, P.TlasOrigin),
+                                          ray.Direction, hitDist, P, sd, srcKind);
         WriteSourceViz(px, srcKind);
     } else {
         hitDist = TraceParams.y;
         Lo = ShadeSky(dir, sunDir, P.SkyIntensity, P);
-        x2 = ray.Origin + ray.Direction * hitDist; // ponto distante na direcao do ceu
+        x2 = RT_TlasToWorld(ray.Origin, P.TlasOrigin) + ray.Direction * hitDist;
         n2 = -dir;                                  // normal "virada" p/ o ponto visivel
         WriteSourceViz(px, RC_SRC_SKY);
     }
@@ -311,7 +313,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     float  len  = length(toS);
                     if (len > 1e-3f) {
                         RayDesc vray;
-                        vray.Origin    = vorg;
+                        vray.Origin    = RT_WorldToTlas(vorg, P.TlasOrigin);
                         vray.Direction = toS / len;
                         vray.TMin      = 0.0f;
                         vray.TMax      = TraceParams.y;
@@ -362,9 +364,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                                       vq.CommittedPrimitiveIndex(),
                                                       vq.CommittedTriangleBarycentrics(),
                                                       vq.CommittedWorldToObject3x4(),
-                                                      vorg, vray.Direction, t, P, vsd);
+                                                      RT_TlasToWorld(vray.Origin, P.TlasOrigin),
+                                                      vray.Direction, t, P, vsd);
                                 // Atualiza a geometria aceita pela tolerância.
-                                prev.x2 = vorg + vray.Direction * t;
+                                prev.x2 = RT_TlasToWorld(vray.Origin, P.TlasOrigin) +
+                                          vray.Direction * t;
                                 prev.n2 = HitGeomNormal(vq.CommittedInstanceID(),
                                                         vq.CommittedPrimitiveIndex(),
                                                         vq.CommittedTriangleBarycentrics(),

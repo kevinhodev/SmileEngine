@@ -161,15 +161,17 @@ namespace Smile {
         }
         GILightSetSignature ^= static_cast<u64>(GILightCount);
 
-        // TlasFlagsDirty: mask/FORCE_NON_OPAQUE/two-sided de uma instancia mudaram (edicao de
-        // material no editor) sem a cena se mexer, entao a versao de transforms sozinha nao
-        // pediria rebuild.
+        // O TLAS vive relativo a camera (Cyberpunk 2077, GPU Zen 3, sec. 7.3.1): mover a camera
+        // muda a translacao de TODAS as instancias, mesmo quando o mundo autoral ficou parado.
+        // TlasFlagsDirty cobre ainda mask/FORCE_NON_OPAQUE/two-sided de material.
         if (RaytracingScene.IsBuilt() &&
             (SceneState->Scene.TransformsVersion() != SceneState->TlasTransformsVersion ||
-             SceneState->TlasFlagsDirty)) {
+             SceneState->TlasFlagsDirty ||
+             !RaytracingScene.IsTlasOriginCurrent(Vw.CameraPosition))) {
             Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> TlasCL;
             if (SUCCEEDED(CommandList->QueryInterface(IID_PPV_ARGS(&TlasCL))) &&
-                RaytracingScene.RecordTlasRebuild(TlasCL.Get(), SceneState->Scene, FrameSlot)) {
+                RaytracingScene.RecordTlasRebuild(TlasCL.Get(), SceneState->Scene,
+                                                  Vw.CameraPosition, FrameSlot)) {
                 SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
                 SceneState->TlasFlagsDirty        = false;
             }

@@ -18,6 +18,12 @@
 // O gather difuso ignora translucidos; transmissao nao e modelada pelos RayQuery.
 #define SMILE_RT_MASK_GATHER      (SMILE_RT_MASK_OPAQUE | SMILE_RT_MASK_ALPHATEST)
 
+// A TLAS usa a camera como origem para manter as translacoes de instancia e as RayDesc perto de
+// zero. Todo o resto da renderer continua em mundo absoluto; estas duas funcoes marcam a unica
+// fronteira permitida entre os espacos. Direcoes e distancias nao mudam sob translacao.
+float3 RT_WorldToTlas(float3 worldPos, float3 tlasOrigin) { return worldPos - tlasOrigin; }
+float3 RT_TlasToWorld(float3 tlasPos, float3 tlasOrigin) { return tlasPos + tlasOrigin; }
+
 #define INSTGEO_FLAG_ALPHATEST 1u  // clip por albedo.a vs AlphaCutoff (folhagem; FORCE_NON_OPAQUE na TLAS)
 #define INSTGEO_FLAG_EMISSIVE  2u  // tem mapa emissivo (EmissiveMapIndex valido)
 #define INSTGEO_FLAG_FOLIAGE   4u  // ShadingModel Foliage (two-sided + transmissao no PT)

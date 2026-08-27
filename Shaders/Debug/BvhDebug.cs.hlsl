@@ -88,7 +88,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const float3 nearPos = wH.xyz / wH.w;
 
     RayDesc ray;
-    ray.Origin    = CameraPos.xyz;
+    ray.Origin    = RT_WorldToTlas(CameraPos.xyz, CameraPos.xyz); // camera = origem da TLAS
     ray.Direction = normalize(nearPos - CameraPos.xyz);
     ray.TMin      = 0.0f;
     ray.TMax      = BvhDebugParams.y;

@@ -338,7 +338,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         const float tMax = len - max(Params.w, 0.0f);
         if (len > 1e-6f && tMax > RayEpsB.x) {
             RayDesc ray;
-            ray.Origin = origin;
+            ray.Origin = RT_WorldToTlas(origin, CameraPos.xyz);
             ray.Direction = toLight / len;
             ray.TMin = RayEpsB.x;
             ray.TMax = tMax;
@@ -348,7 +348,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             SMILE_RT_PROCEED(query)
             if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
                 visibility = 0.0f;
-                const float3 blockerPos = ray.Origin + ray.Direction * query.CommittedRayT();
+                const float3 blockerPos = RT_TlasToWorld(ray.Origin, CameraPos.xyz) +
+                                          ray.Direction * query.CommittedRayT();
                 // So p/ luz analitica: o plano virtual precisa da posicao ANTERIOR da luz, e
                 // triangulo emissivo nao tem esse par (a malha e estatica, e quando deixar de ser
                 // a correspondencia certa e a transform da instancia, nao um PrevPos).

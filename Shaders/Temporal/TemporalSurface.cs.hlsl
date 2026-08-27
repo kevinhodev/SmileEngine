@@ -38,7 +38,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
 
     RayDesc ray;
-    ray.Origin = CameraPos.xyz;
+    ray.Origin = RT_WorldToTlas(CameraPos.xyz, CameraPos.xyz);
     ray.Direction = toSurface / distanceToSurface;
     ray.TMin = 0.0f;
     ray.TMax = distanceToSurface + max(0.01f, distanceToSurface * 1.0e-3f);

@@ -280,6 +280,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // secundario vale aqui com mais forca que em qualquer consumidor. Ver PT_LoadHitMaterial.
     P.RoughnessMin       = GIBiasParams.w;
     P.CacheRayRoughness  = -1.0f; // o raio de origem e difuso
+    P.TlasOrigin         = CameraPos.xyz;
     RC_UNPACK_PARAMS(P);
 
     // ============================================================================================
@@ -293,7 +294,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     uint  termKind = RCU_TERM_OTHER;
 
     RayDesc ray;
-    ray.Origin    = OffsetRayGBuffer(x1, N, dir, camDist);
+    ray.Origin    = RT_WorldToTlas(OffsetRayGBuffer(x1, N, dir, camDist), P.TlasOrigin);
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
@@ -380,7 +381,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 const FHitSurface T = PT_LoadHitSurface(
                     Instances[q.CommittedInstanceID()], q.CommittedPrimitiveIndex(),
                     q.CommittedTriangleBarycentrics(), q.CommittedWorldToObject3x4(),
-                    ray.Origin, ray.Direction, hitDist);
+                    RT_TlasToWorld(ray.Origin, P.TlasOrigin), ray.Direction, hitDist);
                 // Miss de cache => ZERO, e nao DDGI. O caminho fica escuro enquanto a tabela
                 // esfria, e e assim que se ve o cache aquecer; somar DDGI aqui devolveria
                 // exatamente o sinal que esta serie existe para trocar.
@@ -397,7 +398,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         const FHitSurface S = PT_LoadHitSurface(Instances[instId], q.CommittedPrimitiveIndex(),
                                                 q.CommittedTriangleBarycentrics(),
                                                 q.CommittedWorldToObject3x4(),
-                                                ray.Origin, ray.Direction, hitDist);
+                                                RT_TlasToWorld(ray.Origin, P.TlasOrigin),
+                                                ray.Direction, hitDist);
         const float3 V = normalize(-ray.Direction);
         const FHitMaterial M = PT_LoadHitMaterial(Instances[instId], S.UV, P.AlbedoLOD,
                                                   P.RoughnessMin);
@@ -461,7 +463,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // offset fixo empurraria a origem ATRAVES da superficie, que e o mesmo modo de falha que
         // se esta fechando.
         const float3 offN = (dot(S.OffsetN, B.Dir) >= 0.0f) ? S.OffsetN : -S.OffsetN;
-        ray.Origin    = OffsetRayWB(S.Pos, offN);
+        ray.Origin    = RT_WorldToTlas(OffsetRayWB(S.Pos, offN), P.TlasOrigin);
         ray.Direction = B.Dir;
         // TMin ZERO, como o raio de origem acima e como os tres raios de transporte da engine
         // (ReSTIRGITrace, ReflectionTrace, ReflectionTraceMirror). Era RayEpsB.x — o TMin dos

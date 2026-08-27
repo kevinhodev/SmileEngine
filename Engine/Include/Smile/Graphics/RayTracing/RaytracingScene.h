@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
+#include "Smile/Math/Math.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <vector>
@@ -16,7 +17,7 @@ namespace Smile {
     class FRaytracingScene {
     public:
         void Build(FD3D12Device& Device, FCommandQueue& Queue, FTextureSRVHeap& SRVHeap,
-                   const FScene& Scene);
+                   const FScene& Scene, const Vec3& TlasOrigin);
 
         // Rebuild SO da TLAS (BLAS/pool intactos) na command list do FRAME — p/ transform de
         // renderable mudado no editor (gizmo). Rebuild em vez de update (recomendacao
@@ -24,7 +25,7 @@ namespace Smile {
         // se nao ha TLAS ou se ha mais instancias que a capacidade do load (ai so o Build
         // completo resolve — NAO pode ser chamado mid-frame).
         bool RecordTlasRebuild(ID3D12GraphicsCommandList4* CL, const FScene& Scene,
-                               u32 FrameSlot);
+                               const Vec3& TlasOrigin, u32 FrameSlot);
 
         void Release(FTextureSRVHeap& SRVHeap);
 
@@ -36,6 +37,10 @@ namespace Smile {
         u32  TlasSRVSlot()    const { return TlasSRVSlot_; }
         u32  InstanceCount()  const { return InstanceCount_; }
         u32  BlasCount()      const { return BlasCount_; }
+        bool IsTlasOriginCurrent(const Vec3& Origin) const {
+            return TlasOrigin_.X == Origin.X && TlasOrigin_.Y == Origin.Y &&
+                   TlasOrigin_.Z == Origin.Z;
+        }
 
         // === Snapshot InstanceGeo =========================================================
         // Material + geometria por instancia, indexado pelo InstanceID da TLAS: o que TODO hit
@@ -75,7 +80,7 @@ namespace Smile {
         // desligar mexia em TODOS os passes de uma vez: eixo errado.
 
     private:
-        void CollectInstances(const FScene& Scene,
+        void CollectInstances(const FScene& Scene, const Vec3& TlasOrigin,
                               std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& Out) const;
         // Definido no .cpp (FRTInstanceGeo e local daquele arquivo); _Mapped tem _Count entradas.
         void FillInstanceGeo(const FScene& Scene, u8* Mapped, u32 Count) const;
@@ -97,6 +102,9 @@ namespace Smile {
         u8*                                    InstanceMapped[kInstanceSlots] = {};
         Microsoft::WRL::ComPtr<ID3D12Resource> TlasScratch;
         u32                                    InstanceCapacity_ = 0;
+        // Origem do espaco descrito pelas matrizes da TLAS. O mundo autoral fica intacto; os
+        // shaders convertem RayDesc para este espaco e somam a origem ao reconstruir hits.
+        Vec3                                   TlasOrigin_{};
 
         // Snapshot InstanceGeo (ver os acessores acima). Upload heap sem versao por frame: o
         // conteudo muda raramente e sempre com a GPU drenada pelo chamador.

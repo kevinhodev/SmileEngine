@@ -111,12 +111,13 @@ namespace Smile {
             InstanceMapped[s] = nullptr;
         }
         InstanceCapacity_ = 0;
+        TlasOrigin_     = {};
         Built          = false;
         InstanceCount_ = 0;
         BlasCount_     = 0;
     }
 
-    void FRaytracingScene::CollectInstances(const FScene& _Scene,
+    void FRaytracingScene::CollectInstances(const FScene& _Scene, const Vec3& _TlasOrigin,
                                             std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& _Out) const {
         _Out.clear();
         _Out.reserve(_Scene.Renderables().size());
@@ -129,7 +130,14 @@ namespace Smile {
 
             D3D12_RAYTRACING_INSTANCE_DESC Inst{};
 
-            const Mat44 T = R.Transform.Matrix().GetTransposed();
+            // DXR recebe a instancia no espaco relativo a camera. O mundo autoral, bounds,
+            // luzes, volumes e caches continuam absolutos; so a fronteira do RayQuery muda.
+            // Subtrair antes da transposta e importante: a Smile guarda translacao em M[3].
+            Mat44 Relative = R.Transform.Matrix();
+            Relative.M[3][0] -= _TlasOrigin.X;
+            Relative.M[3][1] -= _TlasOrigin.Y;
+            Relative.M[3][2] -= _TlasOrigin.Z;
+            const Mat44 T = Relative.GetTransposed();
             for (int Row = 0; Row < 3; ++Row)
                 for (int Col = 0; Col < 4; ++Col)
                     Inst.Transform[Row][Col] = T.M[Row][Col];
@@ -269,11 +277,11 @@ namespace Smile {
     }
 
     bool FRaytracingScene::RecordTlasRebuild(ID3D12GraphicsCommandList4* _CL, const FScene& _Scene,
-                                             u32 _FrameSlot) {
+                                             const Vec3& _TlasOrigin, u32 _FrameSlot) {
         if (!Built || !Tlas || !TlasScratch || !_CL) return false;
 
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> Instances;
-        CollectInstances(_Scene, Instances);
+        CollectInstances(_Scene, _TlasOrigin, Instances);
         if (Instances.empty() || Instances.size() > InstanceCapacity_) return false;
 
         const u32 Slot = _FrameSlot % kInstanceSlots;
@@ -296,11 +304,13 @@ namespace Smile {
         GlobalUAVBarrier(_CL);
 
         InstanceCount_ = static_cast<u32>(Instances.size());
+        TlasOrigin_     = _TlasOrigin;
         return true;
     }
 
     void FRaytracingScene::Build(FD3D12Device& _Device, FCommandQueue& _Queue,
-                                 FTextureSRVHeap& _SRVHeap, const FScene& _Scene) {
+                                 FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
+                                 const Vec3& _TlasOrigin) {
         if (!_Device.RaytracingSupported() || !_Device.Device5()) return;
 
         Release(_SRVHeap);
@@ -457,7 +467,7 @@ namespace Smile {
         BlasCount_ = NumBlas;
 
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> Instances;
-        CollectInstances(_Scene, Instances);
+        CollectInstances(_Scene, _TlasOrigin, Instances);
         InstanceCount_ = static_cast<u32>(Instances.size());
 
         if (!Instances.empty()) {
@@ -592,6 +602,7 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device.Native(), InstanceGeoBuf.Get(), GeoBufSrv, InstanceGeoSRVSlot_);
 
         Built = true;
+        TlasOrigin_ = _TlasOrigin;
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);
         const double FinalMB   = static_cast<double>(Compact ? TotalCompact : TotalBuild) / (1024.0 * 1024.0);
         LogDebug("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +

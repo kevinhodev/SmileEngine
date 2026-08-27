@@ -273,7 +273,7 @@ float3 PT_ShadeDirectSun(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParam
     // antes que FoliageTransmission pudesse avaliá-lo.
     if (ndl > 0.0f || any(M.TransColor > 0.0f)) {
         RayDesc sray;
-        sray.Origin    = PT_ShadowRayOrigin(S, P.SunDir, P);
+        sray.Origin    = RT_WorldToTlas(PT_ShadowRayOrigin(S, P.SunDir, P), P.TlasOrigin);
         sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
         sray.TMin      = RayEpsB.x;
         sray.TMax      = P.MaxRayDist;
@@ -319,7 +319,7 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
             directLighting += regirEstimate;
         } else {
             RayDesc lray;
-            lray.Origin = lorg; lray.Direction = toL / lenL;
+            lray.Origin = RT_WorldToTlas(lorg, P.TlasOrigin); lray.Direction = toL / lenL;
             lray.TMin = RayEpsB.x; lray.TMax = lTMax;
             RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
             lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
@@ -357,7 +357,7 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
         }
 
         RayDesc lray;
-        lray.Origin    = lorg;
+        lray.Origin    = RT_WorldToTlas(lorg, P.TlasOrigin);
         lray.Direction = toL / lenL;
         lray.TMin      = RayEpsB.x;
         lray.TMax      = lTMax;

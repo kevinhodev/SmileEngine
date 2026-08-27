@@ -189,7 +189,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 float  mLen = length(mToS);
                 if (mLen > VisRayMinLength()) { // mesmas folgas do shading visibility
                     RayDesc mray;
-                    mray.Origin    = morg;
+                    mray.Origin    = RT_WorldToTlas(morg, CameraPos.xyz);
                     mray.Direction = mToS / mLen;
                     mray.TMin      = RayEpsB.y;
                     mray.TMax      = mLen - RayEpsB.z;
@@ -215,7 +215,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         float  len  = length(toS);
         if (len > VisRayMinLength()) {
             RayDesc vray;
-            vray.Origin    = org;
+            vray.Origin    = RT_WorldToTlas(org, CameraPos.xyz);
             vray.Direction = toS / len;
             vray.TMin      = RayEpsB.y;
             vray.TMax      = len - RayEpsB.z; // > TMin garantido; para antes do x2
