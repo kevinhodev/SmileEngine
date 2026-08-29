@@ -6,6 +6,14 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <stdexcept>
+
+// O loader D3D12 do Windows procura estes exports no executavel. Como este TU contem tambem
+// FD3D12Device::Initialize, ele nao e descartado ao linkar a biblioteca estatica da engine.
+extern "C" {
+    __declspec(dllexport) extern const UINT D3D12SDKVersion = SMILE_D3D12_AGILITY_VERSION;
+    __declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
+}
 
 namespace Smile {
     namespace {
@@ -144,20 +152,30 @@ namespace Smile {
 
         LogDebug("[D3D12] - Device Criado");
 
+        bool ShaderModel69 = false;
         if (SUCCEEDED(Device.As(&DeviceRT))) {
             D3D12_FEATURE_DATA_D3D12_OPTIONS5 Options5{};
             if (SUCCEEDED(Device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5,
                                                       &Options5, sizeof(Options5)))) {
                 IsRaytracingSupported =
-                    (Options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
+                    (Options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_2);
                 LogDebug(std::string("[D3D12] - Raytracing Tier: ") +
                         std::to_string(static_cast<int>(Options5.RaytracingTier)));
             }
+
+            D3D12_FEATURE_DATA_SHADER_MODEL ShaderModel{};
+            ShaderModel.HighestShaderModel = D3D_SHADER_MODEL_6_9;
+            ShaderModel69 = SUCCEEDED(Device->CheckFeatureSupport(
+                D3D12_FEATURE_SHADER_MODEL, &ShaderModel, sizeof(ShaderModel))) &&
+                ShaderModel.HighestShaderModel >= D3D_SHADER_MODEL_6_9;
+            LogDebug("[D3D12] - Shader Model: " +
+                     std::to_string(static_cast<unsigned>(ShaderModel.HighestShaderModel)));
         }
-        if (IsRaytracingSupported)
-            LogDebug("[D3D12] - DXR Tier 1.1+ disponivel (inline ray tracing / GI habilitavel)");
-        else
-            LogWarning("[D3D12] - DXR indisponivel (Tier < 1.1); GI sera desativada");
+        if (!IsRaytracingSupported || !ShaderModel69)
+            throw std::runtime_error(
+                "SmileEngine requer DXR Tier 1.2 + Shader Model 6.9 (Opacity Micromaps); "
+                "atualize o driver ou use uma GPU compativel");
+        LogDebug("[D3D12] - DXR Tier 1.2 + SM 6.9 disponiveis (OMM obrigatorio)");
 
         // ResourceHeapTier e capability SEPARADA do DXR (OPTIONS x OPTIONS5): na pratica toda
         // GPU com DXR e Tier 2, mas a spec trata as duas como independentes, e assumir uma pela

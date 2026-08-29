@@ -11,6 +11,7 @@
 
 namespace Smile {
     class FUploadQueue;
+    struct FOpacityMicromapData;
 
     // Capacidade a alocar para uma cena de N renderaveis.
     //
@@ -89,6 +90,9 @@ namespace Smile {
         FTransform  Transform;
         FGpuMesh*   Mesh     = nullptr;
         FMaterial*  Material = nullptr;
+        // OMM depende do par geometria/material (UV + alpha + cutoff), nao apenas da malha.
+        // shared_ptr faz instancias e duplicatas reaproveitarem o mesmo bake imutavel.
+        std::shared_ptr<FOpacityMicromapData> OpacityMicromap;
         bool        Visible  = true;
 
         // De qual renderavel do .sscene este objeto veio (-1 = nenhum, ex.: proxy do terreno).

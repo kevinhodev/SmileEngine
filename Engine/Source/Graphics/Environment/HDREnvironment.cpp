@@ -5,6 +5,7 @@
 #include "Smile/Core/Logger.h"
 #include <iterator>
 
+#define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_HDR
 #include <stb/stb_image.h>

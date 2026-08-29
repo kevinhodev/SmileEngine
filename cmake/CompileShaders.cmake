@@ -1,17 +1,22 @@
 # CompileShaders.cmake
 # Utilitario para compilar shaders HLSL com DXC (DirectX Shader Compiler) em build time.
 
-# Localiza o DXC do Windows SDK 10.0.22621.0
+# SM 6.9 e obrigatorio para RayQuery + OMM. O DXC 1.6 do Windows SDK 22621 nao
+# reconhece o segundo argumento de template do RayQuery.
+unset(SMILE_DXC_EXECUTABLE CACHE)
+unset(SMILE_DXC_EXECUTABLE)
 find_program(SMILE_DXC_EXECUTABLE
     NAMES dxc.exe dxc
     PATHS
+        "${SMILE_DXC_ROOT}/bin/x64"
         "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64"
         "C:/Program Files (x86)/Windows Kits/10/bin/x64"
     NO_DEFAULT_PATH
 )
 
 if(NOT SMILE_DXC_EXECUTABLE)
-    message(FATAL_ERROR "DXC (dxc.exe) nao encontrado. Instale o Windows SDK 10.0.22621.0.")
+    message(FATAL_ERROR
+        "DXC com Shader Model 6.9 nao encontrado em SMILE_DXC_ROOT='${SMILE_DXC_ROOT}'.")
 else()
     message(STATUS "DXC encontrado em: ${SMILE_DXC_EXECUTABLE}")
 endif()

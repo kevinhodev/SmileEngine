@@ -263,7 +263,7 @@ namespace Smile {
     }
 
     void FTemporalMotionVectors::CreatePipelines(ID3D12Device* _Device) {
-        SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_6.cso", 3, 1, true);
+        SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_9.cso", 3, 1, true);
         DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 4, 1, false);
     }
 

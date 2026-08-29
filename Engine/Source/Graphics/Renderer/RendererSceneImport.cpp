@@ -4,6 +4,7 @@
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Scene/SceneLoader.h"
 #include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Core/Logger.h"
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -97,8 +99,10 @@ namespace Smile {
         GpuResources::AccumulatePhase(PhaseSum, "commit/texturas", TexCreationBase);
         const std::vector<std::string>& relList = Imported.TexturePaths;
         std::unordered_map<std::string, FTexture*> texByPath;
+        std::unordered_map<std::string, const FTextureCPUData*> texCpuByPath;
         u32 uploaded = 0;
         for (size_t i = 0; i < relList.size(); ++i) {
+            if (i < Imported.TextureData.size()) texCpuByPath[relList[i]] = &Imported.TextureData[i];
             if (!texs[i].IsValid()) { texByPath[relList[i]] = nullptr; continue; }
             auto up = std::make_unique<FTexture>(std::move(texs[i]));
             texByPath[relList[i]] = up.get();
@@ -110,6 +114,11 @@ namespace Smile {
             if (!rel || !rel[0]) return nullptr;
             auto it = texByPath.find(rel);
             return (it != texByPath.end()) ? it->second : nullptr;
+        };
+        auto getTexCpu = [&](const char* rel) -> const FTextureCPUData* {
+            if (!rel || !rel[0]) return nullptr;
+            const auto it = texCpuByPath.find(rel);
+            return (it != texCpuByPath.end()) ? it->second : nullptr;
         };
 
         // SSceneMaterial nao possui padding e o Cooker inicializa todos os bytes; o hash e estavel.
@@ -205,6 +214,7 @@ namespace Smile {
         const auto MeshCreationBase = GpuResources::CreationStats();
         std::vector<FGpuMesh*> meshPtrs = SceneState->Scene.AddMeshesBatch(
             Backend->Device.Native(), Backend->UploadQueue, Imported.Meshes);
+        std::unordered_map<u64, std::shared_ptr<FOpacityMicromapData>> ommByMeshMaterial;
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
             const SSceneRenderable& r = rnds[i];
             if (r.MeshIndex >= mh.MeshCount) continue;
@@ -212,6 +222,21 @@ namespace Smile {
             out.Name     = nameOf(r, r.MaterialIndex, i);
             out.Mesh     = meshPtrs[r.MeshIndex];
             out.Material = matOf(r.MaterialIndex);
+            if (out.Material && out.Material->Constants.AlphaTest) {
+                if (r.MaterialIndex == kNoMaterial || r.MaterialIndex >= sh.MaterialCount)
+                    throw std::runtime_error("Renderable alpha-tested sem material valido para OMM");
+                const u64 OmmKey = (static_cast<u64>(r.MeshIndex) << 32) |
+                                   static_cast<u64>(r.MaterialIndex);
+                auto [It, Inserted] = ommByMeshMaterial.try_emplace(OmmKey);
+                if (Inserted) {
+                    const SSceneMaterial& Sm = mats[r.MaterialIndex];
+                    It->second = FOpacityMicromapBaker::Bake(
+                        Imported.Meshes[r.MeshIndex], getTexCpu(Sm.BaseColor),
+                        out.Material->Constants.BaseColorFactor.W,
+                        out.Material->Constants.AlphaCutoff);
+                }
+                out.OpacityMicromap = It->second;
+            }
             out.Transform.Position      = Vec3{ r.Position[0], r.Position[1], r.Position[2] };
             out.Transform.RotationEuler = Vec3{ r.RotationEuler[0], r.RotationEuler[1],
                                                 r.RotationEuler[2] };

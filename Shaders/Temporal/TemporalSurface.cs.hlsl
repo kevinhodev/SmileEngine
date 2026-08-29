@@ -42,7 +42,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.Direction = toSurface / distanceToSurface;
     ray.TMin = 0.0f;
     ray.TMax = distanceToSurface + max(0.01f, distanceToSurface * 1.0e-3f);
-    RayQuery<RAY_FLAG_NONE> query;
+    RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> query;
     query.TraceRayInline(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
                          SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(query)

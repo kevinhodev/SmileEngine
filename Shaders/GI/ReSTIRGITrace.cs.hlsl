@@ -137,7 +137,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
     // Sem culling: a política abaixo precisa classificar o verso.
-    RayQuery<RAY_FLAG_NONE> q;
+    RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
     q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
 
@@ -318,7 +318,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                         vray.TMin      = 0.0f;
                         vray.TMax      = TraceParams.y;
                         // Revalidação precisa reencontrar a mesma superfície.
-                        RayQuery<RAY_FLAG_NONE> vq;
+                        RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> vq;
                         vq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, vray);
                         SMILE_RT_PROCEED(vq)
 

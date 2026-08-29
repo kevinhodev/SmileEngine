@@ -70,8 +70,8 @@ namespace Smile {
         // O destino e o buffer de contadores porque e nele que a telemetria deste passe (caminhos
         // lancados, profundidade, terminal por tipo) escreve desde a Fase 4 — por bindless, como
         // todo o resto; o binding aqui continua existindo so para o range serializar.
-        UpdatePSO.Initialize(Device, "RadianceCacheUpdate.cs_6_6.cso", kUpdateSrvCount, 1, true);
-        UpdateLegacyPSO.Initialize(Device, "RadianceCacheUpdateLegacy.cs_6_6.cso",
+        UpdatePSO.Initialize(Device, "RadianceCacheUpdate.cs_6_9.cso", kUpdateSrvCount, 1, true);
+        UpdateLegacyPSO.Initialize(Device, "RadianceCacheUpdateLegacy.cs_6_9.cso",
                                    kUpdateSrvCount, 1, true);
     }
 

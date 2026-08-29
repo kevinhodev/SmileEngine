@@ -32,6 +32,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Runtime D3D12 local da engine. O OMM faz parte do DXR 1.2 e o caminho RayQuery exige
+# Shader Model 6.9; por isso estes SDKs sao requisitos, nao features opcionais.
+set(SMILE_AGILITY_SDK_ROOT "D:/Engines/AgilitySDK-1.619.5" CACHE PATH
+    "Raiz do Microsoft Direct3D Agility SDK 1.619.5+")
+set(SMILE_DXC_ROOT "D:/Engines/DXC-1.9.2602.24" CACHE PATH
+    "Raiz do DirectX Shader Compiler com Shader Model 6.9")
+
 # Raiz dos .cso compilados, exposta para o codigo C++. Em geradores multi-config
 # (Visual Studio), cada configuracao precisa de seu proprio bytecode: Debug usa
 # -Zi/-Od e Release usa -O3. Compartilhar o mesmo OUTPUT faria o timestamp de uma

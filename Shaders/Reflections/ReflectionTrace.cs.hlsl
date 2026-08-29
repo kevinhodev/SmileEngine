@@ -150,7 +150,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         ray.TMin      = 0.0f;
         ray.TMax      = TraceParams.y;
 
-        RayQuery<RAY_FLAG_NONE> q;
+        RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
         // ALL, e nao GATHER: reflexao PRECISA ver o vidro (a vitrine tem que aparecer no reflexo).
         // E a divisao do Lumen — o gather difuso ignora translucido, o passe de reflexao o inclui.
         //

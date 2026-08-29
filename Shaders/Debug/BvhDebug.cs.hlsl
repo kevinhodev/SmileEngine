@@ -110,7 +110,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         //
         // Consequencia: este raio e mais caro que o do frame real e nao mede o custo DELE. Mede
         // a densidade da estrutura, que e o que se conserta editando a cena.
-        RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
+        RayQuery<RAY_FLAG_FORCE_NON_OPAQUE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
         q.TraceRayInline(Scene, RAY_FLAG_FORCE_NON_OPAQUE, SMILE_RT_MASK_ALL, ray);
         uint tested = 0u;
         while (q.Proceed()) {
@@ -120,7 +120,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         const float t = (float)tested / max(BvhDebugParams.z, 1.0f);
         color = (tested == 0u) ? kMissColor : HeatRamp(t);
     } else {
-        RayQuery<RAY_FLAG_NONE> q;
+        RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
         q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_ALL, ray);
         SMILE_RT_PROCEED(q)
 

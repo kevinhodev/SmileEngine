@@ -313,7 +313,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // superficie fina (a chave ja separa os dois lados pelo octante da normal). E a politica
         // de backface abaixo que decide entre re-tracar e matar — deixar o DXR cullar descartaria
         // o hit antes da classificacao.
-        RayQuery<RAY_FLAG_NONE> q;
+        RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
         q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
         SMILE_RT_PROCEED(q)
 

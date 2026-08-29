@@ -277,7 +277,8 @@ float3 PT_ShadeDirectSun(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParam
         sray.Direction = P.SunDir; // direcional: a direcao nao depende da origem deslocada
         sray.TMin      = RayEpsB.x;
         sray.TMax      = P.MaxRayDist;
-        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                 RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> sq;
         sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, sray);
         SMILE_RT_PROCEED(sq)
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
@@ -321,7 +322,8 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
             RayDesc lray;
             lray.Origin = RT_WorldToTlas(lorg, P.TlasOrigin); lray.Direction = toL / lenL;
             lray.TMin = RayEpsB.x; lray.TMax = lTMax;
-            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                     RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> lq;
             lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                               P.ShadowRayMask, lray);
             SMILE_RT_PROCEED(lq)
@@ -361,7 +363,8 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
         lray.Direction = toL / lenL;
         lray.TMin      = RayEpsB.x;
         lray.TMax      = lTMax;
-        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> lq;
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                 RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> lq;
         lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)
         if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) directLighting += contrib;
@@ -440,7 +443,9 @@ float3 PT_ComposeIndirect(FHitSurface S, FHitMaterial M, float3 V, float3 indire
 // ⚠️ DUAS COPIAS DESTA POLITICA existem hoje no ReSTIRGITrace.cs.hlsl (gather e revalidacao),
 // escritas antes desta funcao. Elas devem migrar para ca — mas em commit proprio, com a
 // comparacao de DXIL que a serie usa, porque mexer nelas e mexer no caminho de RENDER.
-bool PT_ResolveSelfIntersection(inout RayQuery<RAY_FLAG_NONE> q, inout RayDesc ray, uint mask) {
+bool PT_ResolveSelfIntersection(
+    inout RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q,
+    inout RayDesc ray, uint mask) {
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
 
     bool twoSided;

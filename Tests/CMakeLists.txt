@@ -155,3 +155,27 @@ add_test(
 set_tests_properties(Smile.RenderPassRegistry PROPERTIES
     LABELS "graphics;architecture;render-pass"
 )
+
+add_executable(SmileOpacityMicromapBakeTests
+    OpacityMicromapBakeTests.cpp
+)
+
+target_compile_features(SmileOpacityMicromapBakeTests PRIVATE cxx_std_20)
+target_link_libraries(SmileOpacityMicromapBakeTests PRIVATE SmileEngine)
+set_target_properties(SmileOpacityMicromapBakeTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.OpacityMicromapBake.BistroExterior
+    COMMAND SmileOpacityMicromapBakeTests
+            "${PROJECT_SOURCE_DIR}/Assets/Scenes/Bistro/BistroExterior.sscene"
+)
+
+set_tests_properties(Smile.OpacityMicromapBake.BistroExterior PROPERTIES
+    LABELS "graphics;raytracing;omm;integration"
+    TIMEOUT 300
+)

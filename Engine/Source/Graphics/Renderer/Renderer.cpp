@@ -225,27 +225,26 @@ namespace Smile {
         HiZ.Initialize(Backend->Device.Native());
         HiZ.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
-        if (Backend->Device.RaytracingSupported()) {
-            ReportInitProgress("Compilando pipelines de ray tracing", {}, 0.88f);
-            // A NVAPI precisa reservar o slot antes da criacao das PSOs instrumentadas.
-            // A falha e esperada em GPUs sem suporte; nesses casos nao ha permutacao de timer.
-            FShaderTimer::InitializeApi(Backend->Device.Native(), Backend->SRVHeap);
-            BvhDebug.Initialize(Backend->Device.Native());
-            // O fallback precisa existir antes dos consumidores que copiam seus descriptors.
-            GIFallback.Initialize(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap);
-            DDGI.Initialize(Backend->Device.Native());
-            ReGIR.Initialize(Backend->Device.Native());
-            RadianceCache.Initialize(Backend->Device.Native());
-            MeshLights.Initialize(Backend->Device.Native());
-            ReSTIRGI.Initialize(Backend->Device.Native());
-            Nrd.Initialize(Backend->Device.Native());
-            NrdDirect.Initialize(Backend->Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
-            Reflections.Initialize(Backend->Device.Native());
-            ReSTIRDI.Initialize(Backend->Device.Native());
-            TemporalMotion.Initialize(Backend->Device.Native());
-            DDGIDebugPass.Initialize(Backend->Device.Native(),
-                                     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
-        }
+        ReportInitProgress("Compilando pipelines de ray tracing", {}, 0.88f);
+        // A NVAPI precisa reservar o slot antes da criacao das PSOs instrumentadas.
+        // O timer pode ficar indisponivel, mas o pipeline DXR/OMM e obrigatorio.
+        FShaderTimer::InitializeApi(Backend->Device.Native(), Backend->SRVHeap);
+        BvhDebug.Initialize(Backend->Device.Native());
+        // O fallback de CONTEUDO precisa existir antes dos consumidores que copiam descriptors;
+        // ele nao e um fallback de hardware e continua usando o pipeline DXR obrigatorio.
+        GIFallback.Initialize(Backend->Device.Native(), Backend->DirectQueue, Backend->SRVHeap);
+        DDGI.Initialize(Backend->Device.Native());
+        ReGIR.Initialize(Backend->Device.Native());
+        RadianceCache.Initialize(Backend->Device.Native());
+        MeshLights.Initialize(Backend->Device.Native());
+        ReSTIRGI.Initialize(Backend->Device.Native());
+        Nrd.Initialize(Backend->Device.Native());
+        NrdDirect.Initialize(Backend->Device.Native(), FNrdDenoiser::ESignalProfile::Direct);
+        Reflections.Initialize(Backend->Device.Native());
+        ReSTIRDI.Initialize(Backend->Device.Native());
+        TemporalMotion.Initialize(Backend->Device.Native());
+        DDGIDebugPass.Initialize(Backend->Device.Native(),
+                                 DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_D32_FLOAT);
 
         ReportInitProgress("Construindo estruturas de aceleração", {}, 0.96f);
         BuildRaytracingScene();
@@ -259,7 +258,7 @@ namespace Smile {
         Initialized = true;
         ReportInitProgress("Renderizador pronto", {}, 1.0f);
 
-        std::string Features = Backend->Device.RaytracingSupported() ? "DXR" : "Raster";
+        std::string Features = "DXR 1.2 | OMM";
         if (Fsr.Available())    Features += " | FSR";
         if (Dlss.Available())   Features += " | DLSS";
         if (DlssRR.Available()) Features += " | DLSS-RR";

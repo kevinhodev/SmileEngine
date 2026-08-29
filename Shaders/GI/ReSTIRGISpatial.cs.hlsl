@@ -194,7 +194,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                     mray.TMin      = RayEpsB.y;
                     mray.TMax      = mLen - RayEpsB.z;
                     // Teste de oclusão sem culling.
-                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> mq;
+                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                             RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> mq;
                     mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                                       SMILE_RT_MASK_GATHER, mray);
                     SMILE_RT_PROCEED(mq)
@@ -220,7 +221,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             vray.TMin      = RayEpsB.y;
             vray.TMax      = len - RayEpsB.z; // > TMin garantido; para antes do x2
             const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
-            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> vq;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                     RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> vq;
             vq.TraceRayInline(Scene, VisFlags, SMILE_RT_MASK_GATHER, vray);
             SMILE_RT_PROCEED(vq)
             if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {

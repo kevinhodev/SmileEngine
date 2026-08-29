@@ -48,23 +48,23 @@ smile_compile_shader(DepthMasked.ps.hlsl       ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 
-# GI (DDGI) — trace via DXR 1.1 inline ray tracing (RayQuery, SM 6.5) + update dos probes
+# GI (DDGI) — trace via DXR 1.2 inline ray tracing (RayQuery + OMM, SM 6.9)
 # Debug da BVH: raio primario por pixel na TLAS (GPU Zen 3, 7.3.3). cs_6_6 pelo RayQuery + heap
 # diretamente indexado (VB/IB bindless do alpha-test e da normal do hit).
-smile_compile_shader(Debug/BvhDebug.cs.hlsl    cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Debug/BvhDebug.cs.hlsl    cs_6_9 main SHADER_OUTPUTS)
 
-smile_compile_shader(GI/DDGITrace.cs.hlsl      cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(GI/DDGITrace.cs.hlsl      cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIUpdate.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIUpdateDist.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIRelocate.cs.hlsl   cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGICompactBuild.cs.hlsl    cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGICompactFinalize.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 # ReSTIR GI — final-gather difuso por pixel (reservoir espaciotemporal) sobre o DDGI (cache)
-smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
-smile_compile_shader(GI/ReSTIRGISpatial.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl   cs_6_9 main SHADER_OUTPUTS)
+smile_compile_shader(GI/ReSTIRGISpatial.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(GI/ReSTIRGIUpsample.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
 if(SMILE_SHADER_TIMER_AVAILABLE)
-    smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+    smile_compile_shader(GI/ReSTIRGITrace.cs.hlsl cs_6_9 main SHADER_OUTPUTS
         OUTPUT_NAME ReSTIRGITraceTimed ${SMILE_TIMER_FLAGS})
 endif()
 # World radiance cache — hash espacial de radiancia de saida, terminador dos raios secundarios.
@@ -78,9 +78,9 @@ smile_compile_shader(GI/RadianceCacheDebug.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
 # Path tracer esparso que ALIMENTA o cache: ~4% dos pixels por frame, sem ler DDGI.
 # As duas permutacoes ficam no MESMO binario para o A/B de scheduling da Fase 7 nao comparar
 # builds diferentes. Compact e o default; Legacy preserva o full-screen + early-out como controle.
-smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl cs_6_9 main SHADER_OUTPUTS
     -D RCU_COMPACT_DISPATCH=1)
-smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+smile_compile_shader(GI/RadianceCacheUpdate.cs.hlsl cs_6_9 main SHADER_OUTPUTS
     OUTPUT_NAME RadianceCacheUpdateLegacy -D RCU_COMPACT_DISPATCH=0)
 # ReGIR — pools de luz em grade de mundo para os hits secundarios.
 smile_compile_shader(GI/ReGIRBuild.cs.hlsl   cs_6_6 main SHADER_OUTPUTS)
@@ -98,22 +98,22 @@ smile_compile_shader(GI/DDGIDebugStats.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GI/DDGIDebugPoint.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 
 # ReSTIR DI: candidatas uniformes + temporal, depois spatial + um shadow ray final.
-smile_compile_shader(Lighting/ReSTIRDIInitialTemporal.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
-smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Lighting/ReSTIRDIInitialTemporal.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
+smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_9 main SHADER_OUTPUTS)
 # Instancia RELAX dedicada ao direto: pack demodulado e composite remodulado.
 smile_compile_shader(Lighting/ReSTIRDINrdPack.cs.hlsl          cs_6_6 main SHADER_OUTPUTS ${SMILE_NRD_SHADER_INCLUDE})
 smile_compile_shader(Lighting/ReSTIRDINrdComposite.cs.hlsl     cs_6_6 main SHADER_OUTPUTS)
 # Mesh lights: extrai os triangulos emissivos da cena para o pool de luzes.
 smile_compile_shader(Lighting/MeshLightExtract.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
 
-# Specular GI (reflexoes RT, estilo Lumen) — trace (DXR inline, SM 6.6) + resolve + composite
-smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_6 main SHADER_OUTPUTS)
+# Specular GI (reflexoes RT, estilo Lumen) — trace (DXR 1.2 inline + OMM, SM 6.9)
+smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_9 main SHADER_OUTPUTS)
 if(SMILE_SHADER_TIMER_AVAILABLE)
-    smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl cs_6_6 main SHADER_OUTPUTS
+    smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl cs_6_9 main SHADER_OUTPUTS
         OUTPUT_NAME ReflectionTraceTimed ${SMILE_TIMER_FLAGS})
 endif()
-smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
-smile_compile_shader(Reflections/WaterReflectionTrace.cs.hlsl  cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
+smile_compile_shader(Reflections/WaterReflectionTrace.cs.hlsl  cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/WaterReflectionTemporal.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionResolve.cs.hlsl     cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTemporal.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
@@ -134,7 +134,7 @@ smile_compile_shader(Upscale/DlssRRWaterSpecHit.cs.hlsl cs_6_0 main SHADER_OUTPU
 smile_compile_shader(Upscale/BackgroundVelocity.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # Vetores temporais confiaveis (RT Gems II, cap. 25): historico de superficie + vetor dual.
-smile_compile_shader(Temporal/TemporalSurface.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+smile_compile_shader(Temporal/TemporalSurface.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(Temporal/DualMotion.cs.hlsl      cs_6_0 main SHADER_OUTPUTS)
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto

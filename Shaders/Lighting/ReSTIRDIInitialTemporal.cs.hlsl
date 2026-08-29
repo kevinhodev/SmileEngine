@@ -74,7 +74,8 @@ bool DI_SelectedOccluded(float3 lightPoint, float3 x1, float3 n1, float3 L, floa
     ray.Direction = toLight / len;
     ray.TMin = RayEpsB.x;
     ray.TMax = tMax;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+             RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> query;
     query.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, (uint)Params.z, ray);
     SMILE_RT_PROCEED(query)
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;

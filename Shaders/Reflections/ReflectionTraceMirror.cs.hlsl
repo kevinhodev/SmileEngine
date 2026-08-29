@@ -132,7 +132,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
 
-    RayQuery<RAY_FLAG_NONE> q;
+    RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
     // ALL: reflexao inclui translucido (ver ReflectionTrace.cs.hlsl).
     q.TraceRayInline(Scene, ReflectionCullFlags(), SMILE_RT_MASK_ALL, ray);
     SMILE_RT_PROCEED(q)

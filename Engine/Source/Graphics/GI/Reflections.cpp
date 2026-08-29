@@ -34,20 +34,20 @@ namespace Smile {
     }
 
     void FReflections::RecreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_6.cso", 12, 3, true);
-        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_6.cso", 12, 2, true);
+        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_9.cso", 12, 3, true);
+        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_9.cso", 12, 2, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 5, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 4, 1, false);
         NrdPackPSO.Initialize(_Device, "ReflectionNrdPack.cs_6_0.cso", 3, 1, false);
-        WaterTracePSO.Initialize(_Device, "WaterReflectionTrace.cs_6_6.cso", 15, 2, true);
+        WaterTracePSO.Initialize(_Device, "WaterReflectionTrace.cs_6_9.cso", 15, 2, true);
         WaterTemporalPSO.Initialize(_Device, "WaterReflectionTemporal.cs_6_0.cso", 5, 1, false);
         // Gemea instrumentada do trace half-res (ver FShaderTimer): mesmas tabelas, mais o slot
         // falso da NVAPI no root sig. Fora de GPU NVIDIA nao existe e o passe segue igual.
         TraceTimed = false;
         if (FShaderTimer::IsAvailable()) {
             try {
-                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_6.cso", 12, 3, true, true);
+                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_9.cso", 12, 3, true, true);
                 TraceTimed = true;
             } catch (const std::exception&) {
                 LogWarning("ReflectionTraceTimed.cso ausente — timer das reflexoes indisponivel.");

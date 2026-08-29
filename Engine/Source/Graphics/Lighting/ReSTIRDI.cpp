@@ -53,9 +53,9 @@ namespace Smile {
     }
 
     void FReSTIRDI::Initialize(ID3D12Device* Device) {
-        InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_6.cso",
+        InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_9.cso",
                                       kInitialSRVs, kInitialUAVs, true);
-        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso",
+        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_9.cso",
                               kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
                               kNrdPackSRVs, kNrdPackUAVs, false);
@@ -67,9 +67,9 @@ namespace Smile {
 
     void FReSTIRDI::RecreatePSO(ID3D12Device* Device) {
         if (!Initialized) return;
-        InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_6.cso",
+        InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_9.cso",
                                       kInitialSRVs, kInitialUAVs, true);
-        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_6.cso",
+        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_9.cso",
                               kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
                               kNrdPackSRVs, kNrdPackUAVs, false);

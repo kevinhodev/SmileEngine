@@ -7,6 +7,7 @@
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Mesh.h" // sizeof(Vertex): stride do SRV bindless de VB
 #include "Smile/Graphics/RayTracing/RTMasks.h"
+#include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/HResultCheck.h"
@@ -14,6 +15,8 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
+#include <stdexcept>
+#include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
 
@@ -104,6 +107,7 @@ namespace Smile {
         MeshGeoSlot.clear();
         BlasPool.Reset();
         BlasByMesh.clear();
+        OmmArrays.clear();
         Tlas.Reset();
         TlasScratch.Reset();
         for (u32 s = 0; s < kInstanceSlots; ++s) {
@@ -125,8 +129,22 @@ namespace Smile {
         for (const FRenderable& R : _Scene.Renderables()) {
             const u32 ThisIdx = Idx++;
             if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
-            auto It = BlasByMesh.find(R.Mesh);
-            if (It == BlasByMesh.end() || It->second == 0) continue;
+            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
+            const FOpacityMicromapData* Omm = AlphaTest ? R.OpacityMicromap.get() : nullptr;
+            if (AlphaTest && (!Omm || !Omm->Valid()))
+                throw std::runtime_error("Material alpha-tested sem OMM valido; nao existe fallback DXR");
+            if (AlphaTest && !Omm->Matches(R.Material->Constants.BaseColorFactor.W,
+                                           R.Material->Constants.AlphaCutoff))
+                throw std::runtime_error(
+                    "OMM desatualizado apos editar alpha/cutoff; recarregue a cena para rebake");
+            auto MeshIt = BlasByMesh.find(R.Mesh);
+            if (MeshIt == BlasByMesh.end())
+                throw std::runtime_error("BLAS ausente para mesh da TLAS");
+            auto BlasIt = MeshIt->second.find(Omm);
+            if (BlasIt == MeshIt->second.end() || BlasIt->second == 0)
+                throw std::runtime_error(AlphaTest
+                    ? "Material alpha-tested sem BLAS OMM; recarregue a cena apos editar o modo/cutoff"
+                    : "BLAS opaco ausente para mesh da TLAS");
 
             D3D12_RAYTRACING_INSTANCE_DESC Inst{};
 
@@ -146,18 +164,14 @@ namespace Smile {
             Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
             // Categoria da instancia (kRTMask* em RTMasks.h). UM bit por instancia; quem escolhe
             // o que enxerga e o PASSE, pela mask do raio — modelo do Lumen.
-            // Folhagem/alpha-test: candidatos nao-opacos passam pelo AlphaTestPass no shader
-            // (SMILE_RT_PROCEED em HitShading.hlsli) — sem isto os cards viram quads solidos.
+            // Folhagem/alpha-test usa OMM 4-state: transparente/opaco e resolvido pelo hardware;
+            // somente microtriangulos UNKNOWN chegam ao AlphaTestPass (SMILE_RT_PROCEED).
             // Translucido (Blend) fica numa categoria propria: o gather do GI nao o inclui, entao
             // o vidro deixa de ser parede opaca para a iluminacao indireta. Ele CONTINUA na TLAS —
             // as reflexoes ainda o enxergam, que era a razao de nao simplesmente removE-lo.
-            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
             const bool Blend     = R.Material && R.Material->Blend;
             Inst.InstanceMask = Blend ? kRTMaskTranslucent
                                       : (AlphaTest ? kRTMaskAlphaTest : kRTMaskOpaque);
-            if (AlphaTest)
-                Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
-
             // Culling. A instance flag VENCE a ray flag na spec do DXR, entao enquanto isto saia
             // incondicionalmente TODO RAY_FLAG_CULL_BACK_FACING_TRIANGLES da engine era no-op — a
             // cena inteira era double-sided no RT enquanto o raster cullava. A flag agora descreve
@@ -176,7 +190,7 @@ namespace Smile {
             // regimes convivem na mesma TLAS.
             if (R.Material && R.Material->IsTwoSidedForRT())
                 Inst.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
-            Inst.AccelerationStructure               = It->second;
+            Inst.AccelerationStructure               = BlasIt->second;
             _Out.push_back(Inst);
         }
     }
@@ -311,7 +325,8 @@ namespace Smile {
     void FRaytracingScene::Build(FD3D12Device& _Device, FCommandQueue& _Queue,
                                  FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
                                  const Vec3& _TlasOrigin) {
-        if (!_Device.RaytracingSupported() || !_Device.Device5()) return;
+        if (!_Device.RaytracingSupported() || !_Device.Device5())
+            throw std::runtime_error("DXR Tier 1.2 obrigatorio para construir a cena OMM");
 
         Release(_SRVHeap);
         ID3D12Device5* Dev5 = _Device.Device5();
@@ -319,22 +334,41 @@ namespace Smile {
         _Queue.ResetForRecording();
         ComPtr<ID3D12GraphicsCommandList4> CL;
         if (FAILED(_Queue.List()->QueryInterface(IID_PPV_ARGS(&CL)))) {
-            LogWarning("[GI] - ID3D12GraphicsCommandList4 indisponivel; AS nao construida");
-            return;
+            throw std::runtime_error(
+                "ID3D12GraphicsCommandList4 indisponivel; nao existe caminho sem OMM");
         }
 
+        struct FBlasKey {
+            const FGpuMesh*             Mesh = nullptr;
+            const FOpacityMicromapData* Omm  = nullptr;
+        };
+        std::vector<FBlasKey> UniqueBlas;
         std::vector<const FGpuMesh*> UniqueMeshes;
+        std::unordered_set<const FGpuMesh*> SeenMeshes;
         for (const FRenderable& R : _Scene.Renderables()) {
             if (!R.Mesh || !R.Mesh->IsValid()) continue;
-            if (BlasByMesh.find(R.Mesh) != BlasByMesh.end()) continue;
-            BlasByMesh.emplace(R.Mesh, D3D12_GPU_VIRTUAL_ADDRESS{ 0 });
-            UniqueMeshes.push_back(R.Mesh);
+            if (SeenMeshes.insert(R.Mesh).second) UniqueMeshes.push_back(R.Mesh);
+
+            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
+            const FOpacityMicromapData* Omm = AlphaTest ? R.OpacityMicromap.get() : nullptr;
+            if (AlphaTest && (!Omm || !Omm->Valid()))
+                throw std::runtime_error("Material alpha-tested sem OMM valido; nao existe fallback DXR");
+            if (AlphaTest && !Omm->Matches(R.Material->Constants.BaseColorFactor.W,
+                                           R.Material->Constants.AlphaCutoff))
+                throw std::runtime_error(
+                    "OMM desatualizado apos editar alpha/cutoff; recarregue a cena para rebake");
+
+            auto& Variants = BlasByMesh[R.Mesh];
+            if (Variants.find(Omm) != Variants.end()) continue;
+            Variants.emplace(Omm, D3D12_GPU_VIRTUAL_ADDRESS{ 0 });
+            UniqueBlas.push_back({ R.Mesh, Omm });
         }
-        if (UniqueMeshes.empty()) {
+        if (UniqueBlas.empty()) {
             LogDebug("[GI] - Cena sem geometria; AS nao construida");
             return;
         }
-        const u32 NumBlas = static_cast<u32>(UniqueMeshes.size());
+        const u32 NumBlas   = static_cast<u32>(UniqueBlas.size());
+        const u32 NumMeshes = static_cast<u32>(UniqueMeshes.size());
 
         // VB/IB dos meshes ja vivem em estado combinado de leitura que inclui NON_PIXEL
         // (GpuMesh.cpp) — o build de BLAS le direto, sem transicao de ida e volta.
@@ -344,6 +378,14 @@ namespace Smile {
         // (heap >= 64KB) por BLAS — best practice NVIDIA/UE (RHIBuildAccelerationStructures).
         struct FBlasPlan {
             D3D12_RAYTRACING_GEOMETRY_DESC Geo{};
+            D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC Triangles{};
+            D3D12_RAYTRACING_GEOMETRY_OMM_LINKAGE_DESC OmmLinkage{};
+            D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_DESC OmmArrayDesc{};
+            GpuResources::FUploadBuffer OmmArrayInput;
+            GpuResources::FUploadBuffer OmmDescInput;
+            GpuResources::FUploadBuffer OmmIndexInput;
+            ComPtr<ID3D12Resource> OmmArray;
+            UINT64 OmmScratchOffset = 0;
             UINT64 ScratchOffset = 0;
             UINT64 BuildOffset   = 0;
             UINT64 CompactOffset = 0;
@@ -351,18 +393,73 @@ namespace Smile {
         std::vector<FBlasPlan> Plans(NumBlas);
         UINT64 TotalScratch = 0, TotalBuild = 0;
         for (u32 i = 0; i < NumBlas; ++i) {
-            const FGpuMesh* M = UniqueMeshes[i];
+            const FBlasKey& Key = UniqueBlas[i];
+            const FGpuMesh* M = Key.Mesh;
             FBlasPlan& P = Plans[i];
-            P.Geo.Type  = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-            P.Geo.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
-            P.Geo.Triangles.VertexBuffer.StartAddress  = M->VertexBufferGPUVA();
-            P.Geo.Triangles.VertexBuffer.StrideInBytes = M->VertexStride();
-            P.Geo.Triangles.VertexFormat               = DXGI_FORMAT_R32G32B32_FLOAT;
-            P.Geo.Triangles.VertexCount                = M->VertexCount();
-            P.Geo.Triangles.IndexBuffer                = M->IndexBufferGPUVA();
-            P.Geo.Triangles.IndexFormat                = DXGI_FORMAT_R32_UINT;
-            P.Geo.Triangles.IndexCount                 = M->GetIndexCount();
-            P.Geo.Triangles.Transform3x4               = 0;
+            P.Triangles.VertexBuffer.StartAddress  = M->VertexBufferGPUVA();
+            P.Triangles.VertexBuffer.StrideInBytes = M->VertexStride();
+            P.Triangles.VertexFormat               = DXGI_FORMAT_R32G32B32_FLOAT;
+            P.Triangles.VertexCount                = M->VertexCount();
+            P.Triangles.IndexBuffer                = M->IndexBufferGPUVA();
+            P.Triangles.IndexFormat                = DXGI_FORMAT_R32_UINT;
+            P.Triangles.IndexCount                 = M->GetIndexCount();
+            P.Triangles.Transform3x4               = 0;
+
+            if (Key.Omm) {
+                const FOpacityMicromapData& Omm = *Key.Omm;
+                P.OmmIndexInput = GpuResources::CreateUploadBuffer(
+                    Dev5, static_cast<u64>(Omm.Indices.size()), 1, false);
+                std::memcpy(P.OmmIndexInput.Mapped, Omm.Indices.data(), Omm.Indices.size());
+
+                if (!Omm.Descs.empty()) {
+                    P.OmmArrayInput = GpuResources::CreateUploadBuffer(
+                        Dev5, static_cast<u64>(Omm.ArrayData.size()), 1, false);
+                    P.OmmDescInput = GpuResources::CreateUploadBuffer(
+                        Dev5, static_cast<u64>(Omm.Descs.size() * sizeof(Omm.Descs[0])), 1, false);
+                    std::memcpy(P.OmmArrayInput.Mapped, Omm.ArrayData.data(), Omm.ArrayData.size());
+                    std::memcpy(P.OmmDescInput.Mapped, Omm.Descs.data(),
+                                Omm.Descs.size() * sizeof(Omm.Descs[0]));
+
+                    P.OmmArrayDesc.NumOmmHistogramEntries = static_cast<UINT>(Omm.Histogram.size());
+                    P.OmmArrayDesc.pOmmHistogram          = Omm.Histogram.data();
+                    P.OmmArrayDesc.InputBuffer            = P.OmmArrayInput.Address(0);
+                    P.OmmArrayDesc.PerOmmDescs = {
+                        P.OmmDescInput.Address(0), sizeof(D3D12_RAYTRACING_OPACITY_MICROMAP_DESC)
+                    };
+
+                    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS OmmInputs{};
+                    OmmInputs.Type        = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_ARRAY;
+                    OmmInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+                    OmmInputs.Flags       = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+                    OmmInputs.NumDescs    = 1;
+                    OmmInputs.pOpacityMicromapArrayDesc = &P.OmmArrayDesc;
+                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO OmmInfo{};
+                    Dev5->GetRaytracingAccelerationStructurePrebuildInfo(&OmmInputs, &OmmInfo);
+                    if (OmmInfo.ResultDataMaxSizeInBytes == 0 || OmmInfo.ScratchDataSizeInBytes == 0)
+                        throw std::runtime_error("Driver recusou o prebuild do OMM Array");
+                    P.OmmScratchOffset = TotalScratch;
+                    TotalScratch += AlignAS(OmmInfo.ScratchDataSizeInBytes);
+                    P.OmmArray = CreateUAVBuffer(Dev5, OmmInfo.ResultDataMaxSizeInBytes,
+                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+                    OmmArrays.push_back(P.OmmArray);
+                }
+
+                P.OmmLinkage.OpacityMicromapIndexBuffer = {
+                    P.OmmIndexInput.Address(0), Omm.IndexStride
+                };
+                P.OmmLinkage.OpacityMicromapIndexFormat = Omm.IndexFormat;
+                P.OmmLinkage.OpacityMicromapBaseLocation = 0;
+                P.OmmLinkage.OpacityMicromapArray =
+                    P.OmmArray ? P.OmmArray->GetGPUVirtualAddress() : 0;
+                P.Geo.Type  = D3D12_RAYTRACING_GEOMETRY_TYPE_OMM_TRIANGLES;
+                P.Geo.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
+                P.Geo.OmmTriangles.pTriangles  = &P.Triangles;
+                P.Geo.OmmTriangles.pOmmLinkage = &P.OmmLinkage;
+            } else {
+                P.Geo.Type      = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+                P.Geo.Flags     = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+                P.Geo.Triangles = P.Triangles;
+            }
 
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS Inputs{};
             Inputs.Type           = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
@@ -390,7 +487,24 @@ namespace Smile {
         ComPtr<ID3D12Resource> ReadbackBuf = GpuResources::CreateReadbackBuffer(
             Dev5, static_cast<u64>(NumBlas) * sizeof(UINT64));
 
-        // Passo 2: builds no pool + emissao do tamanho compactado de cada BLAS.
+        // Passo 2: os OMM Arrays precisam existir antes de qualquer BLAS que os referencia.
+        bool HasOmmBuild = false;
+        for (FBlasPlan& P : Plans) {
+            if (!P.OmmArray) continue; // bake so de indices especiais nao possui array
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC Build{};
+            Build.Inputs.Type        = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_ARRAY;
+            Build.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            Build.Inputs.Flags       = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+            Build.Inputs.NumDescs    = 1;
+            Build.Inputs.pOpacityMicromapArrayDesc = &P.OmmArrayDesc;
+            Build.ScratchAccelerationStructureData = Scratch->GetGPUVirtualAddress() + P.OmmScratchOffset;
+            Build.DestAccelerationStructureData    = P.OmmArray->GetGPUVirtualAddress();
+            CL->BuildRaytracingAccelerationStructure(&Build, 0, nullptr);
+            HasOmmBuild = true;
+        }
+        if (HasOmmBuild) GlobalUAVBarrier(CL.Get());
+
+        // Builds de BLAS no pool + emissao do tamanho compactado de cada um.
         for (u32 i = 0; i < NumBlas; ++i) {
             FBlasPlan& P = Plans[i];
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS Inputs{};
@@ -457,12 +571,14 @@ namespace Smile {
             }
             GlobalUAVBarrier(CL.Get());
             for (u32 i = 0; i < NumBlas; ++i)
-                BlasByMesh[UniqueMeshes[i]] = BlasPool->GetGPUVirtualAddress() + Plans[i].CompactOffset;
+                BlasByMesh[UniqueBlas[i].Mesh][UniqueBlas[i].Omm] =
+                    BlasPool->GetGPUVirtualAddress() + Plans[i].CompactOffset;
         } else {
             LogWarning("[GI] - Readback de compaction invalido; BLAS sem compactar");
             BlasPool = BuildPool;
             for (u32 i = 0; i < NumBlas; ++i)
-                BlasByMesh[UniqueMeshes[i]] = BlasPool->GetGPUVirtualAddress() + Plans[i].BuildOffset;
+                BlasByMesh[UniqueBlas[i].Mesh][UniqueBlas[i].Omm] =
+                    BlasPool->GetGPUVirtualAddress() + Plans[i].BuildOffset;
         }
         BlasCount_ = NumBlas;
 
@@ -538,13 +654,13 @@ namespace Smile {
         // reconstruia essa lista com um criterio identico, palavra por palavra; uma so agora.
         // TRES por malha desde a v8: [VB][IB][RTTri]. O terceiro e o payload pre-cozido por
         // triangulo, que o caminho de hit passou a ler no lugar da cadeia IB -> 3 vertices.
-        MeshGeoSlotCount = NumBlas * 3;
+        MeshGeoSlotCount = NumMeshes * 3;
         MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
             GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
             GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            for (u32 i = 0; i < NumBlas; ++i) {
+            for (u32 i = 0; i < NumMeshes; ++i) {
                 const FGpuMesh* M      = UniqueMeshes[i];
                 const u32       VbSlot = MeshGeoSlotBase + i * 3;
 
@@ -606,7 +722,8 @@ namespace Smile {
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);
         const double FinalMB   = static_cast<double>(Compact ? TotalCompact : TotalBuild) / (1024.0 * 1024.0);
         LogDebug("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
-                " instancias / " + std::to_string(NumBlas) + " BLAS (pool " +
+                " instancias / " + std::to_string(NumBlas) + " BLAS / " +
+                std::to_string(OmmArrays.size()) + " OMM Arrays (pool " +
                 std::to_string(FinalMB).substr(0, 6) + " MB, build " +
                 std::to_string(BuildMB).substr(0, 6) + " MB, compaction " +
                 (Compact ? "ON" : "OFF") + ")");

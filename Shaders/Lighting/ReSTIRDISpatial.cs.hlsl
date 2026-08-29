@@ -342,7 +342,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             ray.Direction = toLight / len;
             ray.TMin = RayEpsB.x;
             ray.TMax = tMax;
-            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                     RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> query;
             query.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                                  (uint)Params.z, ray);
             SMILE_RT_PROCEED(query)

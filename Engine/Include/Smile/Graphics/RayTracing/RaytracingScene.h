@@ -13,6 +13,7 @@ namespace Smile {
     class FTextureSRVHeap;
     class FScene;
     class FGpuMesh;
+    struct FOpacityMicromapData;
 
     class FRaytracingScene {
     public:
@@ -50,8 +51,8 @@ namespace Smile {
         //
         // Morava no FDDGI, e isso obrigava sete consumidores que nao tocam em sonda nenhuma a
         // esperar o VOLUME existir para receber um descritor valido. Aqui ele fica ao lado do que
-        // ja descreve a mesma cena de RT: a TLAS enderecada pelo mesmo InstanceID e o BlasByMesh,
-        // que percorre exatamente a mesma lista de malhas unicas deste snapshot.
+        // ja descreve a mesma cena de RT: a TLAS enderecada pelo mesmo InstanceID e o conjunto
+        // de malhas geometricas. Uma malha pode ter varios BLAS por causa dos OMM por material.
         u32  InstanceGeoSRV()      const { return InstanceGeoSRVSlot_; }
         // Quantas instancias o snapshot consegue descrever. Alocado no Build pelo tamanho da cena
         // de entao, COM folga (SceneCapacityFor); o RefreshInstanceGeo trunca nele. Quem cria
@@ -90,10 +91,14 @@ namespace Smile {
         u32    InstanceCount_  = 0;
         u32    BlasCount_      = 0;
 
-        // Todos os BLAS vivem suballocados (offsets 256B) num buffer unico ja compactado;
-        // o map guarda o VA de cada BLAS dentro do pool.
-        Microsoft::WRL::ComPtr<ID3D12Resource>                         BlasPool;
-        std::unordered_map<const FGpuMesh*, D3D12_GPU_VIRTUAL_ADDRESS> BlasByMesh;
+        // OMM e propriedade do par mesh/material. A mesma FGpuMesh pode, portanto, possuir um
+        // BLAS opaco e outros BLAS ligados a micro-maps diferentes.
+        Microsoft::WRL::ComPtr<ID3D12Resource> BlasPool;
+        std::unordered_map<const FGpuMesh*,
+            std::unordered_map<const FOpacityMicromapData*, D3D12_GPU_VIRTUAL_ADDRESS>> BlasByMesh;
+        // O OMM Array e uma acceleration structure referenciada pelo BLAS e precisa viver pelo
+        // mesmo tempo. ArrayData/desc/index sao apenas inputs de build e nao ficam persistentes.
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> OmmArrays;
         Microsoft::WRL::ComPtr<ID3D12Resource>                         Tlas;
 
         // Infra persistente do rebuild de TLAS por frame: uploads de instancias + scratch
@@ -112,9 +117,8 @@ namespace Smile {
         u32                                    InstanceGeoCount    = 0; // capacidade, nao a cena
         u32                                    InstanceGeoSRVSlot_ = 0xFFFFFFFFu;
         // SRVs bindless de VB/IB por malha unica (2 slots contiguos por malha: base+2i = VB,
-        // base+2i+1 = IB) — o InstanceGeo carrega os indices. Mesma lista de malhas unicas do
-        // BlasByMesh, agora percorrida UMA vez: o DDGI refazia a propria deduplicacao com o
-        // mesmo criterio, e duas listas com a mesma regra sao uma que fica para tras.
+        // base+2i+1 = IB) — o InstanceGeo carrega os indices. A lista deduplica a geometria,
+        // independente das variantes de BLAS/OMM que uma mesma malha possua.
         u32                                    MeshGeoSlotBase  = 0xFFFFFFFFu;
         u32                                    MeshGeoSlotCount = 0;
         // Malha -> slot bindless do VB (IB = +1). Membro, e nao local do Build, porque o

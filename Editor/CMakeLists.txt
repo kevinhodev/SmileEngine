@@ -93,6 +93,18 @@ if(WIN32)
         COMMENT "Copiando stylesheets QSS para o diretorio de build"
     )
 
+    # Agility SDK app-local. D3D12SDKPath, exportado por D3D12Device.cpp, aponta para esta pasta.
+    add_custom_command(TARGET SmileEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:SmileEditor>/D3D12"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SMILE_AGILITY_SDK_ROOT}/build/native/bin/x64/D3D12Core.dll"
+                "$<TARGET_FILE_DIR:SmileEditor>/D3D12"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SMILE_AGILITY_SDK_ROOT}/build/native/bin/x64/d3d12SDKLayers.dll"
+                "$<TARGET_FILE_DIR:SmileEditor>/D3D12"
+        COMMENT "Copiando Direct3D Agility SDK 1.619 para D3D12/"
+    )
+
     # Copia a pasta de Qml (deploy fallback; em dev carregamos do source dir p/ hot-reload)
     add_custom_command(TARGET SmileEditor POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory

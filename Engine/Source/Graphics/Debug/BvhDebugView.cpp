@@ -148,7 +148,7 @@ namespace Smile {
     }
 
     void FBvhDebugView::CreatePipelines(ID3D12Device* _Device) {
-        PSO.Initialize(_Device, "BvhDebug.cs_6_6.cso", 2, 1, /*HeapDirectlyIndexed=*/true);
+        PSO.Initialize(_Device, "BvhDebug.cs_6_9.cso", 2, 1, /*HeapDirectlyIndexed=*/true);
     }
 
 

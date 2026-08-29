@@ -984,7 +984,7 @@ namespace Smile {
     }
 
     void FDDGI::CreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "DDGITrace.cs_6_6.cso", 11, 1, true);
+        TracePSO.Initialize(_Device, "DDGITrace.cs_6_9.cso", 11, 1, true);
         UpdatePSO.Initialize(_Device, "DDGIUpdate.cs_6_0.cso", 4, 1);
         UpdateDistPSO.Initialize(_Device, "DDGIUpdateDist.cs_6_0.cso", 4, 1);
         RelocatePSO.Initialize(_Device, "DDGIRelocate.cs_6_0.cso", 4, 2);

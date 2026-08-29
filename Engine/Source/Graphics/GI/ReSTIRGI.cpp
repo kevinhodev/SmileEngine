@@ -568,14 +568,14 @@ namespace Smile {
     }
 
     void FReSTIRGI::CreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_6.cso", 14, 3, true);
-        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_6.cso", 10, 1, true);
+        TracePSO.Initialize(_Device, "ReSTIRGITrace.cs_6_9.cso", 14, 3, true);
+        SpatialPSO.Initialize(_Device, "ReSTIRGISpatial.cs_6_9.cso", 10, 1, true);
         UpsamplePSO.Initialize(_Device, "ReSTIRGIUpsample.cs_6_6.cso", 5, 1, true);
         NrdPackPSO.Initialize(_Device, "ReSTIRNrdPack.cs_6_6.cso", 4, 4, false);
 
         if (FShaderTimer::IsAvailable()) {
             try {
-                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_6.cso", 14, 3, true, true);
+                TracePSOTimed.Initialize(_Device, "ReSTIRGITraceTimed.cs_6_9.cso", 14, 3, true, true);
                 TraceTimed = true;
             } catch (const std::exception&) {
                 LogWarning("ReSTIRGITraceTimed.cso Ausente — Timer do ReSTIR GI Indisponível.");

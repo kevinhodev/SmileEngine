@@ -119,7 +119,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     ray.TMin      = 0.0f;
     ray.TMax      = maxT;
 
-    RayQuery<RAY_FLAG_NONE> q;
+    RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
     // RAY_FLAG_NONE preserva backfaces para detectar sondas enterradas.
     q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)

@@ -67,7 +67,6 @@ namespace Smile {
     // porque o trabalho async espera um fence da direta. Depois de reconstruir uma cena viva,
     // SetupGIForScene deve remontar as tabelas que copiam descriptors do snapshot.
     void Renderer::BuildRaytracingScene() {
-        if (!Backend->Device.RaytracingSupported()) return;
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
         RaytracingScene.Build(Backend->Device, Backend->DirectQueue, Backend->SRVHeap,

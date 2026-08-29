@@ -1,5 +1,43 @@
 # Biblioteca estatica da engine - SmileEngine
 
+# === DXR 1.2 / Opacity Micromaps ==============================================================
+# OMM nao possui fallback na Smile: configure falha cedo se os SDKs necessarios nao estiverem
+# presentes. O baker CPU oficial da NVIDIA gera os micro-mapas no load; DirectXTex converte
+# inclusive albedo BC3/BC7 para o plano FP32 de alpha consumido pelo baker.
+set(SMILE_OMM_ROOT "D:/Engines/OMM" CACHE PATH "Raiz do NVIDIA Opacity Micro-Map SDK")
+set(SMILE_DIRECTXTEX_ROOT "D:/Engines/DirectXTex" CACHE PATH "Raiz do Microsoft DirectXTex")
+
+if(NOT EXISTS "${SMILE_AGILITY_SDK_ROOT}/build/native/include/d3d12.h")
+    message(FATAL_ERROR "Agility SDK 1.619.5+ ausente: ${SMILE_AGILITY_SDK_ROOT}")
+endif()
+if(NOT EXISTS "${SMILE_OMM_ROOT}/libraries/omm-lib/include/omm.hpp")
+    message(FATAL_ERROR "NVIDIA OMM SDK ausente: ${SMILE_OMM_ROOT}")
+endif()
+if(NOT EXISTS "${SMILE_DIRECTXTEX_ROOT}/DirectXTex/DirectXTex.h")
+    message(FATAL_ERROR "DirectXTex ausente: ${SMILE_DIRECTXTEX_ROOT}")
+endif()
+
+set(OMM_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(OMM_BUILD_VIEWER OFF CACHE BOOL "" FORCE)
+set(OMM_BUILD_OMM_GPU_NVRHI OFF CACHE BOOL "" FORCE)
+set(OMM_ENABLE_PRECOMPILED_SHADERS_DXIL OFF CACHE BOOL "" FORCE)
+set(OMM_ENABLE_PRECOMPILED_SHADERS_SPIRV OFF CACHE BOOL "" FORCE)
+set(OMM_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+set(OMM_LIB_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${SMILE_OMM_ROOT}" "${CMAKE_BINARY_DIR}/third_party/omm" EXCLUDE_FROM_ALL)
+
+set(_smile_build_testing "${BUILD_TESTING}")
+set(BUILD_TESTING OFF)
+set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+set(BUILD_DX11 OFF CACHE BOOL "" FORCE)
+set(BUILD_DX12 OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BC_USE_OPENMP ON CACHE BOOL "" FORCE)
+add_subdirectory("${SMILE_DIRECTXTEX_ROOT}" "${CMAKE_BINARY_DIR}/third_party/directxtex"
+                 EXCLUDE_FROM_ALL)
+set(BUILD_TESTING "${_smile_build_testing}")
+
 # Gera VersionInfo.h a partir do template (.in) com as macros definidas no CMake raiz.
 # Este aqui e o do CONFIGURE, e existe so para o arquivo ja estar em disco quando o CMake monta
 # a lista de fontes. O valor que vale e o carimbado a cada build pelo alvo abaixo.
@@ -52,6 +90,9 @@ set_source_files_properties(
 )
 
 target_include_directories(SmileEngine
+    BEFORE PUBLIC
+        # Tem de preceder o Windows SDK: estes headers contem DXR 1.2 / OMM.
+        ${SMILE_AGILITY_SDK_ROOT}/build/native/include
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
         ${CMAKE_CURRENT_BINARY_DIR}/generated
@@ -78,7 +119,15 @@ target_link_libraries(SmileEngine
         dxguid
         windowscodecs
         ole32
+    PRIVATE
+        omm-lib
+        DirectXTex
 )
+
+target_include_directories(SmileEngine PRIVATE
+    "${SMILE_OMM_ROOT}/libraries/omm-lib/include"
+)
+target_compile_definitions(SmileEngine PUBLIC SMILE_D3D12_AGILITY_VERSION=619)
 
 # === FSR (AMD FidelityFX Super Resolution — upscaler FSR 3.1 via ffx-api) ========================
 # FidelityFX SDK 1.1.4 com a API unificada (ffx-api): linka a import lib do amd_fidelityfx_dx12.dll +

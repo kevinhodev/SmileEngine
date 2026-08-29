@@ -28,7 +28,7 @@ float3 OffsetRayWB(float3 p, float3 n) {
     const float kFloatScale = 1.0f / 65536.0f;
     const float kIntScale   = 256.0f;
     int3   ofI = int3(kIntScale * n);
-    float3 pI  = asfloat(asint(p) + ((p < 0.0f) ? -ofI : ofI));
+    float3 pI  = asfloat(asint(p) + select(p < 0.0f, -ofI, ofI));
     return float3(abs(p.x) < kOrigin ? p.x + kFloatScale * n.x : pI.x,
                   abs(p.y) < kOrigin ? p.y + kFloatScale * n.y : pI.y,
                   abs(p.z) < kOrigin ? p.z + kFloatScale * n.z : pI.z);
