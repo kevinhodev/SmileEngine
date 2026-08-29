@@ -44,6 +44,8 @@ namespace Smile {
         static std::shared_ptr<FOpacityMicromapData> Bake(const FMesh& Mesh,
                                                           const FTextureCPUData* AlphaTexture,
                                                           f32 BaseAlpha,
-                                                          f32 AlphaCutoff);
+                                                          f32 AlphaCutoff,
+                                                          bool EnableInternalThreads = true,
+                                                          u32 InternalThreadCount = 0);
     };
 }

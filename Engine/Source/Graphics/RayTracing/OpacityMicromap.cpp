@@ -8,6 +8,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 #include <stdexcept>
 #include <string>
 
@@ -126,7 +129,8 @@ namespace Smile {
 
     std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
         const FMesh& _Mesh, const FTextureCPUData* _AlphaTexture,
-        f32 _BaseAlpha, f32 _AlphaCutoff) {
+        f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
+        u32 _InternalThreadCount) {
         if (_Mesh.Vertices.empty() || _Mesh.Indices.empty() || (_Mesh.Indices.size() % 3) != 0)
             Fail("mesh sem triangulos validos");
         if (_Mesh.Vertices.size() > std::numeric_limits<u32>::max() ||
@@ -164,8 +168,20 @@ namespace Smile {
             CheckOmm(omm::Cpu::CreateTexture(Baker, TextureDesc, &Texture), "CreateTexture");
 
             omm::Cpu::BakeInputDesc Input{};
-            Input.bakeFlags = omm::Cpu::BakeFlags::EnableInternalThreads |
-                              omm::Cpu::BakeFlags::EnableValidation;
+            Input.bakeFlags = omm::Cpu::BakeFlags::EnableValidation;
+            if (_EnableInternalThreads) {
+#if defined(_OPENMP)
+                if (_InternalThreadCount > 0) {
+                    omp_set_dynamic(0);
+                    omp_set_num_threads(static_cast<int>(_InternalThreadCount));
+                }
+#else
+                (void)_InternalThreadCount;
+#endif
+                Input.bakeFlags = static_cast<omm::Cpu::BakeFlags>(
+                    static_cast<u32>(Input.bakeFlags) |
+                    static_cast<u32>(omm::Cpu::BakeFlags::EnableInternalThreads));
+            }
             Input.texture = Texture;
             Input.runtimeSamplerDesc.addressingMode = omm::TextureAddressMode::Wrap;
             Input.runtimeSamplerDesc.filter         = omm::TextureFilterMode::Linear;

@@ -752,12 +752,12 @@ namespace SmileEditor {
 
     void MaterialsBridge::SetAlphaTest(bool _V) {
         auto M = SelMat(); if (!M) return;
-        M->Constants.AlphaTest = _V ? 1 : 0;
-        M->UpdateConstants();
-        // AlphaTest nao e so raster: decide a InstanceMask e o FORCE_NON_OPAQUE da TLAS, entra no
-        // criterio de culling (IsTwoSidedForRT) e vive no snapshot do InstanceGeo. Sem isto o RT
-        // seguia com o estado do load.
-        TouchSelectedRT(EChangeDomain::MaterialMode);
+        if ((M->Constants.AlphaTest != 0) == _V) return;
+        // OMM e o tipo do BLAS pertencem ao estado carregado. Trocar opaco <-> masked sem
+        // rebake deixaria a TLAS sem a variante exigida e encerraria a render thread.
+        Smile::LogWarning(
+            "Materiais: toggle de Alpha Test rejeitado; OMM exige recarregar/rebake da cena");
+        emit MaterialModeChanged();
     }
 
     qreal MaterialsBridge::AlphaCutoff() const {
@@ -767,6 +767,13 @@ namespace SmileEditor {
 
     void MaterialsBridge::SetAlphaCutoff(qreal _V) {
         auto M = SelMat(); if (!M) return;
+        if (std::abs(M->Constants.AlphaCutoff - float(_V)) <= 1.0e-6f) return;
+        if (M->Constants.AlphaTest) {
+            Smile::LogWarning(
+                "Materiais: Alpha Cutoff rejeitado; o OMM masked exige recarregar/rebake da cena");
+            emit MaterialModeChanged();
+            return;
+        }
         M->Constants.AlphaCutoff = float(_V);
         M->UpdateConstants();
         // InstanceGeo.AlphaCutoff: e o cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli).

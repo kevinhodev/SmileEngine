@@ -9,14 +9,18 @@
 #include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Core/Logger.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -210,11 +214,112 @@ namespace Smile {
             return "Mesh " + std::to_string(fallbackIdx);
         };
 
+        struct FOmmBakeJob {
+            u64 Key = 0;
+            const FMesh* Mesh = nullptr;
+            const FTextureCPUData* AlphaTexture = nullptr;
+            f32 BaseAlpha = 1.0f;
+            f32 AlphaCutoff = 0.5f;
+        };
+
+        std::vector<FOmmBakeJob> ommJobs;
+        std::unordered_map<u64, size_t> ommJobByMeshMaterial;
+        ommJobs.reserve(sh.RenderableCount);
+        for (u32 i = 0; i < sh.RenderableCount; ++i) {
+            const SSceneRenderable& r = rnds[i];
+            if (r.MeshIndex >= mh.MeshCount) continue;
+            FMaterial* Material = matOf(r.MaterialIndex);
+            if (!Material || !Material->Constants.AlphaTest) continue;
+            if (r.MaterialIndex == kNoMaterial || r.MaterialIndex >= sh.MaterialCount)
+                throw std::runtime_error("Renderable alpha-tested sem material valido para OMM");
+
+            const u64 Key = (static_cast<u64>(r.MeshIndex) << 32) |
+                            static_cast<u64>(r.MaterialIndex);
+            if (ommJobByMeshMaterial.contains(Key)) continue;
+            const SSceneMaterial& Sm = mats[r.MaterialIndex];
+            ommJobByMeshMaterial.emplace(Key, ommJobs.size());
+            ommJobs.push_back({ Key, &Imported.Meshes[r.MeshIndex], getTexCpu(Sm.BaseColor),
+                                Material->Constants.BaseColorFactor.W,
+                                Material->Constants.AlphaCutoff });
+        }
+
+        // Comecar pelas geometrias maiores reduz a cauda: os ultimos workers nao ficam presos
+        // sozinhos nos bakes caros depois que todos os jobs pequenos ja terminaram.
+        std::stable_sort(ommJobs.begin(), ommJobs.end(),
+            [](const FOmmBakeJob& A, const FOmmBakeJob& B) {
+                return A.Mesh->Indices.size() > B.Mesh->Indices.size();
+            });
+        ommJobByMeshMaterial.clear();
+        for (size_t I = 0; I < ommJobs.size(); ++I)
+            ommJobByMeshMaterial.emplace(ommJobs[I].Key, I);
+
+        // OMM possui dois perfis bem diferentes: geometrias grandes/UVs patologicas escalam com
+        // o OpenMP interno, enquanto muitos jobs pequenos ganham mais sendo executados em
+        // paralelo sem equipes aninhadas. Separar as duas faixas evita uma cauda single-thread.
+        const Clock::time_point tOmmBakeStart = Clock::now();
+        std::vector<std::shared_ptr<FOpacityMicromapData>> ommResults(ommJobs.size());
+        const unsigned HardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+        const unsigned WorkerBudget = HardwareThreads > 2 ? HardwareThreads - 2 : 1;
+        constexpr size_t kInternalThreadTriangleThreshold = 4096;
+        std::vector<size_t> parallelJobIndices;
+        parallelJobIndices.reserve(ommJobs.size());
+        size_t InternalJobCount = 0;
+        for (size_t I = 0; I < ommJobs.size(); ++I) {
+            const FOmmBakeJob& Job = ommJobs[I];
+            const size_t TriangleCount = Job.Mesh->Indices.size() / 3;
+            if (TriangleCount >= kInternalThreadTriangleThreshold) {
+                ommResults[I] = FOpacityMicromapBaker::Bake(
+                    *Job.Mesh, Job.AlphaTexture, Job.BaseAlpha, Job.AlphaCutoff,
+                    true, WorkerBudget);
+                ++InternalJobCount;
+            } else {
+                parallelJobIndices.push_back(I);
+            }
+        }
+
+        const unsigned WorkerCount = std::min<unsigned>(
+            std::min(WorkerBudget, 8u), static_cast<unsigned>(parallelJobIndices.size()));
+        std::atomic_size_t NextJob{ 0 };
+        std::atomic_bool StopWorkers{ false };
+        std::mutex ErrorMutex;
+        std::exception_ptr FirstError;
+        auto BakeWorker = [&]() {
+            while (!StopWorkers.load(std::memory_order_relaxed)) {
+                const size_t Slot = NextJob.fetch_add(1, std::memory_order_relaxed);
+                if (Slot >= parallelJobIndices.size()) return;
+                const size_t JobIndex = parallelJobIndices[Slot];
+                const FOmmBakeJob& Job = ommJobs[JobIndex];
+                try {
+                    ommResults[JobIndex] = FOpacityMicromapBaker::Bake(
+                        *Job.Mesh, Job.AlphaTexture, Job.BaseAlpha, Job.AlphaCutoff, false);
+                } catch (...) {
+                    {
+                        std::scoped_lock Lock(ErrorMutex);
+                        if (!FirstError) FirstError = std::current_exception();
+                    }
+                    StopWorkers.store(true, std::memory_order_relaxed);
+                    return;
+                }
+            }
+        };
+        std::vector<std::jthread> ommWorkers;
+        ommWorkers.reserve(WorkerCount);
+        for (unsigned I = 0; I < WorkerCount; ++I) ommWorkers.emplace_back(BakeWorker);
+        for (std::jthread& Worker : ommWorkers) Worker.join();
+        if (FirstError) std::rethrow_exception(FirstError);
+        const double msOmmBake = MsSince(tOmmBakeStart);
+        if (!ommJobs.empty()) {
+            LogDebug("[OMM] Bake paralelo: " + std::to_string(ommJobs.size()) +
+                     " pares (" + std::to_string(InternalJobCount) + " grandes internos + " +
+                     std::to_string(parallelJobIndices.size()) + " pequenos em " +
+                     std::to_string(WorkerCount) + " workers) em " +
+                     std::to_string(static_cast<int>(msOmmBake)) + " ms");
+        }
+
         const Clock::time_point tMeshUploadStart = Clock::now();
         const auto MeshCreationBase = GpuResources::CreationStats();
         std::vector<FGpuMesh*> meshPtrs = SceneState->Scene.AddMeshesBatch(
             Backend->Device.Native(), Backend->UploadQueue, Imported.Meshes);
-        std::unordered_map<u64, std::shared_ptr<FOpacityMicromapData>> ommByMeshMaterial;
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
             const SSceneRenderable& r = rnds[i];
             if (r.MeshIndex >= mh.MeshCount) continue;
@@ -223,19 +328,12 @@ namespace Smile {
             out.Mesh     = meshPtrs[r.MeshIndex];
             out.Material = matOf(r.MaterialIndex);
             if (out.Material && out.Material->Constants.AlphaTest) {
-                if (r.MaterialIndex == kNoMaterial || r.MaterialIndex >= sh.MaterialCount)
-                    throw std::runtime_error("Renderable alpha-tested sem material valido para OMM");
                 const u64 OmmKey = (static_cast<u64>(r.MeshIndex) << 32) |
                                    static_cast<u64>(r.MaterialIndex);
-                auto [It, Inserted] = ommByMeshMaterial.try_emplace(OmmKey);
-                if (Inserted) {
-                    const SSceneMaterial& Sm = mats[r.MaterialIndex];
-                    It->second = FOpacityMicromapBaker::Bake(
-                        Imported.Meshes[r.MeshIndex], getTexCpu(Sm.BaseColor),
-                        out.Material->Constants.BaseColorFactor.W,
-                        out.Material->Constants.AlphaCutoff);
-                }
-                out.OpacityMicromap = It->second;
+                const auto It = ommJobByMeshMaterial.find(OmmKey);
+                if (It == ommJobByMeshMaterial.end() || It->second >= ommResults.size())
+                    throw std::runtime_error("Job OMM ausente para renderable alpha-tested");
+                out.OpacityMicromap = ommResults[It->second];
             }
             out.Transform.Position      = Vec3{ r.Position[0], r.Position[1], r.Position[2] };
             out.Transform.RotationEuler = Vec3{ r.RotationEuler[0], r.RotationEuler[1],

@@ -34,6 +34,11 @@ executavel, portanto o runtime nao depende da versao de D3D12 distribuida pelo s
 6. Os BLAS sao compactados e a TLAS seleciona a variante correta por par mesh/OMM.
 7. Todos os `RayQuery` usam `RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS` e shaders SM 6.9.
 
+Os pares unicos de malha/material sao ordenados por tamanho e usam duas faixas: geometrias
+grandes executam com o OpenMP interno do SDK; jobs menores sao distribuídos dinamicamente entre
+ate oito workers single-thread. As faixas nao se sobrepoem e deixam dois processadores logicos
+livres, evitando OpenMP aninhado e a cauda de um bake patologico isolado.
+
 Microtriangulos conhecidos como opacos ou transparentes sao resolvidos pelo hardware. Somente
 o estado `UNKNOWN` chega ao `AlphaTestPass`, preservando o resultado exato da textura sem pagar
 o custo do alpha-test em todos os candidatos. Isso e parte do caminho OMM 4-state, nao um
@@ -46,8 +51,8 @@ O cutoff usa a mesma semantica `alpha >= cutoff` do raster/HLSL. O baker da NVID
 
 - O bake pertence ao par mesh/material; uma mesma mesh pode gerar varios BLAS.
 - `AlphaTest`, alpha do `BaseColorFactor` e `AlphaCutoff` usados no build devem continuar iguais
-  durante a vida da cena. Se forem editados, a engine acusa OMM desatualizado e exige recarregar
-  a cena para rebake, em vez de usar um resultado incorreto ou cair no BLAS antigo.
+  durante a vida da cena. O Editor rejeita toggles de `AlphaTest` e mudancas de cutoff em material
+  masked ate existir rebake ao vivo, em vez de invalidar a render thread ou cair no BLAS antigo.
 - Trocar a textura base-color de um material masked tambem exige recarregar a cena.
 - Materiais opacos continuam usando triangulos `OPAQUE`; a obrigatoriedade de OMM se aplica a
   toda geometria alpha-tested.
