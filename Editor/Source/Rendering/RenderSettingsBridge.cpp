@@ -525,7 +525,7 @@ namespace SmileEditor {
         return Renderer ? static_cast<int>(Renderer->Settings().GetRadianceCacheMaxVertices()) : 4;
     }
     double RenderSettingsBridge::GetRadianceCacheMinRoughness() const {
-        return Renderer ? Renderer->Settings().GetRadianceCacheMinCacheableRoughness() : 0.5;
+        return Renderer ? Renderer->Settings().GetRadianceCacheMinCacheableRoughness() : 0.0;
     }
     int RenderSettingsBridge::GetRadianceCacheMinSamples() const {
         return Renderer ? static_cast<int>(Renderer->Settings().GetRadianceCacheMinSampleCount())

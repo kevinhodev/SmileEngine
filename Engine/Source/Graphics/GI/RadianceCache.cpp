@@ -16,9 +16,9 @@ using Microsoft::WRL::ComPtr;
 namespace Smile {
     namespace {
         // Espelham o layout do RadianceCacheResolve.cs.hlsl. Entries e 1 uint (checksum), Accum
-        // sao 4 uints (rgb em ponto fixo + contagem) e Resolved e 1 uint4.
+        // sao 8 ints (Y L0/L1, Co/Cg L0, contagem e padding) e Resolved guarda 6 halfs + metadata.
         constexpr u32 kEntryStride    = sizeof(u32);
-        constexpr u32 kAccumStride    = sizeof(u32) * 4;
+        constexpr u32 kAccumStride    = sizeof(u32) * 8;
         constexpr u32 kResolvedStride = sizeof(u32) * 4;
         // Espelha RC_STAT_COUNT do RadianceCache.hlsli.
         constexpr u32 kStatCount      = 36;
@@ -238,7 +238,7 @@ namespace Smile {
 
         Entries  = CreateStructuredUAV(Device, CapacityV, kEntryStride,
                                        "Radiance cache · chaves");
-        Accum    = CreateStructuredUAV(Device, CapacityV * 4u, kEntryStride,
+        Accum    = CreateStructuredUAV(Device, CapacityV * 8u, kEntryStride,
                                        "Radiance cache · acumulacao");
         Resolved = CreateStructuredUAV(Device, CapacityV, kResolvedStride,
                                        "Radiance cache · resolvido");
@@ -265,9 +265,9 @@ namespace Smile {
         Uav.Buffer.StructureByteStride = kEntryStride;
         SRVHeap.CreateUAV(Device, Entries.Get(), Uav, UavTable + 0);
 
-        // O Accum e declarado como RWStructuredBuffer<uint> no shader e indexado por
-        // entryIndex*4 + canal — por isso NumElements e 4x e o stride e de uint, nao do quarteto.
-        Uav.Buffer.NumElements         = CapacityV * 4u;
+        // O Accum e declarado como RWStructuredBuffer<int> no shader e indexado por
+        // entryIndex*8 + coeficiente — por isso NumElements e 8x e o stride e de int.
+        Uav.Buffer.NumElements         = CapacityV * 8u;
         Uav.Buffer.StructureByteStride = kEntryStride;
         SRVHeap.CreateUAV(Device, Accum.Get(), Uav, UavTable + 1);
 
@@ -652,11 +652,10 @@ namespace Smile {
         // que nao consulta o volume de jeito nenhum.
         U.GIDistParams = { GIHit.DistTile, GIHit.DistAtlasW, GIHit.DistAtlasH,
                            GIHit.SkipModePacked() };
-        // .w e o unico campo desta linha que o passe LE: o piso de roughness do secundario. Ele
-        // importa aqui mais que em qualquer consumidor — este e o produtor do cache
-        // nao-direcional.
+        // O updater direcional nao achata o material para o piso de roughness do GI secundario:
+        // ele preserva o glossy no L1 e usa UpdateParams.w + cone como politica de elegibilidade.
         U.GIBiasParams = { GIHit.BiasScale, GIHit.BiasMax, GIHit.FadeProbes,
-                           GIHit.SecondaryRoughnessMin };
+                           0.0f };
         U.ReGIRGridMinSlots     = ReGIRParams.GridMinSlots;
         U.ReGIRInvCellEnabled   = ReGIRParams.InvCellSizeEnabled;
         U.ReGIRGridCountSamples = ReGIRParams.GridCountSamples;

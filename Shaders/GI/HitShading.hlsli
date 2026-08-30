@@ -134,7 +134,7 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
     // pareceria travada.
     bool srcIneligible = false;
     {
-        const FRCQueryResult Q = RC_QueryEx(P.Cache, S.Pos, S.CacheN,
+        const FRCQueryResult Q = RC_QueryEx(P.Cache, S.Pos, S.CacheN, -Path.Dir,
                                             Path.SegmentLength, Path.RayRoughness);
         if (RC_QueryHit(Q)) {
             RC_CountSource(P.Cache, RC_STAT_SRC_CACHE);
@@ -193,7 +193,16 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
     // E ESTE o "produtor legado" que o plano manda manter ate a Fase 3 existir: o cache aprende
     // dos hits do render, e nao de um passe proprio. O bit ja e a flag que o desliga — quando o
     // updater dedicado entrar, o CPU para de arma-lo aqui e esta linha sai sem cirurgia.
-    RC_Update(P.Cache, S.Pos, S.CacheN, outRadiance);
+    // Direcao = hit -> vertice anterior. Direta e indireta passam pela BRDF do material; emissivo
+    // e isotropico. Ponderar pela luminancia faz uma unica gravacao equivaler a somar as duas
+    // codificacoes separadas, sem duplicar a contagem de amostras.
+    const float shadedY  = RC_RadianceY(directLighting + indirectLighting);
+    const float totalY   = RC_RadianceY(outRadiance);
+    const float materialDirection = RC_MaterialDirectionWeight(
+        M.DiffuseColor, M.SpecularColor, M.Roughness);
+    const float directionWeight = totalY > 1e-6f
+                                ? materialDirection * shadedY / totalY : 0.0f;
+    RC_Update(P.Cache, S.Pos, S.CacheN, outRadiance, -Path.Dir, directionWeight);
 
     return outRadiance;
 }

@@ -512,8 +512,8 @@ FBsdfSample PT_SampleBSDF(FHitSurface S, FHitMaterial M, float3 V, float2 Edir, 
 
     // Probabilidade do lobo pela ENERGIA de cada um [Cyberpunk 2077, "escolher o lobo a partir da
     // energia difusa/especular"]. Metal tem DiffuseColor zero e cairia inteiro no especular, que e
-    // o certo: com o piso de roughness do secundario (PT_LoadHitMaterial) esse lobo e largo o
-    // bastante para o cache nao-direcional representa-lo.
+    // o certo. O cache SH direcional preserva a orientacao desse lobo; no modo L0, o piso de
+    // roughness do secundario (PT_LoadHitMaterial) ainda evita um sinal angular estreito demais.
     const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
     const float  wd    = dot(M.DiffuseColor,  kLuma);
     const float  ws    = dot(M.SpecularColor, kLuma);

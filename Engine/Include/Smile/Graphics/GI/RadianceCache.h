@@ -273,11 +273,12 @@ namespace Smile {
         static constexpr u32 kMaxSamplesPerFrame   = 64;
         static constexpr u32 kStaleFrameMax         = 64;
         static_assert(kMaxAccumulatedFrames <= 0xFFu && kStaleFrameMax <= 0xFFu,
-                      "Resolved.w reserva 8 bits para cada contador de frames");
+                      "Resolved.Metadata reserva 8 bits para cada contador de frames");
         static_assert(kMaxAccumulatedFrames * kMaxSamplesPerFrame <= 0xFFFFu,
-                      "Resolved.w reserva 16 bits para o peso historico de amostras");
+                      "Resolved.Metadata reserva 16 bits para o peso historico de amostras");
 
-        // 2^17 = 131.072 celulas = 4,5 MB (4 + 16 + 16 bytes por celula). Isto e RESULTADO DE
+        // 2^17 = 131.072 celulas = 6,5 MB (4 + 32 + 16 bytes por celula). A capacidade continua
+        // sendo RESULTADO DE
         // MEDIDA, e nao a estimativa que estava aqui: com o produtor dedicado a tabela de 2^20
         // ocupava 2,40% (25.176 celulas, Bistro exterior, V1, C4, N=128). A conta antiga foi feita
         // quando quem alimentava o cache eram os hits do RENDER — todo raio secundario inseria, e
@@ -398,11 +399,9 @@ namespace Smile {
             UpdateMaxVertices = C;
         }
         u32  GetUpdateMaxVertices() const { return UpdateMaxVertices; }
-        // Piso de roughness do lobo que CHEGA para o vertice poder ser gravado. Nasce igual ao
-        // FGIHitSampling::SecondaryRoughnessMin de proposito: aquele e o piso que o material recebe
-        // no hit, entao qualquer lobo especular deste passe ja e pelo menos assim largo — os dois
-        // numeros descrevem a mesma decisao ("o que o cache nao-direcional consegue representar")
-        // vista de dois lados. Subir este acima daquele e que passa a rejeitar de verdade.
+        // Piso de roughness do lobo que CHEGA para o vertice poder ser gravado. Nasce em zero
+        // porque o SH direcional representa glossy; subir este valor ainda permite excluir
+        // lobos estreitos por politica. O gate espacial de cone continua valendo em qualquer caso.
         void SetMinCacheableRoughness(f32 V) {
             MinCacheableRoughness = V < 0.0f ? 0.0f : (V > 1.0f ? 1.0f : V);
         }
@@ -709,8 +708,8 @@ namespace Smile {
         FComputePipeline UpdateLegacyPSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Entries;  // checksum por celula (0 = vazia)
-        Microsoft::WRL::ComPtr<ID3D12Resource> Accum;    // 4 uints/celula: rgb ponto fixo + N
-        Microsoft::WRL::ComPtr<ID3D12Resource> Resolved; // uint4/celula: asuint(rgb) + N|frames
+        Microsoft::WRL::ComPtr<ID3D12Resource> Accum;    // 8 int/celula: Y SH, Co/Cg, N, padding
+        Microsoft::WRL::ComPtr<ID3D12Resource> Resolved; // 6 halfs direcionais + metadata
         Microsoft::WRL::ComPtr<ID3D12Resource> StatsBuf; // RC_STAT_COUNT uints
 
         D3D12_RESOURCE_STATES EntriesState  = D3D12_RESOURCE_STATE_COMMON;
@@ -816,7 +815,7 @@ namespace Smile {
         // 4, e V4 passa a custar mais E entregar mais. Este default esta calibrado para uma classe
         // de cena, nao para todas — reabrir com medida de interior antes de trata-lo como geral.
         u32  UpdateMaxVertices     = 1;
-        f32  MinCacheableRoughness = 0.5f;
+        f32  MinCacheableRoughness = 0.0f;
         // 4 amostras. E um ponto de partida a MEDIR, nao um numero herdado de fonte nenhuma — o
         // que a serie tem para calibra-lo e o A/B, e `1` reproduz exatamente o comportamento
         // anterior ao piso, que e o outro braco dele.

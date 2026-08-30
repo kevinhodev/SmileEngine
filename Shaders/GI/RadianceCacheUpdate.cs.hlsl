@@ -22,7 +22,7 @@
 //
 //     L_terminal = ceu / cache anterior / zero
 //     L_i        = local_i + throughput_i * L_(i+1)      (local = direta + emissivo)
-//     RC_Update(pos_i, normal_i, L_i)                    para cada i elegivel
+//     RC_Update(pos_i, normal_i, L_i, dir_i, peso_i)     para cada i elegivel
 //
 // As DUAS realimentacoes coexistem e nao se confundem. A do FRAME e este laco: quatro vertices
 // resolvidos de uma vez, latencia zero. A do TEMPO e o terminal lendo `Resolved` e a escrita indo
@@ -178,6 +178,9 @@ struct FPathVertex {
     float3 CacheN;
     float3 Local;
     float3 Throughput;
+    float3 RadianceDirection;
+    float  LocalDirectionWeight;
+    float  BounceDirectionWeight;
     bool   Eligible;
 };
 
@@ -385,8 +388,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 // Miss de cache => ZERO, e nao DDGI. O caminho fica escuro enquanto a tabela
                 // esfria, e e assim que se ve o cache aquecer; somar DDGI aqui devolveria
                 // exatamente o sinal que esta serie existe para trocar.
-                const FRCQueryResult Q = RC_QueryEx(P.Cache, T.Pos, T.CacheN, hitDist,
-                                                    rayRoughness);
+                const FRCQueryResult Q = RC_QueryEx(P.Cache, T.Pos, T.CacheN,
+                                                    -ray.Direction, hitDist, rayRoughness);
                 if (RC_QueryHit(Q)) { Lterm = Q.Radiance; termKind = RCU_TERM_CACHE; }
                 else                { termKind = RCU_TERM_MISS; }
             }
@@ -404,28 +407,38 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         const FHitMaterial M = PT_LoadHitMaterial(Instances[instId], S.UV, P.AlbedoLOD,
                                                   P.RoughnessMin);
 
-        float3 local = PT_ShadeDirectSun(S, M, V, P);
-        PT_AddDirectLocal(S, M, V, P, local);
-        local += PT_LoadHitEmissive(Instances[instId], S.UV, P.AlbedoLOD);
+        float3 shadedLocal = PT_ShadeDirectSun(S, M, V, P);
+        PT_AddDirectLocal(S, M, V, P, shadedLocal);
+        const float3 emissive = PT_LoadHitEmissive(Instances[instId], S.UV, P.AlbedoLOD);
+        const float3 local = shadedLocal + emissive;
 
         // ELEGIBILIDADE: o vertice so entra na tabela se o lobo que CHEGOU nele for largo o
-        // bastante. O cache guarda um RGB por celula e o serve a qualquer direcao; radiancia de
-        // saida vista por um lobo estreito so vale para aquela direcao, e grava-la mentiria para
-        // todos os que consultarem a celula depois.
+        // bastante. O gate de cone continua necessario com SH angular: ele limita aliasing
+        // ESPACIAL dentro do voxel, enquanto L1 corrige a dependencia de direcao. O piso de
+        // roughness e uma protecao opcional adicional; zero deixa o cone decidir sozinho.
         //
         // Duas guardas, e as duas usam a MESMA funcao que a query usa (RC_ConeCoversCell):
         // roughness acima do piso, e cone cobrindo a celula. O gate de SEGMENTO CURTO da query
         // NAO se aplica aqui — la ele evita auto-referencia (origem e hit na mesma celula), e o
         // produtor nao le nada, so escreve o que aquele ponto emite.
         const float cellSize = RC_CellSizeAt(P.Cache, S.Pos);
-        const bool  eligible = (rayRoughness < 0.0f) ||
-                               (rayRoughness >= UpdateParams.w &&
-                                RC_ConeCoversCell(hitDist, rayRoughness, cellSize));
+        const bool eligible = (rayRoughness < 0.0f) ||
+                              (rayRoughness >= UpdateParams.w &&
+                               RC_ConeCoversCell(hitDist, rayRoughness, cellSize));
+
+        const float localY = RC_RadianceY(local);
+        const float materialDirection = RC_MaterialDirectionWeight(
+            M.DiffuseColor, M.SpecularColor, M.Roughness);
+        const float localDirectionWeight = localY > 1e-6f
+            ? materialDirection * RC_RadianceY(shadedLocal) / localY : 0.0f;
 
         verts[bounce].Pos        = S.Pos;
         verts[bounce].CacheN     = S.CacheN;
         verts[bounce].Local      = local;
         verts[bounce].Throughput = float3(0.0f, 0.0f, 0.0f); // preenchido pela amostragem abaixo
+        verts[bounce].RadianceDirection    = -ray.Direction;
+        verts[bounce].LocalDirectionWeight = localDirectionWeight;
+        verts[bounce].BounceDirectionWeight = 0.0f;
         verts[bounce].Eligible   = eligible;
         count = bounce + 1u;
 
@@ -440,6 +453,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         if (!B.Valid) { termKind = RCU_TERM_LOBE; break; }
 
         verts[bounce].Throughput = B.Throughput;
+        verts[bounce].BounceDirectionWeight = (B.Lobe == PT_LOBE_SPECULAR)
+            ? RC_GlossyDirectionWeight(M.Roughness) : 0.0f;
 
         // ORIGEM DO SEGMENTO: offset ULP (Wachter-Binder), NAO o do shadow ray.
         //
@@ -497,10 +512,23 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     float3 L = Lterm;
     [unroll] for (int i = RCU_MAX_VERTS - 1; i >= 0; --i) {
         if ((uint)i >= count) continue;
-        L = verts[i].Local + verts[i].Throughput * L;
+        const float3 bounced = verts[i].Throughput * L;
+        L = verts[i].Local + bounced;
+        // A soma de duas contribuicoes com a mesma direcao pode ser codificada uma vez se o peso
+        // angular for ponderado pela luminancia: Yl*wl + Yb*wb = (Yl+Yb)*w. Isso preserva a
+        // separacao local/indireto da API oficial sem reservar duas amostras para o mesmo vertice.
+        const float localY   = RC_RadianceY(verts[i].Local);
+        const float bouncedY = RC_RadianceY(bounced);
+        const float totalY   = localY + bouncedY;
+        const float directionWeight = totalY > 1e-6f
+            ? (localY * verts[i].LocalDirectionWeight
+             + bouncedY * verts[i].BounceDirectionWeight) / totalY : 0.0f;
         // O clamp de faixa, o descarte de NaN/Inf e a reserva de vaga no acumulador ficam no
         // RC_Update — onde ja estavam para o produtor antigo.
-        if (verts[i].Eligible) RC_Update(P.Cache, verts[i].Pos, verts[i].CacheN, L);
+        if (verts[i].Eligible) {
+            RC_Update(P.Cache, verts[i].Pos, verts[i].CacheN, L,
+                      verts[i].RadianceDirection, directionWeight);
+        }
     }
 
     // ============================================================================================

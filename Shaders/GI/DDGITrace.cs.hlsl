@@ -16,7 +16,7 @@ cbuffer DDGICB : register(b0) {
     float4 RayEpsB;         // x=shadowRayTMin, y=visRayTMin, z=visRayEndMargin, w=angularMinRatio
     float4 GIDistParams;    // x=distTile, y=distW, z=distH, w=skipMode
     float4 GIBiasParams;    // x=escala do bias, y=teto em metros, z=fade de sondas,
-                            // w=piso de roughness do hit (cache nao-direcional)
+                            // w=piso de roughness do hit secundario
     float4 ReGIRGridMinSlots;
     float4 ReGIRInvCellEnabled;
     float4 ReGIRGridCountSamples;

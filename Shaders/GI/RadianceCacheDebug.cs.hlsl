@@ -87,9 +87,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     uint accumulatedFrames = 0u;
     uint age       = 0u;
     if (found) {
-        RWStructuredBuffer<uint4> resolved =
+        RWStructuredBuffer<FRCResolvedData> resolved =
             ResourceDescriptorHeap[NonUniformResourceIndex(P.ResolvedUAV)];
-        const uint packed = resolved[entryIndex].w;
+        const uint packed = resolved[entryIndex].Metadata;
         sampleNum         = RC_MetadataSampleCount(packed);
         accumulatedFrames = RC_MetadataAccumulatedFrames(packed);
         age               = RC_MetadataStaleFrames(packed);

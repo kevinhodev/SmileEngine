@@ -179,8 +179,7 @@ namespace Smile {
         // a origem da cascata fina segue a camera. Dono = Renderer, fonte = FDDGI.
         void SetGICascades(const FDDGICascadeConstants& C) { GICascadesCPU = C; }
         void SetReGIRParams(const FReGIRShaderParams& P) { ReGIRParams = P; }
-        // Sem update: radiancia especular e direcional, enquanto o cache e nao-direcional.
-        // Consultas continuam validas.
+        // Reflexoes apenas consultam; a producao do cache pertence aos caminhos de GI/path tracing.
         void SetRadianceCacheParams(const FRadianceCacheShaderParams& P) { RadianceCacheParams = P; }
         // Parameterizacao do sky-view LUT p/ o ShadeSky dos raios que escapam (dono = Renderer,
         // empurra todo frame a partir do FAtmosphere — fonte unica, ver Atmosphere.h).

@@ -28,11 +28,11 @@ cbuffer RadianceCacheCB : register(b0) {
     float4 StatsParams;  // x = modo (0 resolve, 1 clear), y = piso de confianca, zw livres
 };
 
-RWStructuredBuffer<uint>  Entries  : register(u0);
-RWStructuredBuffer<uint>  Accum    : register(u1); // 4 uints por entrada: rgb em ponto fixo + N
-// w = peso de amostras[15:0] | frames acumulados[23:16] | idade sem amostra[31:24].
-RWStructuredBuffer<uint4> Resolved : register(u2);
-RWStructuredBuffer<uint>  Stats    : register(u3); // ver RC_STAT_* no RadianceCache.hlsli
+RWStructuredBuffer<uint>            Entries  : register(u0);
+// 8 ints: Y L1.xyz/L0, Co/Cg L0, N e padding. Com sinal porque L1 e crominancia podem ser negativos.
+RWStructuredBuffer<int>             Accum    : register(u1);
+RWStructuredBuffer<FRCResolvedData> Resolved : register(u2);
+RWStructuredBuffer<uint>            Stats    : register(u3); // ver RC_STAT_* no RadianceCache.hlsli
 
 // Reducao por grupo: 1 M de InterlockedAdd por frame saturaria a porta de atomicos do buffer.
 // Com o reduce em groupshared sobra UM atomico por grupo de 64 — 16 k no total na capacidade
@@ -101,7 +101,7 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
 
     const uint idx = did.x;
     const bool inRange = idx < (uint)CacheParams.x;
-    const uint base = idx * 4u;
+    const uint base = idx * RC_ACCUM_STRIDE_INTS;
 
     // evictedOut e uma TAXA POR FRAME (quantas cairam neste resolve), nao um acumulado — e o que
     // diz se a evicção esta dando conta do fluxo de celulas novas. Zero com a camera andando
@@ -115,26 +115,24 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     // lugar do mundo e envelhecer celula por celula levaria STALE_FRAME_MAX frames.
     if (inRange && CacheParams.w != 0.0f) {
         Entries[idx]  = RC_INVALID_CHECKSUM;
-        Resolved[idx] = uint4(0u, 0u, 0u, 0u);
-        Accum[base + 0u] = 0u; Accum[base + 1u] = 0u;
-        Accum[base + 2u] = 0u; Accum[base + 3u] = 0u;
+        Resolved[idx] = (FRCResolvedData)0;
+        [unroll] for (uint c = 0u; c < RC_ACCUM_STRIDE_INTS; ++c) Accum[base + c] = 0;
     } else if (inRange && Entries[idx] == RC_TOMBSTONE_CHECKSUM) {
         // Compatibilidade com tabelas produzidas pela versao anterior. Como RC_Find agora percorre
         // a janela fixa inteira, estes slots podem voltar a INVALID sem esconder colisoes.
         Entries[idx]  = RC_INVALID_CHECKSUM;
-        Resolved[idx] = uint4(0u, 0u, 0u, 0u);
-        Accum[base + 0u] = 0u; Accum[base + 1u] = 0u;
-        Accum[base + 2u] = 0u; Accum[base + 3u] = 0u;
+        Resolved[idx] = (FRCResolvedData)0;
+        [unroll] for (uint c = 0u; c < RC_ACCUM_STRIDE_INTS; ++c) Accum[base + c] = 0;
     } else if (inRange && Entries[idx] != RC_INVALID_CHECKSUM) {
-        const uint newSamples = Accum[base + 3u];
+        const uint newSamples = (uint)max(Accum[base + 6u], 0);
 
-        const uint4 prev          = Resolved[idx];
-        const float3 prevRadiance = asfloat(prev.xyz);
-        const uint   prevSamples  = RC_MetadataSampleCount(prev.w);
-        const uint   prevAccumFrames = RC_MetadataAccumulatedFrames(prev.w);
-        const uint   prevStaleFrames = RC_MetadataStaleFrames(prev.w);
+        const FRCResolvedData prev = Resolved[idx];
+        const FRCRadianceData prevRadiance = RC_UnpackResolved(prev);
+        const uint   prevSamples  = RC_MetadataSampleCount(prev.Metadata);
+        const uint   prevAccumFrames = RC_MetadataAccumulatedFrames(prev.Metadata);
+        const uint   prevStaleFrames = RC_MetadataStaleFrames(prev.Metadata);
 
-        float3 radiance = prevRadiance;
+        FRCRadianceData radiance = prevRadiance;
         uint   samples  = prevSamples;
         uint   accumulatedFrames = min(prevAccumFrames + 1u, RC_META_FRAME_MASK);
         uint   staleFrames       = prevStaleFrames;
@@ -144,9 +142,13 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             // Media corrente. `Accum` guarda a SOMA das amostras deste frame em ponto fixo, entao
             // a combinacao com o historico e ponderada pelas contagens — nao um lerp de constante
             // fixa.
-            const float3 newSum = float3((float)Accum[base + 0u],
-                                         (float)Accum[base + 1u],
-                                         (float)Accum[base + 2u]) / RC_RADIANCE_SCALE;
+            FRCRadianceData newSum;
+            newSum.LuminanceSH = float4((float)Accum[base + 0u],
+                                        (float)Accum[base + 1u],
+                                        (float)Accum[base + 2u],
+                                        (float)Accum[base + 3u]) / RC_RADIANCE_SCALE;
+            newSum.ChromaL0 = float2((float)Accum[base + 4u],
+                                     (float)Accum[base + 5u]) / RC_RADIANCE_SCALE;
             // O limite e em FRAMES, nao em amostras. Antes, saturar prevSamples em 64 fazia uma
             // celula com 64 paths novos receber peso 1/2 e outra com um path receber 1/65. A SHaRC
             // conserva o peso real de amostras e, ao exceder a janela temporal, renormaliza apenas
@@ -159,7 +161,11 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             }
 
             const float total = historySamples + (float)newSamples;
-            radiance = (prevRadiance * historySamples + newSum) / max(total, 1.0f);
+            const float inverseTotal = rcp(max(total, 1.0f));
+            radiance.LuminanceSH = (prevRadiance.LuminanceSH * historySamples
+                                  + newSum.LuminanceSH) * inverseTotal;
+            radiance.ChromaL0 = (prevRadiance.ChromaL0 * historySamples
+                               + newSum.ChromaL0) * inverseTotal;
             samples  = min((uint)(total + 0.5f), RC_META_SAMPLE_MASK);
             staleFrames = 0u;
         } else {
@@ -171,11 +177,11 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             // A busca percorre sempre a janela fixa de 32 slots, portanto INVALID nao interrompe
             // uma cadeia e a entrada pode ser realmente reciclada — sem tombstones permanentes.
             Entries[idx]  = RC_INVALID_CHECKSUM;
-            Resolved[idx] = uint4(0u, 0u, 0u, 0u);
+            Resolved[idx] = (FRCResolvedData)0;
             evictedOut    = 1u;
         } else {
-            Resolved[idx] = uint4(asuint(radiance),
-                                  RC_PackMetadata(samples, accumulatedFrames, staleFrames));
+            Resolved[idx] = RC_PackResolved(
+                radiance, RC_PackMetadata(samples, accumulatedFrames, staleFrames));
             occupied   = 1u;
             // As DUAS contagens, e nao uma. `hasSamples` diz que a celula tem radiancia;
             // `confident` diz que ela encerra um caminho. Entre 1 amostra e o piso a celula conta
@@ -187,8 +193,7 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             samplesOut = min(samples, RC_SAMPLE_NUM_MAX);
         }
 
-        Accum[base + 0u] = 0u; Accum[base + 1u] = 0u;
-        Accum[base + 2u] = 0u; Accum[base + 3u] = 0u;
+        [unroll] for (uint c = 0u; c < RC_ACCUM_STRIDE_INTS; ++c) Accum[base + c] = 0;
     }
 
     SharedOccupied[tid.x]   = occupied;

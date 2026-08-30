@@ -53,16 +53,19 @@
 // Sondagem linear a partir do slot: [Gautron2020] "a linear search finds the next free space".
 // 32 e o BUCKET_SIZE da SHaRC; acima disso o custo da busca supera o ganho de nao descartar.
 #define RC_BUCKET_SIZE      32u
-// Ponto fixo para o InterlockedAdd. 1e4 e a RADIANCE_SCALE do idTech 8.
-#define RC_RADIANCE_SCALE   1e4f
-// Teto por amostra ANTES do ponto fixo. Com RC_SAMPLE_NUM_MAX amostras de RC_RADIANCE_MAX, o
-// acumulador chega a 64 * 6.5e3 * 1e4 = 4.16e9, logo abaixo do estouro de uint32 (4.29e9).
-// Sem este teto um unico firefly transborda o acumulador e a celula volta com lixo.
+// Ponto fixo para o InterlockedAdd. A codificacao direcional tem coeficientes com sinal (L1 e
+// Co/Cg), portanto o acumulador passa a ser int32. 5e3 preserva boa precisao e mantem o pior caso
+// dentro de INT_MAX: 64 * 6500 * 5000 = 2,08e9 < 2,147e9.
+#define RC_RADIANCE_SCALE   5e3f
+// Teto por amostra ANTES do ponto fixo. Com RC_SAMPLE_NUM_MAX amostras de RC_RADIANCE_MAX, cada
+// coeficiente chega no maximo a 2,08e9, logo abaixo do INT_MAX. Sem este teto um unico firefly
+// transborda o acumulador e a celula volta com lixo.
 #define RC_RADIANCE_MAX     6.5e3f
 #define RC_SAMPLE_NUM_MAX   64u
 #define RC_STALE_FRAME_MAX  64u
 #define RC_ACCUM_FRAME_MAX  64u
-// Layout de Resolved.w. O peso de amostras precisa chegar a 64 amostras/frame * 64 frames; limitar
+#define RC_ACCUM_STRIDE_INTS 8u
+// Layout de Resolved.Metadata. O peso de amostras precisa chegar a 64 amostras/frame * 64 frames; limitar
 // esse campo a 64 foi o que fazia a resposta temporal depender da densidade de paths. Os dois
 // contadores de frame cabem em 8 bits porque ambos tem teto 64 no regime atual.
 #define RC_META_SAMPLE_MASK 0xFFFFu
@@ -98,7 +101,7 @@ static const float RC_LOD_BLEND_WIDTH = 0.125f;
 // 2026-08-08: amostras/celula caiu 41,8 -> 16,8 e 2466 despejos/frame ao ligar a leitura).
 //
 // E o "reaproveitadas por N frames" do [Sousa2025], nao um sorteio: a idade ja esta em
-// Resolved[].w, entao a decisao nao custa leitura nenhuma e cada celula refresca em intervalo
+// Resolved[].Metadata, entao a decisao nao custa leitura nenhuma e cada celula refresca em intervalo
 // conhecido — que e o que devolve resposta a mudanca de iluminacao (TOD).
 // TEM de ser bem menor que RC_STALE_FRAME_MAX, senao a corrida contra o despejo e perdida.
 // POTENCIA DE 2: o escalonamento abaixo usa mascara.
@@ -248,7 +251,6 @@ struct FRadianceCacheParams {
 // contencao no UAV de estatisticas, para o overlap com o updater assincrono e, por consequencia,
 // para os TIMINGS ja medidos em `Sd`. "Nao muda a imagem" e menos que "e comparavel".
 #define RC_FLAG_STATS_SOURCE 16u
-
 // Contrato de CBUFFER, por NOME — igual ao RayEpsA/RayEpsB e ao GIDistParams. Todo consumidor do
 // HitShading.hlsli declara estas tres linhas no b0 dele (anexadas no FIM da struct C++
 // correspondente, para nao deslocar offset nenhum) e chama a macro abaixo.
@@ -276,6 +278,108 @@ struct FRadianceCacheParams {
     C.StatsUAV     = (uint)RadianceCacheResources.w;
 
 #define RC_UNPACK_PARAMS(P) RC_UNPACK_PARAMS_INTO(P.Cache)
+
+// --------------------------------------------------------------------------------------------
+// Radiancia direcional — formato misto YCoCg SH2 do SHaRC 1.8.3
+// --------------------------------------------------------------------------------------------
+// Nomenclatura da referencia: "SH2" significa quatro coeficientes de primeira ordem (L0 + L1),
+// nao nove coeficientes RGB. So a luminancia Y carrega direcao; Co/Cg ficam em L0. Assim o
+// resolved continua em 16 bytes: 6 halfs + metadata. O acumulador usa 6 int32 + N + padding.
+struct FRCRadianceData {
+    float4 LuminanceSH; // xyz = L1, w = L0
+    float2 ChromaL0;    // Co/Cg L0
+};
+
+struct FRCResolvedData {
+    uint LuminanceSH01; // half2: L1.x, L1.y
+    uint LuminanceSH23; // half2: L1.z, L0
+    uint ChromaL0;      // half2: Co, Cg
+    uint Metadata;      // peso historico + frames acumulados + idade
+};
+
+float3 RC_RGBToYCoCg(float3 color) {
+    return float3(0.25f * (color.x + 2.0f * color.y + color.z),
+                  color.x - color.z,
+                  color.y - 0.5f * (color.x + color.z));
+}
+
+float3 RC_YCoCgToRGB(float3 color) {
+    return float3(color.x + 0.5f * (color.y - color.z),
+                  color.x + 0.5f * color.z,
+                  color.x - 0.5f * (color.y + color.z));
+}
+
+float RC_RadianceY(float3 radiance) {
+    return 0.25f * (radiance.x + 2.0f * radiance.y + radiance.z);
+}
+
+float3 RC_SafeDirection(float3 direction) {
+    const float length2 = dot(direction, direction);
+    if (!all(isfinite(direction)) || !(length2 > 1e-12f)) return float3(0.0f, 0.0f, 1.0f);
+    return direction * rsqrt(length2);
+}
+
+FRCRadianceData RC_EncodeRadiance(float3 radiance, float3 radianceDirection,
+                                  float directionWeight) {
+    FRCRadianceData data;
+    const float3 ycocg = RC_RGBToYCoCg(radiance);
+    data.LuminanceSH = float4(ycocg.x * RC_SafeDirection(radianceDirection)
+                            * saturate(directionWeight), ycocg.x);
+    data.ChromaL0 = ycocg.yz;
+    return data;
+}
+
+float3 RC_DecodeRadiance(FRCRadianceData data, float3 radianceDirection) {
+    const float3 direction = RC_SafeDirection(radianceDirection);
+    const float directionalY = min(length(data.LuminanceSH.xyz),
+                                   max(data.LuminanceSH.w, 0.0f));
+    const float diffuseY = max(data.LuminanceSH.w - directionalY, 0.0f);
+    const float luminance = diffuseY + max(dot(data.LuminanceSH.xyz, direction), 0.0f);
+    const float chromaScale = data.LuminanceSH.w > 1e-6f
+                            ? luminance / data.LuminanceSH.w : 0.0f;
+    return max(RC_YCoCgToRGB(float3(luminance, data.ChromaL0 * chromaScale)), 0.0f);
+}
+
+uint RC_PackHalf2(float2 value) {
+    const float2 clamped = clamp(value, -65504.0f, 65504.0f);
+    return (f32tof16(clamped.x) & 0xFFFFu) | (f32tof16(clamped.y) << 16u);
+}
+
+float2 RC_UnpackHalf2(uint packed) {
+    return float2(f16tof32(packed & 0xFFFFu), f16tof32(packed >> 16u));
+}
+
+FRCResolvedData RC_PackResolved(FRCRadianceData data, uint metadata) {
+    FRCResolvedData packed;
+    packed.LuminanceSH01 = RC_PackHalf2(data.LuminanceSH.xy);
+    packed.LuminanceSH23 = RC_PackHalf2(data.LuminanceSH.zw);
+    packed.ChromaL0      = RC_PackHalf2(data.ChromaL0);
+    packed.Metadata      = metadata;
+    return packed;
+}
+
+FRCRadianceData RC_UnpackResolved(FRCResolvedData packed) {
+    FRCRadianceData data;
+    data.LuminanceSH.xy = RC_UnpackHalf2(packed.LuminanceSH01);
+    data.LuminanceSH.zw = RC_UnpackHalf2(packed.LuminanceSH23);
+    data.ChromaL0       = RC_UnpackHalf2(packed.ChromaL0);
+    return data;
+}
+
+float RC_GlossyDirectionWeight(float roughness) {
+    return saturate(1.0f - roughness);
+}
+
+// Peso medio para contribuicoes locais que avaliam difuso + especular juntos. O updater consegue
+// usar o lobo efetivamente sorteado para o indireto; direta e fallback legado nao tem essa
+// informacao, entao usam a fracao de energia especular do material.
+float RC_MaterialDirectionWeight(float3 diffuseColor, float3 specularColor, float roughness) {
+    const float diffuseY  = max(RC_RadianceY(diffuseColor), 0.0f);
+    const float specularY = max(RC_RadianceY(specularColor), 0.0f);
+    const float totalY    = diffuseY + specularY;
+    return totalY > 1e-6f
+         ? RC_GlossyDirectionWeight(roughness) * (specularY / totalY) : 0.0f;
+}
 
 // --------------------------------------------------------------------------------------------
 // Hash
@@ -436,7 +540,7 @@ uint RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
 // ONDE a consulta parou. Um bool respondia "aproveitei?" e perdia o resto — e o resto e o que a
 // telemetria de miss da Fase 4 vai querer separar: miss por chave, por celula fria, por segmento
 // curto e por cone estreito sao problemas DIFERENTES (capacidade, aquecimento, geometria do
-// caminho, e um limite do proprio cache nao-direcional). Com um bool, os quatro chegam ao painel
+// caminho, e um limite espacial da voxelizacao). Com um bool, os quatro chegam ao painel
 // como o mesmo numero.
 //
 // Ordenado pelo ponto de desistencia, do mais cedo ao mais tarde.
@@ -511,7 +615,8 @@ bool RC_ConeCoversCell(float segmentLength, float rayRoughness, float cellSize) 
 // o intervalo entre aresta e diagonal deixa origem e hit compartilharem a chave e realimentarem a
 // propria superficie.
 FRCQueryResult RC_QueryLevel(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-                             float segmentLength, float rayRoughness, uint level) {
+                             float3 radianceDirection, float segmentLength,
+                             float rayRoughness, uint level) {
     FRCQueryResult R = (FRCQueryResult)0;
 
     const float cellSize = RC_CellSize(level, P.BaseCellSize);
@@ -538,13 +643,13 @@ FRCQueryResult RC_QueryLevel(FRadianceCacheParams P, float3 samplePos, float3 sa
         return R;
     }
 
-    RWStructuredBuffer<uint4> resolved =
+    RWStructuredBuffer<FRCResolvedData> resolved =
         ResourceDescriptorHeap[NonUniformResourceIndex(P.ResolvedUAV)];
-    const uint4 packed    = resolved[entryIndex];
-    const uint  sampleNum = RC_MetadataSampleCount(packed.w);
+    const FRCResolvedData packed = resolved[entryIndex];
+    const uint  sampleNum = RC_MetadataSampleCount(packed.Metadata);
     // Idade em frames sem realimentacao — o MESMO campo que o resolve incrementa e usa para
     // despejar. Ja veio no `packed`: a decisao de refrescar nao custa leitura extra.
-    const uint  age       = RC_MetadataStaleFrames(packed.w);
+    const uint  age       = RC_MetadataStaleFrames(packed.Metadata);
     R.SampleCount = sampleNum;
     R.Age         = age;
     if (sampleNum == 0u) { R.Status = RC_QUERY_NO_SAMPLES; return R; }
@@ -571,7 +676,7 @@ FRCQueryResult RC_QueryLevel(FRadianceCacheParams P, float3 samplePos, float3 sa
     // frame vencem no mesmo frame e o custo do refresh vira um pico periodico em vez de um piso
     // constante — o mesmo motivo pelo qual o secondary shadow map do AC Shadows e time-sliced.
     const uint threshold = RC_REFRESH_FRAME_MAX + (checksum & (RC_REFRESH_FRAME_MAX - 1u));
-    R.Radiance = asfloat(packed.xyz);
+    R.Radiance = RC_DecodeRadiance(RC_UnpackResolved(packed), radianceDirection);
     R.Status   = (age >= threshold) ? RC_QUERY_STALE : RC_QUERY_HIT;
     return R;
 }
@@ -582,13 +687,14 @@ FRCQueryResult RC_QueryLevel(FRadianceCacheParams P, float3 samplePos, float3 sa
 // equivalente no lookup. Se so um nivel estiver pronto ele responde sozinho — importante no
 // primeiro frame depois que a camera cruza a fronteira.
 FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-                             float segmentLength, float rayRoughness) {
+                             float3 radianceDirection, float segmentLength,
+                             float rayRoughness) {
     const float levelContinuous = RC_GridLevelContinuous(samplePos, P.CameraPos, P.LodDistance);
     const uint  level           = (uint)floor(levelContinuous);
     const float levelFraction   = frac(levelContinuous);
 
-    FRCQueryResult primary = RC_QueryLevel(P, samplePos, sampleNormal, segmentLength,
-                                           rayRoughness, level);
+    FRCQueryResult primary = RC_QueryLevel(P, samplePos, sampleNormal, radianceDirection,
+                                           segmentLength, rayRoughness, level);
 
     uint  adjacentLevel = level;
     float primaryWeight = 1.0f;
@@ -606,8 +712,8 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
     }
     if (!blendAdjacent) return primary;
 
-    const FRCQueryResult adjacent = RC_QueryLevel(P, samplePos, sampleNormal, segmentLength,
-                                                   rayRoughness, adjacentLevel);
+    const FRCQueryResult adjacent = RC_QueryLevel(P, samplePos, sampleNormal, radianceDirection,
+                                                   segmentLength, rayRoughness, adjacentLevel);
     const bool primaryHit  = RC_QueryHit(primary);
     const bool adjacentHit = RC_QueryHit(adjacent);
     if (!primaryHit) {
@@ -692,12 +798,13 @@ void RC_CountEligibility(FRadianceCacheParams P) {
 }
 
 FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-                          float segmentLength, float rayRoughness) {
+                          float3 radianceDirection, float segmentLength, float rayRoughness) {
     FRCQueryResult R = (FRCQueryResult)0;
     R.Status = RC_QUERY_DISABLED;
     if ((P.Flags & RC_FLAG_QUERY) == 0u) return R;
 
-    R = RC_QueryInner(P, samplePos, sampleNormal, segmentLength, rayRoughness);
+    R = RC_QueryInner(P, samplePos, sampleNormal, radianceDirection,
+                      segmentLength, rayRoughness);
     const bool hit = RC_QueryHit(R);
     // A celula tem dado, mas quem pediu vai sombrear do zero: devolver a radiancia velha junto
     // seria um pe no caminho de quem ler isto depois. O SampleCount e a Age SOBREVIVEM ao STALE de
@@ -758,15 +865,18 @@ FRCQueryResult RC_QueryEx(FRadianceCacheParams P, float3 samplePos, float3 sampl
 
 // Forma booleana, mantida para quem so quer "aproveitei?" — hoje, todos os consumidores.
 bool RC_Query(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-              float segmentLength, float rayRoughness, out float3 radiance) {
-    const FRCQueryResult R = RC_QueryEx(P, samplePos, sampleNormal, segmentLength, rayRoughness);
+              float3 radianceDirection, float segmentLength, float rayRoughness,
+              out float3 radiance) {
+    const FRCQueryResult R = RC_QueryEx(P, samplePos, sampleNormal, radianceDirection,
+                                        segmentLength, rayRoughness);
     radiance = R.Radiance;
     return RC_QueryHit(R);
 }
 
 // Acumula a radiancia de saida que o ShadeSurfaceHit produziu. Ponto fixo + InterlockedAdd
 // porque varias threads escrevem a mesma celula no mesmo frame.
-void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, float3 radiance) {
+void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, float3 radiance,
+               float3 radianceDirection, float directionWeight) {
     if ((P.Flags & RC_FLAG_UPDATE) == 0u) return;
 
     const uint  level    = RC_GridLevel(samplePos, P.CameraPos, P.LodDistance);
@@ -825,13 +935,16 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
     safe.b = isfinite(radiance.b) ? radiance.b : 0.0f;
     safe = clamp(safe, 0.0f, RC_RADIANCE_MAX);
 
-    RWStructuredBuffer<uint> accum = ResourceDescriptorHeap[NonUniformResourceIndex(P.AccumUAV)];
-    const uint base = entryIndex * 4u;
+    const FRCRadianceData encoded = RC_EncodeRadiance(
+        safe, radianceDirection, saturate(directionWeight));
 
-    // O teto do Resolved nao limitava quantas threads podiam somar no Accum neste frame. No pior
-    // caso, 67 amostras no clamp ja ultrapassavam uint32 (6500 * 1e4 * 67). Reserve uma das 64
-    // vagas por CAS ANTES de tocar RGB; quem chega depois descarta a amostra sem contaminar a
-    // media. A barreira UAV antes do resolve garante que contagem e canais terminaram.
+    RWStructuredBuffer<int> accum = ResourceDescriptorHeap[NonUniformResourceIndex(P.AccumUAV)];
+    const uint base = entryIndex * RC_ACCUM_STRIDE_INTS;
+
+    // O teto do Resolved nao limita quantas threads podem somar no Accum neste frame. Reserve uma
+    // das 64 vagas por CAS ANTES de tocar os coeficientes; quem chega depois descarta a amostra
+    // sem contaminar a media. A barreira UAV antes do resolve garante que contagem e canais
+    // terminaram.
     // O descarte no teto e CONTADO. Sem isto, `TRIES - FULL - CONTENDED` se leria como "updates
     // aceitos" e estaria errado: a chave existe, a insercao deu certo, e a amostra foi jogada fora
     // mesmo assim. Aceitos = TRIES - FULL - CONTENDED - CAPPED.
@@ -839,8 +952,8 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
     // O contador fica AQUI e nao no chamador porque este e o unico ponto que sabe a diferenca —
     // e um `return` no meio de um laco de reserva, indistinguivel de fora de um retorno normal.
     [loop] for (;;) {
-        const uint count = accum[base + 3u];
-        if (count >= RC_SAMPLE_NUM_MAX) {
+        const int count = accum[base + 6u];
+        if (count >= (int)RC_SAMPLE_NUM_MAX) {
             [branch] if ((P.Flags & RC_FLAG_STATS_DETAIL) != 0u) {
                 const uint waveCapped = WaveActiveCountBits(true);
                 if (WaveIsFirstLane()) {
@@ -852,15 +965,20 @@ void RC_Update(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal, fl
             }
             return;
         }
-        uint prevCount;
-        InterlockedCompareExchange(accum[base + 3u], count, count + 1u, prevCount);
+        int prevCount;
+        InterlockedCompareExchange(accum[base + 6u], count, count + 1, prevCount);
         if (prevCount == count) break;
     }
 
-    uint ignored;
-    InterlockedAdd(accum[base + 0u], (uint)(safe.r * RC_RADIANCE_SCALE), ignored);
-    InterlockedAdd(accum[base + 1u], (uint)(safe.g * RC_RADIANCE_SCALE), ignored);
-    InterlockedAdd(accum[base + 2u], (uint)(safe.b * RC_RADIANCE_SCALE), ignored);
+    const int4 luminanceSH = (int4)(encoded.LuminanceSH * RC_RADIANCE_SCALE);
+    const int2 chromaL0    = (int2)(encoded.ChromaL0 * RC_RADIANCE_SCALE);
+    int ignored;
+    InterlockedAdd(accum[base + 0u], luminanceSH.x, ignored);
+    InterlockedAdd(accum[base + 1u], luminanceSH.y, ignored);
+    InterlockedAdd(accum[base + 2u], luminanceSH.z, ignored);
+    InterlockedAdd(accum[base + 3u], luminanceSH.w, ignored);
+    InterlockedAdd(accum[base + 4u], chromaL0.x, ignored);
+    InterlockedAdd(accum[base + 5u], chromaL0.y, ignored);
 }
 
 #endif
