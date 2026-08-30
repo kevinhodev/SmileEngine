@@ -996,7 +996,7 @@ resolver, e por isso ela entrou antes do commit #4 em vez de depois.
   `RadianceCache`), de propósito. Correto para navegação, errado para captura — daí o domínio
   `DeterministicCapture` pendente.
 - **O aquecimento é de centenas de frames**, não dezenas: histerese 0,99 no DDGI (~199 updates para
-  o atlas de distância) e teto de 64 amostras no radiance cache.
+  o atlas de distância) e janela temporal de 64 frames no radiance cache (até 64 amostras/frame).
 - **Existência × habilitação.** O que é lido no setup fica *latched* na tabela de descritores; o que
   é lido por frame não. `UseGI` muda sem provocar setup, então não pode participar de escolha de
   descritor. Critério para qualquer campo novo no `FGIFallbackBindings`.
@@ -1404,7 +1404,8 @@ Publicar um cache estável, responsivo e mensurável antes de habilitá-lo como 
 - Expandir visualização com `Age`, `Confidence`, `Fallback source` e, se barato, `Path depth`.
   ✅ **`Age` e `Confidence` entraram**, e o modo "cobertura" já distinguia aquecendo (azul)
   respeitando o piso. `Age` quebra a rampa no limiar de refresh (que é por célula); `Confidence`
-  mede N contra o **piso** e satura acima dele, que é o que o separa de `Converged` (N/64).
+  mede N contra o **piso** e satura acima dele, que é o que o separa de `Converged`
+  (frames acumulados/64).
   `Fallback source` fica para a Fase 5, quando existir escolha de fallback por hit. `Path depth`
   não entrou: o produtor grava por vértice e a profundidade é do CAMINHO, não da célula — pintá-la
   na tela exigiria um campo novo na tabela, que é exatamente o "16 MiB sem evidência" que o item
@@ -1630,7 +1631,7 @@ O `FReSTIRGI` atual armazena e reconecta um ponto secundário. ReSTIR PT grava i
   - cálculo de LOD e cell size;
   - quantização de posição e octante da normal;
   - determinismo do hash/checksum;
-  - probing com vazio, colisão e tombstone;
+  - probing de janela fixa com vazio reciclado e colisão depois do vazio;
   - média temporal com teto de 64;
   - idade, refresh e evicção;
   - composição de confiança.
@@ -1717,4 +1718,3 @@ Se um gate falhar, corrigir dentro da mesma fase. Não avançar acumulando dívi
 - `D:/Engines/RTXDI-main/Doc/RestirGI.md`
 - `D:/Engines/RTXDI-main/Doc/RestirPT.md`
 - `D:/Engines/RTXDI-main/Samples/FullSample`: referência obrigatória somente se o apêndice ReSTIR PT for autorizado.
-

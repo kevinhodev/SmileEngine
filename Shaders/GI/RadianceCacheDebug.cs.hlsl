@@ -84,13 +84,15 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const bool found = RC_Find(entries, slot, checksum, P.Capacity, entryIndex);
 
     uint sampleNum = 0u;
+    uint accumulatedFrames = 0u;
     uint age       = 0u;
     if (found) {
         RWStructuredBuffer<uint4> resolved =
             ResourceDescriptorHeap[NonUniformResourceIndex(P.ResolvedUAV)];
         const uint packed = resolved[entryIndex].w;
-        sampleNum = packed & 0xFFFFu;
-        age       = packed >> 16u;
+        sampleNum         = RC_MetadataSampleCount(packed);
+        accumulatedFrames = RC_MetadataAccumulatedFrames(packed);
+        age               = RC_MetadataStaleFrames(packed);
     }
 
     const uint mode = (uint)CameraPosMode.w;
@@ -126,7 +128,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     } else if (mode == RC_DEBUG_LOD) {
         color = RC_LevelColor(level);
     } else if (mode == RC_DEBUG_CONVERGED) {
-        const float t = saturate((float)sampleNum / (float)RC_SAMPLE_NUM_MAX);
+        // Convergencia TEMPORAL, nao densidade de paths. O resolve preserva o peso real de
+        // amostras separadamente, mas e este contador de frames que limita a memoria historica.
+        const float t = saturate((float)accumulatedFrames / (float)RC_ACCUM_FRAME_MAX);
         color = lerp(float3(0.75f, 0.10f, 0.10f), float3(0.15f, 0.85f, 0.30f), t);
         if (!found) color = float3(0.05f, 0.05f, 0.05f);
     } else if (mode == RC_DEBUG_AGE) {
@@ -153,8 +157,8 @@ void main(uint3 DTid : SV_DispatchThreadID) {
             color = lerp(float3(0.95f, 0.90f, 0.15f), float3(0.90f, 0.15f, 0.15f), t);
         }
     } else {
-        // CONFIANCA, que nao e convergencia: o modo acima mostra N/64 (quanto a media ja
-        // convergiu), este mostra N contra o PISO — a fronteira que decide se a celula pode
+        // CONFIANCA, que nao e convergencia: o modo acima mostra frames/64 (a memoria temporal da
+        // media), este mostra N contra o PISO — a fronteira que decide se a celula pode
         // encerrar um caminho. Acima do piso ele satura, porque dali para cima a resposta da
         // consulta e a mesma e o que muda e so a qualidade da media, que o outro modo ja conta.
         //

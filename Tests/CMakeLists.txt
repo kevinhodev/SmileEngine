@@ -22,6 +22,27 @@ set_tests_properties(Smile.MathPrimitives PROPERTIES
     LABELS "math;geometry;matrix"
 )
 
+add_executable(SmileRadianceCacheMathTests
+    RadianceCacheMathTests.cpp
+)
+
+target_compile_features(SmileRadianceCacheMathTests PRIVATE cxx_std_20)
+set_target_properties(SmileRadianceCacheMathTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.RadianceCacheMath
+    COMMAND SmileRadianceCacheMathTests
+)
+
+set_tests_properties(Smile.RadianceCacheMath PROPERTIES
+    LABELS "graphics;gi;radiance-cache;math"
+)
+
 add_executable(SmileOceanMathBaselineTests
     OceanMathBaselineTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Water/OceanSpectrum.cpp

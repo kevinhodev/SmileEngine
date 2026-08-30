@@ -28,7 +28,7 @@
 //  [Sousa2025]    "Fast as Hell: idTech 8 Global Illumination", SIGGRAPH Advances. Cita o
 //                 Gautron; celulas de 25 cm + LOD por distancia da camera; 14 MB no DOOM TDA.
 //  [SHaRC]        NVIDIA RTXGI 2.0. Mesma familia; de la vem a separacao acumulacao/resolvido,
-//                 o teto de amostras e a politica de eviccao por frames sem uso.
+//                 o teto de frames acumulados e a politica de eviccao por frames sem uso.
 //
 // POR QUE CHECKSUM DE 32 BITS E NAO CHAVE DE 64
 // A SHaRC usa chave de 64 bits e exige `InterlockedCompareExchange64` (SM 6.6 + Int64ShaderOps
@@ -46,9 +46,9 @@
 // ============================================================================================
 
 #define RC_INVALID_CHECKSUM   0u
-// Slot que ja foi ocupado e depois despejado. Nao pode voltar a 0: em enderecamento aberto,
-// `vazio` encerra a busca e uma remocao no meio da cadeia esconderia todas as colisoes que vieram
-// depois. O tombstone preserva a cadeia e continua sendo reutilizavel pela insercao.
+// Sentinela legada. A busca atual percorre a janela fixa inteira, como a SHaRC, portanto o resolve
+// pode devolver entradas despejadas diretamente a INVALID. Manter o valor aqui permite que um
+// shader novo recupere uma tabela criada por um binario anterior sem confundir tombstone com chave.
 #define RC_TOMBSTONE_CHECKSUM 0xFFFFFFFFu
 // Sondagem linear a partir do slot: [Gautron2020] "a linear search finds the next free space".
 // 32 e o BUCKET_SIZE da SHaRC; acima disso o custo da busca supera o ganho de nao descartar.
@@ -61,6 +61,33 @@
 #define RC_RADIANCE_MAX     6.5e3f
 #define RC_SAMPLE_NUM_MAX   64u
 #define RC_STALE_FRAME_MAX  64u
+#define RC_ACCUM_FRAME_MAX  64u
+// Layout de Resolved.w. O peso de amostras precisa chegar a 64 amostras/frame * 64 frames; limitar
+// esse campo a 64 foi o que fazia a resposta temporal depender da densidade de paths. Os dois
+// contadores de frame cabem em 8 bits porque ambos tem teto 64 no regime atual.
+#define RC_META_SAMPLE_MASK 0xFFFFu
+#define RC_META_FRAME_MASK  0xFFu
+#define RC_META_ACCUM_SHIFT 16u
+#define RC_META_STALE_SHIFT 24u
+
+uint RC_MetadataSampleCount(uint packed) { return packed & RC_META_SAMPLE_MASK; }
+uint RC_MetadataAccumulatedFrames(uint packed) {
+    return (packed >> RC_META_ACCUM_SHIFT) & RC_META_FRAME_MASK;
+}
+uint RC_MetadataStaleFrames(uint packed) {
+    return (packed >> RC_META_STALE_SHIFT) & RC_META_FRAME_MASK;
+}
+uint RC_PackMetadata(uint sampleCount, uint accumulatedFrames, uint staleFrames) {
+    return min(sampleCount, RC_META_SAMPLE_MASK)
+         | (min(accumulatedFrames, RC_META_FRAME_MASK) << RC_META_ACCUM_SHIFT)
+         | (min(staleFrames, RC_META_FRAME_MASK) << RC_META_STALE_SHIFT);
+}
+
+static const float RC_SQRT_3          = 1.7320508075688772f;
+static const float RC_NORMAL_BIAS     = 1e-3f;
+// Meia largura, em niveis continuos, da faixa de transicao. So dentro dela uma consulta paga a
+// segunda busca; dos dois lados da fronteira o peso e 50/50 e portanto nao ha salto.
+static const float RC_LOD_BLEND_WIDTH = 0.125f;
 // Idade (em frames sem realimentacao) a partir da qual a proxima consulta REFRESCA a celula em vez
 // de aproveita-la: ela devolve "erro" de proposito, o chamador sombreia inteiro e o RC_Update
 // zera a idade.
@@ -97,7 +124,7 @@
 // e some sozinho; refresh e a resposta a luz dinamica funcionando; segmento curto e cone estreito
 // sao limites geometricos do proprio cache, que nao se conserta aumentando nada. Sem separa-los,
 // "acerto de 40%" nao diz se falta memoria, se falta aquecer ou se a cena e assim.
-#define RC_STAT_MISS_SHORT   7u  // segmento menor que a celula
+#define RC_STAT_MISS_SHORT   7u  // segmento nao supera a diagonal da celula
 #define RC_STAT_MISS_CONE    8u  // cone especular menor que a celula
 #define RC_STAT_MISS_NOENTRY 9u  // chave nao encontrada (ausente ou balde cheio)
 #define RC_STAT_MISS_EMPTY   10u // celula existe, ainda sem radiancia
@@ -275,9 +302,13 @@ uint RC_XXHash32(uint4 p) {
 // Nivel de detalhe pela distancia a camera [Sousa2025]: celulas crescem em potencias de 2 para
 // que uma parede a 100 m nao consuma mil celulas de 25 cm. O `1.0 +` garante nivel 0 colado na
 // camera. O log2/floor e o `s_wd = 2^floor(log2(s_w/s_min))` da eq. 3 do [Gautron2020].
-uint RC_GridLevel(float3 samplePos, float3 cameraPos, float lodDistance) {
+float RC_GridLevelContinuous(float3 samplePos, float3 cameraPos, float lodDistance) {
     const float d = length(cameraPos - samplePos);
-    return (uint)max(floor(log2(1.0f + d / max(lodDistance, 1e-3f))), 0.0f);
+    return max(log2(1.0f + d / max(lodDistance, 1e-3f)), 0.0f);
+}
+
+uint RC_GridLevel(float3 samplePos, float3 cameraPos, float lodDistance) {
+    return (uint)floor(RC_GridLevelContinuous(samplePos, cameraPos, lodDistance));
 }
 
 float RC_CellSize(uint level, float baseCellSize) {
@@ -294,9 +325,11 @@ void RC_HashKey(float3 samplePos, float3 sampleNormal, uint level, float cellSiz
     const int3  posInt = (int3)floor(samplePos / cellSize);
     // SHaRC Listing 7.6: keep only the normal octant. This separates opposing faces without
     // fragmenting curved surfaces into many unstable normal buckets.
-    const uint normalBits = (sampleNormal.x >= 0.0f ? 1u : 0u)
-                          | (sampleNormal.y >= 0.0f ? 2u : 0u)
-                          | (sampleNormal.z >= 0.0f ? 4u : 0u);
+    // O bias da referencia estabiliza componentes numericamente proximas de zero: pequenas
+    // variacoes de interpolacao nao podem alternar a chave entre dois octantes a cada frame.
+    const uint normalBits = (sampleNormal.x + RC_NORMAL_BIAS >= 0.0f ? 1u : 0u)
+                          | (sampleNormal.y + RC_NORMAL_BIAS >= 0.0f ? 2u : 0u)
+                          | (sampleNormal.z + RC_NORMAL_BIAS >= 0.0f ? 4u : 0u);
     const uint4 key    = uint4((uint)posInt.x, (uint)posInt.y, (uint)posInt.z,
                                level | (normalBits << 8));
     slot = RC_XXHash32(key) & (capacity - 1u);
@@ -320,9 +353,8 @@ bool RC_Find(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint ca
         const uint idx = (slot + i) & (capacity - 1u);
         const uint stored = entries[idx];
         if (stored == checksum) { entryIndex = idx; return true; }
-        // Vazio VERDADEIRO = a celula nunca foi inserida: a sondagem teria parado aqui. Tombstone
-        // nao encerra a busca, porque pode haver uma colisao viva depois de uma entrada despejada.
-        if (stored == RC_INVALID_CHECKSUM) return false;
+        // A janela e fixa: INVALID nao encerra a busca. Isto permite ao resolve reciclar uma
+        // entrada expirada para zero sem esconder uma colisao valida que esteja depois dela.
     }
     return false;
 }
@@ -352,9 +384,9 @@ uint RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
     entryIndex  = 0u;
     chainProbes = 0u;
     retries     = 0u;
-    // Primeiro PROCURA a chave ate o fim da cadeia, guardando o primeiro slot reutilizavel. Nao
-    // podemos tomar o tombstone imediatamente: a mesma chave pode continuar viva mais adiante.
-    // Depois tenta publicar no slot escolhido por CAS; se outra chave ganhar a corrida, recomeca.
+    // Primeiro PROCURA a chave na janela fixa inteira, guardando o primeiro slot reutilizavel. Nao
+    // podemos parar no primeiro INVALID: a mesma chave pode continuar viva mais adiante depois de
+    // uma eviccao. Depois tenta publicar no slot escolhido por CAS; se outra chave ganhar, recomeca.
     [loop] for (uint attempt = 0u; attempt < RC_BUCKET_SIZE; ++attempt) {
         uint reusable = 0xFFFFFFFFu;
         uint expected = RC_INVALID_CHECKSUM;
@@ -370,16 +402,10 @@ uint RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
                 return RC_INSERT_OK;
             }
 
-            if (stored == RC_TOMBSTONE_CHECKSUM && reusable == 0xFFFFFFFFu) {
+            if ((stored == RC_TOMBSTONE_CHECKSUM || stored == RC_INVALID_CHECKSUM) &&
+                reusable == 0xFFFFFFFFu) {
                 reusable = idx;
-                expected = RC_TOMBSTONE_CHECKSUM;
-            }
-            if (stored == RC_INVALID_CHECKSUM) {
-                if (reusable == 0xFFFFFFFFu) {
-                    reusable = idx;
-                    expected = RC_INVALID_CHECKSUM;
-                }
-                break; // nada desta cadeia existe depois do primeiro vazio verdadeiro
+                expected = stored;
             }
         }
         if (attempt == 0u) chainProbes = walked;
@@ -415,7 +441,7 @@ uint RC_Insert(RWStructuredBuffer<uint> entries, uint slot, uint checksum, uint 
 //
 // Ordenado pelo ponto de desistencia, do mais cedo ao mais tarde.
 #define RC_QUERY_DISABLED      0u // flag de query off: nem olhou a tabela
-#define RC_QUERY_SHORT_SEGMENT 1u // segmento menor que a celula: seria auto-referencia
+#define RC_QUERY_SHORT_SEGMENT 1u // segmento nao supera a diagonal: seria auto-referencia
 #define RC_QUERY_NARROW_CONE   2u // cone especular menor que a celula: o RGB apagaria a direcao
 #define RC_QUERY_NO_ENTRY      3u // chave nao encontrada (ausente ou balde cheio)
 #define RC_QUERY_NO_SAMPLES    4u // celula existe, ainda sem radiancia
@@ -480,21 +506,20 @@ bool RC_ConeCoversCell(float segmentLength, float rayRoughness, float cellSize) 
     return true;
 }
 
-// Le a radiancia resolvida (frames ANTERIORES) na posicao.
-//
-// `segmentLength` e o comprimento do segmento de raio que chegou aqui. Consultar o cache com
-// segmento MENOR que a celula e auto-referencia: origem e hit caem na mesma celula e o valor
-// devolvido descreve a propria superficie de origem. E a mesma guarda do `GetVoxelSize()` da
-// SHaRC e do "continue tracing until the path segment length is bigger than the voxel size" do
-// [Sousa2025].
-FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
-                             float segmentLength, float rayRoughness) {
+// Consulta um nivel especifico. Dois pontos no mesmo voxel podem estar separados pela DIAGONAL,
+// nao apenas pela aresta; por isso a guarda segue o sample RTXGI (`voxelSize * sqrt(3)`). Aceitar
+// o intervalo entre aresta e diagonal deixa origem e hit compartilharem a chave e realimentarem a
+// propria superficie.
+FRCQueryResult RC_QueryLevel(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
+                             float segmentLength, float rayRoughness, uint level) {
     FRCQueryResult R = (FRCQueryResult)0;
 
-    const uint  level    = RC_GridLevel(samplePos, P.CameraPos, P.LodDistance);
     const float cellSize = RC_CellSize(level, P.BaseCellSize);
     R.CellSize = cellSize;
-    if (segmentLength < cellSize) { R.Status = RC_QUERY_SHORT_SEGMENT; return R; }
+    if (segmentLength <= cellSize * RC_SQRT_3) {
+        R.Status = RC_QUERY_SHORT_SEGMENT;
+        return R;
+    }
 
     // Mesma regra que o produtor usa para decidir se um vertice e gravavel — ver RC_ConeCoversCell.
     if (!RC_ConeCoversCell(segmentLength, rayRoughness, cellSize)) {
@@ -516,10 +541,10 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
     RWStructuredBuffer<uint4> resolved =
         ResourceDescriptorHeap[NonUniformResourceIndex(P.ResolvedUAV)];
     const uint4 packed    = resolved[entryIndex];
-    const uint  sampleNum = packed.w & 0xFFFFu;
+    const uint  sampleNum = RC_MetadataSampleCount(packed.w);
     // Idade em frames sem realimentacao — o MESMO campo que o resolve incrementa e usa para
     // despejar. Ja veio no `packed`: a decisao de refrescar nao custa leitura extra.
-    const uint  age       = packed.w >> 16u;
+    const uint  age       = RC_MetadataStaleFrames(packed.w);
     R.SampleCount = sampleNum;
     R.Age         = age;
     if (sampleNum == 0u) { R.Status = RC_QUERY_NO_SAMPLES; return R; }
@@ -549,6 +574,52 @@ FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sa
     R.Radiance = asfloat(packed.xyz);
     R.Status   = (age >= threshold) ? RC_QUERY_STALE : RC_QUERY_HIT;
     return R;
+}
+
+// Le a radiancia resolvida (frames ANTERIORES) na posicao. Perto de uma fronteira de LOD consulta
+// tambem o nivel do outro lado e mistura os dois continuamente. A SHaRC consegue reprojetar no
+// resolve porque guarda a chave espacial reversivel; a Smile guarda apenas checksum, entao faz o
+// equivalente no lookup. Se so um nivel estiver pronto ele responde sozinho — importante no
+// primeiro frame depois que a camera cruza a fronteira.
+FRCQueryResult RC_QueryInner(FRadianceCacheParams P, float3 samplePos, float3 sampleNormal,
+                             float segmentLength, float rayRoughness) {
+    const float levelContinuous = RC_GridLevelContinuous(samplePos, P.CameraPos, P.LodDistance);
+    const uint  level           = (uint)floor(levelContinuous);
+    const float levelFraction   = frac(levelContinuous);
+
+    FRCQueryResult primary = RC_QueryLevel(P, samplePos, sampleNormal, segmentLength,
+                                           rayRoughness, level);
+
+    uint  adjacentLevel = level;
+    float primaryWeight = 1.0f;
+    bool  blendAdjacent = false;
+    if (level > 0u && levelFraction < RC_LOD_BLEND_WIDTH) {
+        adjacentLevel = level - 1u;
+        const float t = smoothstep(0.0f, RC_LOD_BLEND_WIDTH, levelFraction);
+        primaryWeight = 0.5f + 0.5f * t;
+        blendAdjacent = true;
+    } else if (levelFraction > 1.0f - RC_LOD_BLEND_WIDTH) {
+        adjacentLevel = level + 1u;
+        const float t = smoothstep(1.0f - RC_LOD_BLEND_WIDTH, 1.0f, levelFraction);
+        primaryWeight = 1.0f - 0.5f * t;
+        blendAdjacent = true;
+    }
+    if (!blendAdjacent) return primary;
+
+    const FRCQueryResult adjacent = RC_QueryLevel(P, samplePos, sampleNormal, segmentLength,
+                                                   rayRoughness, adjacentLevel);
+    const bool primaryHit  = RC_QueryHit(primary);
+    const bool adjacentHit = RC_QueryHit(adjacent);
+    if (!primaryHit) {
+        if (adjacentHit) return adjacent;
+        return primary;
+    }
+    if (!adjacentHit) return primary;
+
+    primary.Radiance = lerp(adjacent.Radiance, primary.Radiance, primaryWeight);
+    primary.SampleCount = min(primary.SampleCount + adjacent.SampleCount, RC_META_SAMPLE_MASK);
+    primary.Age = min(primary.Age, adjacent.Age);
+    return primary;
 }
 
 // As classes de FONTE como valor, para quem quer o dado e nao o contador. A ordem espelha os

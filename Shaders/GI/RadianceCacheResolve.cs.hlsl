@@ -1,15 +1,15 @@
 // Resolve do World Radiance Cache: uma thread por entrada da tabela.
 //
 // Junta o que foi acumulado NESTE frame (`Accum`) com o historico (`Resolved`), aplica o teto de
-// amostras, envelhece as celulas que ninguem tocou e despeja as que passaram do prazo. Zera o
+// frames acumulados, envelhece as celulas que ninguem tocou e despeja as que passaram do prazo. Zera o
 // acumulador no fim para o proximo frame.
 //
 // A separacao acumulacao/resolvido e o que impede a auto-referencia: o `RC_Query` do
 // RadianceCache.hlsli le SEMPRE de `Resolved`, que so contem frames anteriores. Ver o cabecalho
 // daquele arquivo.
 //
-// Politica de eviccao e teto de amostras vem da SHaRC (RTXGI 2.0) e do [Sousa2025]
-// (SAMPLE_NUM_MAX 64, STALE_FRAME_NUM_MAX 64).
+// Politica de eviccao e teto temporal vem da SHaRC (RTXGI 2.0) e do [Sousa2025]
+// (ACCUMULATED_FRAME_NUM_MAX 64, STALE_FRAME_NUM_MAX 64).
 //
 // MODOS (StatsParams.x). O mesmo .cso e despachado duas vezes por frame porque os contadores de
 // ocupacao precisam comecar zerados e nao ha como zerar e acumular no MESMO dispatch (nada
@@ -21,7 +21,7 @@
 #include "RadianceCache.hlsli"
 
 cbuffer RadianceCacheCB : register(b0) {
-    float4 CacheParams;  // x = capacity, y = maxAccumSamples, z = staleFrameMax, w = resetAll
+    float4 CacheParams;  // x = capacity, y = maxAccumFrames, z = staleFrameMax, w = resetAll
     // y = PISO DE CONFIANCA, o mesmo que a consulta usa. O resolve precisa dele para contar
     // quantas celulas estao de fato utilizaveis: `tem amostra` e `encerra um caminho` deixaram de
     // ser a mesma coisa quando o piso entrou, e o estado global Filling/Active vai ler o segundo.
@@ -30,7 +30,8 @@ cbuffer RadianceCacheCB : register(b0) {
 
 RWStructuredBuffer<uint>  Entries  : register(u0);
 RWStructuredBuffer<uint>  Accum    : register(u1); // 4 uints por entrada: rgb em ponto fixo + N
-RWStructuredBuffer<uint4> Resolved : register(u2); // xyz = asuint(radiancia), w = N | frames<<16
+// w = peso de amostras[15:0] | frames acumulados[23:16] | idade sem amostra[31:24].
+RWStructuredBuffer<uint4> Resolved : register(u2);
 RWStructuredBuffer<uint>  Stats    : register(u3); // ver RC_STAT_* no RadianceCache.hlsli
 
 // Reducao por grupo: 1 M de InterlockedAdd por frame saturaria a porta de atomicos do buffer.
@@ -91,6 +92,7 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             Stats[RC_STAT_SRC_TOTAL]      = 0u;
             Stats[RC_STAT_SRC_CACHE]      = 0u;
             Stats[RC_STAT_SRC_DDGI]       = 0u;
+            Stats[RC_STAT_SRC_ENVIRONMENT] = 0u;
             Stats[RC_STAT_SRC_ZERO]       = 0u;
             Stats[RC_STAT_SRC_INELIGIBLE] = 0u;
         }
@@ -116,18 +118,26 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
         Resolved[idx] = uint4(0u, 0u, 0u, 0u);
         Accum[base + 0u] = 0u; Accum[base + 1u] = 0u;
         Accum[base + 2u] = 0u; Accum[base + 3u] = 0u;
-    } else if (inRange && Entries[idx] != RC_INVALID_CHECKSUM &&
-               Entries[idx] != RC_TOMBSTONE_CHECKSUM) {
+    } else if (inRange && Entries[idx] == RC_TOMBSTONE_CHECKSUM) {
+        // Compatibilidade com tabelas produzidas pela versao anterior. Como RC_Find agora percorre
+        // a janela fixa inteira, estes slots podem voltar a INVALID sem esconder colisoes.
+        Entries[idx]  = RC_INVALID_CHECKSUM;
+        Resolved[idx] = uint4(0u, 0u, 0u, 0u);
+        Accum[base + 0u] = 0u; Accum[base + 1u] = 0u;
+        Accum[base + 2u] = 0u; Accum[base + 3u] = 0u;
+    } else if (inRange && Entries[idx] != RC_INVALID_CHECKSUM) {
         const uint newSamples = Accum[base + 3u];
 
         const uint4 prev          = Resolved[idx];
         const float3 prevRadiance = asfloat(prev.xyz);
-        const uint   prevSamples  = prev.w & 0xFFFFu;
-        const uint   prevFrames   = prev.w >> 16u;
+        const uint   prevSamples  = RC_MetadataSampleCount(prev.w);
+        const uint   prevAccumFrames = RC_MetadataAccumulatedFrames(prev.w);
+        const uint   prevStaleFrames = RC_MetadataStaleFrames(prev.w);
 
         float3 radiance = prevRadiance;
         uint   samples  = prevSamples;
-        uint   frames   = prevFrames;
+        uint   accumulatedFrames = min(prevAccumFrames + 1u, RC_META_FRAME_MASK);
+        uint   staleFrames       = prevStaleFrames;
         bool   evicted  = false;
 
         if (newSamples > 0u) {
@@ -137,35 +147,44 @@ void main(uint3 did : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
             const float3 newSum = float3((float)Accum[base + 0u],
                                          (float)Accum[base + 1u],
                                          (float)Accum[base + 2u]) / RC_RADIANCE_SCALE;
-            const float total = (float)prevSamples + (float)newSamples;
-            radiance = (prevRadiance * (float)prevSamples + newSum) / total;
+            // O limite e em FRAMES, nao em amostras. Antes, saturar prevSamples em 64 fazia uma
+            // celula com 64 paths novos receber peso 1/2 e outra com um path receber 1/65. A SHaRC
+            // conserva o peso real de amostras e, ao exceder a janela temporal, renormaliza apenas
+            // o historico. Assim densidade constante de 1 ou 64 paths/frame tem a mesma meia-vida.
+            const uint maxAccumFrames = max((uint)CacheParams.y, 1u);
+            float historySamples = (float)prevSamples;
+            if (accumulatedFrames > maxAccumFrames) {
+                historySamples *= (float)maxAccumFrames / (float)accumulatedFrames;
+                accumulatedFrames = maxAccumFrames;
+            }
 
-            // Teto de amostras: com N ilimitado a celula congela e para de responder a mudanca de
-            // iluminacao (TOD, luz acesa/apagada). Limitar N transforma a media corrente numa
-            // media movel exponencial de constante 1/N — e o `maxAccumulatedFrames` da SHaRC.
-            samples = min((uint)total, (uint)CacheParams.y);
-            frames  = 0u;
+            const float total = historySamples + (float)newSamples;
+            radiance = (prevRadiance * historySamples + newSum) / max(total, 1.0f);
+            samples  = min((uint)(total + 0.5f), RC_META_SAMPLE_MASK);
+            staleFrames = 0u;
         } else {
-            frames = prevFrames + 1u;
-            evicted = frames > (uint)CacheParams.z;
+            staleFrames = min(prevStaleFrames + 1u, RC_META_FRAME_MASK);
+            evicted = staleFrames > (uint)CacheParams.z;
         }
 
         if (evicted) {
-            // Nao volte a `vazio`: isto pode estar no meio de uma cadeia de sondagem linear.
-            // Tombstone mantem as colisoes posteriores encontraveis e RC_Insert o reutiliza.
-            Entries[idx]  = RC_TOMBSTONE_CHECKSUM;
+            // A busca percorre sempre a janela fixa de 32 slots, portanto INVALID nao interrompe
+            // uma cadeia e a entrada pode ser realmente reciclada — sem tombstones permanentes.
+            Entries[idx]  = RC_INVALID_CHECKSUM;
             Resolved[idx] = uint4(0u, 0u, 0u, 0u);
             evictedOut    = 1u;
         } else {
             Resolved[idx] = uint4(asuint(radiance),
-                                  (samples & 0xFFFFu) | (min(frames, 0xFFFFu) << 16u));
+                                  RC_PackMetadata(samples, accumulatedFrames, staleFrames));
             occupied   = 1u;
             // As DUAS contagens, e nao uma. `hasSamples` diz que a celula tem radiancia;
             // `confident` diz que ela encerra um caminho. Entre 1 amostra e o piso a celula conta
             // na primeira e nao na segunda — e e a segunda que descreve o cache utilizavel.
             hasSamples = samples > 0u ? 1u : 0u;
             confident  = samples >= minSamples ? 1u : 0u;
-            samplesOut = samples;
+            // Mantem a telemetria no intervalo historico 0..64 por celula. O peso interno pode
+            // chegar a 4096, mas soma-lo em uma tabela 2^22 estouraria o contador uint do painel.
+            samplesOut = min(samples, RC_SAMPLE_NUM_MAX);
         }
 
         Accum[base + 0u] = 0u; Accum[base + 1u] = 0u;

@@ -34,7 +34,7 @@ namespace Smile {
     };
 
     struct alignas(256) RadianceCacheConstants {
-        Vec4 CacheParams; // x = capacidade; y = maxAccumSamples; z = staleFrameMax; w = reset
+        Vec4 CacheParams; // x = capacidade; y = maxAccumFrames; z = staleFrameMax; w = reset
         // y = piso de confianca. O resolve conta as celulas CONFIAVEIS separadas das que so tem
         // amostra, e para isso precisa do mesmo numero que a consulta usa.
         Vec4 StatsParams; // x = modo do dispatch (0 resolve, 1 clear dos contadores); y = piso
@@ -95,7 +95,7 @@ namespace Smile {
         Cells = 0,   // cor por celula — a estrutura do hash no mundo
         HitMiss,     // cobertura: verde = utilizavel; laranja = refresh; amarelo = sem amostra
         Lod,         // nivel da celula por distancia da camera
-        Converged,   // N/kMaxAccumSamples — quanto a MEDIA convergiu
+        Converged,   // frames acumulados/kMaxAccumulatedFrames — memoria temporal da media
         Age,         // frames desde a ultima amostra, com o limiar de refresh como cor
         // N contra o PISO, e nao contra o teto: a fronteira que decide se a celula encerra um
         // caminho. E o modo que mostra a frente de aquecimento andando depois de um reset — o
@@ -139,7 +139,7 @@ namespace Smile {
         // Misses por MOTIVO. Eles pedem coisas opostas — capacidade, cobertura, tempo, ou nada
         // (limite geometrico do cache) —, e somados num numero so nao respondem nenhuma delas.
         // A ordem espelha RC_STAT_MISS_* e o static_assert abaixo trava o par com os RC_QUERY_*.
-        u32 MissShort   = 0; // segmento menor que a celula
+        u32 MissShort   = 0; // segmento nao supera a diagonal da celula
         u32 MissCone    = 0; // cone especular menor que a celula
         u32 MissNoEntry = 0; // chave ausente ou balde cheio  -> capacidade
         u32 MissEmpty   = 0; // celula sem amostra            -> cobertura do produtor
@@ -186,7 +186,8 @@ namespace Smile {
         u32 SrcDDGI       = 0; // o cache errou e o volume respondeu
         u32 SrcEnvironment = 0; // o cache errou e o ambiente respondeu
         u32 SrcZero       = 0; // o cache errou e o terminador era Black
-        // Nem chegou a consultar: segmento menor que a celula ou cone mais estreito que ela. Estes
+        // Nem chegou a consultar: segmento nao supera a diagonal ou cone mais estreito que a
+        // celula. Estes
         // raios estao TAMBEM em `SrcDDGI`, `SrcEnvironment` ou `SrcZero` — nunca em `SrcCache`, por construcao.
         //
         // Ele mede quanto dos hits o cache NAO PODE atender por geometria, e so isso. Quanto disso
@@ -241,7 +242,7 @@ namespace Smile {
         FPassShaderStems ShaderStems() const override;
         bool IsActive(const FFrameModes& Modes) const override;
 
-        // O cache E um acumulador temporal: media movel com teto de kMaxAccumSamples. Sem entrar
+        // O cache E um acumulador temporal: media movel com teto de kMaxAccumulatedFrames. Sem entrar
         // no grafo, um knob que muda o que o raio enxerga deixaria radiancia velha viva por ate
         // kStaleFrameMax frames — o mesmo "historico que nao morre" que o HistoryDomain.h
         // descreve. O OnResize existe so pelo alvo do VISUALIZADOR; a tabela em si e de MUNDO e
@@ -265,10 +266,16 @@ namespace Smile {
         // muda a imagem" e menos que "e comparavel".
         static constexpr u32 kFlagStatsSource = 16u;
 
-        // Espelham RC_SAMPLE_NUM_MAX / RC_STALE_FRAME_MAX do shader. Mudar aqui sem mudar la
-        // deixa o teto de amostras incoerente com o teto do ponto fixo do acumulador.
-        static constexpr u32 kMaxAccumSamples = 64;
-        static constexpr u32 kStaleFrameMax   = 64;
+        // Espelham RC_ACCUM_FRAME_MAX / RC_STALE_FRAME_MAX do shader. O primeiro limita memoria
+        // TEMPORAL; RC_SAMPLE_NUM_MAX continua sendo o teto independente de paths por frame que
+        // protege o acumulador de ponto fixo.
+        static constexpr u32 kMaxAccumulatedFrames = 64;
+        static constexpr u32 kMaxSamplesPerFrame   = 64;
+        static constexpr u32 kStaleFrameMax         = 64;
+        static_assert(kMaxAccumulatedFrames <= 0xFFu && kStaleFrameMax <= 0xFFu,
+                      "Resolved.w reserva 8 bits para cada contador de frames");
+        static_assert(kMaxAccumulatedFrames * kMaxSamplesPerFrame <= 0xFFFFu,
+                      "Resolved.w reserva 16 bits para o peso historico de amostras");
 
         // 2^17 = 131.072 celulas = 4,5 MB (4 + 16 + 16 bytes por celula). Isto e RESULTADO DE
         // MEDIDA, e nao a estimativa que estava aqui: com o produtor dedicado a tabela de 2^20
@@ -419,9 +426,9 @@ namespace Smile {
             MinSampleCount = C;
         }
         u32  GetMinSampleCount() const { return MinSampleCount; }
-        // Teto do knob, e nao do formato: `sampleNum` cabe em 16 bits e o acumulador para em
-        // kMaxAccumSamples. Acima de uns poucos a celula so ficaria inalcancavel — com 64 nenhuma
-        // celula jamais seria consultavel antes de estar no teto, e o cache viraria decoracao.
+        // Teto do knob, e nao do formato: `sampleNum` cabe em 16 bits, mas o acumulador por frame
+        // aceita no maximo 64 amostras. Acima de uns poucos a celula so ficaria inalcancavel — com
+        // 64 nenhuma celula seria consultavel antes de um frame completamente cheio.
         static constexpr u32 kMaxMinSamples = 16;
         // Espelha o RCU_MAX_VERTS do shader, que e constante de COMPILACAO la (o array de vertices
         // precisa viver em registrador). Pedir mais que isto no CB nao alocaria nada — o shader

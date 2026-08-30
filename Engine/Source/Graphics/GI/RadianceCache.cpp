@@ -401,7 +401,7 @@ namespace Smile {
         PublishedMinSamples   = 0;
         if (!Ready || !MappedCB) return;
         CPU.CacheParams = { static_cast<f32>(CapacityV),
-                            static_cast<f32>(kMaxAccumSamples),
+                            static_cast<f32>(kMaxAccumulatedFrames),
                             static_cast<f32>(kStaleFrameMax),
                             ResetPending ? 1.0f : 0.0f };
         const size_t Base = static_cast<size_t>(FrameSlot) * 2u * sizeof(RadianceCacheConstants);
