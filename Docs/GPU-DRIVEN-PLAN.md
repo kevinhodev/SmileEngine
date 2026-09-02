@@ -641,8 +641,8 @@ contra assets incompatíveis.
   moram em DEFAULT. A resposta tem de sair do **delta de memória local/não-local medido em
   runtime** (`GetGpuMemoryInfo`), com o editor aberto na `Synthetic_1M`. Só o caminho de CPU está
   verificado;
-- fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas — **infraestrutura
-  feita, poses das cenas reais pendentes**:
+- ~~fixar bookmarks/reprodução para as cenas de gate~~ — **feito**. O conjunto obrigatório é
+  **Bistro + Emerald + as três sintéticas**; `MEASURE_SEVEN` saiu dos requisitos (ver abaixo).
 
   O achado que definiu o slice: os `.cameras.json` viviam sob `Assets/Scenes/`, que é gitignored,
   então **nenhum bookmark era versionado**. Um baseline cuja pose de câmera existe só na máquina
@@ -666,11 +666,17 @@ contra assets incompatíveis.
 
   Quatro ângulos bonitos do mesmo regime não distinguiriam ganho de culling de ganho de submissão.
 
-  **Pendente e não é trabalho de ferramenta:** Bistro tem 3 slots, Emerald 2, e MEASURE_SEVEN
-  nenhum (só `MEASURE_SEVEN_COLORED_LIGHTS`, com 1). As poses de cena real precisam ser
-  escolhidas olhando a cena, no editor — uma câmera de baseline mal escolhida é pior que nenhuma,
-  porque torna toda medição futura silenciosamente irrelevante. Os critérios da tabela acima
-  valem como guia. Depois de escolhidas, elas ficam versionadas automaticamente;
+  **Cenas reais: 4 slots autorados em cada.** Bistro e Emerald foram fixadas no editor e estão
+  versionadas, com as quatro poses distintas e validadas pelo parser do gate. Poses de cena real
+  não são deriváveis — precisam ser escolhidas olhando a cena, porque uma câmera de baseline mal
+  escolhida é pior que nenhuma: torna toda medição futura silenciosamente irrelevante.
+
+  **`MEASURE_SEVEN` saiu do conjunto obrigatório.** Ela é a maior contagem do acervo (10.740),
+  mas exercita iluminação e RT muito mais que submissão em escala — e o eixo de escala passou a
+  ser coberto pelas sintéticas, que vão a 1M com geometria e materiais controláveis. Manter uma
+  cena pesada como gate por um papel que outra cobre melhor só encarece a rodada. O sidecar dela
+  continua no repositório e continua validado pelo gate (arquivo versionado tem de ser parseável);
+  o que mudou é que ela não é mais **requisito** dos itens 8 e 9;
 - capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.
 
 ### Arquivos prováveis
@@ -1117,13 +1123,17 @@ validar escala de produção.
 
 ### 9.1 Conteúdo
 
-| Conteúdo | O que prova |
-|---|---|
-| Bistro | materiais variados, transparência, alpha e regressão visual |
-| Emerald | instancing real e muitos materiais |
-| BEEPLE MEASURE_SEVEN | maior contagem atual, submissão e memória |
-| SunTemple | shadows e referência histórica do protótipo removido |
-| sintética 10k/100k/1M | scaling controlado e overflows |
+Os **gates obrigatórios** são Bistro, Emerald e as três sintéticas: as duas primeiras cobrem cena
+real (material, alpha, oclusão, instancing) e as sintéticas cobrem escala com geometria e
+materiais controláveis. O resto é opcional e roda quando o eixo dele interessar.
+
+| Conteúdo | O que prova | |
+|---|---|---|
+| Bistro | materiais variados, transparência, alpha e regressão visual | **gate** |
+| Emerald | instancing real, muitos materiais e vegetação mascarada | **gate** |
+| sintética 10k/100k/1M | scaling controlado e overflows | **gate** |
+| BEEPLE MEASURE_SEVEN | maior contagem do acervo (10.740), mas exercita iluminação/RT mais que submissão — o eixo de escala é melhor coberto pelas sintéticas | opcional |
+| SunTemple | shadows e referência histórica do protótipo removido | opcional |
 | Moana Geometry subset | instancing massivo, clusters e streaming |
 | Moana completa | alvo final de escala, não gate do núcleo inicial |
 

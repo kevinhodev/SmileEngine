@@ -29,11 +29,11 @@ namespace {
 
     using namespace SmileEditor;
 
-    // Os quatro slots sinteticos existem para exercitar REGIMES diferentes de culling/submissao;
-    // se dois deles coincidirem, o baseline mede a mesma coisa quatro vezes.
-    // _Strict: pose repetida e FALHA (cena gerada, onde repetir e regressao do gerador) ou apenas
-    // AVISO (cena real, onde as poses sao autoradas e repetir e trabalho por terminar). Mesma
-    // distincao invalido-vs-incompleto do resto do teste: nao se trava o build por autoria.
+    // Os quatro slots existem para exercitar REGIMES diferentes de culling/submissao; se dois
+    // deles coincidirem, o baseline mede a mesma coisa duas vezes.
+    // _Strict: pose repetida e FALHA quando o chamador declarou --expect-slots, ou seja quando o
+    // conjunto de poses ja esta CONGELADO (sinteticas, e as duas cenas de gate). Sem a flag, vira
+    // AVISO: as poses ainda estao sendo autoradas e repetir e trabalho por terminar, nao defeito.
     void CheckDistinctPoses(const BookmarkSchema::FSlot* _S, bool _Strict) {
         for (int A = 0; A < BookmarkSchema::kSlotCount; ++A) {
             if (!_S[A].Filled) continue; // slot vazio e tudo-zero: comparar dois deles acusaria
@@ -57,12 +57,13 @@ namespace {
 int main(int argc, char** argv) {
     // --expect-slots N exige EXATAMENTE N slots preenchidos; sem ele, basta pelo menos um.
     //
-    // A distincao e entre INVALIDO e INCOMPLETO. As sinteticas sao geradas, entao sempre tem os
-    // quatro, e a ausencia de um e regressao do gerador. As cenas reais tem as poses que alguem
-    // escolheu ate agora (Bistro 3, Emerald 2), e exigir quatro deixaria a suite vermelha por
-    // trabalho pendente — suite permanentemente vermelha para de informar. A lacuna de poses e
-    // rastreada no plano; o que o gate cobre aqui e que o arquivo VERSIONADO, que vai ser editado
-    // a mao, continua parseavel e sao.
+    // A distincao e entre INVALIDO e INCOMPLETO, e quem decide qual e cada cena e o CMakeLists,
+    // nao este arquivo. As sinteticas e as duas cenas de GATE (Bistro e Emerald) passam
+    // --expect-slots 4: nelas as quatro poses ja existem, e a partir daqui apagar ou duplicar uma
+    // e regressao do baseline. As cenas opcionais nao passam a flag, porque travar um numero
+    // deixaria a suite vermelha por autoria pendente — suite permanentemente vermelha para de
+    // informar. Em todas, o minimo que o gate cobre e o mesmo: o arquivo VERSIONADO, que vai ser
+    // editado a mao, continua parseavel e sao.
     if (argc < 2) {
         std::fprintf(stderr,
                      "uso: SmileBookmarkSidecarTests <cena.cameras.json> [--expect-slots N]\n");

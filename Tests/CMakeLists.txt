@@ -456,20 +456,42 @@ endforeach()
 # Os sidecars VERSIONADOS das cenas reais tambem passam pelo parser: eles entram no repositorio
 # e vao ser editados a mao, entao um JSON quebrado ali precisa derrubar o gate e nao aparecer
 # so na hora da captura.
+#
+# Formato: "<caminho sem extensao>|<slots exigidos, ou 0 para 'pelo menos um'>".
+#
+# As duas cenas de GATE (Bistro e Emerald) exigem os 4: as poses ja foram autoradas, e com o
+# numero fixado o gate passa a defender o baseline em vez de so conferir sintaxe — apagar ou
+# duplicar um slot vira falha aqui, e nao uma medicao silenciosamente diferente semanas depois.
+# --expect-slots tambem torna ESTRITA a checagem de poses distintas, que e exatamente a regressao
+# que a Emerald tinha (slots 0 e 1 byte-a-byte iguais).
+#
+# As cenas OPCIONAIS ficam em 0: nelas as poses sao trabalho em aberto, e travar um numero faria
+# a suite ficar vermelha por autoria pendente — suite permanentemente vermelha para de informar.
 foreach(REAL_SIDECAR
-    "Bistro/BistroExterior"
-    "EmeraldSquare_v4_1/EmeraldSquare_Day"
-    "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS"
+    "Bistro/BistroExterior|4"
+    "EmeraldSquare_v4_1/EmeraldSquare_Day|4"
+    "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS|0"
 )
+    # Separador "|" e nao ";": o CMake achata ";" dentro de listas de foreach.
+    string(REPLACE "|" ";" SIDECAR_FIELDS "${REAL_SIDECAR}")
+    list(GET SIDECAR_FIELDS 0 SIDECAR_PATH)
+    list(GET SIDECAR_FIELDS 1 SIDECAR_SLOTS)
+
     # SEM if(EXISTS): estes sidecars sao VERSIONADOS, entao a ausencia e regressao e nao
     # ambiente. Registrar condicionalmente faria um checkout sem eles rodar menos testes e
     # continuar verde — o mesmo gate-que-some-sozinho que as cenas sinteticas ja tiveram. O
     # executavel devolve exit 3 quando o arquivo nao esta la, que e o diagnostico certo.
-    set(SIDECAR_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${REAL_SIDECAR}.cameras.json")
-    get_filename_component(SIDECAR_NAME "${REAL_SIDECAR}" NAME)
+    set(SIDECAR_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${SIDECAR_PATH}.cameras.json")
+    get_filename_component(SIDECAR_NAME "${SIDECAR_PATH}" NAME)
+
+    set(SIDECAR_ARGS "")
+    if(NOT SIDECAR_SLOTS EQUAL 0)
+        set(SIDECAR_ARGS --expect-slots ${SIDECAR_SLOTS})
+    endif()
+
     add_test(
         NAME Smile.BookmarkSidecar.${SIDECAR_NAME}
-        COMMAND SmileBookmarkSidecarTests "${SIDECAR_FILE}"
+        COMMAND SmileBookmarkSidecarTests "${SIDECAR_FILE}" ${SIDECAR_ARGS}
     )
     set_tests_properties(Smile.BookmarkSidecar.${SIDECAR_NAME} PROPERTIES
         LABELS "scene;bookmarks"
