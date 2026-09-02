@@ -200,3 +200,48 @@ set_tests_properties(Smile.OpacityMicromapBake.BistroExterior PROPERTIES
     LABELS "graphics;raytracing;omm;integration"
     TIMEOUT 300
 )
+
+# Harness de carga da cena cozida, independente de OMM. O SmileOpacityMicromapBakeTests so
+# validava index buffer de malha ALPHA-TESTED e pulava renderavel com indice invalido, entao nas
+# cenas sem material masked (Sponza, BEEPLE) ele nao validava indice nenhum. Este roda em TODAS.
+add_executable(SmileCookedSceneLoadTests
+    CookedSceneLoadTests.cpp
+)
+
+target_compile_features(SmileCookedSceneLoadTests PRIVATE cxx_std_20)
+target_link_libraries(SmileCookedSceneLoadTests PRIVATE SmileEngine)
+set_target_properties(SmileCookedSceneLoadTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+# Uma cena por teste: falha aponta o arquivo, e ctest -R filtra por familia. Os assets sao
+# gitignored, entao o teste so e registrado quando o .sscene existe na arvore.
+foreach(SCENE
+    "Bistro/BistroExterior"
+    "Bistro/BistroInterior"
+    "Bistro/BistroInterior_Wine"
+    "EmeraldSquare_v4_1/EmeraldSquare_Day"
+    "EmeraldSquare_v4_1/EmeraldSquare_Dusk"
+    "SunTemple/SunTemple"
+    "main_sponza/NewSponza_Main_Yup_003"
+    "main_sponza/NewSponza_Main_Zup_003"
+    "BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE"
+    "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN"
+    "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS"
+)
+    set(SCENE_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${SCENE}.sscene")
+    if(EXISTS "${SCENE_FILE}")
+        get_filename_component(SCENE_NAME "${SCENE}" NAME)
+        add_test(
+            NAME Smile.CookedSceneLoad.${SCENE_NAME}
+            COMMAND SmileCookedSceneLoadTests "${SCENE_FILE}"
+        )
+        set_tests_properties(Smile.CookedSceneLoad.${SCENE_NAME} PROPERTIES
+            LABELS "scene;cooked-format;integration"
+            TIMEOUT 300
+        )
+    endif()
+endforeach()

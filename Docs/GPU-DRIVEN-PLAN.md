@@ -544,15 +544,22 @@ contra assets incompatíveis.
   `-Record`/`-Verify`) + `Tools/cook-baseline.json` (hashes). Antes disso a única fonte que dizia
   quem usa a flag era um comentário em [`main.cpp`](../Tools/Cooker/main.cpp#L296), e um recook sem
   a receita mudaria o vidro da Emerald sem nenhum diff de código;
-- confirmar que loader, raster e RT abrem todas as famílias relevantes — **loader FEITO** (11/11
-  carregam via `LoadCookedSceneData` no harness headless de
-  [`OpacityMicromapBakeTests`](../Tests/OpacityMicromapBakeTests.cpp), com validação de índices;
-  6 cenas também exercitam o bake de OMM, e as 5 restantes — Sponza ×2, BEEPLE ×3 — saem com
-  `exit 6`, que é "zero pares masked", não falha de carga). **Raster e RT continuam por verificar**:
-  exigem o editor rodando, não há harness headless;
-- ~~registrar hashes/build~~ — **feito** pelo `cook-baseline.json` (SHA256, bytes, versão e
-  contadores de cabeçalho por arquivo, mais commit e config). `-Verify` é o gate "os assets são os
-  da baseline?". Recook confirmado **determinístico**: recozinhar uma cena reproduz o SHA256;
+- confirmar que loader, raster e RT abrem todas as famílias relevantes — **loader FEITO**, por
+  [`Tests/CookedSceneLoadTests.cpp`](../Tests/CookedSceneLoadTests.cpp), registrado como 11 testes
+  `Smile.CookedSceneLoad.*` (um por cena, para a falha apontar o arquivo). Valida cabeçalhos,
+  coerência entre contadores e vetores, **todas** as referências de renderável
+  (mesh/material/parent, transform finito) e **todos** os index buffers, mais o pareamento
+  posicional do payload de RT e sanidade da AABB. Existe porque o harness de OMM não servia como
+  prova de carga: ele só validava index buffer de malha *alpha-tested* e pulava silenciosamente
+  renderável com índice inválido, então nas cinco cenas sem material masked (Sponza ×2, BEEPLE ×3)
+  não validava índice nenhum — provava apenas que `LoadCookedSceneData` retornou sucesso.
+  **Raster e RT continuam por verificar**: exigem o editor rodando, não há harness headless;
+- ~~registrar hashes/build~~ — **feito** pelo `cook-baseline.json`, que fingerprinta as **entradas**
+  e não só as saídas: SHA256 de cada FBX (também gitignored), da receita e do binário do cooker,
+  mais commit, `treeDirty` e a versão esperada. Sem isso, outro FBX no mesmo caminho ou um cooker
+  vindo de árvore suja seriam indistinguíveis. O bloco `expect` da receita é validado em `-Record`,
+  `-Verify` e depois de cada cook, o que impede a ferramenta de oficializar um formato que este
+  checkout rejeita. Recook confirmado **determinístico**: recozinhar uma cena reproduz o SHA256;
 - não confundir os antigos arquivos v9 com formato suportado;
 - adicionar timers CPU para `BuildDrawLists`, sort, uploads e emissão de passes;
 - registrar draws potenciais/executadas, bindings, renderables, materiais, meshes e bytes de object

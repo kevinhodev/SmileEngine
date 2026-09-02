@@ -7,6 +7,19 @@
     "Rodar com Tools/CookScenes.ps1. Ver Docs/GPU-DRIVEN-PLAN.md, Fase 0."
   ],
   "cooker": "build/bin/Release/SmileCooker.exe",
+
+  "_expectComment": [
+    "Formato que ESTE checkout aceita. Sem isto, -Record oficializaria qualquer coisa que",
+    "estivesse no disco (inclusive os antigos v9) e -Verify aceitaria, porque so compara com a",
+    "propria baseline. Bumpar o cozido exige bumpar aqui de proposito.",
+    "Magics e versao em Engine/Include/Smile/Scene/CookedFormat.h."
+  ],
+  "expect": {
+    "version": 8,
+    "smeshMagic": "0x48534D53",
+    "ssceneMagic": "0x4E435353"
+  },
+
   "scenes": [
     {
       "source": "Assets/Scenes/main_sponza/NewSponza_Main_Yup_003.fbx",

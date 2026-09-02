@@ -1,193 +1,332 @@
 {
-    "generatedUtc":  "2026-09-02T02:49:31Z",
-    "commit":  "f725a65",
+    "generatedUtc":  "2026-09-02T03:03:17Z",
+    "commit":  "e7a6065",
+    "treeDirty":  true,
     "config":  "Release",
+    "expectVersion":  8,
+    "recipeSha256":  "9DE01BDEA4EFAED0A9DC3561584988479DBDC62AAAF0F9CB7325630B493604DA",
+    "cooker":  {
+                   "sha256":  "9BF4AB8F02DC15374B11541164DFD07810687458B765F802FD2CBD9CAD53DEE2",
+                   "bytes":  410624
+               },
     "outputs":  [
                     {
                         "outBase":  "Assets/Scenes/main_sponza/NewSponza_Main_Yup_003",
+                        "source":  "Assets/Scenes/main_sponza/NewSponza_Main_Yup_003.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "3D44613B1040A1079D550FD0C9CBD9F02DD0677DF89A36E67B7F67D803ED1A19",
+                                             "bytes":  929301382
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "7A3B05201909B1F5A71D6B5187343FCEE82EE4A4125D98E50285F1081C99AD6B",
                                       "bytes":  229887512,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  405,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "9EE6A8DB718191BB42EF9B82AEA046A73BF1D34703619D36DDCF888BCAE1BB13",
                                        "bytes":  119568,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  28,
-                                       "countD":  405
+                                       "countD":  405,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/main_sponza/NewSponza_Main_Zup_003",
+                        "source":  "Assets/Scenes/main_sponza/NewSponza_Main_Zup_003.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "0B9EF098706C13F5815A26E3F061D30B21DD19623D672DA20FD404B1E2E42034",
+                                             "bytes":  929297471
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "7A3B05201909B1F5A71D6B5187343FCEE82EE4A4125D98E50285F1081C99AD6B",
                                       "bytes":  229887512,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  405,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "7E74D1A4FB710645A91C1EDE9B283C17D8B3DE53AC2EBB81811D4C9D27B94790",
                                        "bytes":  119568,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  28,
-                                       "countD":  405
+                                       "countD":  405,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/SunTemple/SunTemple",
+                        "source":  "Assets/Scenes/SunTemple/SunTemple.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "0CCB016A312263B8EF0892B293A9831F14E50926D4D3607A49AACF08B9BDCB8B",
+                                             "bytes":  43377568
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "F8C4CE26959C98C51E347B91DFFDA3A5E3B333E5D0830EB6B27F5B5314293A73",
                                       "bytes":  44265936,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  1056,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "538728DB46CD3693AFBD5E3BFC603A1B898127284A9CA42565DA4FBA0D8B5363",
                                        "bytes":  268624,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  48,
-                                       "countD":  1056
+                                       "countD":  1056,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/Bistro/BistroExterior",
+                        "source":  "Assets/Scenes/Bistro/BistroExterior.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "471991629C7E35A88338C48F3565390AD19CC5D1D7C7E067FC2A60B4F3B5F195",
+                                             "bytes":  119845216
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "4349111F6D2EE0CDA73F7E81B1503C9D041BF1F132563E72D0536B724DD8FBCA",
                                       "bytes":  216552656,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  1591,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "AD4527F5673317C1EBBAC678E6F6B7F6FFB447D2775971B996A452022241BC72",
                                        "bytes":  507600,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  132,
-                                       "countD":  1591
+                                       "countD":  1591,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/Bistro/BistroInterior",
+                        "source":  "Assets/Scenes/Bistro/BistroInterior.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "F18AEA42854112E59752F14596E557C3D011E3526CAF6A1BD55CE0E51881C11E",
+                                             "bytes":  41822352
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "332B96F082B56552E8B9D5BB57662A001EA4F5C8C391E443EFC98F8F64C17370",
                                       "bytes":  71471836,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  2062,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "B2DE93F8707D59EC5A4028F67F69F535F9682774FA4D91C90D51EBFC0A4F7A2F",
                                        "bytes":  485332,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  71,
-                                       "countD":  2062
+                                       "countD":  2062,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/Bistro/BistroInterior_Wine",
+                        "source":  "Assets/Scenes/Bistro/BistroInterior_Wine.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "E5F4549548B0EC05C1F534551DCC7053D5286E0B48C9798C985AC1A7FA87CB1C",
+                                             "bytes":  48742272
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "BA80D4F04287BEF3042AA94E6B7526D7FC2C09E1E4E7DF699E73993E5E51995B",
                                       "bytes":  91933076,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  2289,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "1D4C4974FFA83235C5A32A89C7564B7336D04C9646F596DB95D74B17B9CB1136",
                                        "bytes":  530456,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  74,
-                                       "countD":  2289
+                                       "countD":  2289,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Day",
+                        "source":  "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Day.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "19E44211A976276B10FA68E5C89930F999AE6A729F0A378CEE130A594FB3FDA8",
+                                             "bytes":  147767216
+                                         },
+                        "flags":  [
+                                      "--opaque-glass"
+                                  ],
                         "smesh":  {
                                       "sha256":  "E27C98D24E79165094E77B5898FE394A482D58174F7AC55960E012CB95A3838A",
                                       "bytes":  214754712,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  281,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "F86EA417D994F609F231742E14047339D74773435BA4A59CA8A6CA3BFA94B851",
                                        "bytes":  815600,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  220,
-                                       "countD":  2479
+                                       "countD":  2479,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Dusk",
+                        "source":  "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Dusk.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "AF2C54131A209A67F6B6D1DC17DAB5C244DD280388314E54F7830CD361A55CD1",
+                                             "bytes":  147803856
+                                         },
+                        "flags":  [
+                                      "--opaque-glass"
+                                  ],
                         "smesh":  {
                                       "sha256":  "BF48487582B867AE8F20EB7E86C9243C4D2014A9B2F98825692D23DEED5EFA93",
                                       "bytes":  214755384,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  289,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "F21144CCC52E54B81A0240ED9265D892F8920A4BE4C9C46E4C2125CCD6004E82",
                                        "bytes":  820456,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  222,
-                                       "countD":  2487
+                                       "countD":  2487,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE",
+                        "source":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "99640F14499C14832A08901F0CBC18862E81E730CA6B4861C8404CB3EB15EFD3",
+                                             "bytes":  297906912
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "8E489AA23DEC316F3284026878DBFC98B546B62269201E54CE593805404448A4",
                                       "bytes":  453560844,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  7293,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "74B008D5D2AE52FF0E424C497E7A3815558CDA70B9E8CF8243CEB4FF7B7C0D62",
                                        "bytes":  1569768,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  166,
-                                       "countD":  7293
+                                       "countD":  7293,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN",
+                        "source":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "74F8FA7FEF4776E1F50E20258A193BB302852B6208548DDEE8487DD810BF576A",
+                                             "bytes":  316319504
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "26B852BF0B1253CFAD86B9CE29DB9AE8544384A861F64EAE51B93DAC1853346C",
                                       "bytes":  501723184,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  10740,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "77F565AE84FED850702E432C7F0789EF6DB98F801BEC673DE7C3CA5F32B2AEE9",
                                        "bytes":  2104032,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  124,
-                                       "countD":  10740
+                                       "countD":  10740,
+                                       "formatProblem":  ""
                                    }
                     },
                     {
                         "outBase":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS",
+                        "source":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS.fbx",
+                        "sourceDigest":  {
+                                             "sha256":  "E45234C43EFFD9CCB28DB0F22D9AD39EE136A30C489475268820CE3B4BA21478",
+                                             "bytes":  316326416
+                                         },
+                        "flags":  [
+
+                                  ],
                         "smesh":  {
                                       "sha256":  "26B852BF0B1253CFAD86B9CE29DB9AE8544384A861F64EAE51B93DAC1853346C",
                                       "bytes":  501723184,
                                       "version":  8,
+                                      "magic":  "0x48534D53",
                                       "countC":  10740,
-                                      "countD":  0
+                                      "countD":  0,
+                                      "formatProblem":  ""
                                   },
                         "sscene":  {
                                        "sha256":  "1DBBFE3D7FADA8762E3B211E2F51B677ADA30F00B1E2E7AB1F9AB83F857E699B",
                                        "bytes":  2105756,
                                        "version":  8,
+                                       "magic":  "0x4E435353",
                                        "countC":  125,
-                                       "countD":  10740
+                                       "countD":  10740,
+                                       "formatProblem":  ""
                                    }
                     }
                 ]
