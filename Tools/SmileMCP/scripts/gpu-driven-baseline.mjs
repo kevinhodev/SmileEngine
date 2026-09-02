@@ -151,16 +151,21 @@ function passOf(profile, name, queue) {
   return profile.passes.find((candidate) => candidate.name === name && candidate.queue === queue);
 }
 
-// smile_close_editor AFIRMA que o editor parou, e essa afirmacao nao e confiavel: o shutdown() do
-// bridge conclui "parou" assim que uma chamada de status(500 ms) falha, e numa cena pesada o
-// round-trip de status passa de 500 ms sem o editor ter ido a lugar nenhum. Medido na sintetica de
-// 1M: close_editor devolveu sucesso e o editor seguiu vivo e RENDERIZANDO por mais de 10 minutos
-// (610 s de CPU), ate um WM_CLOSE derruba-lo em 1 segundo.
+// Rede de seguranca do teardown, mantida DEPOIS de o defeito estar corrigido no bridge.
 //
-// Enquanto ele nao morre, a VRAM dele continua tomada, e medir a cena seguinte por cima disso
-// mistura duas cenas na mesma leitura — contaminacao que nao aparece no relatorio, porque cada
-// numero isolado continua plausivel. Entao aqui se verifica o PROCESSO, e nao a afirmacao:
-// `kill(pid, 0)` nao envia sinal, so pergunta se ele existe (ESRCH quando nao).
+// O defeito: o close_editor abria com um `status(300 ms)` e engolia a falha dele como "ja parou".
+// Numa cena pesada o status leva mais que isso (380 ms de p50 medidos na sintetica de 1M, a
+// ~3 FPS), entao a ferramenta devolvia sucesso SEM NUNCA MANDAR o shutdown — e o editor seguia
+// vivo e RENDERIZANDO por mais de 10 minutos (610 s de CPU), ate um WM_CLOSE derruba-lo em 1 s.
+// O caminho nativo nunca teve culpa: com o comando entregue, o editor da 1M fecha em ~3 s. Hoje o
+// shutdown() so devolve `stopped` com o PID sumido, e prazo estourado nao conclui nada.
+//
+// A rede continua porque a consequencia de errar aqui e cara e silenciosa: enquanto o editor nao
+// morre, a VRAM dele continua tomada, e medir a cena seguinte por cima disso mistura duas cenas na
+// mesma leitura — contaminacao que nao aparece no relatorio, porque cada numero isolado continua
+// plausivel. `kill(pid, 0)` nao envia sinal, so pergunta se ele existe (ESRCH quando nao).
+//
+// `forcedKills` no relatorio deixou de ser rotina esperada: agora e sinal de defeito NOVO.
 //
 // Se a saida limpa nao vier, mata. Um benchmark nao tem nada a salvar, e derrubar a rodada
 // inteira por um teardown que nao acontece descartaria as medicoes ja feitas. O forcado fica

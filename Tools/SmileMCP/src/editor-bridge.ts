@@ -16,6 +16,14 @@ const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
 // assincrono da cena, voltando a false enquanto troca os recursos. Uma amostra positiva fez o
 // run_editor liberar a captura cedo demais na Bistro. Exija uma janela continua, nao um pulso.
 const READY_STABLE_MS = 1_500;
+// Comando avulso contra um editor pesado. Todo handler do McpBridge roda no event loop da GUI,
+// entao o round-trip acompanha o custo do frame: medido na sintetica de 1M (~3 FPS), um status
+// leva 380 ms de p50. O prazo e folgado de proposito — ele so precisa NAO expirar num editor
+// vivo; quem prova encerramento e o PID, nunca um prazo estourado.
+export const SLOW_EDITOR_COMMAND_TIMEOUT_MS = 10_000;
+// Sonda de pipe: nao envia comando, entao nao espera frame nenhum.
+const PIPE_PROBE_TIMEOUT_MS = 1_000;
+const STOP_POLL_INTERVAL_MS = 250;
 
 interface BridgeEnvelope {
   version: number;
@@ -288,14 +296,56 @@ function editorPipePath(): string {
   return `\\\\.\\pipe\\${name}`;
 }
 
-function bridgeUnavailableMessage(error: NodeJS.ErrnoException): string {
+/**
+ * A named pipe nao existe: nao ha editor no ar. E a UNICA falha de transporte que autoriza
+ * concluir "encerrado".
+ */
+export class EditorUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EditorUnavailableError";
+  }
+}
+
+/**
+ * A pipe atendeu e a resposta nao chegou no prazo. O editor esta VIVO, so lento — confundir isto
+ * com o caso acima foi o defeito que fez o close_editor declarar sucesso sobre um editor que
+ * seguiu renderizando por dez minutos.
+ */
+export class EditorTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EditorTimeoutError";
+  }
+}
+
+// As mensagens sao as mesmas de antes das classes existirem: scripts que casam pelo texto
+// continuam valendo, e quem precisa decidir passa a usar o tipo.
+function bridgeUnavailableError(error: NodeJS.ErrnoException): Error {
   if (error.code === "ENOENT" || error.code === "ECONNREFUSED") {
-    return (
+    return new EditorUnavailableError(
       "SmileEditor nao encontrado na named pipe local. Inicie uma build que contenha o " +
-      "McpBridge e aguarde o renderer ficar pronto."
+        "McpBridge e aguarde o renderer ficar pronto.",
     );
   }
-  return `Falha ao comunicar com o SmileEditor: ${error.message}`;
+  return new Error(`Falha ao comunicar com o SmileEditor: ${error.message}`);
+}
+
+/**
+ * Existencia do PROCESSO, e nao afirmacao do editor sobre si mesmo. `kill(pid, 0)` nao envia
+ * sinal: so pergunta ao SO se o PID existe. E a unica confirmacao de encerramento que nao passa
+ * pelo event loop da GUI — logo, a unica que nao fica mais fragil conforme a cena pesa mais.
+ */
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true; // existe; so nao da para sinalizar
+    throw error;
+  }
 }
 
 export class SmileEditorBridge {
@@ -558,18 +608,75 @@ export class SmileEditorBridge {
     return this.validateVolFogStatus(result);
   }
 
+  /**
+   * Pede encerramento e SO devolve `stopped` quando o encerramento foi observado de fora: o
+   * processo sumiu, ou — quando o PID nao pode ser lido — a pipe deixou de existir.
+   *
+   * A versao anterior perguntava o status num laco e tratava a primeira falha como prova de
+   * morte. Numa cena a ~3 FPS o status leva 380 ms, entao o prazo de 500 ms expirava sozinho e o
+   * editor era declarado encerrado enquanto seguia vivo, com janela e renderizando. Prazo
+   * estourado nao e evidencia de nada: mede a lentidao do editor, nao a existencia dele.
+   */
   async shutdown(timeoutSeconds: number): Promise<Record<string, unknown>> {
-    const accepted = await this.request("shutdown", {}, 5_000);
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      try {
-        await this.status(500);
-      } catch {
-        return { accepted, stopped: true };
+    // O PID vem ANTES do pedido porque depois nao ha mais a quem perguntar; e ele a prova
+    // procurada no fim. Falhar aqui nao impede o shutdown, so rebaixa a confirmacao para a pipe.
+    let pid: number | undefined;
+    try {
+      pid = (await this.status(SLOW_EDITOR_COMMAND_TIMEOUT_MS)).pid;
+    } catch (error) {
+      // Pipe ausente e a unica falha que ja significa "encerrado". Lentidao nao encerra nada.
+      if (error instanceof EditorUnavailableError) {
+        return { alreadyStopped: true, stopped: true, confirmedBy: "pipe" };
       }
     }
-    throw new Error(`SmileEditor nao encerrou em ${timeoutSeconds} s.`);
+
+    const accepted = await this.request("shutdown", {}, SLOW_EDITOR_COMMAND_TIMEOUT_MS);
+
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, STOP_POLL_INTERVAL_MS));
+      if (pid !== undefined) {
+        if (!processIsAlive(pid)) return { pid, accepted, stopped: true, confirmedBy: "process" };
+      } else if (await this.pipeIsGone(PIPE_PROBE_TIMEOUT_MS)) {
+        return { accepted, stopped: true, confirmedBy: "pipe" };
+      }
+    }
+
+    throw new Error(
+      `SmileEditor aceitou o shutdown mas nao encerrou em ${timeoutSeconds} s` +
+        (pid !== undefined
+          ? ` (PID ${pid} continua vivo)`
+          : " (a named pipe continua atendendo)") +
+        ".",
+    );
+  }
+
+  /**
+   * Conecta e desliga sem enviar comando: pergunta se a pipe ainda existe sem depender de o
+   * editor conseguir RESPONDER. Conservadora de proposito — so ENOENT/ECONNREFUSED contam como
+   * sumico, e qualquer outro desfecho (pipe ocupada, prazo estourado) conta como vivo, porque
+   * o erro caro aqui e o falso positivo.
+   */
+  private pipeIsGone(timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const socket = net.createConnection(editorPipePath());
+
+      const finish = (gone: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(gone);
+      };
+
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      timer.unref();
+
+      socket.on("connect", () => finish(false));
+      socket.on("error", (error: NodeJS.ErrnoException) =>
+        finish(error.code === "ENOENT" || error.code === "ECONNREFUSED"));
+    });
   }
 
   private request(command: string, argumentsObject: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
@@ -599,7 +706,7 @@ export class SmileEditorBridge {
 
       const timer = setTimeout(() => {
         finishError(
-          new Error(
+          new EditorTimeoutError(
             `SmileEditor nao concluiu '${command}' em ${(timeoutMs / 1000).toFixed(0)} s. ` +
               "A captura pode continuar dentro do editor.",
           ),
@@ -610,7 +717,7 @@ export class SmileEditorBridge {
       socket.setEncoding("utf8");
       socket.on("connect", () => socket.write(request));
       socket.on("error", (error: NodeJS.ErrnoException) => {
-        finishError(new Error(bridgeUnavailableMessage(error)));
+        finishError(bridgeUnavailableError(error));
       });
       socket.on("data", (chunk: string) => {
         responseBuffer += chunk;

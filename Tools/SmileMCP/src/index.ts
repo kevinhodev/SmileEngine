@@ -7,6 +7,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  EditorTimeoutError,
+  EditorUnavailableError,
+  SLOW_EDITOR_COMMAND_TIMEOUT_MS,
   SmileEditorBridge,
   type GIConfigureOverrides,
   type ProfileOverrides,
@@ -498,7 +501,16 @@ server.registerTool(
       return jsonResult({ connected: true, ...status });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return jsonResult({ connected: false, ready: false, captureBusy: false, message });
+      // `connected: false` sozinho junta "nao ha editor" com "ha editor e ele nao respondeu no
+      // prazo", que exigem decisoes opostas de quem chama. `reason` separa os dois: so
+      // "unavailable" significa ausencia.
+      const reason =
+        error instanceof EditorUnavailableError
+          ? "unavailable"
+          : error instanceof EditorTimeoutError
+            ? "timeout"
+            : "error";
+      return jsonResult({ connected: false, reason, ready: false, captureBusy: false, message });
     }
   },
 );
@@ -943,7 +955,8 @@ server.registerTool(
   {
     title: "Close Smile editor",
     description:
-      "Solicita fechamento ordenado ao editor vivo e aguarda renderer, janela e named pipe encerrarem.",
+      "Solicita fechamento ordenado ao editor vivo e so reporta sucesso quando o PROCESSO some; " +
+      "editor lento nao conta como encerrado.",
     inputSchema: {
       timeoutSeconds: z.number().int().min(5).max(120).default(30),
     },
@@ -956,9 +969,12 @@ server.registerTool(
   },
   async (input) => {
     try {
-      const status = await editorBridge.status(300).catch(() => undefined);
-      if (!status) return jsonResult({ alreadyStopped: true, stopped: true });
-      return jsonResult({ pid: status.pid, ...(await editorBridge.shutdown(input.timeoutSeconds)) });
+      // Sem pre-checagem propria: quem decide "ja parou" e o shutdown do bridge, que separa pipe
+      // ausente de editor lento. O `status(300).catch(() => undefined)` que ficava aqui juntava
+      // os dois — na sintetica de 1M, onde o status leva 380 ms, ele expirava, engolia o erro e
+      // devolvia `alreadyStopped` SEM NUNCA MANDAR o shutdown. Dai o editor seguir renderizando
+      // depois de esta ferramenta reportar sucesso: nada tinha sido pedido a ele.
+      return jsonResult(await editorBridge.shutdown(input.timeoutSeconds));
     } catch (error) {
       return errorResult(error);
     }
@@ -1002,7 +1018,10 @@ server.registerTool(
       }
 
       try {
-        const existing = await editorBridge.status(300);
+        // O prazo cabe um editor pesado: com 300 ms, um editor vivo numa cena a 3 FPS (380 ms de
+        // status) caia no catch abaixo e a ferramenta falhava com um erro de prazo em vez de
+        // dizer que ja existe editor aberto.
+        const existing = await editorBridge.status(SLOW_EDITOR_COMMAND_TIMEOUT_MS);
         if (!existing.executablePath) {
           throw new Error(
             "O SmileEditor conectado usa um bridge antigo que nao identifica a build. " +
@@ -1032,15 +1051,9 @@ server.registerTool(
           status,
         });
       } catch (error) {
-        if (error instanceof Error && error.message.startsWith("Ja existe um SmileEditor")) {
-          throw error;
-        }
-        if (
-          !(error instanceof Error) ||
-          !error.message.startsWith("SmileEditor nao encontrado na named pipe local")
-        ) {
-          throw error;
-        }
+        // So a AUSENCIA da pipe libera o spawn. Prazo estourado significa editor vivo e lento, e
+        // seguir daqui abriria um segundo editor sobre o primeiro.
+        if (!(error instanceof EditorUnavailableError)) throw error;
       }
 
       const editorArguments = scenePath ? [scenePath, ...input.arguments] : input.arguments;
