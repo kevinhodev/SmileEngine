@@ -1,3 +1,4 @@
+#include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Environment/RainWetness.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Scene/GBuffer.h"
@@ -594,7 +595,8 @@ namespace Smile {
     bool FRainWetness::RecordOcclusionMap(ID3D12GraphicsCommandList* _Cmd,
                                           FTextureSRVHeap& _SRVHeap, u32 _FrameSlot,
                                           const Vec3& _CamPos,
-                                          const FOccluderItem* _Items, size_t _Count) {
+                                          const FOccluderItem* _Items, size_t _Count,
+                                          FDrawSubmitStats* _Stats) {
         if (!OccOpaquePSO) return false;
 
         // Centro snapado num quantum grosso (16 m): andar so re-renderiza ao cruzar a
@@ -654,8 +656,10 @@ namespace Smile {
 
         ID3D12PipelineState* Cur = nullptr;
         FDrawSubmitCache Submit;
+        Submit.Stats = _Stats;
         _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = 0; k < _Count; ++k) {
+            if (_Stats) ++_Stats->Considered;
             const FOccluderItem& It = _Items[k];
             if (!It.Mesh) continue;
             if (It.AABBMax.X < MinX || It.AABBMin.X > MaxX ||

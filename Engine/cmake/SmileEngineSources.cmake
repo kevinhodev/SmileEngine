@@ -91,6 +91,7 @@ smile_engine_group("Scene"
 )
 
 smile_graphics_domain(Renderer
+    CpuFrameStats
     DepthConfig
     FrameContext
     HistoryDomain

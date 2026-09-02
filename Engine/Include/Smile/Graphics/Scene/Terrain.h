@@ -12,6 +12,8 @@
 #include <vector>
 
 namespace Smile {
+    struct FDrawSubmitStats; // forward: so guardamos um ponteiro. Ver GpuMesh.h.
+
     class FUploadQueue;
 
     // Descricao do terreno (sidecar <cena>.terrain.json, chaves planas).
@@ -77,6 +79,12 @@ namespace Smile {
         void RenderDepthPrepass(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                                 bool WithNormal);
         void RenderGBuffer(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap);
+
+        // Balde de telemetria (opcional). Ponteiro por FRAME em vez de parametro porque o
+        // terreno desenha em prepass, G-buffer e como caster extra das sombras, e os tres somam
+        // no MESMO balde: threading por assinatura exigiria o parametro em cada uma delas sem
+        // ganhar granularidade nenhuma. O Renderer o aponta uma vez por frame.
+        void SetSubmitStats(FDrawSubmitStats* Stats) { SubmitStats = Stats; }
         // Uma cascata do CSM (chamada pelo callback do FSunShadows::RecordDepthPass); culling
         // proprio contra o frustum da cascata (5 planos, sem near — pancaking).
         // Depth do terreno numa view de sombra qualquer (cascata do CSM, slice de spot ou face
@@ -119,6 +127,8 @@ namespace Smile {
         void SetRoughness(f32 V)       { Roughness = V; }
 
     private:
+        FDrawSubmitStats* SubmitStats = nullptr;
+
         struct alignas(256) TerrainConstants {
             Mat44 ViewProj;
             Mat44 ViewProjNoJitter;

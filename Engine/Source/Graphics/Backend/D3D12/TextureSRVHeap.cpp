@@ -31,6 +31,8 @@ namespace Smile {
                 FreeList[i].Count  -= _Count;
                 if (FreeList[i].Count == 0)
                     FreeList.erase(FreeList.begin() + i);
+                UsedSlots_ += _Count;
+                if (UsedSlots_ > HighWaterSlots_) HighWaterSlots_ = UsedSlots_;
                 return Slot;
             }
         }
@@ -39,6 +41,7 @@ namespace Smile {
 
     void FTextureSRVHeap::Free(u32 _Slot, u32 _Count) {
         if (_Count == 0) return;
+        UsedSlots_ -= (_Count <= UsedSlots_) ? _Count : UsedSlots_;
 
         size_t i = 0;
         while (i < FreeList.size() && FreeList[i].Offset < _Slot) ++i;

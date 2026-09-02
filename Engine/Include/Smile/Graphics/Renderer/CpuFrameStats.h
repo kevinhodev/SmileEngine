@@ -1,0 +1,133 @@
+#pragma once
+
+#include "Smile/Core/Types.h"
+#include <chrono>
+
+namespace Smile {
+    // Telemetria de CPU do frame: tempos de preparacao/submissao e contadores de trabalho.
+    // Fase 0 do Docs/GPU-DRIVEN-PLAN.md — sem ela nao ha baseline contra a qual medir o
+    // renderer GPU-driven, e "ficou mais rapido" nao seria verificavel.
+    //
+    // REGRA DE PROCEDENCIA (a mesma do manifesto de captura, CAPTURE-PROTOCOL.md): cada numero
+    // vem de ONDE A DECISAO E TOMADA, nunca recomposto por fora. Contagem de draw e incrementada
+    // no FDrawSubmitCache, no ponto exato da submissao — recompor a partir de VisibleScratch
+    // daria um numero plausivel e ERRADO, porque cada passe filtra o seu (Blend fora do prepass,
+    // alpha-test em PSO proprio, caster cullado por cascata) e a divergencia seria silenciosa.
+
+    // Um balde de submissao. Vive por passe e por frame; incrementado no ponto de submissao.
+    struct FDrawSubmitStats {
+        u32 Considered    = 0; // itens que o laco do passe visitou (antes do filtro dele)
+        u32 Draws         = 0; // DrawIndexedInstanced REALMENTE emitidos
+        u32 MaterialBinds = 0; // Bind de material que o cache NAO pulou
+        u32 MeshBinds     = 0; // IASetVertexBuffers/IASetIndexBuffer que o cache NAO pulou
+        u32 SkippedInvalid = 0; // mesh nulo ou sem indices (nao vira draw nem bind)
+
+        void Reset() { *this = FDrawSubmitStats{}; }
+    };
+
+    // Passes que submetem geometria de cena. Fixo (sem alocacao por frame) e exaustivo em
+    // relacao aos usuarios de FDrawSubmitCache — se aparecer um passe novo que submete malha,
+    // ele entra aqui, senao o total do frame passa a mentir por omissao.
+    enum class ESubmitPass : u32 {
+        ZPrepassOpaque = 0,
+        ZPrepassMasked,
+        GBuffer,
+        Translucent,
+        SunShadows,
+        LocalShadows,
+        RainOcclusion,
+        // Terreno: NAO passa pelo FDrawSubmitCache (tem VB/IB e root proprios) e desenha em
+        // varios passes — prepass, G-buffer e como caster extra das sombras. Balde unico de
+        // proposito: depois do GPU-driven ele e exatamente o custo residual que sobrou fora
+        // do stream indireto, e separa-lo por passe esconderia isso.
+        TerrainFallback,
+        Count
+    };
+
+    inline const char* SubmitPassName(ESubmitPass _Pass) {
+        switch (_Pass) {
+            case ESubmitPass::ZPrepassOpaque: return "Z-prepass opacos";
+            case ESubmitPass::ZPrepassMasked: return "Z-prepass mascarados";
+            case ESubmitPass::GBuffer:        return "G-buffer";
+            case ESubmitPass::Translucent:    return "Translucidos";
+            case ESubmitPass::SunShadows:     return "CSM (sol)";
+            case ESubmitPass::LocalShadows:   return "Sombras locais";
+            case ESubmitPass::RainOcclusion:  return "Oclusao de chuva";
+            case ESubmitPass::TerrainFallback: return "Terreno (fora do cache)";
+            default:                          return "?";
+        }
+    }
+
+    // Acumula o tempo de vida do escopo num f64 externo (ms). Existe porque SubmitMs e a SOMA de
+    // varios lacos espalhados: sem um acumulador, cada laco precisaria de um par de now() a mao e
+    // o primeiro esquecido publicaria "custo zero" — que e pior que campo ausente, porque parece
+    // uma medicao.
+    class FCpuScopeTimer {
+    public:
+        explicit FCpuScopeTimer(f64& _AccumMs)
+            : AccumMs(_AccumMs), Start(std::chrono::steady_clock::now()) {}
+        ~FCpuScopeTimer() {
+            AccumMs += std::chrono::duration<f64, std::milli>(
+                           std::chrono::steady_clock::now() - Start).count();
+        }
+        FCpuScopeTimer(const FCpuScopeTimer&)            = delete;
+        FCpuScopeTimer& operator=(const FCpuScopeTimer&) = delete;
+    private:
+        f64& AccumMs;
+        std::chrono::steady_clock::time_point Start;
+    };
+
+    struct FCpuFrameStats {
+        static constexpr u32 kPassCount = static_cast<u32>(ESubmitPass::Count);
+
+        // --- Tempos de CPU (ms). Preparacao e submissao separadas de proposito: o GPU-driven
+        // ataca a SUBMISSAO, e misturar as duas esconderia exatamente o ganho que se quer medir.
+        f64 BuildDrawListsMs = 0.0; // laco da cena: ObjectConstants, selecao, bounds do HiZ
+        f64 CullSortMs       = 0.0; // frustum + filtro de oclusao + sort front-to-back
+        f64 ShadowListsMs    = 0.0; // montagem das listas de caster (CSM + locais)
+        f64 SubmitMs         = 0.0; // soma dos lacos de submissao instrumentados
+
+        // --- Cena (o denominador de tudo acima)
+        u32 Renderables      = 0; // total na cena
+        u32 DrawItems        = 0; // aceitos no frame (visivel, malha valida, nao so-RT)
+        u32 VisibleItems     = 0; // sobreviventes de frustum + oclusao
+        u32 OccludedItems    = 0;
+        u32 Materials        = 0;
+        u32 Meshes           = 0;
+        u64 ObjectConstantBytes = 0; // escritos no CB por frame (DrawItems * sizeof)
+
+        // --- Descriptor heap: ocupacao e high-water. O bindless da Fase 3 consome deste
+        // orcamento, entao a folga precisa ser observavel ANTES de se contar com ela.
+        u32 SrvHeapUsed      = 0;
+        u32 SrvHeapHighWater = 0;
+        u32 SrvHeapCapacity  = 0;
+
+        FDrawSubmitStats Passes[kPassCount];
+
+        void ResetFrame() {
+            BuildDrawListsMs = CullSortMs = ShadowListsMs = SubmitMs = 0.0;
+            DrawItems = VisibleItems = OccludedItems = 0;
+            ObjectConstantBytes = 0;
+            for (u32 i = 0; i < kPassCount; ++i) Passes[i].Reset();
+        }
+
+        FDrawSubmitStats& Pass(ESubmitPass _P) { return Passes[static_cast<u32>(_P)]; }
+        const FDrawSubmitStats& Pass(ESubmitPass _P) const { return Passes[static_cast<u32>(_P)]; }
+
+        // ⚠️ NAO e "draws do frame": e a soma dos baldes INSTRUMENTADOS. Cobre a geometria de
+        // malha de cena (via FDrawSubmitCache) e o terreno. Ficam DE FORA: agua, particulas,
+        // ceu/atmosfera, helpers do editor, picking e contorno de selecao. Chamar isso de total
+        // faria a UI publicar um numero menor que a realidade e a Fase 5 mediria contra uma
+        // referencia errada. O nome e longo de proposito.
+        u32 InstrumentedSceneMeshDraws() const {
+            u32 Sum = 0;
+            for (u32 i = 0; i < kPassCount; ++i) Sum += Passes[i].Draws;
+            return Sum;
+        }
+        u32 InstrumentedMaterialBinds() const {
+            u32 Sum = 0;
+            for (u32 i = 0; i < kPassCount; ++i) Sum += Passes[i].MaterialBinds;
+            return Sum;
+        }
+    };
+}

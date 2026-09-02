@@ -9,6 +9,9 @@
 #include <wrl/client.h>
 
 namespace Smile {
+    // Forward: so guardamos um PONTEIRO no parametro opcional de telemetria. Ver GpuMesh.h.
+    struct FDrawSubmitStats;
+
     class FTextureSRVHeap;
     class FGpuProfiler;
     class FGpuMesh;
@@ -127,7 +130,8 @@ namespace Smile {
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              const FShadowDrawItem* Items, size_t Count,
                              const FExtraCascadeDraw& ExtraDraw = {},
-                             FGpuProfiler* Profiler = nullptr);
+                             FGpuProfiler* Profiler = nullptr,
+                             FDrawSubmitStats* Stats = nullptr);
 
         void EnsureReadable(ID3D12GraphicsCommandList* CommandList);
         // Leitura tambem em compute (volumetric fog): PIXEL | NON_PIXEL.
@@ -185,7 +189,7 @@ namespace Smile {
         // viewport e a root signature ja tem de estar ligados pelo chamador.
         u32  DrawCasters(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                          const FShadowDrawItem* Items, size_t Begin, size_t End,
-                         u32 Cascade, FCascadeStats* St);
+                         u32 Cascade, FCascadeStats* St, FDrawSubmitStats* Stats = nullptr);
         void TransitionStatic(ID3D12GraphicsCommandList* CommandList,
                               D3D12_RESOURCE_STATES After);
 

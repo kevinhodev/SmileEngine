@@ -1200,7 +1200,10 @@ namespace Smile {
                 CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 FDrawSubmitCache Submit;
+                Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::Translucent);
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
+                    ++Submit.Stats->Considered;
                     if (!It->Mat->Blend) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
@@ -1257,7 +1260,15 @@ namespace Smile {
                                       Vw.FovY, Vw.Aspect, Lt.KeyDir, Vw.NearZ, ShadowNoiseFrame,
                                       SceneState->Scene.StaticCastersVersion());
             if (UseSunShadows) {
+                // Montagem + sort da lista de casters. Acumula no MESMO campo que a lista das
+                // sombras locais: os dois sao preparacao de sombra, e a Fase 7 os substitui
+                // juntos por um stream gerado na GPU.
                 std::vector<FSunShadows::FShadowDrawItem> Casters;
+                {
+                // Escopo FECHADO antes da submissao: o timer mede montagem + sort, nao o
+                // RecordDepthPass. Deixar o RAII ate o fim do if somaria submissao dentro de
+                // ShadowListsMs e os dois numeros deixariam de ser separaveis.
+                FCpuScopeTimer ShadowListTimer(CpuStatsBuilding.ShadowListsMs);
                 Casters.reserve(AllItems.size());
                 for (const FDrawItem& A : AllItems) {
                     // Translucido nao projeta sombra opaca (vidro deixa o sol entrar).
@@ -1281,6 +1292,7 @@ namespace Smile {
                               if (a.Mat != b.Mat) return a.Mat < b.Mat;
                               return a.Mesh < b.Mesh;
                           });
+                } // fim do escopo cronometrado da lista
                 {
                     FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombras — sol (CSM)");
                     FSunShadows::FExtraCascadeDraw TerrainCasters;
@@ -1290,8 +1302,10 @@ namespace Smile {
                                                 const Mat44& CascadeVP) {
                             Terrain.RenderShadowCascade(Cmd, Backend->SRVHeap, CascadeCB, CascadeVP);
                         };
+                    FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                     SunShadows.RecordDepthPass(CommandList, Backend->SRVHeap, Casters.data(), Casters.size(),
-                                               TerrainCasters, &Backend->DirectProfiler);
+                                               TerrainCasters, &Backend->DirectProfiler,
+                                               &CpuStatsBuilding.Pass(ESubmitPass::SunShadows));
                 }
 
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
@@ -1311,6 +1325,8 @@ namespace Smile {
 
         if (!LocalShadowJobs.empty() || !LocalCubeJobs.empty()) {
             std::vector<FLocalShadows::FShadowDrawItem> LocalCasters;
+            { // mesmo motivo do CSM: o timer fecha ANTES da submissao
+            FCpuScopeTimer LocalListTimer(CpuStatsBuilding.ShadowListsMs);
             LocalCasters.reserve(AllItems.size());
             for (const FDrawItem& A : AllItems) {
                 if (A.Mat && A.Mat->Blend) continue; // vidro nao projeta sombra opaca
@@ -1329,6 +1345,7 @@ namespace Smile {
                           if (a.Mat != b.Mat) return a.Mat < b.Mat;
                           return a.Mesh < b.Mesh;
                       });
+            } // fim do escopo cronometrado da lista
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombras — locais");
                 // Terreno tambem projeta nas luzes locais. Sem isto o terreno era iluminado
@@ -1347,13 +1364,15 @@ namespace Smile {
                         Terrain.RenderShadowCascade(Cmd, Backend->SRVHeap, SliceCB, SliceVP, true,
                                                     LightPos, Radius);
                     };
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 LocalShadows.RecordDepthPass(CommandList, Backend->SRVHeap, FrameSlot,
                                              LocalCasters.data(), LocalCasters.size(),
                                              LocalShadowJobs.data(),
                                              static_cast<u32>(LocalShadowJobs.size()),
                                              LocalCubeJobs.data(),
                                              static_cast<u32>(LocalCubeJobs.size()),
-                                             TerrainCasters);
+                                             TerrainCasters,
+                                             &CpuStatsBuilding.Pass(ESubmitPass::LocalShadows));
             }
 
             auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
@@ -1402,7 +1421,10 @@ namespace Smile {
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - opacos");
                 FDrawSubmitCache Submit;
+                Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassOpaque);
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem& V : VisibleScratch) {
+                    ++Submit.Stats->Considered;
                     if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
@@ -1416,7 +1438,10 @@ namespace Smile {
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - mascarados");
                 FDrawSubmitCache Submit;
+                Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassMasked);
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem& V : VisibleScratch) {
+                    ++Submit.Stats->Considered;
                     if (V.Mat->Blend) continue;
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
@@ -1557,7 +1582,10 @@ namespace Smile {
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 ID3D12PipelineState* CurGeomPSO = nullptr;
                 FDrawSubmitCache Submit;
+                Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::GBuffer);
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem* V : GBufferOrder) {
+                    ++Submit.Stats->Considered;
                     FMaterial* Mat = V->Mat;
                     const bool TwoSided = Mat->IsTwoSidedForRT();
                     ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
@@ -1615,8 +1643,10 @@ namespace Smile {
                     RainOccluders.push_back({ A.R->Mesh, A.Mat,
                                               ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
                                               A.R->AABBMin, A.R->AABBMax });
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 RainWetness.RecordOcclusionMap(CommandList, Backend->SRVHeap, FrameSlot, Vw.CameraPosition,
-                                               RainOccluders.data(), RainOccluders.size());
+                                               RainOccluders.data(), RainOccluders.size(),
+                                               &CpuStatsBuilding.Pass(ESubmitPass::RainOcclusion));
             }
             const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,
                                        Lt.KeyColor.Z * Lt.KeyInt };
@@ -1892,6 +1922,11 @@ namespace Smile {
     // selecao, aplica frustum + oclusao HZB e ordena front-to-back. E a 2a etapa de preenchimento
     // do FPassContext — daqui em diante Ctx.All / Ctx.Visible / Ctx.Selection sao validos.
     void Renderer::BuildDrawLists(FPassContext& _Ctx) {
+        // Preparacao e culling/sort medidos SEPARADOS: o GPU-driven move os dois para a GPU em
+        // fases diferentes (tabelas na Fase 4, culling na Fase 6), e um numero so nao diria qual
+        // delas pagou. Ver CpuFrameStats.h.
+        const auto TimerStart = std::chrono::steady_clock::now();
+
         const FFrameView& Vw     = *_Ctx.View;
         const u32 FrameSlot      = _Ctx.FrameSlot;
         // Antes havia uma leitura propria da camera; e a MESMA que produziu o
@@ -1946,6 +1981,10 @@ namespace Smile {
             SelectedSlot, SelectedMesh, SelectedMat, SelectedModel, SelectedRenderable
         };
 
+        // Fronteira dos dois tempos: acima e preparacao (ObjectConstants, selecao, bounds do
+        // HiZ), abaixo e culling + sort.
+        const auto TimerAfterBuild = std::chrono::steady_clock::now();
+
         // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
         // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
         const u32* OcclusionVis = UseOcclusionCulling
@@ -1975,6 +2014,21 @@ namespace Smile {
                   [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
         LastVisibleCount  = static_cast<u32>(VisibleScratch.size());
         LastOccludedCount = OccludedCount;
+
+        const auto TimerEnd = std::chrono::steady_clock::now();
+        using FMs = std::chrono::duration<f64, std::milli>;
+        CpuStatsBuilding.BuildDrawListsMs = FMs(TimerAfterBuild - TimerStart).count();
+        CpuStatsBuilding.CullSortMs       = FMs(TimerEnd - TimerAfterBuild).count();
+        CpuStatsBuilding.Renderables      = static_cast<u32>(SceneState->Scene.Renderables().size());
+        CpuStatsBuilding.DrawItems        = static_cast<u32>(AllItems.size());
+        CpuStatsBuilding.VisibleItems     = LastVisibleCount;
+        CpuStatsBuilding.OccludedItems    = OccludedCount;
+        CpuStatsBuilding.Materials        = static_cast<u32>(ImportedMaterials.size());
+        CpuStatsBuilding.Meshes           = SceneState->Scene.MeshCount();
+        // Bytes REALMENTE escritos no CB do frame: um ObjectConstants por item aceito. E o
+        // trafego que as tabelas paginadas da Fase 4 devem substituir por paginas sujas.
+        CpuStatsBuilding.ObjectConstantBytes =
+            static_cast<u64>(AllItems.size()) * sizeof(ObjectConstants);
 
         if (UseTerrain && Terrain.IsLoaded())
             Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered,

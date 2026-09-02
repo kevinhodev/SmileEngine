@@ -161,6 +161,10 @@ namespace Smile {
 
         FLight& AddLight(const FLight& Light);
 
+        // Malhas GPU vivas na cena. Contagem apenas: a biblioteca e privada de proposito (o dono
+        // e o FScene), e a telemetria precisa do denominador, nao dos ponteiros.
+        u32 MeshCount() const { return static_cast<u32>(MeshLibrary.size()); }
+
         std::vector<FLight>&       Lights()       { return LightList; }
         const std::vector<FLight>& Lights() const { return LightList; }
 

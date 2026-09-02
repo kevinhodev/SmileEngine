@@ -10,6 +10,9 @@
 #include <cassert>
 
 namespace Smile {
+    // Forward: so guardamos um PONTEIRO no parametro opcional de telemetria. Ver GpuMesh.h.
+    struct FDrawSubmitStats;
+
     class FTextureSRVHeap;
     class FGpuMesh;
     class FMaterial;
@@ -190,7 +193,8 @@ namespace Smile {
                              u32 FrameSlot, const FShadowDrawItem* Items, size_t Count,
                              const FShadowJob* Jobs, u32 JobCount,
                              const FCubeShadowJob* CubeJobs, u32 CubeJobCount,
-                             const FExtraLocalDraw& ExtraDraw = {});
+                             const FExtraLocalDraw& ExtraDraw = {},
+                             FDrawSubmitStats* Stats = nullptr);
 
         // Slot persistente por luz (ver TShadowSlotCache). Em LOTE: a selecao inteira do frame
         // de uma vez, senao a alocacao remapeia em cascata. Slot kNoSlot = ficou sem sombra.

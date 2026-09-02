@@ -28,7 +28,7 @@
 namespace Smile {
     FScene& Renderer::GetScene() { return SceneState->Scene; }
 
-    u32 Renderer::GetDrawCount() const {
+    u32 Renderer::GetSceneRenderableCount() const {
         return static_cast<u32>(SceneState->Scene.Renderables().size());
     }
 

@@ -1,3 +1,4 @@
+#include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Lighting/SunShadows.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
@@ -623,16 +624,19 @@ namespace Smile {
 
     u32 FSunShadows::DrawCasters(ID3D12GraphicsCommandList* _CommandList,
                                  FTextureSRVHeap& _SRVHeap, const FShadowDrawItem* _Items,
-                                 size_t _Begin, size_t _End, u32 _Cascade, FCascadeStats* _St) {
+                                 size_t _Begin, size_t _End, u32 _Cascade, FCascadeStats* _St,
+                                 FDrawSubmitStats* _Stats) {
         const f32 MinExtent = MinCasterTexels * (&CPUConstants.CascadeTexelWorld.X)[_Cascade];
         // Cur/LastMat zeram por CHAMADA de proposito: entre duas fases o chamador troca de DSV
         // e re-liga a root signature, o que invalida as descriptor tables — o primeiro
         // material precisa religar mesmo que seja o mesmo do fim da fase anterior.
         ID3D12PipelineState* Cur     = nullptr;
         FDrawSubmitCache     Submit;
+        Submit.Stats = _Stats;
         u32 Drawn = 0;
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = _Begin; k < _End; ++k) {
+            if (_Stats) ++_Stats->Considered;
             const FShadowDrawItem& It = _Items[k];
             if (!CasterVisible(It, _Cascade, MinExtent, _St)) continue;
             ++Drawn;
@@ -651,7 +655,8 @@ namespace Smile {
                                       FTextureSRVHeap& _SRVHeap,
                                       const FShadowDrawItem* _Items, size_t _Count,
                                       const FExtraCascadeDraw& _ExtraDraw,
-                                      FGpuProfiler* _Profiler) {
+                                      FGpuProfiler* _Profiler,
+                                      FDrawSubmitStats* _Stats) {
         D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
                            static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
         D3D12_RECT     SC{ 0, 0, static_cast<LONG>(kResolution), static_cast<LONG>(kResolution) };
@@ -695,9 +700,9 @@ namespace Smile {
                 // Duas chamadas e nao uma sobre a lista inteira: o total nao diria quanto e
                 // dinamico, que e a medida que interessa. Sao contiguas, entao nao ha custo.
                 St.SubmittedStatic  = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                  0, FirstDynamic, c, &St);
+                                                  0, FirstDynamic, c, &St, _Stats);
                 St.SubmittedDynamic = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                  FirstDynamic, _Count, c, nullptr);
+                                                  FirstDynamic, _Count, c, nullptr, _Stats);
                 St.Submitted        = St.SubmittedStatic + St.SubmittedDynamic;
                 LastDynamicCount[c] = St.SubmittedDynamic;
                 if (_ExtraDraw)
@@ -748,7 +753,7 @@ namespace Smile {
                 _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
 
                 St.SubmittedStatic = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                 0, FirstDynamic, c, &St);
+                                                 0, FirstDynamic, c, &St, _Stats);
                 // O terreno e caster estatico por definicao e entra AQUI, no mapa cacheado.
                 // Antes ele redesenhava em toda cascata que acordava — e nas cascatas 2 e 3 da
                 // Bistro ele e praticamente o unico conteudo do mapa.
@@ -798,7 +803,7 @@ namespace Smile {
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
                 St.SubmittedDynamic = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                  FirstDynamic, _Count, c, nullptr);
+                                                  FirstDynamic, _Count, c, nullptr, _Stats);
             }
             // Recomposto do retido, nunca acumulado: SubmittedStatic so muda quando o mapa
             // estatico e refeito, e somar o dinamico nele cresceria sem limite.

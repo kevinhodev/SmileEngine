@@ -10,6 +10,9 @@
 #include <wrl/client.h>
 
 namespace Smile {
+    // Forward: so guardamos um PONTEIRO no parametro opcional de telemetria. Ver GpuMesh.h.
+    struct FDrawSubmitStats;
+
     class FGBuffer;
     class FGpuMesh;
     class FMaterial;
@@ -72,7 +75,8 @@ namespace Smile {
         // Cacheado estilo Cry (bProcessed): andar so re-renderiza ao cruzar o quantum de snap.
         bool RecordOcclusionMap(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                                 u32 FrameSlot, const Vec3& CamPos,
-                                const FOccluderItem* Items, size_t Count);
+                                const FOccluderItem* Items, size_t Count,
+                                FDrawSubmitStats* Stats = nullptr);
         void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,

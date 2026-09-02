@@ -1,4 +1,5 @@
 #include "Smile/Graphics/Resources/GpuMesh.h"
+#include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Core/HResultCheck.h"
@@ -98,16 +99,26 @@ namespace Smile {
                                         FTextureSRVHeap& _SRVHeap, const FMaterial* _Mat) {
         if (_Mat == LastMat) return;
         LastMat = _Mat;
-        if (_Mat) _Mat->Bind(_CommandList, _SRVHeap);
+        if (_Mat) {
+            _Mat->Bind(_CommandList, _SRVHeap);
+            // Conta o bind EFETIVO, depois do filtro do cache: o numero que interessa a Fase 3
+            // (bindless) e quantas trocas de tabela sobraram, nao quantas vezes se pediu uma.
+            if (Stats) ++Stats->MaterialBinds;
+        }
     }
 
     void FDrawSubmitCache::DrawMesh(ID3D12GraphicsCommandList* _CommandList,
                                     const FGpuMesh* _Mesh) {
-        if (!_Mesh || !_Mesh->IsValid()) return;
+        if (!_Mesh || !_Mesh->IsValid()) {
+            if (Stats) ++Stats->SkippedInvalid;
+            return;
+        }
         if (_Mesh != LastMesh) {
             LastMesh = _Mesh;
             _Mesh->BindIA(_CommandList);
+            if (Stats) ++Stats->MeshBinds;
         }
         _Mesh->DrawIndexed(_CommandList);
+        if (Stats) ++Stats->Draws;
     }
 }

@@ -877,10 +877,10 @@ namespace SmileEditor {
         }
 
         QString SceneText;
-        if (RendererAccess->GetDrawCount() > 0) {
+        if (RendererAccess->GetSceneRenderableCount() > 0) {
             SceneText = QString("meshes: %1/%2")
                 .arg(RendererAccess->GetVisibleCount())
-                .arg(RendererAccess->GetDrawCount());
+                .arg(RendererAccess->GetSceneRenderableCount());
         }
 
         StatusBr->SetStats(FPS, FrameMs, SceneText, OceanText);

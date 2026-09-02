@@ -709,8 +709,15 @@ Rectangle {
                                 model: [
                                     { label: "Render interno", value: root.statsModel.internalResolution },
                                     { label: "Saída", value: root.statsModel.outputResolution },
-                                    { label: "Draws visíveis", value: root.statsModel.visibleDrawCount + " / " + root.statsModel.totalDrawCount },
+                                    // "visível / total" sempre foram RENDERÁVEIS da cena, nunca
+                                    // draws — o rótulo antigo dizia "Draws visíveis" e mentia.
+                                    // Draws de verdade ficam na seção "CPU / submissão".
+                                    { label: "Malhas visíveis", value: root.statsModel.visibleDrawCount + " / " + root.statsModel.totalDrawCount },
                                     { label: "Ocultados (HZB)", value: root.statsModel.occludedDrawCount },
+                                    { label: "Draws de cena", value: root.statsModel.sceneMeshDraws },
+                                    { label: "Binds de material", value: root.statsModel.materialBinds },
+                                    { label: "SRV heap", value: root.statsModel.srvHeapText },
+                                    { label: "ObjectConstants/frame", value: root.statsModel.objectConstantsText },
                                     { label: "RAM compartilhada", value: root.statsModel.vramNonLocalText }
                                  ]
                                  delegate: Item {
@@ -740,6 +747,94 @@ Rectangle {
                                         anchors.bottom: parent.bottom
                                         height: 1
                                         color: root.divider
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // CPU: onde o tempo de preparação e submissão é gasto, e quantos draws cada
+                    // passe emite. É a baseline da Fase 0 do GPU-DRIVEN-PLAN — o renderer
+                    // GPU-driven ataca "Submissão" e os draws por passe, e sem estes números
+                    // "ficou mais rápido" não seria verificável.
+                    //
+                    // "considerados" é o que o laço do passe visitou; "draws" é o que virou
+                    // DrawIndexedInstanced. A diferença entre os dois É o filtro do passe.
+                    Card {
+                        width: parent.width
+                        height: 88 + (root.statsModel.cpuTimings.length + root.statsModel.submitPasses.length) * 22
+                        visible: root.statsModel.submitPasses.length > 0
+
+                        Text {
+                            x: 16; y: 15
+                            text: "CPU / SUBMISSÃO"
+                            color: root.textPrimary
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        Column {
+                            x: 16; y: 40
+                            width: parent.width - 32
+                            spacing: 0
+
+                            Repeater {
+                                model: root.statsModel.cpuTimings
+                                delegate: Item {
+                                    id: cpuRow
+                                    required property var modelData
+                                    width: parent.width
+                                    height: 22
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: cpuRow.modelData.label
+                                        color: root.textMuted
+                                        font.family: C.Theme.fontFamily
+                                        font.pixelSize: 9
+                                    }
+                                    Text {
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: cpuRow.modelData.ms.toFixed(3) + " ms"
+                                        color: root.textNormal
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                height: 1
+                                color: root.divider
+                            }
+
+                            Repeater {
+                                model: root.statsModel.submitPasses
+                                delegate: Item {
+                                    id: submitPassRow
+                                    required property var modelData
+                                    width: parent.width
+                                    height: 22
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: submitPassRow.modelData.label
+                                        color: root.textMuted
+                                        font.family: C.Theme.fontFamily
+                                        font.pixelSize: 9
+                                    }
+                                    Text {
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: submitPassRow.modelData.draws + " draws  ·  " +
+                                              submitPassRow.modelData.considered + " vistos  ·  " +
+                                              submitPassRow.modelData.matBinds + " mat"
+                                        color: root.textNormal
+                                        font.family: C.Theme.fontMono
+                                        font.pixelSize: 9
                                     }
                                 }
                             }

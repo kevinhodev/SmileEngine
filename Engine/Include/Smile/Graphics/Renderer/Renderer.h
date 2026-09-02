@@ -16,6 +16,7 @@
 #include "Smile/Graphics/Renderer/SceneTargets.h"
 #include "Smile/Graphics/Renderer/FrameContext.h"
 #include "Smile/Graphics/Debug/FrameCapture.h"
+#include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Renderer/PassContext.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include "Smile/Graphics/Debug/DebugView.h"
@@ -254,7 +255,17 @@ namespace Smile {
         // Telemetria de culling (os toggles moraram p/ o FRenderSettings).
         u32  GetOccludedCount() const    { return LastOccludedCount; }
         u32  GetVisibleCount() const     { return LastVisibleCount; }
-        u32  GetDrawCount() const;
+        // ⚠️ Isto e o total de RENDERAVEIS DA CENA, nao contagem de draw — o nome mente desde
+        // sempre e a UI o rotula como "total". Draws de verdade: CpuStats().TotalDraws(), que
+        // conta no ponto de submissao. Mantido porque a StatsBridge o publica como totalDrawCount.
+        u32  GetSceneRenderableCount() const;
+        [[deprecated("nao e draw count; use GetSceneRenderableCount ou CpuStats().InstrumentedSceneMeshDraws()")]]
+        u32  GetDrawCount() const { return GetSceneRenderableCount(); }
+
+        // Telemetria de CPU do frame anterior: tempos de preparacao/submissao, contadores por
+        // passe e ocupacao do descriptor heap. Base de medida da Fase 0 do GPU-DRIVEN-PLAN —
+        // ver CpuFrameStats.h para a regra de procedencia dos numeros.
+        const FCpuFrameStats& CpuStats() const { return CpuStatsLast; }
 
         // Telemetria do CSM por cascata (contagem + frequencia de atualizacao). Const, so
         // leitura: e a base de medida da separacao static/dynamic dos casters.
@@ -795,6 +806,11 @@ namespace Smile {
         u32  UpscalerRenderWidth  = 0; // 0 = derivar de RenderScale
         u32  UpscalerRenderHeight = 0;
         u32  LastVisibleCount  = 0;
+
+        // Balde do frame EM CONSTRUCAO e o do ultimo frame FECHADO. Dois porque a UI le a
+        // qualquer momento: publicar o parcial faria a contagem de draw piscar entre passes.
+        FCpuFrameStats CpuStatsBuilding;
+        FCpuFrameStats CpuStatsLast;
 
         FPostProcessor           PostProcessor;
 

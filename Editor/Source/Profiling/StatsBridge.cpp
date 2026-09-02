@@ -68,7 +68,7 @@ namespace SmileEditor {
     }
 
     int StatsBridge::GetTotalDrawCount() const {
-        return Snapshot.TotalDrawCount;
+        return Snapshot.SceneRenderableCount;
     }
 
     int StatsBridge::GetOccludedDrawCount() const {
@@ -205,6 +205,14 @@ namespace SmileEditor {
     QVariantList StatsBridge::GetShadowCascades() const {
         return Snapshot.ShadowCascades;
     }
+
+    QVariantList StatsBridge::GetCpuTimings() const { return Snapshot.CpuTimings; }
+    QVariantList StatsBridge::GetSubmitPasses() const { return Snapshot.SubmitPasses; }
+    int          StatsBridge::GetSceneMeshDraws() const { return Snapshot.SceneMeshDraws; }
+    int          StatsBridge::GetMaterialBinds() const { return Snapshot.MaterialBinds; }
+    QString      StatsBridge::GetObjectConstantsText() const { return Snapshot.ObjectConstantsText; }
+    QString      StatsBridge::GetSrvHeapText() const { return Snapshot.SrvHeapText; }
+    double       StatsBridge::GetSrvHeapFrac() const { return Snapshot.SrvHeapFrac; }
 
     // Estatísticas de caster pertencem à última atualização da cascata; cascatas congeladas
     // preservam esses valores até a próxima rasterização.
@@ -417,7 +425,7 @@ namespace SmileEditor {
         FSnapshot Next;
         Next.FPS = Viewport ? static_cast<double>(Viewport->GetFPS()) : 0.0;
         Next.VisibleDrawCount = static_cast<int>(_Renderer.GetVisibleCount());
-        Next.TotalDrawCount = static_cast<int>(_Renderer.GetDrawCount());
+        Next.SceneRenderableCount = static_cast<int>(_Renderer.GetSceneRenderableCount());
         Next.OccludedDrawCount = static_cast<int>(_Renderer.GetOccludedCount());
         Next.InternalResolution = QStringLiteral("%1×%2")
             .arg(_Renderer.RenderWidth()).arg(_Renderer.RenderHeight());
@@ -461,6 +469,56 @@ namespace SmileEditor {
         }
         Next.GpuTimings = BuildGpuTimings(_Renderer);
         Next.ShadowCascades = BuildShadowCascades(_Renderer);
+
+        // --- Telemetria de CPU (Fase 0 do GPU-DRIVEN-PLAN) --------------------------------
+        // Lida do frame FECHADO (CpuStats), nunca do parcial: enquanto os passes gravam, os
+        // baldes estao incompletos e a UI veria a contagem de draw subir dentro do frame.
+        {
+            const Smile::FCpuFrameStats& Cpu = _Renderer.CpuStats();
+            const QLocale Loc(QLocale::Portuguese, QLocale::Brazil);
+
+            auto Row = [](const QString& _Label, double _Ms) {
+                QVariantMap M;
+                M[QStringLiteral("label")] = _Label;
+                M[QStringLiteral("ms")]    = _Ms;
+                return QVariant(M);
+            };
+            Next.CpuTimings = {
+                Row(QStringLiteral("Listas de draw"),   Cpu.BuildDrawListsMs),
+                Row(QStringLiteral("Culling + sort"),   Cpu.CullSortMs),
+                Row(QStringLiteral("Listas de sombra"), Cpu.ShadowListsMs),
+                Row(QStringLiteral("Submissao"),        Cpu.SubmitMs),
+            };
+
+            // Uma linha por passe, com "considerados" ao lado de "draws": a diferenca entre os
+            // dois E o filtro do passe, e ve-la e o que permite dizer onde o trabalho morre.
+            Next.SubmitPasses.clear();
+            for (Smile::u32 P = 0; P < Smile::FCpuFrameStats::kPassCount; ++P) {
+                const Smile::FDrawSubmitStats& S = Cpu.Passes[P];
+                if (S.Considered == 0 && S.Draws == 0) continue; // passe que nao rodou
+                QVariantMap M;
+                M[QStringLiteral("label")]      = QString::fromUtf8(
+                    Smile::SubmitPassName(static_cast<Smile::ESubmitPass>(P)));
+                M[QStringLiteral("considered")] = static_cast<int>(S.Considered);
+                M[QStringLiteral("draws")]      = static_cast<int>(S.Draws);
+                M[QStringLiteral("matBinds")]   = static_cast<int>(S.MaterialBinds);
+                M[QStringLiteral("meshBinds")]  = static_cast<int>(S.MeshBinds);
+                Next.SubmitPasses.append(M);
+            }
+
+            Next.SceneMeshDraws = static_cast<int>(Cpu.InstrumentedSceneMeshDraws());
+            Next.MaterialBinds  = static_cast<int>(Cpu.InstrumentedMaterialBinds());
+            Next.ObjectConstantsText =
+                QStringLiteral("%1 KiB").arg(Loc.toString(Cpu.ObjectConstantBytes / 1024.0, 'f', 1));
+            Next.SrvHeapText = QStringLiteral("%1 / %2  (pico %3)")
+                                   .arg(Cpu.SrvHeapUsed)
+                                   .arg(Cpu.SrvHeapCapacity)
+                                   .arg(Cpu.SrvHeapHighWater);
+            Next.SrvHeapFrac = Cpu.SrvHeapCapacity
+                                   ? static_cast<double>(Cpu.SrvHeapHighWater) / Cpu.SrvHeapCapacity
+                                   : 0.0;
+        }
+
         Snapshot = std::move(Next);
     }
 

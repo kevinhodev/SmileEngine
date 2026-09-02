@@ -35,6 +35,17 @@ namespace SmileEditor {
         Q_PROPERTY(QVariantList gpuTimings READ GetGpuTimings NOTIFY Updated)
         Q_PROPERTY(QVariantList shadowCascades READ GetShadowCascades NOTIFY Updated)
 
+        // Telemetria de CPU (Fase 0 do GPU-DRIVEN-PLAN). Nomes explicitos de proposito:
+        // sceneMeshDraws NAO e "draws do frame" — exclui agua, particulas, ceu e helpers do
+        // editor. Ver Smile::FCpuFrameStats.
+        Q_PROPERTY(QVariantList cpuTimings READ GetCpuTimings NOTIFY Updated)
+        Q_PROPERTY(QVariantList submitPasses READ GetSubmitPasses NOTIFY Updated)
+        Q_PROPERTY(int sceneMeshDraws READ GetSceneMeshDraws NOTIFY Updated)
+        Q_PROPERTY(int materialBinds READ GetMaterialBinds NOTIFY Updated)
+        Q_PROPERTY(QString objectConstantsText READ GetObjectConstantsText NOTIFY Updated)
+        Q_PROPERTY(QString srvHeapText READ GetSrvHeapText NOTIFY Updated)
+        Q_PROPERTY(double srvHeapFrac READ GetSrvHeapFrac NOTIFY Updated)
+
     public:
         explicit StatsBridge(QObject* Parent = nullptr);
 
@@ -58,6 +69,13 @@ namespace SmileEditor {
         double       GetGpuFrameMs() const;
         QVariantList GetGpuTimings() const;
         QVariantList GetShadowCascades() const;
+        QVariantList GetCpuTimings() const;
+        QVariantList GetSubmitPasses() const;
+        int          GetSceneMeshDraws() const;
+        int          GetMaterialBinds() const;
+        QString      GetObjectConstantsText() const;
+        QString      GetSrvHeapText() const;
+        double       GetSrvHeapFrac() const;
 
     signals:
         void Updated();
@@ -72,7 +90,7 @@ namespace SmileEditor {
         struct FSnapshot {
             double       FPS = 0.0;
             int          VisibleDrawCount = 0;
-            int          TotalDrawCount = 0;
+            int          SceneRenderableCount = 0;
             int          OccludedDrawCount = 0;
             QString      InternalResolution = QStringLiteral("—");
             QString      OutputResolution = QStringLiteral("—");
@@ -87,6 +105,13 @@ namespace SmileEditor {
             double       GPUFrameMs = 0.0;
             QVariantList GpuTimings;
             QVariantList ShadowCascades;
+            QVariantList CpuTimings;
+            QVariantList SubmitPasses;
+            int          SceneMeshDraws = 0;
+            int          MaterialBinds  = 0;
+            QString      ObjectConstantsText = QStringLiteral("—");
+            QString      SrvHeapText = QStringLiteral("—");
+            double       SrvHeapFrac = 0.0;
         } Snapshot;
 
         QPointer<ViewportWidget> Viewport;

@@ -1,3 +1,4 @@
+#include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Scene/Terrain.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
@@ -953,6 +954,7 @@ namespace Smile {
                 BoundLod = Lod;
             }
             _Cmd->DrawIndexedInstanced(Grids[Lod].IndexCount, 1, 0, 0, 0);
+            if (SubmitStats) { ++SubmitStats->Draws; ++SubmitStats->Considered; }
         }
     }
 

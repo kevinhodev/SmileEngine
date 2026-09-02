@@ -1,3 +1,4 @@
+#include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Lighting/LocalShadows.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
@@ -268,7 +269,8 @@ namespace Smile {
                                         const FShadowDrawItem* _Items, size_t _Count,
                                         const FShadowJob* _Jobs, u32 _JobCount,
                                         const FCubeShadowJob* _CubeJobs, u32 _CubeJobCount,
-                                        const FExtraLocalDraw& _ExtraDraw) {
+                                        const FExtraLocalDraw& _ExtraDraw,
+                                        FDrawSubmitStats* _Stats) {
         if (!Initialized) return;
         if (_JobCount == 0 && _CubeJobCount == 0) { EnsureReadable(_CommandList); return; }
 
@@ -302,8 +304,10 @@ namespace Smile {
             ExtractFrustumPlanes(_ViewProj, Planes);
             ID3D12PipelineState* Cur = nullptr; // local: o ExtraDraw da view anterior trocou o PSO
             FDrawSubmitCache Submit;
+            Submit.Stats = _Stats;
             _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             for (u32 k : CullScratch) {
+                if (_Stats) ++_Stats->Considered;
                 const FShadowDrawItem& It = _Items[k];
                 if (AABBOutsidePlanes(Planes, It.AABBMin, It.AABBMax)) continue;
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);

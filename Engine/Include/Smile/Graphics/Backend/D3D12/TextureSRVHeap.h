@@ -40,6 +40,14 @@ namespace Smile {
 
         ID3D12DescriptorHeap* Native() const { return Heap.Get(); }
 
+        // Ocupacao. High-water e por SESSAO (nunca decresce): o pico e o que decide se cabe
+        // outro consumidor, e a instantanea sozinha esconde um pico entre trocas de cena. O
+        // bindless da Fase 3 vai consumir deste mesmo orcamento, entao a folga precisa ser
+        // observavel ANTES de se contar com ela.
+        u32 UsedSlots()      const { return UsedSlots_; }
+        u32 HighWaterSlots() const { return HighWaterSlots_; }
+        u32 CapacitySlots()  const { return kCapacity; }
+
     private:
         struct FFreeRange { u32 Offset; u32 Count; };
 
@@ -47,5 +55,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> StagingHeap; 
         u32 HandleSize = 0;
         std::vector<FFreeRange> FreeList;
+        u32 UsedSlots_      = 0;
+        u32 HighWaterSlots_ = 0;
     };
 } 

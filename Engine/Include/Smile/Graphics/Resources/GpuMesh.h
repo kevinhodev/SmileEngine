@@ -78,6 +78,11 @@ namespace Smile {
 
     class FMaterial;
     class FTextureSRVHeap;
+    // Forward: o cache so guarda um PONTEIRO. Incluir CpuFrameStats.h aqui puxava um header
+    // de Renderer para dentro de Resources e, como GpuMesh.h e incluido por quase tudo,
+    // espalhava a dependencia pela engine inteira — qualquer mexida na telemetria virava
+    // rebuild completo. A definicao entra nos .cpp que tocam nos membros.
+    struct FDrawSubmitStats;
 
     // Cache de submissao por passe: Bind de material e IA de mesh sao idempotentes
     // enquanto o ponteiro nao muda. O CSM ja pulava o Bind; o G-buffer e o prepass
@@ -87,9 +92,17 @@ namespace Smile {
         const FGpuMesh*   LastMesh = nullptr;
         const FMaterial*  LastMat  = nullptr;
 
+        // Balde de telemetria do passe (opcional; nullptr = sem instrumentacao). Contar AQUI e
+        // deliberado: este e o unico ponto por onde a geometria de cena e submetida, entao o
+        // numero nasce do ato de submeter em vez de ser recomposto varrendo listas depois — que
+        // e como uma contagem plausivel e errada entraria sem ninguem notar. Ver CpuFrameStats.h.
+        FDrawSubmitStats* Stats = nullptr;
+
         void Reset() {
             LastMesh = nullptr;
             LastMat  = nullptr;
+            // Stats NAO e zerado: o Reset existe para invalidar o cache ao trocar root
+            // signature/PSO no MEIO de um passe, e o balde e do passe inteiro.
         }
 
         void BindMaterial(ID3D12GraphicsCommandList* CommandList,

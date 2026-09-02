@@ -855,6 +855,10 @@ namespace Smile {
 
         const FLocalShadowJobs ShadowJobs = PackDirectLights(Ctx, MappedCB);
 
+        // Zera o balde do frame AQUI, imediatamente antes do primeiro produtor. Zerar no topo do
+        // RenderFrame deixaria os passes de compute que rodam antes fora de qualquer frame.
+        CpuStatsBuilding.ResetFrame();
+        Terrain.SetSubmitStats(&CpuStatsBuilding.Pass(ESubmitPass::TerrainFallback));
         BuildDrawLists(Ctx);
 
         RecordShadows(Ctx, ShadowJobs);
@@ -962,6 +966,15 @@ namespace Smile {
 
         AsyncGIRanLastFrame = (GIComputeFence != 0);
         Backend->DirectQueue.EndFrame(CommandLists, 1);
+
+        // Publica a telemetria de CPU do frame que acabou de ser submetido. So aqui: enquanto
+        // os passes gravam, o balde esta PARCIAL, e publicar antes faria a contagem de draw
+        // piscar para quem le da UI. A ocupacao do heap e amostrada agora porque criacao de
+        // recurso acontece ao longo do frame (load de textura, refinalize de material).
+        CpuStatsBuilding.SrvHeapUsed      = Backend->SRVHeap.UsedSlots();
+        CpuStatsBuilding.SrvHeapHighWater = Backend->SRVHeap.HighWaterSlots();
+        CpuStatsBuilding.SrvHeapCapacity  = Backend->SRVHeap.CapacitySlots();
+        CpuStatsLast = CpuStatsBuilding;
 
         // Avanca o aquecimento e, no frame de captura, grava PNG + manifesto. ANTES do ++ dos
         // contadores logo abaixo: o manifesto grava o TemporalSampleIndex com que este frame
