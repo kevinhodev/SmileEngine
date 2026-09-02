@@ -62,6 +62,13 @@ namespace Smile {
         return Backend->ComputeProfiler.Results();
     }
 
+    std::optional<u64> Renderer::GetAsyncComputeFrameIndex() const {
+        // MESMO gate do GetAsyncComputeTimings: sem isso o indice apareceria sozinho, sem
+        // timings a que pertencer, e um agregador o trataria como amostra valida.
+        if (!AsyncGIRanLastFrame || Backend->ComputeProfiler.Results().empty()) return std::nullopt;
+        return Backend->ComputeProfiler.ResultsFrameIndex();
+    }
+
     u32 Renderer::RenderWidth() const {
         if (UpscalerRenderWidth != 0) return UpscalerRenderWidth;
         return static_cast<u32>(Backend->SwapChain.GetWidth() * RenderScale + 0.5f);

@@ -145,10 +145,13 @@ namespace SmileEditor {
         FVideoMemorySnapshot            Vram;
         FRenderSettingsSnapshot         Settings;
         FCpuProfileSnapshot             Cpu;
-        // Frame que produziu os timestamps de GPU em Direct/AsyncCompute. Fica ATRASADO em
-        // relacao a FrameIndex e a Cpu.SourceFrameIndex, porque o slot so e legivel depois do
-        // fence. Publicado para que quem agrega nao junte GPU e CPU de frames diferentes.
-        quint64                         GpuSourceFrameIndex = 0;
+        // Uma identidade POR FILA. Direct e async compute tem rings e ResultsFrameIndex
+        // proprios, e a async pode ficar suspensa por frames — um indice unico atribuiria os
+        // timings dela ao frame errado. Ambos ficam ATRASADOS em relacao a FrameIndex e a
+        // Cpu.SourceFrameIndex, porque o slot so e legivel depois do fence.
+        quint64                         DirectGpuSourceFrameIndex = 0;
+        // Ausente quando a fila nao produziu resultado neste snapshot.
+        std::optional<quint64>          AsyncComputeSourceFrameIndex;
     };
 
     struct FProfileConfiguration {

@@ -20,14 +20,15 @@
 
 namespace SmileEditor {
     namespace {
-        // v2: profile_snapshot passou a incluir o bloco "cpu" e "gpuSourceFrameIndex", e o
+        // v3: gpuSourceFrameIndex virou directGpuSourceFrameIndex +
+        // asyncComputeSourceFrameIndex (uma identidade por FILA). v2 passou a incluir o "cpu", e o
         // cliente os EXIGE. Sem o bump, editor antigo e cliente novo fechavam handshake e so
         // falhavam la na frente, dentro do profile_snapshot — erro tardio e sem causa obvia.
         //
         // O NOME DO PIPE fica em v1 de proposito: ele e ponto de encontro, nao declaracao de
         // protocolo. Mantendo-o, um par incompativel ainda CONECTA e recebe rejeicao explicita
         // de versao; renomeando, viraria "editor nao encontrado", que e um diagnostico pior.
-        constexpr int kProtocolVersion = 2;
+        constexpr int kProtocolVersion = 3;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -230,7 +231,8 @@ namespace SmileEditor {
             }
             return QJsonObject{
                 // ⚠️ Identidade da serie de CPU. A serie de GPU tem a sua propria
-                // (gpuSourceFrameIndex, no nivel de cima) e esta ATRASADA: as duas sao series
+                // (directGpuSourceFrameIndex/asyncComputeSourceFrameIndex, no nivel de cima) e
+                // estao ATRASADAS: sao series
                 // independentes e devem ser agregadas separadamente, nunca pareadas por posicao.
                 { QStringLiteral("sourceFrameIndex"),
                   static_cast<double>(_Cpu.SourceFrameIndex) },
@@ -263,11 +265,16 @@ namespace SmileEditor {
         QJsonObject SerializeProfileSnapshot(const FProfileSnapshot& _Snapshot) {
             return QJsonObject{
                 { QStringLiteral("frameIndex"), static_cast<double>(_Snapshot.FrameIndex) },
-                // Os timestamps de GPU vem do slot lido kFramesInFlight frames atras, entao
-                // NAO sao do mesmo frame que a CPU. Publicar as duas identidades e o que permite
-                // agregar cada serie por si em vez de fingir uma correlacao que nao existe.
-                { QStringLiteral("gpuSourceFrameIndex"),
-                  static_cast<double>(_Snapshot.GpuSourceFrameIndex) },
+                // TRES series independentes, cada uma com identidade propria: CPU (em cpu.*),
+                // fila direct e async compute. As de GPU vem do slot lido kFramesInFlight
+                // frames atras, e a async ainda pode estar suspensa e trazer OUTRO frame. Um
+                // indice unico atribuiria a medida de uma fila ao frame da outra.
+                { QStringLiteral("directGpuSourceFrameIndex"),
+                  static_cast<double>(_Snapshot.DirectGpuSourceFrameIndex) },
+                { QStringLiteral("asyncComputeSourceFrameIndex"),
+                  _Snapshot.AsyncComputeSourceFrameIndex
+                      ? QJsonValue(static_cast<double>(*_Snapshot.AsyncComputeSourceFrameIndex))
+                      : QJsonValue() }, // null = a fila nao produziu resultado
                 { QStringLiteral("cpuFps"), _Snapshot.CpuFps },
                 { QStringLiteral("outputWidth"), _Snapshot.OutputWidth },
                 { QStringLiteral("outputHeight"), _Snapshot.OutputHeight },

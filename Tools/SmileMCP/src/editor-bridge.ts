@@ -3,11 +3,12 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
-// v2: profile_snapshot inclui o bloco "cpu" e "gpuSourceFrameIndex", exigidos por este
+// v3: gpuSourceFrameIndex virou directGpuSourceFrameIndex + asyncComputeSourceFrameIndex, uma
+// identidade por FILA. v2 incluiu o bloco "cpu". Ambos exigidos por este
 // cliente. O bump faz o par incompativel falhar no HANDSHAKE, com causa explicita, em vez de
 // so quebrar dentro do profile_snapshot. O nome do pipe segue em v1: e rendezvous, nao
 // protocolo — mantendo-o, a rejeicao e "versao incompativel" e nao "editor nao encontrado".
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -125,11 +126,16 @@ export interface ProfileSnapshot {
   };
   settings: Record<string, unknown>;
   /**
-   * Frame que produziu os timestamps de GPU em `direct`/`asyncCompute`. Fica ATRASADO em
-   * relacao a `frameIndex` e a `cpu.sourceFrameIndex`: o slot de timestamp so e legivel depois
-   * do fence. CPU e GPU sao series independentes e nao devem ser pareadas por posicao.
+   * Frame que produziu os timestamps de `direct`. ATRASADO em relacao a `frameIndex` e a
+   * `cpu.sourceFrameIndex`: o slot so e legivel depois do fence.
    */
-  gpuSourceFrameIndex: number;
+  directGpuSourceFrameIndex: number;
+  /**
+   * Frame que produziu os timestamps de `asyncCompute`. Serie PROPRIA: a fila tem ring proprio
+   * e pode ficar suspensa por frames, entao pode pertencer a outro frame que a direct.
+   * `null` quando a fila nao produziu resultado neste snapshot.
+   */
+  asyncComputeSourceFrameIndex: number | null;
   /** Telemetria de CPU do ultimo frame FECHADO. Ver CpuProfileStats. */
   cpu: CpuProfileStats;
 }
@@ -448,6 +454,9 @@ export class SmileEditorBridge {
         !cpu.timingsMs || typeof cpu.timingsMs !== "object" ||
         !Array.isArray(cpu.passes)) {
       throw new Error("Snapshot de perfil sem telemetria de CPU.");
+    }
+    if (typeof snapshot.directGpuSourceFrameIndex !== "number") {
+      throw new Error("Snapshot de perfil sem identidade da fila direct.");
     }
     return snapshot as ProfileSnapshot;
   }

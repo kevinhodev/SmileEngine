@@ -171,10 +171,27 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
     sampleCount: snapshots.length,
     firstFrameIndex: snapshots[0]?.frameIndex ?? null,
     lastFrameIndex: snapshots.at(-1)?.frameIndex ?? null,
-    // A serie de GPU tem identidade propria e ATRASADA. Publicada para nao se confundir com
-    // frameIndex nem com cpu.*SourceFrameIndex.
-    firstGpuSourceFrameIndex: snapshots[0]?.gpuSourceFrameIndex ?? null,
-    lastGpuSourceFrameIndex: snapshots.at(-1)?.gpuSourceFrameIndex ?? null,
+    // TRES series, tres identidades. Cada fila de GPU tem ring proprio e a async pode ficar
+    // suspensa, entao os frames distintos sao contados POR FILA — usar a contagem da direct
+    // para a async superestimaria a independencia das amostras dela.
+    directGpu: {
+      firstSourceFrameIndex: snapshots[0]?.directGpuSourceFrameIndex ?? null,
+      lastSourceFrameIndex: snapshots.at(-1)?.directGpuSourceFrameIndex ?? null,
+      distinctFrames: new Set(snapshots.map((s) => s.directGpuSourceFrameIndex)).size,
+    },
+    asyncCompute: (() => {
+      const indices = snapshots
+        .map((s) => s.asyncComputeSourceFrameIndex)
+        .filter((value): value is number => typeof value === "number");
+      return {
+        // Amostras em que a fila produziu resultado. Menor que sampleCount significa fila
+        // suspensa em parte da coleta, e nao amostra perdida.
+        sampleCount: indices.length,
+        firstSourceFrameIndex: indices[0] ?? null,
+        lastSourceFrameIndex: indices.at(-1) ?? null,
+        distinctFrames: new Set(indices).size,
+      };
+    })(),
     cpu: cpuSummary,
     gpu: snapshots[0]?.gpu ?? null,
     resolution: snapshots[0]

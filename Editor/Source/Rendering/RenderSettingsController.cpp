@@ -358,7 +358,9 @@ namespace SmileEditor {
         Result.Vram.NonLocalUsageBytes = VM.NonLocalUsage;
         Result.Settings = CollectSettings(*Access);
         Result.Cpu      = CollectCpuStats(*Access);
-        Result.GpuSourceFrameIndex = Access->GetGpuProfiler().ResultsFrameIndex();
+        Result.DirectGpuSourceFrameIndex = Access->GetGpuProfiler().ResultsFrameIndex();
+        if (const auto Async = Access->GetAsyncComputeFrameIndex())
+            Result.AsyncComputeSourceFrameIndex = static_cast<quint64>(*Async);
         return Result;
     }
 

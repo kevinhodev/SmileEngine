@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 #include <memory>
+#include <optional>
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
@@ -508,6 +509,10 @@ namespace Smile {
         // Vazio quando o DDGI rodou na fila direta (async off/relocation) — a UI nao
         // mostra linha velha de um modo que nao esta mais rodando.
         std::vector<FGpuProfiler::FScopeResult> GetAsyncComputeTimings() const;
+        // Identidade PROPRIA da serie de async compute. A fila tem ring e ResultsFrameIndex
+        // proprios, e pode ficar suspensa por frames — publicar os timings dela sob o indice da
+        // fila direct atribuiria a medida ao frame errado. nullopt = a fila nao produziu nada.
+        std::optional<u64> GetAsyncComputeFrameIndex() const;
         // Telemetria do DDGI (spacing, momentos de distancia, contagem de sondas) p/ o painel
         // de GI. Os knobs — inclusive os de amostragem — moraram p/ o FRenderSettings.
         const FDDGI& GetDDGI() const { return DDGI; }
