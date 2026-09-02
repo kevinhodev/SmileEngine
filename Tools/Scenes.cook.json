@@ -6,7 +6,12 @@
     "feito sem a receita muda o vidro da Emerald Square sem nenhum diff de codigo.",
     "Rodar com Tools/CookScenes.ps1. Ver Docs/GPU-DRIVEN-PLAN.md, Fase 0."
   ],
-  "cooker": "build/bin/Release/SmileCooker.exe",
+  "_cookerComment": [
+    "So o NOME do executavel. O caminho e derivado de -BuildDir/-Config pelo script:",
+    "<buildDir>/bin/<config>/<cookerName>. Um caminho fixo aqui fazia o script construir num",
+    "diretorio e executar o binario de outro quando -BuildDir era passado."
+  ],
+  "cookerName": "SmileCooker.exe",
 
   "_expectComment": [
     "Formato que ESTE checkout aceita. Sem isto, -Record oficializaria qualquer coisa que",

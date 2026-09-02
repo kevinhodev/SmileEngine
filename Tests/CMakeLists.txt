@@ -198,6 +198,7 @@ add_test(
 
 set_tests_properties(Smile.OpacityMicromapBake.BistroExterior PROPERTIES
     LABELS "graphics;raytracing;omm;integration"
+    RESOURCE_LOCK CookedSceneMemory
     TIMEOUT 300
 )
 
@@ -239,8 +240,12 @@ foreach(SCENE
             NAME Smile.CookedSceneLoad.${SCENE_NAME}
             COMMAND SmileCookedSceneLoadTests "${SCENE_FILE}"
         )
+        # RESOURCE_LOCK compartilhado com o teste de OMM: cada processo materializa a cena
+        # inteira em memoria (o maior .smesh tem ~478 MiB, os 11 somam ~2,6 GB), entao
+        # "ctest -j" poderia lancar os 11 ao mesmo tempo e estourar a RAM de maquina menor/CI.
         set_tests_properties(Smile.CookedSceneLoad.${SCENE_NAME} PROPERTIES
             LABELS "scene;cooked-format;integration"
+            RESOURCE_LOCK CookedSceneMemory
             TIMEOUT 300
         )
     endif()

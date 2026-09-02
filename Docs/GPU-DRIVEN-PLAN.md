@@ -556,10 +556,23 @@ contra assets incompatíveis.
   **Raster e RT continuam por verificar**: exigem o editor rodando, não há harness headless;
 - ~~registrar hashes/build~~ — **feito** pelo `cook-baseline.json`, que fingerprinta as **entradas**
   e não só as saídas: SHA256 de cada FBX (também gitignored), da receita e do binário do cooker,
-  mais commit, `treeDirty` e a versão esperada. Sem isso, outro FBX no mesmo caminho ou um cooker
-  vindo de árvore suja seriam indistinguíveis. O bloco `expect` da receita é validado em `-Record`,
-  `-Verify` e depois de cada cook, o que impede a ferramenta de oficializar um formato que este
-  checkout rejeita. Recook confirmado **determinístico**: recozinhar uma cena reproduz o SHA256;
+  mais commit, `treeDirty`, `config` e a versão esperada. Sem isso, outro FBX no mesmo caminho ou um
+  cooker vindo de árvore suja seriam indistinguíveis. Três propriedades que o `-Verify` sustenta e
+  que valem como contrato para quem for medir em cima disso:
+  - **schema obrigatório.** Ausência de qualquer fingerprint é falha, não "passa por omissão".
+    Guards do tipo *se presente* fazem um verificador aceitar baseline incompleta em silêncio;
+  - **`provenanceMode`.** `cooked` = este script cozinhou as saídas com aquele binário naquela
+    execução; `adopted` = as saídas já existiam e o hash é só do cooker que estava presente na
+    hora, que pode não ser o produtor real. Sem o campo, qualquer ferramenta leria `cooker.sha256`
+    como produtor comprovado nos dois casos. Note que procedência forte e árvore limpa não são
+    simultaneamente atingíveis num mesmo commit: um recook feito junto da mudança sempre grava
+    `treeDirty: true`, e regravar depois com `-Record` rebaixaria o modo para `adopted`.
+    Entre os dois, `cooked` informa mais;
+  - **formato validado nas três bordas.** O bloco `expect` da receita é conferido em `-Record`, em
+    `-Verify` e depois de cada cook, antes de virar hash — é o que impede a ferramenta de
+    oficializar um formato que este checkout rejeita (ex.: os antigos v9).
+
+  Recook confirmado **determinístico**: recozinhar uma cena reproduz o SHA256;
 - não confundir os antigos arquivos v9 com formato suportado;
 - adicionar timers CPU para `BuildDrawLists`, sort, uploads e emissão de passes;
 - registrar draws potenciais/executadas, bindings, renderables, materiais, meshes e bytes de object

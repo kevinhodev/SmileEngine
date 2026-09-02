@@ -15,8 +15,9 @@
     Ver Docs/GPU-DRIVEN-PLAN.md, Fase 0.
 
 .PARAMETER Verify
-    Nao cozinha: confere os assets atuais contra a baseline E contra o formato esperado na
-    receita. E o gate "os assets sao os da baseline e o formato e o suportado?".
+    Nao cozinha. Exige o schema completo da baseline e compara TODA a procedencia declarada:
+    receita, config, binario do cooker, fonte de cada cena, formato (magic/versao) e hash das
+    saidas. Ausencia de qualquer fingerprint e falha, nao "passa por omissao".
 
 .PARAMETER Record
     Escreve a baseline a partir dos assets ja presentes, sem cozinhar. Recusa registrar
@@ -35,7 +36,8 @@
     Configuracao do cooker (default Release).
 
 .PARAMETER BuildDir
-    Diretorio de build do CMake (default "build").
+    Diretorio de build do CMake (default "build"; aceita relativo ao repo ou absoluto). O cooker
+    e DERIVADO dele: <buildDir>/bin/<config>/<cookerName>.
 
 .EXAMPLE
     powershell -File Tools/CookScenes.ps1
@@ -62,6 +64,14 @@ $BaselinePath = Join-Path $PSScriptRoot "cook-baseline.json"
 if (-not (Test-Path $RecipePath)) { throw "receita nao encontrada: $RecipePath" }
 $Recipe    = Get-Content $RecipePath -Raw | ConvertFrom-Json
 $RecipeSha = (Get-FileHash $RecipePath -Algorithm SHA256).Hash
+
+# BuildDir normalizado (aceita relativo ao repo ou absoluto) e o cooker DERIVADO dele. Um
+# caminho fixo na receita fazia -BuildDir construir num diretorio e executar o binario de outro.
+$BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir }
+             else { Join-Path $RepoRoot $BuildDir }
+$BuildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
+if (-not $Recipe.cookerName) { throw "receita sem 'cookerName'" }
+$CookerPath = Join-Path $BuildRoot (Join-Path "bin" (Join-Path $Config $Recipe.cookerName))
 
 if (-not $Recipe.expect) { throw "receita sem bloco 'expect' (magic/versao esperados)" }
 $ExpectVersion = [int] $Recipe.expect.version
@@ -157,18 +167,47 @@ function Get-RepoStamp {
     [ordered]@{ commit = $Hash; dirty = $Dirty }
 }
 
+# Falha quando qualquer peca da procedencia estiver ausente. Sem isto os guards viravam
+# "if presente", e ausencia passava: uma baseline incompleta era aceita em silencio.
+function Assert-BaselineSchema {
+    param($Baseline)
+    $Missing = @()
+    foreach ($Field in @("generatedUtc", "commit", "config", "expectVersion",
+                         "recipeSha256", "provenanceMode", "outputs")) {
+        if ($null -eq $Baseline.$Field) { $Missing += $Field }
+    }
+    if (-not $Baseline.cooker -or -not $Baseline.cooker.sha256) { $Missing += "cooker.sha256" }
+    foreach ($Out in $Baseline.outputs) {
+        foreach ($Field in @("outBase", "source", "sourceDigest", "flags", "smesh", "sscene")) {
+            if ($null -eq $Out.$Field) { $Missing += "outputs[$($Out.outBase)].$Field" }
+        }
+        if ($Out.sourceDigest -and -not $Out.sourceDigest.sha256) {
+            $Missing += "outputs[$($Out.outBase)].sourceDigest.sha256"
+        }
+    }
+    if ($Missing.Count -gt 0) {
+        throw ("baseline incompleta (regrave com -Record ou recook): faltam " + ($Missing -join ", "))
+    }
+}
+
+# provenanceMode distingue o que a baseline PODE afirmar sobre o cooker:
+#   cooked  = este script cozinhou as saidas com ESTE binario nesta execucao;
+#   adopted = as saidas ja existiam e o hash e do binario que estava presente na hora, que pode
+#             nao ser o produtor real.
+# Sem o campo, outra ferramenta leria cooker.sha256 como produtor comprovado nos dois casos.
 function Write-Baseline {
-    param($Outputs, $CookerFingerprint)
+    param($Outputs, $CookerFingerprint, [string] $ProvenanceMode)
     $Stamp    = Get-RepoStamp
     $Manifest = [ordered]@{
-        generatedUtc  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-        commit        = $Stamp.commit
-        treeDirty     = $Stamp.dirty
-        config        = $Config
-        expectVersion = $ExpectVersion
-        recipeSha256  = $RecipeSha
-        cooker        = $CookerFingerprint
-        outputs       = $Outputs
+        generatedUtc   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        commit         = $Stamp.commit
+        treeDirty      = $Stamp.dirty
+        config         = $Config
+        expectVersion  = $ExpectVersion
+        recipeSha256   = $RecipeSha
+        provenanceMode = $ProvenanceMode
+        cooker         = $CookerFingerprint
+        outputs        = $Outputs
     }
     $Json = $Manifest | ConvertTo-Json -Depth 8
     # PS 5.1 grava BOM com Out-File -Encoding utf8, e BOM quebra parser JSON estrito.
@@ -185,15 +224,37 @@ if (-not $Selected) { throw "nenhuma cena casou com -Only '$Only'" }
 if ($Verify) {
     if (-not (Test-Path $BaselinePath)) { throw "baseline ausente: $BaselinePath (rode -Record ou cozinhe primeiro)" }
     $Baseline = Get-Content $BaselinePath -Raw | ConvertFrom-Json
+    Assert-BaselineSchema $Baseline
     $Failures = 0
 
-    if ($Baseline.expectVersion -and [int] $Baseline.expectVersion -ne $ExpectVersion) {
+    Write-Host ("procedencia: {0}  (commit {1}{2}, config {3})" -f
+                $Baseline.provenanceMode, $Baseline.commit,
+                $(if ($Baseline.treeDirty) { ", arvore suja" } else { "" }), $Baseline.config)
+    if ($Baseline.provenanceMode -ne "cooked") {
+        Write-Host "  NOTA: cooker.sha256 foi ADOTADO, nao comprovado como produtor destes assets."
+    }
+    Write-Host ""
+
+    # Contrato declarado: receita, config e cooker sao comparados SEMPRE, nao "se presentes".
+    if ([int] $Baseline.expectVersion -ne $ExpectVersion) {
         Write-Host ("  RECEITA MUDOU  baseline espera v{0}, receita espera v{1}" -f $Baseline.expectVersion, $ExpectVersion)
         $Failures++
     }
-    if ($Baseline.recipeSha256 -and $Baseline.recipeSha256 -ne $RecipeSha) {
+    if ($Baseline.recipeSha256 -ne $RecipeSha) {
         Write-Host "  RECEITA MUDOU  Scenes.cook.json difere da usada na baseline"
         $Failures++
+    }
+    if ($Baseline.config -ne $Config) {
+        Write-Host ("  CONFIG DIFERE  baseline={0}, atual={1}" -f $Baseline.config, $Config)
+        $Failures++
+    }
+    # Cooker diferente nao altera assets ja no disco, mas quebra a alegacao de que eles sao
+    # reproduziveis a partir desta arvore, que e o que a baseline existe para sustentar.
+    $CurrentCooker = Get-Fingerprint $CookerPath
+    if (-not $CurrentCooker) {
+        Write-Host ("  COOKER AUSENTE {0}" -f $CookerPath); $Failures++
+    } elseif ($CurrentCooker.sha256 -ne $Baseline.cooker.sha256) {
+        Write-Host "  COOKER DIFERE  binario atual nao e o registrado na baseline"; $Failures++
     }
 
     foreach ($Scene in $Selected) {
@@ -204,9 +265,11 @@ if ($Verify) {
         }
 
         # A FONTE tambem e gitignored: outro FBX no mesmo caminho produziria saidas diferentes
-        # sem nenhuma pista, entao ela e conferida antes das saidas.
-        if ($Expected.sourceDigest -and $Current["sourceDigest"] -and
-            $Expected.sourceDigest.sha256 -ne $Current["sourceDigest"].sha256) {
+        # sem nenhuma pista. Ausencia e FALHA: antes o guard "se presente" deixava passar um
+        # source apagado.
+        if (-not $Current["sourceDigest"]) {
+            Write-Host ("  FONTE AUSENTE  {0}" -f $Current["source"]); $Failures++
+        } elseif ($Expected.sourceDigest.sha256 -ne $Current["sourceDigest"].sha256) {
             Write-Host ("  FONTE DIFERE   {0}" -f $Current["source"]); $Failures++
         }
 
@@ -242,28 +305,25 @@ if ($Record) {
         Write-Host ("  {0}  v{1}" -f $Rec.outBase, $Rec["sscene"].version)
         $Outputs += ,$Rec
     }
-    $CookerPath = Join-Path $RepoRoot ($Recipe.cooker -replace "/Release/", "/$Config/")
-    Write-Baseline $Outputs (Get-Fingerprint $CookerPath)
+    Write-Baseline $Outputs (Get-Fingerprint $CookerPath) "adopted"
     Write-Host ""
     Write-Host ("baseline escrita a partir dos assets atuais: {0}" -f $BaselinePath)
     exit 0
 }
 
 # ---------------------------------------------------------------- cozimento
-$Cooker = Join-Path $RepoRoot ($Recipe.cooker -replace "/Release/", "/$Config/")
-
 # Deixar o CMake decidir o que esta desatualizado e a UNICA forma de respeitar as dependencias
 # reais do target (ufbx.c/ufbx.h, CMakeLists, Mesh.h, headers transitivos). A heuristica anterior
 # olhava so main.cpp e CookedFormat.h e aceitaria um exe defasado por mudanca em qualquer outra.
 if (-not $NoBuild) {
     Write-Host "reconstruindo SmileCooker ($Config)..."
-    & cmake --build (Join-Path $RepoRoot $BuildDir) --target SmileCooker --config $Config | Out-Null
+    & cmake --build $BuildRoot --target SmileCooker --config $Config | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "build do SmileCooker falhou (exit $LASTEXITCODE)" }
 }
-if (-not (Test-Path $Cooker)) {
-    throw "cooker nao encontrado: $Cooker`nRode antes: cmake --build $BuildDir --target SmileCooker --config $Config"
+if (-not (Test-Path $CookerPath)) {
+    throw "cooker nao encontrado: $CookerPath`nRode antes: cmake --build $BuildRoot --target SmileCooker --config $Config"
 }
-$CookerFingerprint = Get-Fingerprint $Cooker
+$CookerFingerprint = Get-Fingerprint $CookerPath
 Write-Host ("cooker sha256={0}" -f $CookerFingerprint.sha256.Substring(0, 16))
 Write-Host ""
 
@@ -279,7 +339,7 @@ foreach ($Scene in $Selected) {
     else                    { Write-Host ("=== {0}" -f $Label) }
 
     $CookArgs = @($Source) + $Flags
-    & $Cooker @CookArgs | Select-String -Pattern "Meshes:|Instancing:|ERRO" | ForEach-Object { "    $_" }
+    & $CookerPath @CookArgs | Select-String -Pattern "Meshes:|Instancing:|ERRO" | ForEach-Object { "    $_" }
     if ($LASTEXITCODE -ne 0) { Write-Host ("    FALHOU (exit {0})" -f $LASTEXITCODE); $Failed++; continue }
 
     # -Strict: saida fora do formato esperado aborta ANTES de virar hash na baseline.
@@ -291,7 +351,7 @@ if ($Failed -gt 0) { throw "$Failed cena(s) falharam" }
 # So um recook COMPLETO reescreve a baseline: um -Only produziria manifesto parcial, e o
 # -Verify seguinte acusaria ausencia nas cenas nao cozidas.
 if ($Only -eq "") {
-    Write-Baseline $Outputs $CookerFingerprint
+    Write-Baseline $Outputs $CookerFingerprint "cooked"
     Write-Host ""
     Write-Host ("baseline escrita: {0}" -f $BaselinePath)
 } else {
