@@ -12,26 +12,9 @@
 #include <cmath>
 
 namespace SmileEditor {
-    namespace {
-
-        // Faixas plausiveis. Nao sao gosto: o sidecar e um arquivo de texto que entra no
-        // repositorio e vai ser editado a mao, e um pitch de 3000 graus ou um NaN vindo dali
-        // viraria uma matriz de view degenerada — que aparece como tela preta ou lixo, longe
-        // daqui e sem nada apontando para o arquivo.
-        // 89, e nao 90: e o clamp da propria FCamera (Camera.cpp, Clamp(..., -89, 89)). Em 90 o
-        // forward fica paralelo ao up e a matriz de view degenera — ou seja, aceitar 90 aqui seria
-        // aceitar uma pose que a camera nao consegue produzir e nao consegue reproduzir.
-
-        // Le um numero OBRIGATORIO. Chave ausente e erro, e nao zero: o toDouble() sem esta
-        // checagem transformava sidecar truncado em pose (0,0,0) — um valor plausivel, gravavel e
-        // errado, que e o pior resultado possivel para um arquivo de referencia.
-        bool ReadNum(const QJsonObject& _O, const char* _Key, double& _Out) {
-            const QJsonValue V = _O.value(QLatin1String(_Key));
-            if (!V.isDouble()) return false;
-            _Out = V.toDouble();
-            return std::isfinite(_Out);
-        }
-    }
+    // Schema, faixas plausiveis e validacao vivem em BookmarkSchema.h — inclusive o porque de
+    // cada limite (pitch em 89 e nao 90 por causa do clamp da FCamera, etc.). Ficam la, e nao
+    // aqui, para o gate poder validar o sidecar com o MESMO codigo que o editor usa ao carregar.
 
     CameraBookmarksBridge::CameraBookmarksBridge(QObject* _Parent) : QObject(_Parent) {}
 
@@ -182,7 +165,11 @@ namespace SmileEditor {
         if (State == ESidecarState::Incompatible) {
             emit Message(tr("Bookmarks: %1 — arquivo preservado").arg(Msg));
             // Schema desconhecido nao entrega poses; slot rejeitado individualmente sim.
-            return Slots[0].Filled || Slots[1].Filled || Slots[2].Filled || Slots[3].Filled;
+            // Laco sobre kSlotCount e nao os quatro escritos a mao: com a contagem enumerada,
+            // aumentar o schema ignoraria os slots novos e diminui-lo leria fora do array.
+            for (int I = 0; I < kSlotCount; ++I)
+                if (Slots[I].Filled) return true;
+            return false;
         }
         return true;
     }
