@@ -151,28 +151,57 @@ function passOf(profile, name, queue) {
   return profile.passes.find((candidate) => candidate.name === name && candidate.queue === queue);
 }
 
-// smile_close_editor devolve quando o named pipe e a janela fecham — o PROCESSO ainda pode estar
-// vivo depois disso, liberando BLAS/TLAS. Foi observado na 1M: o editor continuou vivo minutos
-// apos o PASS da rodada. Enquanto ele nao morre, a VRAM dele ainda esta tomada, e medir a cena
-// seguinte por cima disso mistura duas cenas na mesma leitura. `kill(pid, 0)` nao envia sinal;
-// so pergunta se o processo existe (ESRCH quando nao).
-async function waitForProcessExit(pid, label, timeoutMilliseconds = 300_000) {
-  const deadline = Date.now() + timeoutMilliseconds;
-  for (;;) {
+// smile_close_editor AFIRMA que o editor parou, e essa afirmacao nao e confiavel: o shutdown() do
+// bridge conclui "parou" assim que uma chamada de status(500 ms) falha, e numa cena pesada o
+// round-trip de status passa de 500 ms sem o editor ter ido a lugar nenhum. Medido na sintetica de
+// 1M: close_editor devolveu sucesso e o editor seguiu vivo e RENDERIZANDO por mais de 10 minutos
+// (610 s de CPU), ate um WM_CLOSE derruba-lo em 1 segundo.
+//
+// Enquanto ele nao morre, a VRAM dele continua tomada, e medir a cena seguinte por cima disso
+// mistura duas cenas na mesma leitura — contaminacao que nao aparece no relatorio, porque cada
+// numero isolado continua plausivel. Entao aqui se verifica o PROCESSO, e nao a afirmacao:
+// `kill(pid, 0)` nao envia sinal, so pergunta se ele existe (ESRCH quando nao).
+//
+// Se a saida limpa nao vier, mata. Um benchmark nao tem nada a salvar, e derrubar a rodada
+// inteira por um teardown que nao acontece descartaria as medicoes ja feitas. O forcado fica
+// REGISTRADO no relatorio: e sintoma de um defeito no caminho de shutdown, nao rotina.
+async function ensureProcessGone(pid, label, graceMilliseconds = 120_000) {
+  const alive = () => {
     try {
       process.kill(pid, 0);
+      return true;
     } catch (error) {
-      if (error.code === "ESRCH") return;
-      // EPERM: existe, mas sem permissao para sinalizar. Continua sendo "vivo".
-      if (error.code !== "EPERM") throw error;
+      if (error.code === "ESRCH") return false;
+      if (error.code === "EPERM") return true; // existe, sem permissao para sinalizar
+      throw error;
     }
-    assert(
-      Date.now() < deadline,
-      `${label}: o editor PID ${pid} continuou vivo ${timeoutMilliseconds / 1000}s depois do ` +
-        `fechamento; medir a proxima cena por cima dele misturaria as duas`,
-    );
-    await delay(500);
+  };
+  const until = async (deadline) => {
+    while (Date.now() < deadline) {
+      if (!alive()) return true;
+      await delay(500);
+    }
+    return !alive();
+  };
+
+  if (await until(Date.now() + graceMilliseconds)) return;
+
+  console.warn(
+    `[baseline] ${label}: o editor PID ${pid} continuou vivo ${graceMilliseconds / 1000}s depois ` +
+      `de close_editor ter reportado sucesso; encerrando a forca`,
+  );
+  report.forcedKills ??= [];
+  report.forcedKills.push({ scene: label, pid, graceSeconds: graceMilliseconds / 1000 });
+  try {
+    process.kill(pid);
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
   }
+  assert(
+    await until(Date.now() + 60_000),
+    `${label}: o editor PID ${pid} sobreviveu ate ao encerramento forcado; medir a proxima cena ` +
+      `por cima dele misturaria as duas`,
+  );
 }
 
 async function readSidecar(relativePath) {
@@ -259,7 +288,7 @@ async function measureScene(sceneEntry) {
   // derrubar a rodada por um teardown lento perderia 20 medicoes ja feitas -- que foi o que
   // aconteceu na primeira tentativa, com a 1M levando mais de 180 s para sair.
   if (pendingExitPid !== undefined) {
-    await waitForProcessExit(pendingExitPid, sceneEntry.id);
+    await ensureProcessGone(pendingExitPid, sceneEntry.id);
     pendingExitPid = undefined;
   }
   console.log(`[baseline] ${sceneEntry.id}: abrindo o editor`);
@@ -441,6 +470,14 @@ try {
     const status = await call("smile_editor_status", { timeoutSeconds: 1 });
     if (status.connected && currentLaunch && !currentLaunch.alreadyRunning) {
       await call("smile_close_editor", { timeoutSeconds: 120 });
+      pendingExitPid = currentLaunch.pid;
+    }
+    // O editor da ULTIMA cena nao tem ninguem depois dele para proteger, mas deixa-lo vivo trava
+    // o rebuild seguinte por manter o .exe aberto — foi o que aconteceu aqui. Melhor esforco: nao
+    // derruba uma rodada ja concluida.
+    if (pendingExitPid !== undefined) {
+      await ensureProcessGone(pendingExitPid, "final", 60_000);
+      pendingExitPid = undefined;
     }
   } catch (cleanupError) {
     console.error(`[baseline] cleanup: ${cleanupError}`);
