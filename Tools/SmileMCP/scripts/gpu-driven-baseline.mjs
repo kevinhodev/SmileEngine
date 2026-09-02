@@ -156,7 +156,7 @@ function passOf(profile, name, queue) {
 // apos o PASS da rodada. Enquanto ele nao morre, a VRAM dele ainda esta tomada, e medir a cena
 // seguinte por cima disso mistura duas cenas na mesma leitura. `kill(pid, 0)` nao envia sinal;
 // so pergunta se o processo existe (ESRCH quando nao).
-async function waitForProcessExit(pid, label, timeoutMilliseconds = 180_000) {
+async function waitForProcessExit(pid, label, timeoutMilliseconds = 300_000) {
   const deadline = Date.now() + timeoutMilliseconds;
   for (;;) {
     try {
@@ -222,6 +222,8 @@ const report = {
 };
 
 let currentLaunch;
+// PID do editor da cena anterior, ja mandado fechar mas talvez ainda vivo.
+let pendingExitPid;
 let reportPath;
 
 // Uma rodada verde com DEVICE_REMOVED no log nao e uma rodada verde. Mesma auditoria do
@@ -252,6 +254,14 @@ async function auditLogs(sceneId, pid) {
 
 async function measureScene(sceneEntry) {
   const sidecar = await readSidecar(sceneEntry.sidecar);
+  // Esperar aqui, e nao depois de fechar, e o que importa: o perigo e a cena ANTERIOR ainda estar
+  // segurando VRAM enquanto esta mede. Depois da ultima cena nao ha ninguem para proteger, e
+  // derrubar a rodada por um teardown lento perderia 20 medicoes ja feitas -- que foi o que
+  // aconteceu na primeira tentativa, com a 1M levando mais de 180 s para sair.
+  if (pendingExitPid !== undefined) {
+    await waitForProcessExit(pendingExitPid, sceneEntry.id);
+    pendingExitPid = undefined;
+  }
   console.log(`[baseline] ${sceneEntry.id}: abrindo o editor`);
   currentLaunch = await call("smile_run_editor", {
     configuration: "Release",
@@ -388,7 +398,7 @@ async function measureScene(sceneEntry) {
 
   if (!currentLaunch.alreadyRunning) {
     await call("smile_close_editor", { timeoutSeconds: 120 });
-    await waitForProcessExit(currentLaunch.pid, sceneEntry.id);
+    pendingExitPid = currentLaunch.pid;
   }
   currentLaunch = undefined;
   return sceneRuns;
@@ -431,7 +441,6 @@ try {
     const status = await call("smile_editor_status", { timeoutSeconds: 1 });
     if (status.connected && currentLaunch && !currentLaunch.alreadyRunning) {
       await call("smile_close_editor", { timeoutSeconds: 120 });
-      await waitForProcessExit(currentLaunch.pid, "cleanup");
     }
   } catch (cleanupError) {
     console.error(`[baseline] cleanup: ${cleanupError}`);
