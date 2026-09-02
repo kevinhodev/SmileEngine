@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SmileEditor/Scene/BookmarkSchema.h"
+
 #include <QObject>
 #include <QString>
 #include <QVariantList>
@@ -44,22 +46,13 @@ namespace SmileEditor {
         void Message(const QString& Text);
 
     private:
-        struct FSlot {
-            bool  Filled = false;
-            float PosX = 0.0f, PosY = 0.0f, PosZ = 0.0f;
-            float Pitch = 0.0f, Yaw = 0.0f;
-            // Gravado para manter o enquadramento compativel quando o FOV virar editavel.
-            float FovYDeg = 60.0f;
-        };
+        // Tipos e regras vivem no BookmarkSchema, para o gate poder validar o sidecar com o
+        // MESMO parser que o editor usa. Alias para nao mexer em nenhum call site.
+        using FSlot = BookmarkSchema::FSlot;
         FSlot Slots[kSlotCount];
 
         // Distingue sidecar ausente de um arquivo que nao pode ser sobrescrito com seguranca.
-        enum class ESidecarState {
-            None,         // nao existe em disco ainda: gravar e seguro
-            Ok,           // lido e entendido
-            Corrupt,      // JSON invalido
-            Incompatible  // schema de outra versao, ou pose que esta build nao sabe restaurar
-        };
+        using ESidecarState = BookmarkSchema::EState;
         ESidecarState State = ESidecarState::None;
 
         bool LoadFromDisk();

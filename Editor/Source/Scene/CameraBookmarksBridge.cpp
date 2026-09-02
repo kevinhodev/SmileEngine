@@ -173,87 +173,22 @@ namespace SmileEditor {
             State = ESidecarState::Corrupt; // existe e nao abriu: NAO tratar como "vazio"
             return false;
         }
-
-        QJsonParseError Err{};
-        const QJsonDocument Doc = QJsonDocument::fromJson(F.readAll(), &Err);
+        const QByteArray Bytes = F.readAll();
         F.close();
-        if (Err.error != QJsonParseError::NoError || !Doc.isObject()) {
-            State = ESidecarState::Corrupt;
-            emit Message(tr("Bookmarks: JSON inválido — o arquivo será preservado como .bak"));
+
+        // Regras no BookmarkSchema: o gate valida o sidecar com ESTE parser, e nao com uma
+        // reimplementacao que divergiria em silencio.
+        QString Msg;
+        State = BookmarkSchema::Parse(Bytes, EngineFovYDeg(), Slots, &Msg);
+        if (State == ESidecarState::Corrupt) {
+            emit Message(tr("Bookmarks: %1 — o arquivo será preservado como .bak").arg(Msg));
             return false;
         }
-
-        const QJsonObject Root = Doc.object();
-        if (Root.value(QStringLiteral("version")).toInt(0) != kSchemaVersion) {
-            State = ESidecarState::Incompatible;
-            emit Message(tr("Bookmarks: versão de schema desconhecida — arquivo preservado"));
-            return false;
+        if (State == ESidecarState::Incompatible) {
+            emit Message(tr("Bookmarks: %1 — arquivo preservado").arg(Msg));
+            // Schema desconhecido nao entrega poses; slot rejeitado individualmente sim.
+            return Slots[0].Filled || Slots[1].Filled || Slots[2].Filled || Slots[3].Filled;
         }
-
-        // `slots` TEM de ser array. Sem esta checagem, uma chave ausente (ou de outro tipo) virava
-        // array vazio pelo toArray(), o estado ia para Ok e a gravacao seguinte substituia o
-        // arquivo SEM backup — exatamente o caminho de perda que o estado Corrupt existe para
-        // fechar, aberto pelo unico caso que nao passava por ele.
-        const QJsonValue SlotsV = Root.value(QStringLiteral("slots"));
-        if (!SlotsV.isArray()) {
-            State = ESidecarState::Corrupt;
-            emit Message(tr("Bookmarks: arquivo sem lista de câmeras — será preservado como .bak"));
-            return false;
-        }
-
-        const float FovNow = EngineFovYDeg();
-        bool AnyRejected = false;
-        FSlot Parsed[kSlotCount];
-
-        const QJsonArray Arr = SlotsV.toArray();
-        for (const QJsonValue& V : Arr) {
-            if (!V.isObject()) { AnyRejected = true; continue; }
-            const QJsonObject O = V.toObject();
-            const QJsonValue IdxV = O.value(QStringLiteral("index"));
-            if (!IdxV.isDouble()) { AnyRejected = true; continue; }
-            const int Idx = IdxV.toInt(-1);
-            if (!ValidSlot(Idx)) { AnyRejected = true; continue; }
-
-            // Parseia em TEMPORARIO e so publica se TUDO passar. A versao anterior marcava
-            // Filled = true antes de ler, entao uma chave ausente virava 0.0 e o slot nascia
-            // valido apontando para a origem do mundo.
-            double PX, PY, PZ, Pitch, Yaw, Fov;
-            if (!ReadNum(O, "posX", PX) || !ReadNum(O, "posY", PY) || !ReadNum(O, "posZ", PZ) ||
-                !ReadNum(O, "pitch", Pitch) || !ReadNum(O, "yaw", Yaw) ||
-                !ReadNum(O, "fovYDeg", Fov)) {
-                AnyRejected = true;
-                continue;
-            }
-            if (std::abs(PX) > kMaxAbsPosition || std::abs(PY) > kMaxAbsPosition ||
-                std::abs(PZ) > kMaxAbsPosition ||
-                std::abs(Pitch) > kMaxAbsPitch || std::abs(Yaw) > kMaxAbsYaw) {
-                AnyRejected = true;
-                continue;
-            }
-            // FOV que esta build nao reproduz: a pose sairia certa e o enquadramento errado, e
-            // duas capturas com enquadramentos diferentes nao comparam nada. Rejeitar e o unico
-            // desfecho honesto enquanto o FOV nao for restauravel.
-            if (std::abs(Fov - static_cast<double>(FovNow)) > 0.01) {
-                AnyRejected = true;
-                continue;
-            }
-
-            FSlot& S = Parsed[Idx];
-            S.Filled  = true;
-            S.PosX    = static_cast<float>(PX);
-            S.PosY    = static_cast<float>(PY);
-            S.PosZ    = static_cast<float>(PZ);
-            S.Pitch   = static_cast<float>(Pitch);
-            S.Yaw     = static_cast<float>(Yaw);
-            S.FovYDeg = static_cast<float>(Fov);
-        }
-
-        for (int i = 0; i < kSlotCount; ++i) Slots[i] = Parsed[i];
-        // Um slot recusado nao invalida o arquivo inteiro, mas tambem nao pode virar Ok em
-        // silencio: gravar por cima apagaria a entrada que esta build nao entendeu.
-        State = AnyRejected ? ESidecarState::Incompatible : ESidecarState::Ok;
-        if (AnyRejected)
-            emit Message(tr("Bookmarks: uma ou mais câmeras não puderam ser lidas — arquivo preservado"));
         return true;
     }
 

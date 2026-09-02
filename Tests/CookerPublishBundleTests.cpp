@@ -1,4 +1,4 @@
-// Ramos do publicador de par do cooker (Tools/Cooker/PublishPair.h).
+// Ramos do publicador de bundle do cooker (Tools/Cooker/PublishBundle.h).
 //
 // Existe porque o ramo "primeiro publicado, segundo falhou" NAO e alcancavel de fora do
 // processo: travar um destino antes de rodar a ferramenta faz a falha cair no BACKUP, ja que os
@@ -10,7 +10,7 @@
 // O bug guardado era DESTRUTIVO: o rollback removia os destinos incondicionalmente, entao uma
 // falha no BACKUP — quando nada tinha sido publicado — apagava o par valido.
 
-#include "../Tools/Cooker/PublishPair.h"
+#include "../Tools/Cooker/PublishBundle.h"
 
 #include <cstdio>
 #include <functional>
@@ -91,10 +91,10 @@ int main() {
     // --- 1. Caminho feliz: publica os dois e apaga os backups.
     {
         FFakeFs F = MakeFsWithExistingPair();
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(!R.Error, "feliz: sem erro");
-        Check(R.MeshPublished && R.ScenePublished, "feliz: os dois publicados");
+        Check(R.Published[0] && R.Published[1], "feliz: os dois publicados");
         Check(Has(F, kMeshPath) && Has(F, kScenePath), "feliz: par no destino");
         Check(!Has(F, fs::path(kMeshPath).concat(kTag)), "feliz: backup do mesh removido");
         Check(!Has(F, fs::path(kScenePath).concat(kTag)), "feliz: backup da cena removido");
@@ -105,10 +105,10 @@ int main() {
     {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailOnRename = 0;
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "backup1: reporta erro");
-        Check(!R.MeshBackedUp && !R.MeshPublished && !R.ScenePublished,
+        Check(!R.BackedUp[0] && !R.Published[0] && !R.Published[1],
               "backup1: nada foi publicado");
         Check(Has(F, kMeshPath),  "backup1: .smesh PRESERVADO");
         Check(Has(F, kScenePath), "backup1: .sscene PRESERVADO");
@@ -119,11 +119,11 @@ int main() {
     {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailOnRename = 1;
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "backup2: reporta erro");
-        Check(R.MeshBackedUp && !R.SceneBackedUp, "backup2: so o mesh foi para backup");
-        Check(!R.MeshPublished && !R.ScenePublished, "backup2: nada publicado");
+        Check(R.BackedUp[0] && !R.BackedUp[1], "backup2: so o mesh foi para backup");
+        Check(!R.Published[0] && !R.Published[1], "backup2: nada publicado");
         Check(Has(F, kMeshPath),  "backup2: .smesh restaurado");
         Check(Has(F, kScenePath), "backup2: .sscene intocado");
         Check(!R.RestoreFailed, "backup2: restauracao ok");
@@ -134,11 +134,11 @@ int main() {
     {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailOnRename = 3; // 0,1 = backups; 2 = publish do mesh; 3 = publish da cena
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "publish2: reporta erro");
-        Check(R.MeshBackedUp && R.SceneBackedUp, "publish2: os dois backups aconteceram");
-        Check(R.MeshPublished && !R.ScenePublished,
+        Check(R.BackedUp[0] && R.BackedUp[1], "publish2: os dois backups aconteceram");
+        Check(R.Published[0] && !R.Published[1],
               "publish2: mesh publicado, cena nao (o ramo em questao)");
         Check(Has(F, kMeshPath),  "publish2: .smesh restaurado ao ANTERIOR");
         Check(Has(F, kScenePath), "publish2: .sscene restaurado ao ANTERIOR");
@@ -154,11 +154,11 @@ int main() {
         FFakeFs F;
         F.Files = { kMeshTmp.string(), kSceneTmp.string() };
         F.FailOnRename = 1; // 0 = publish do mesh; 1 = publish da cena
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "vazio: reporta erro");
-        Check(!R.MeshBackedUp && !R.SceneBackedUp, "vazio: nao havia o que salvar");
-        Check(R.MeshPublished && !R.ScenePublished, "vazio: so o mesh saiu");
+        Check(!R.BackedUp[0] && !R.BackedUp[1], "vazio: nao havia o que salvar");
+        Check(R.Published[0] && !R.Published[1], "vazio: so o mesh saiu");
         Check(!Has(F, kMeshPath) && !Has(F, kScenePath),
               "vazio: o mesh publicado foi removido (nao deixa meio par)");
         Check(!R.RestoreFailed, "vazio: nada a restaurar");
@@ -177,8 +177,8 @@ int main() {
                 return std::make_error_code(std::errc::permission_denied);
             return InnerRename(From, To);
         };
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, Ops);
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, Ops);
         Check(static_cast<bool>(R.Error), "restore: reporta erro de publicacao");
         Check(R.RestoreFailed, "restore: sinaliza que a restauracao falhou");
     }
@@ -190,8 +190,8 @@ int main() {
     {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailExistsOn = { kMeshPath.string() };
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "exists1: reporta erro de consulta");
         Check(F.RenameCount == 0, "exists1: NENHUM rename foi tentado");
         Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists1: DESTINOS intocados");
@@ -199,14 +199,14 @@ int main() {
         // e justamente o que colide com a proxima execucao.
         Check(!Has(F, kMeshTmp) && !Has(F, kSceneTmp), "exists1: temporarios removidos");
         Check(!R.CleanupFailed, "exists1: limpeza sem erro");
-        Check(!R.MeshBackedUp && !R.MeshPublished, "exists1: nada marcado como feito");
+        Check(!R.BackedUp[0] && !R.Published[0], "exists1: nada marcado como feito");
     }
     // Mesma coisa para o SEGUNDO destino: a consulta dos dois acontece antes da primeira mutacao.
     {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailExistsOn = { kScenePath.string() };
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "exists2: reporta erro de consulta");
         Check(F.RenameCount == 0, "exists2: nenhum rename tentado (consulta vem antes de tudo)");
         Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists2: destinos intocados");
@@ -218,8 +218,8 @@ int main() {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailExistsOn = { kMeshPath.string() };
         F.FailRemoveOn = { kSceneTmp.string() };
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "exists+lixo: reporta erro de consulta");
         Check(R.CleanupFailed, "exists+lixo: SINALIZA o temporario que ficou");
         Check(Has(F, kSceneTmp), "exists+lixo: o temporario de fato ficou");
@@ -234,10 +234,10 @@ int main() {
         F.Files = { kMeshTmp.string(), kSceneTmp.string() }; // primeira geracao, sem backup
         F.FailOnRename  = 1;                                 // publish da cena falha
         F.FailRemoveOn  = { kMeshPath.string() };            // e o mesh publicado nao sai
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "cleanup: reporta erro");
-        Check(R.MeshPublished && !R.ScenePublished, "cleanup: meio par publicado");
+        Check(R.Published[0] && !R.Published[1], "cleanup: meio par publicado");
         Check(R.CleanupFailed, "cleanup: SINALIZA que a limpeza falhou");
         Check(Has(F, kMeshPath), "cleanup: o meio par de fato ficou no disco");
         Check(!R.RestoreFailed, "cleanup: nao havia backup a restaurar");
@@ -248,17 +248,42 @@ int main() {
     {
         FFakeFs F = MakeFsWithExistingPair();
         F.FailRemoveOn = { fs::path(kMeshPath).concat(kTag).string() };
-        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
-                                                  kTag, F.Ops());
+        const auto R = CookerPublish::PublishBundle({ { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath } },
+                                                    kTag, F.Ops());
         Check(!R.Error, "feliz+lixo: publicou");
         Check(R.CleanupFailed, "feliz+lixo: sinaliza backup nao removido");
         Check(Has(F, fs::path(kMeshPath).concat(kTag)), "feliz+lixo: backup ficou mesmo");
+    }
+
+    // --- 11. TRES artefatos, que e o caso real da cena sintetica (.smesh + .sscene +
+    // .cameras.json). O terceiro falha ao publicar: os dois primeiros ja sairam e precisam ser
+    // desfeitos, senao fica "par novo + camera antiga" — o espelho exato do bug que motivou o
+    // bundle, que era "par antigo + camera nova".
+    {
+        const fs::path CamTmp  = "/x/P.cameras.json.tmp";
+        const fs::path CamPath = "/x/P.cameras.json";
+        FFakeFs F;
+        F.Files = { kMeshTmp.string(), kSceneTmp.string(), CamTmp.string(),
+                    kMeshPath.string(), kScenePath.string(), CamPath.string() };
+        F.FailOnRename = 5; // 0,1,2 = backups; 3,4 = publish do par; 5 = publish da camera
+        const auto R = CookerPublish::PublishBundle(
+            { { kMeshTmp, kMeshPath }, { kSceneTmp, kScenePath }, { CamTmp, CamPath } },
+            kTag, F.Ops());
+        Check(static_cast<bool>(R.Error), "bundle3: reporta erro");
+        Check(R.Published[0] && R.Published[1] && !R.Published[2],
+              "bundle3: os dois primeiros sairam, o terceiro nao");
+        Check(Has(F, kMeshPath) && Has(F, kScenePath) && Has(F, CamPath),
+              "bundle3: os TRES restaurados ao anterior");
+        Check(!Has(F, fs::path(CamPath).concat(kTag)), "bundle3: backup da camera consumido");
+        Check(!Has(F, kMeshTmp) && !Has(F, kSceneTmp) && !Has(F, CamTmp),
+              "bundle3: temporarios removidos");
+        Check(!R.RestoreFailed && !R.CleanupFailed, "bundle3: rollback limpo");
     }
 
     if (Failures > 0) {
         std::fprintf(stderr, "[PUBLISH] %d falha(s)\n", Failures);
         return 1;
     }
-    std::printf("[PUBLISH] ok - 10 cenarios, incluindo os inalcancaveis de fora do processo\n");
+    std::printf("[PUBLISH] ok - 11 cenarios, incluindo os inalcancaveis de fora do processo\n");
     return 0;
 }

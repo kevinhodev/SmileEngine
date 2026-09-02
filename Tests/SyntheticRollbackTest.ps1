@@ -73,7 +73,7 @@ function Invoke-LockedRegen([string] $LockedPath, [string] $Label) {
     if ($Code -ne 3) {
         Fail "$Label : exit $Code, esperado 3 (falha ao publicar). Saida: $($Output.Trim())"
     }
-    if ($Output -notmatch "ERRO ao publicar o par") {
+    if ($Output -notmatch "ERRO ao publicar o bundle") {
         Fail "$Label : nao imprimiu o diagnostico de publicacao. Saida: $($Output.Trim())"
     }
 

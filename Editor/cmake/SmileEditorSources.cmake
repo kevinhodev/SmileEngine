@@ -87,6 +87,7 @@ smile_editor_domain(UI
 )
 
 smile_editor_domain(Scene
+    BookmarkSchema
     CameraBookmarksBridge
     CloudsBridge
     JsonSidecar

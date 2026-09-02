@@ -20,7 +20,7 @@
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/RayTracing/RTTriangle.h"
-#include "PublishPair.h"
+#include "PublishBundle.h"
 
 #include <chrono>
 #include <functional>
@@ -431,10 +431,17 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
     // Isto cobre falha de I/O, nao crash no meio: atomicidade real contra queda exigiria
     // generation id no nome e um manifesto publicado por ultimo, que so vale a pena quando o
     // formato tiver um indice proprio.
-    // Bookmarks ANTES de publicar o par: se falharem, nada foi tocado nos destinos. Depois da
-    // publicacao, uma falha aqui deixaria cena boa sem a regua que o baseline exige.
+    // Bookmark num TEMPORARIO: ele entra na MESMA transacao do par. Escrever direto no destino
+    // truncava um bookmark valido no fopen("wb") e, se o par falhasse depois, deixava "par
+    // antigo + camera nova" — um bundle que nunca existiu junto.
+    const fs::path CamTmp  = fs::path(_OutBase).concat(".cameras.json.tmp");
+    const fs::path CamPath = fs::path(_OutBase).concat(".cameras.json");
     const float Half = 0.5f * static_cast<float>(Side) * _Spacing;
-    if (!WriteCameraBookmarks(fs::path(_OutBase).concat(".cameras.json"), Half)) return 3;
+    if (!WriteCameraBookmarks(CamTmp, Half)) {
+        ScrubTemp(MeshTmp);  // os dois cozidos ja estao no disco; nao ficam para tras
+        ScrubTemp(SceneTmp);
+        return 3;
+    }
 
     // Sufixo UNICO por execucao: um ".old" fixo colide com sobra de uma execucao anterior que
     // caiu no meio, e essa colisao era o gatilho do bug destrutivo.
@@ -442,10 +449,13 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
         static_cast<unsigned long long>(
             std::chrono::steady_clock::now().time_since_epoch().count())) + ".old";
 
-    const CookerPublish::FPublishResult Pub =
-        CookerPublish::PublishPair(MeshTmp, MeshPath, SceneTmp, ScenePath, Tag);
+    const CookerPublish::FPublishResult Pub = CookerPublish::PublishBundle({
+        { MeshTmp,  MeshPath  },
+        { SceneTmp, ScenePath },
+        { CamTmp,   CamPath   },
+    }, Tag);
     if (Pub.Error) {
-        std::printf("[Cooker] ERRO ao publicar o par: %s\n", Pub.Error.message().c_str());
+        std::printf("[Cooker] ERRO ao publicar o bundle: %s\n", Pub.Error.message().c_str());
         if (Pub.RestoreFailed) {
             std::printf("[Cooker] ATENCAO: falha ao restaurar o par anterior. Os arquivos bons\n"
                         "          estao preservados com o sufixo '%s' ao lado do destino.\n",

@@ -397,11 +397,11 @@ set_tests_properties(Smile.SyntheticScene.PublishRollback PROPERTIES
 # Ramos do publicador de par do cooker. Teste C++ porque o ramo "primeiro publicado, segundo
 # falhou" NAO e alcancavel de fora do processo: travar um destino faz a falha cair no backup, ja
 # que os dois backups acontecem antes de qualquer publicacao. Aqui o filesystem e injetado.
-add_executable(SmileCookerPublishPairTests
-    CookerPublishPairTests.cpp
+add_executable(SmileCookerPublishBundleTests
+    CookerPublishBundleTests.cpp
 )
-target_compile_features(SmileCookerPublishPairTests PRIVATE cxx_std_20)
-set_target_properties(SmileCookerPublishPairTests PROPERTIES
+target_compile_features(SmileCookerPublishBundleTests PRIVATE cxx_std_20)
+set_target_properties(SmileCookerPublishBundleTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF
     AUTORCC OFF
@@ -409,10 +409,68 @@ set_target_properties(SmileCookerPublishPairTests PROPERTIES
 )
 
 add_test(
-    NAME Smile.Cooker.PublishPair
-    COMMAND SmileCookerPublishPairTests
+    NAME Smile.Cooker.PublishBundle
+    COMMAND SmileCookerPublishBundleTests
 )
-set_tests_properties(Smile.Cooker.PublishPair PROPERTIES
+set_tests_properties(Smile.Cooker.PublishBundle PROPERTIES
     LABELS "cooker;negative"
     TIMEOUT 60
 )
+
+# Valida o sidecar de bookmarks pelo PARSER REAL do editor. Sem isto, o gate sintetico so
+# passava o .sscene ao loader: remover a geracao do .cameras.json, emitir JSON invalido ou
+# escrever indices errados continuava verde.
+add_executable(SmileBookmarkSidecarTests
+    BookmarkSidecarTests.cpp
+)
+target_compile_features(SmileBookmarkSidecarTests PRIVATE cxx_std_20)
+target_include_directories(SmileBookmarkSidecarTests PRIVATE
+    "${PROJECT_SOURCE_DIR}/Editor/Include"
+)
+# So Qt Core: o BookmarkSchema nao depende de QObject nem do Renderer, que e exatamente o
+# motivo de ele ter sido extraido do bridge.
+target_link_libraries(SmileBookmarkSidecarTests PRIVATE Qt6::Core)
+set_target_properties(SmileBookmarkSidecarTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+foreach(CASE ${SMILE_SYNTHETIC_CASES})
+    string(REPLACE "|" ";" CASE_FIELDS "${CASE}")
+    list(GET CASE_FIELDS 0 SYN_LABEL)
+    add_test(
+        NAME Smile.BookmarkSidecar.Synthetic_${SYN_LABEL}
+        COMMAND SmileBookmarkSidecarTests
+                "${SMILE_SYNTHETIC_DIR}/Synthetic_${SYN_LABEL}.cameras.json"
+                --expect-slots 4
+    )
+    set_tests_properties(Smile.BookmarkSidecar.Synthetic_${SYN_LABEL} PROPERTIES
+        LABELS "scene;synthetic;bookmarks"
+        FIXTURES_REQUIRED SyntheticScene_${SYN_LABEL}
+        TIMEOUT 60
+    )
+endforeach()
+
+# Os sidecars VERSIONADOS das cenas reais tambem passam pelo parser: eles entram no repositorio
+# e vao ser editados a mao, entao um JSON quebrado ali precisa derrubar o gate e nao aparecer
+# so na hora da captura.
+foreach(REAL_SIDECAR
+    "Bistro/BistroExterior"
+    "EmeraldSquare_v4_1/EmeraldSquare_Day"
+    "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS"
+)
+    set(SIDECAR_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${REAL_SIDECAR}.cameras.json")
+    if(EXISTS "${SIDECAR_FILE}")
+        get_filename_component(SIDECAR_NAME "${REAL_SIDECAR}" NAME)
+        add_test(
+            NAME Smile.BookmarkSidecar.${SIDECAR_NAME}
+            COMMAND SmileBookmarkSidecarTests "${SIDECAR_FILE}"
+        )
+        set_tests_properties(Smile.BookmarkSidecar.${SIDECAR_NAME} PROPERTIES
+            LABELS "scene;bookmarks"
+            TIMEOUT 60
+        )
+    endif()
+endforeach()
