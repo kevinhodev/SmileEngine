@@ -19,7 +19,10 @@ namespace SmileEditor {
         Q_PROPERTY(QString      sidecarWarning READ SidecarWarning NOTIFY SlotsChanged)
 
     public:
-        static constexpr int kSlotCount = 4;
+        // Vem do BookmarkSchema: um bump de schema tem de mover leitor E escritor juntos. Com a
+        // constante duplicada aqui, um v2 faria o editor GRAVAR v1 e depois recusar o proprio
+        // arquivo ao recarregar.
+        static constexpr int kSlotCount = BookmarkSchema::kSlotCount;
 
         explicit CameraBookmarksBridge(QObject* parent = nullptr);
 
@@ -59,7 +62,7 @@ namespace SmileEditor {
         bool SaveToDisk();
         // Preserva sidecars ilegiveis em <nome>.bak antes da primeira gravacao.
         bool BackupUnreadableSidecar();
-        static bool ValidSlot(int Slot) { return Slot >= 0 && Slot < kSlotCount; }
+        static bool ValidSlot(int Slot) { return BookmarkSchema::ValidSlot(Slot); }
         float EngineFovYDeg() const;
 
         RendererHandle Renderer;

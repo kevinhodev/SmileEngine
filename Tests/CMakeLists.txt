@@ -461,16 +461,18 @@ foreach(REAL_SIDECAR
     "EmeraldSquare_v4_1/EmeraldSquare_Day"
     "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS"
 )
+    # SEM if(EXISTS): estes sidecars sao VERSIONADOS, entao a ausencia e regressao e nao
+    # ambiente. Registrar condicionalmente faria um checkout sem eles rodar menos testes e
+    # continuar verde — o mesmo gate-que-some-sozinho que as cenas sinteticas ja tiveram. O
+    # executavel devolve exit 3 quando o arquivo nao esta la, que e o diagnostico certo.
     set(SIDECAR_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${REAL_SIDECAR}.cameras.json")
-    if(EXISTS "${SIDECAR_FILE}")
-        get_filename_component(SIDECAR_NAME "${REAL_SIDECAR}" NAME)
-        add_test(
-            NAME Smile.BookmarkSidecar.${SIDECAR_NAME}
-            COMMAND SmileBookmarkSidecarTests "${SIDECAR_FILE}"
-        )
-        set_tests_properties(Smile.BookmarkSidecar.${SIDECAR_NAME} PROPERTIES
-            LABELS "scene;bookmarks"
-            TIMEOUT 60
-        )
-    endif()
+    get_filename_component(SIDECAR_NAME "${REAL_SIDECAR}" NAME)
+    add_test(
+        NAME Smile.BookmarkSidecar.${SIDECAR_NAME}
+        COMMAND SmileBookmarkSidecarTests "${SIDECAR_FILE}"
+    )
+    set_tests_properties(Smile.BookmarkSidecar.${SIDECAR_NAME} PROPERTIES
+        LABELS "scene;bookmarks"
+        TIMEOUT 60
+    )
 endforeach()

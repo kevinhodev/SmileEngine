@@ -13,19 +13,14 @@
 
 namespace SmileEditor {
     namespace {
-        // Versao do SCHEMA do sidecar, independente do kCookedVersion.
-        constexpr int kSchemaVersion = 1;
 
         // Faixas plausiveis. Nao sao gosto: o sidecar e um arquivo de texto que entra no
         // repositorio e vai ser editado a mao, e um pitch de 3000 graus ou um NaN vindo dali
         // viraria uma matriz de view degenerada — que aparece como tela preta ou lixo, longe
         // daqui e sem nada apontando para o arquivo.
-        constexpr double kMaxAbsPosition = 1.0e6; // muito alem de qualquer cena da engine
         // 89, e nao 90: e o clamp da propria FCamera (Camera.cpp, Clamp(..., -89, 89)). Em 90 o
         // forward fica paralelo ao up e a matriz de view degenera — ou seja, aceitar 90 aqui seria
         // aceitar uma pose que a camera nao consegue produzir e nao consegue reproduzir.
-        constexpr double kMaxAbsPitch    = 89.0;
-        constexpr double kMaxAbsYaw      = 3600.0; // yaw acumula voltas; so barra o absurdo
 
         // Le um numero OBRIGATORIO. Chave ausente e erro, e nao zero: o toDouble() sem esta
         // checagem transformava sidecar truncado em pose (0,0,0) — um valor plausivel, gravavel e
@@ -229,7 +224,7 @@ namespace SmileEditor {
         }
 
         QJsonObject Root;
-        Root[QStringLiteral("version")] = kSchemaVersion;
+        Root[QStringLiteral("version")] = BookmarkSchema::kSchemaVersion;
         Root[QStringLiteral("slots")]   = Arr;
 
         // Escrita atomica compartilhada (ver JsonSidecar.h). Esta era a UNICA das cinco copias
