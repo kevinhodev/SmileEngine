@@ -486,6 +486,7 @@ namespace SmileEditor {
             Next.CpuTimings = {
                 Row(QStringLiteral("Listas de draw"),   Cpu.BuildDrawListsMs),
                 Row(QStringLiteral("Culling + sort"),   Cpu.CullSortMs),
+                Row(QStringLiteral("Sort de lote"),     Cpu.BatchSortMs),
                 Row(QStringLiteral("Listas de sombra"), Cpu.ShadowListsMs),
                 Row(QStringLiteral("Submissao"),        Cpu.SubmitMs),
             };

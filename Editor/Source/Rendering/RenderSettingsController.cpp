@@ -284,6 +284,47 @@ namespace SmileEditor {
         return Result;
     }
 
+    // Copia CRUA do FCpuFrameStats do ultimo frame fechado. Nenhuma formatacao aqui: o MCP
+    // publica numeros e o QML e que traduz — se o agente lesse texto da UI, renomear um rotulo
+    // do painel quebraria benchmark.
+    FCpuProfileSnapshot RenderSettingsController::CollectCpuStats(const Smile::Renderer& _Renderer) {
+        const Smile::FCpuFrameStats& S = _Renderer.CpuStats();
+        FCpuProfileSnapshot Out;
+        Out.SourceFrameIndex = S.SourceFrameIndex;
+        Out.BuildDrawListsMs = S.BuildDrawListsMs;
+        Out.CullSortMs       = S.CullSortMs;
+        Out.BatchSortMs      = S.BatchSortMs;
+        Out.ShadowListsMs    = S.ShadowListsMs;
+        Out.SubmitMs         = S.SubmitMs;
+        Out.Renderables      = S.Renderables;
+        Out.DrawItems        = S.DrawItems;
+        Out.VisibleItems     = S.VisibleItems;
+        Out.OccludedItems    = S.OccludedItems;
+        Out.Materials        = S.Materials;
+        Out.Meshes           = S.Meshes;
+        Out.ObjectConstantBytes = S.ObjectConstantBytes;
+        Out.SrvHeapUsed      = S.SrvHeapUsed;
+        Out.SrvHeapHighWater = S.SrvHeapHighWater;
+        Out.SrvHeapCapacity  = S.SrvHeapCapacity;
+        // TODOS os passes, inclusive os zerados: uma serie temporal com conjunto de chaves
+        // variavel obrigaria o agente a tratar ausencia como zero, e ausencia tambem poderia
+        // significar "passe removido". Zero explicito nao tem essa ambiguidade.
+        Out.Passes.reserve(static_cast<int>(Smile::FCpuFrameStats::kPassCount));
+        for (Smile::u32 P = 0; P < Smile::FCpuFrameStats::kPassCount; ++P) {
+            const Smile::FDrawSubmitStats& B = S.Passes[P];
+            FCpuSubmitPassSnapshot Row;
+            Row.Key = QString::fromLatin1(
+                Smile::SubmitPassKey(static_cast<Smile::ESubmitPass>(P)));
+            Row.Considered     = B.Considered;
+            Row.Draws          = B.Draws;
+            Row.MaterialBinds  = B.MaterialBinds;
+            Row.MeshBinds      = B.MeshBinds;
+            Row.SkippedInvalid = B.SkippedInvalid;
+            Out.Passes.push_back(Row);
+        }
+        return Out;
+    }
+
     std::optional<FProfileSnapshot> RenderSettingsController::ProfileSnapshot(
         QString& _Error) const {
         _Error.clear();
@@ -316,6 +357,7 @@ namespace SmileEditor {
         Result.Vram.LocalBudgetBytes   = VM.LocalBudget;
         Result.Vram.NonLocalUsageBytes = VM.NonLocalUsage;
         Result.Settings = CollectSettings(*Access);
+        Result.Cpu      = CollectCpuStats(*Access);
         return Result;
     }
 

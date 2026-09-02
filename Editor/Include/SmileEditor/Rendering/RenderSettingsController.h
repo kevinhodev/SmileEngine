@@ -93,6 +93,45 @@ namespace SmileEditor {
         std::optional<bool> BackgroundThrottleEnabled;
     };
 
+    // Telemetria de CPU do ultimo frame FECHADO. Espelha Smile::FCpuFrameStats em tipos do Qt,
+    // sem formatacao: o MCP serializa numeros crus e quem formata e o QML. Ler texto da UI aqui
+    // perderia precisao e criaria duas fontes de verdade.
+    struct FCpuSubmitPassSnapshot {
+        QString Key;            // chave estavel em ingles (Smile::SubmitPassKey)
+        quint32 Considered     = 0;
+        quint32 Draws          = 0;
+        quint32 MaterialBinds  = 0;
+        quint32 MeshBinds      = 0;
+        quint32 SkippedInvalid = 0;
+    };
+
+    struct FCpuProfileSnapshot {
+        // Frame que ESTES numeros descrevem. Difere do FrameIndex geral, que ja avancou quando
+        // o snapshot e lido — sem isso uma automacao correlacionaria CPU e GPU de frames
+        // diferentes sem perceber.
+        quint64 SourceFrameIndex = 0;
+
+        double BuildDrawListsMs = 0.0;
+        double CullSortMs       = 0.0;
+        double BatchSortMs      = 0.0;
+        double ShadowListsMs    = 0.0;
+        double SubmitMs         = 0.0;
+
+        quint32 Renderables   = 0;
+        quint32 DrawItems     = 0;
+        quint32 VisibleItems  = 0;
+        quint32 OccludedItems = 0;
+        quint32 Materials     = 0;
+        quint32 Meshes        = 0;
+        quint64 ObjectConstantBytes = 0;
+
+        quint32 SrvHeapUsed      = 0;
+        quint32 SrvHeapHighWater = 0;
+        quint32 SrvHeapCapacity  = 0;
+
+        QVector<FCpuSubmitPassSnapshot> Passes;
+    };
+
     struct FProfileSnapshot {
         quint64 FrameIndex = 0;
         double  CpuFps     = 0.0;
@@ -105,6 +144,7 @@ namespace SmileEditor {
         QVector<FProfileTimingSnapshot> AsyncCompute;
         FVideoMemorySnapshot            Vram;
         FRenderSettingsSnapshot         Settings;
+        FCpuProfileSnapshot             Cpu;
     };
 
     struct FProfileConfiguration {
@@ -264,6 +304,7 @@ namespace SmileEditor {
 
     private:
         static FRenderSettingsSnapshot CollectSettings(const Smile::Renderer& Renderer);
+        static FCpuProfileSnapshot     CollectCpuStats(const Smile::Renderer& Renderer);
         static FCameraPoseSnapshot CollectCamera(const Smile::Renderer& Renderer);
         static FSceneObjectSnapshot CollectSceneObject(
             const Smile::FRenderable& Renderable, int Index);

@@ -59,6 +59,50 @@ export interface ProfileTiming {
   rawMilliseconds: number;
 }
 
+/**
+ * Um balde de submissao de CPU. `key` e estavel em ingles e vem do engine
+ * (Smile::SubmitPassKey); os rotulos traduzidos vivem so no painel do editor, entao
+ * benchmark nao quebra quando um rotulo da UI e renomeado.
+ *
+ * `considered` e o que o laco do passe visitou; `draws` e o que virou DrawIndexedInstanced.
+ * A diferenca entre os dois E o filtro daquele passe.
+ */
+export interface CpuSubmitPass {
+  key: string;
+  considered: number;
+  draws: number;
+  materialBinds: number;
+  meshBinds: number;
+  skippedInvalid: number;
+}
+
+export interface CpuProfileStats {
+  /**
+   * Frame que ESTES numeros descrevem. Difere do `frameIndex` de fora, que ja avancou quando
+   * o snapshot e lido — correlacionar CPU com GPU exige este campo, nao aquele.
+   */
+  sourceFrameIndex: number;
+  timingsMs: {
+    buildDrawLists: number;
+    cullSort: number;
+    /** Classificacao por lote do G-buffer: o O(N log N) que a Fase 5 do GPU-driven remove. */
+    batchSort: number;
+    shadowLists: number;
+    submit: number;
+  };
+  scene: {
+    renderables: number;
+    drawItems: number;
+    visibleItems: number;
+    occludedItems: number;
+    materials: number;
+    meshes: number;
+  };
+  objectConstantBytes: number;
+  srvHeap: { used: number; highWater: number; capacity: number };
+  passes: CpuSubmitPass[];
+}
+
 export interface ProfileSnapshot {
   frameIndex: number;
   cpuFps: number;
@@ -76,6 +120,8 @@ export interface ProfileSnapshot {
     nonLocalUsageBytes: number;
   };
   settings: Record<string, unknown>;
+  /** Telemetria de CPU do ultimo frame FECHADO. Ver CpuProfileStats. */
+  cpu: CpuProfileStats;
 }
 
 export interface ProfileConfiguration {
@@ -383,6 +429,15 @@ export class SmileEditorBridge {
     const snapshot = result as Partial<ProfileSnapshot>;
     if (!Array.isArray(snapshot.direct) || !Array.isArray(snapshot.asyncCompute)) {
       throw new Error("Snapshot de perfil sem timestamps de GPU.");
+    }
+    // Mesma exigencia dos timings de GPU: sem o bloco de CPU o snapshot nao serve de regua,
+    // e aceitar silenciosamente produziria benchmark com metade dos eixos faltando.
+    const cpu = snapshot.cpu as Partial<CpuProfileStats> | undefined;
+    if (!cpu || typeof cpu !== "object" ||
+        typeof cpu.sourceFrameIndex !== "number" ||
+        !cpu.timingsMs || typeof cpu.timingsMs !== "object" ||
+        !Array.isArray(cpu.passes)) {
+      throw new Error("Snapshot de perfil sem telemetria de CPU.");
     }
     return snapshot as ProfileSnapshot;
   }

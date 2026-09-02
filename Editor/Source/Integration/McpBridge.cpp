@@ -202,6 +202,56 @@ namespace SmileEditor {
             };
         }
 
+        // Telemetria de CPU: numeros crus, chaves de passe estaveis em ingles. Nada e lido da
+        // StatsBridge — o painel e apenas OUTRO consumidor do mesmo Renderer::CpuStats(), e ler
+        // texto formatado da UI aqui perderia precisao e criaria duas fontes de verdade.
+        //
+        // Uma amostra e uma AMOSTRA: para benchmark, o agente coleta varios frames distintos
+        // depois do aquecimento e calcula mediana/p95/min/max. Um snapshot unico nao e resultado
+        // de performance.
+        QJsonObject SerializeCpuStats(const FCpuProfileSnapshot& _Cpu) {
+            QJsonArray Passes;
+            for (const FCpuSubmitPassSnapshot& P : _Cpu.Passes) {
+                Passes.append(QJsonObject{
+                    { QStringLiteral("key"), P.Key },
+                    { QStringLiteral("considered"), static_cast<double>(P.Considered) },
+                    { QStringLiteral("draws"), static_cast<double>(P.Draws) },
+                    { QStringLiteral("materialBinds"), static_cast<double>(P.MaterialBinds) },
+                    { QStringLiteral("meshBinds"), static_cast<double>(P.MeshBinds) },
+                    { QStringLiteral("skippedInvalid"), static_cast<double>(P.SkippedInvalid) },
+                });
+            }
+            return QJsonObject{
+                // ⚠️ Difere do frameIndex de fora: este e o frame que a amostra descreve, e o
+                // de fora ja avancou. Correlacionar CPU com GPU exige ESTE campo.
+                { QStringLiteral("sourceFrameIndex"),
+                  static_cast<double>(_Cpu.SourceFrameIndex) },
+                { QStringLiteral("timingsMs"), QJsonObject{
+                    { QStringLiteral("buildDrawLists"), _Cpu.BuildDrawListsMs },
+                    { QStringLiteral("cullSort"),       _Cpu.CullSortMs },
+                    { QStringLiteral("batchSort"),      _Cpu.BatchSortMs },
+                    { QStringLiteral("shadowLists"),    _Cpu.ShadowListsMs },
+                    { QStringLiteral("submit"),         _Cpu.SubmitMs },
+                } },
+                { QStringLiteral("scene"), QJsonObject{
+                    { QStringLiteral("renderables"),   static_cast<double>(_Cpu.Renderables) },
+                    { QStringLiteral("drawItems"),     static_cast<double>(_Cpu.DrawItems) },
+                    { QStringLiteral("visibleItems"),  static_cast<double>(_Cpu.VisibleItems) },
+                    { QStringLiteral("occludedItems"), static_cast<double>(_Cpu.OccludedItems) },
+                    { QStringLiteral("materials"),     static_cast<double>(_Cpu.Materials) },
+                    { QStringLiteral("meshes"),        static_cast<double>(_Cpu.Meshes) },
+                } },
+                { QStringLiteral("objectConstantBytes"),
+                  static_cast<double>(_Cpu.ObjectConstantBytes) },
+                { QStringLiteral("srvHeap"), QJsonObject{
+                    { QStringLiteral("used"),      static_cast<double>(_Cpu.SrvHeapUsed) },
+                    { QStringLiteral("highWater"), static_cast<double>(_Cpu.SrvHeapHighWater) },
+                    { QStringLiteral("capacity"),  static_cast<double>(_Cpu.SrvHeapCapacity) },
+                } },
+                { QStringLiteral("passes"), Passes },
+            };
+        }
+
         QJsonObject SerializeProfileSnapshot(const FProfileSnapshot& _Snapshot) {
             return QJsonObject{
                 { QStringLiteral("frameIndex"), static_cast<double>(_Snapshot.FrameIndex) },
@@ -223,6 +273,7 @@ namespace SmileEditor {
                       static_cast<double>(_Snapshot.Vram.NonLocalUsageBytes) },
                 } },
                 { QStringLiteral("settings"), SerializeSettings(_Snapshot.Settings) },
+                { QStringLiteral("cpu"), SerializeCpuStats(_Snapshot.Cpu) },
             };
         }
 

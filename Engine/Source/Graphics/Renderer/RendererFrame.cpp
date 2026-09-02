@@ -974,6 +974,9 @@ namespace Smile {
         CpuStatsBuilding.SrvHeapUsed      = Backend->SRVHeap.UsedSlots();
         CpuStatsBuilding.SrvHeapHighWater = Backend->SRVHeap.HighWaterSlots();
         CpuStatsBuilding.SrvHeapCapacity  = Backend->SRVHeap.CapacitySlots();
+        // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
+        // de ser submetido, que e exatamente o frame que estes numeros descrevem.
+        CpuStatsBuilding.SourceFrameIndex = FrameState->FrameIndex;
         CpuStatsLast = CpuStatsBuilding;
 
         // Avanca o aquecimento e, no frame de captura, grava PNG + manifesto. ANTES do ++ dos

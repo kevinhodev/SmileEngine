@@ -1453,6 +1453,10 @@ namespace Smile {
 
             if (UseTerrain && Terrain.IsLoaded()) {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - terreno");
+                // Sem isto, os draws de terreno contavam em TerrainFallback mas o TEMPO ficava
+                // fora de SubmitMs — nas sombras ele ja entrava, por estar dentro do timer do
+                // CSM. Contagem e tempo passariam a cobrir conjuntos diferentes.
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 Terrain.RenderDepthPrepass(CommandList, Backend->SRVHeap, Modes.GeometricNormalWillRun);
             }
             Backend->DirectProfiler.End(CommandList); // Z-prepass
@@ -1566,6 +1570,10 @@ namespace Smile {
                 // profundidade nao reduz overdraw — so espalha PSO/material/IA. Agrupar
                 // como o CSM ja faz: PSO (two-sided) -> material -> mesh.
                 std::vector<const FVisibleItem*> GBufferOrder;
+                {
+                // Escopo FECHA antes da submissao: e o O(N log N) que a Fase 5 remove, e
+                // diluido em SubmitMs o ganho ficaria invisivel na metrica que deveria prova-lo.
+                FCpuScopeTimer BatchSort(CpuStatsBuilding.BatchSortMs);
                 GBufferOrder.reserve(VisibleScratch.size());
                 for (const FVisibleItem& V : VisibleScratch) {
                     if (!V.Mat->Blend) GBufferOrder.push_back(&V);
@@ -1578,6 +1586,7 @@ namespace Smile {
                               if (a->Mat != b->Mat) return a->Mat < b->Mat;
                               return a->R->Mesh < b->R->Mesh;
                           });
+                } // fim do escopo do sort de lote
 
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 ID3D12PipelineState* CurGeomPSO = nullptr;
@@ -1600,6 +1609,7 @@ namespace Smile {
 
             if (UseTerrain && Terrain.IsLoaded()) {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "G-buffer - terreno");
+                FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 Terrain.RenderGBuffer(CommandList, Backend->SRVHeap);
             }
             Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,

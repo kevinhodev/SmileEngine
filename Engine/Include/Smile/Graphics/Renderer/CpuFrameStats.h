@@ -44,6 +44,23 @@ namespace Smile {
         Count
     };
 
+    // Chave ESTAVEL, em ingles, para consumidores de maquina (MCP). Rotulo traduzido pertence
+    // ao QML: se a automacao dependesse do texto da UI, renomear uma linha do painel quebraria
+    // benchmark, e teriamos duas fontes de verdade.
+    inline const char* SubmitPassKey(ESubmitPass _Pass) {
+        switch (_Pass) {
+            case ESubmitPass::ZPrepassOpaque:  return "zPrepassOpaque";
+            case ESubmitPass::ZPrepassMasked:  return "zPrepassMasked";
+            case ESubmitPass::GBuffer:         return "gbuffer";
+            case ESubmitPass::Translucent:     return "translucent";
+            case ESubmitPass::SunShadows:      return "sunShadows";
+            case ESubmitPass::LocalShadows:    return "localShadows";
+            case ESubmitPass::RainOcclusion:   return "rainOcclusion";
+            case ESubmitPass::TerrainFallback: return "terrainFallback";
+            default:                           return "unknown";
+        }
+    }
+
     inline const char* SubmitPassName(ESubmitPass _Pass) {
         switch (_Pass) {
             case ESubmitPass::ZPrepassOpaque: return "Z-prepass opacos";
@@ -84,6 +101,11 @@ namespace Smile {
         // ataca a SUBMISSAO, e misturar as duas esconderia exatamente o ganho que se quer medir.
         f64 BuildDrawListsMs = 0.0; // laco da cena: ObjectConstants, selecao, bounds do HiZ
         f64 CullSortMs       = 0.0; // frustum + filtro de oclusao + sort front-to-back
+        // Classificacao por lote do G-buffer (filtro de Blend + sort por two-sided/material/mesh).
+        // Campo PROPRIO porque e O(N log N) e e exatamente o trabalho que a Fase 5 remove ao
+        // agrupar por batch na GPU: diluido em CullSortMs ou em SubmitMs, o ganho ficaria
+        // invisivel justamente na metrica que deveria prova-lo.
+        f64 BatchSortMs      = 0.0;
         f64 ShadowListsMs    = 0.0; // montagem das listas de caster (CSM + locais)
         f64 SubmitMs         = 0.0; // soma dos lacos de submissao instrumentados
 
@@ -102,10 +124,15 @@ namespace Smile {
         u32 SrvHeapHighWater = 0;
         u32 SrvHeapCapacity  = 0;
 
+        // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
+        // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
+        // e GPU de frames diferentes sem perceber.
+        u64 SourceFrameIndex = 0;
+
         FDrawSubmitStats Passes[kPassCount];
 
         void ResetFrame() {
-            BuildDrawListsMs = CullSortMs = ShadowListsMs = SubmitMs = 0.0;
+            BuildDrawListsMs = CullSortMs = BatchSortMs = ShadowListsMs = SubmitMs = 0.0;
             DrawItems = VisibleItems = OccludedItems = 0;
             ObjectConstantBytes = 0;
             for (u32 i = 0; i < kPassCount; ++i) Passes[i].Reset();

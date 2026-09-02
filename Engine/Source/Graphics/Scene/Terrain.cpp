@@ -952,6 +952,9 @@ namespace Smile {
                 _Cmd->IASetVertexBuffers(0, 1, &Grids[Lod].VBV);
                 _Cmd->IASetIndexBuffer(&Grids[Lod].IBV);
                 BoundLod = Lod;
+                // Mesmo criterio do FDrawSubmitCache: bind EFETIVO, no ramo que de fato troca
+                // VB/IB. Fora daqui o balde publicaria meshBinds=0 com binds reais acontecendo.
+                if (SubmitStats) ++SubmitStats->MeshBinds;
             }
             _Cmd->DrawIndexedInstanced(Grids[Lod].IndexCount, 1, 0, 0, 0);
             if (SubmitStats) { ++SubmitStats->Draws; ++SubmitStats->Considered; }
