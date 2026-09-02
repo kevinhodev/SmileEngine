@@ -194,8 +194,11 @@ int main() {
                                                   kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "exists1: reporta erro de consulta");
         Check(F.RenameCount == 0, "exists1: NENHUM rename foi tentado");
-        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists1: par intocado");
-        Check(Has(F, kMeshTmp) && Has(F, kSceneTmp), "exists1: temporarios intocados");
+        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists1: DESTINOS intocados");
+        // Os temporarios sao desta execucao: abandona-los seria vazamento silencioso, e a sobra
+        // e justamente o que colide com a proxima execucao.
+        Check(!Has(F, kMeshTmp) && !Has(F, kSceneTmp), "exists1: temporarios removidos");
+        Check(!R.CleanupFailed, "exists1: limpeza sem erro");
         Check(!R.MeshBackedUp && !R.MeshPublished, "exists1: nada marcado como feito");
     }
     // Mesma coisa para o SEGUNDO destino: a consulta dos dois acontece antes da primeira mutacao.
@@ -206,7 +209,21 @@ int main() {
                                                   kTag, F.Ops());
         Check(static_cast<bool>(R.Error), "exists2: reporta erro de consulta");
         Check(F.RenameCount == 0, "exists2: nenhum rename tentado (consulta vem antes de tudo)");
-        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists2: par intocado");
+        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists2: destinos intocados");
+        Check(!Has(F, kMeshTmp) && !Has(F, kSceneTmp), "exists2: temporarios removidos");
+    }
+    // Consulta falha E o temporario nao sai: o vazamento tem de ser SINALIZADO, senao o chamador
+    // conclui que nao sobrou nada.
+    {
+        FFakeFs F = MakeFsWithExistingPair();
+        F.FailExistsOn = { kMeshPath.string() };
+        F.FailRemoveOn = { kSceneTmp.string() };
+        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
+                                                  kTag, F.Ops());
+        Check(static_cast<bool>(R.Error), "exists+lixo: reporta erro de consulta");
+        Check(R.CleanupFailed, "exists+lixo: SINALIZA o temporario que ficou");
+        Check(Has(F, kSceneTmp), "exists+lixo: o temporario de fato ficou");
+        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists+lixo: destinos intocados");
     }
 
     // --- 8. Falha de REMOCAO no rollback. O mesh publicado nao pode ser removido, entao sobra

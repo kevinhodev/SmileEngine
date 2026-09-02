@@ -97,6 +97,20 @@ namespace {
 }
 
 namespace {
+    // Remocao de algo que ESTA execucao criou, com o erro REPORTADO. A propagacao de falha de
+    // limpeza nao pode valer so dentro do PublishPair: a transacao do gerador comeca nas
+    // escritas, e um temporario truncado abandonado em silencio e a sobra que colide depois.
+    bool ScrubTemp(const fs::path& _Path) {
+        std::error_code Ec;
+        fs::remove(_Path, Ec);
+        if (Ec) {
+            std::printf("[Cooker] ATENCAO: nao consegui remover %s: %s\n",
+                        _Path.string().c_str(), Ec.message().c_str());
+            return false;
+        }
+        return true;
+    }
+
     // Escrita verificada. fwrite/fclose sem checagem transformavam disco cheio num par de
     // arquivos truncado com "OK" impresso na tela — e o proximo a ler seria o loader, meses
     // depois, com uma mensagem que nao aponta para aqui.
@@ -116,8 +130,7 @@ namespace {
         const bool Closed = (std::fclose(F) == 0);
         if (!Ok || !Closed) {
             std::printf("[Cooker] ERRO ao escrever %s (disco cheio?)\n", _Path.string().c_str());
-            std::error_code Ec;
-            fs::remove(_Path, Ec); // nao deixa temporario truncado para tras
+            ScrubTemp(_Path); // nao deixa temporario truncado para tras, e avisa se nao conseguir
             return false;
         }
         return true;
@@ -340,8 +353,7 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
                          Materials.data(), Materials.size() * sizeof(Smile::SSceneMaterial),
                          Renderables.data(),
                          Renderables.size() * sizeof(Smile::SSceneRenderable))) {
-        std::error_code Ec;
-        fs::remove(MeshTmp, Ec); // o par nao sai pela metade
+        ScrubTemp(MeshTmp); // o par nao sai pela metade, e o residuo nao fica mudo
         return 3;
     }
 

@@ -75,12 +75,21 @@ namespace CookerPublish {
         const fs::path MeshOld  = fs::path(_MeshPath).concat(_BackupTag);
         const fs::path SceneOld = fs::path(_ScenePath).concat(_BackupTag);
 
-        // Consulta os DOIS destinos ANTES de qualquer mutacao. Erro de consulta aborta com o
-        // disco intacto: adivinhar "nao existe" aqui e o que levaria a sobrescrever sem backup.
+        // Limpeza de algo que ESTA execucao criou. Erro nao e ignorado: temporario abandonado em
+        // silencio e a sobra que colide com a proxima execucao.
+        auto Scrub = [&](const fs::path& _P) { if (_Ops.Remove(_P)) R.CleanupFailed = true; };
+
+        // Consulta os DOIS destinos ANTES de qualquer mutacao. Erro de consulta aborta sem tocar
+        // nos DESTINOS — adivinhar "nao existe" aqui e o que levaria a sobrescrever sem backup —,
+        // mas os temporarios sao desta execucao e saem junto: deixa-los seria vazamento silencioso.
         bool HadMesh = false, HadScene = false;
         R.Error = _Ops.Exists(_MeshPath, HadMesh);
         if (!R.Error) R.Error = _Ops.Exists(_ScenePath, HadScene);
-        if (R.Error) return R; // nada foi tocado
+        if (R.Error) {
+            Scrub(_MeshTmp);
+            Scrub(_SceneTmp);
+            return R; // destinos intactos; temporarios removidos
+        }
 
         if (HadMesh) {
             R.Error = _Ops.Rename(_MeshPath, MeshOld);
@@ -100,7 +109,6 @@ namespace CookerPublish {
             // Falha de remocao NAO e ignorada: sem isso, um meio par publicado que nao pode ser
             // removido ficava no disco com RestoreFailed=false, ou seja, o resultado dizia que
             // estava tudo desfeito.
-            auto Scrub = [&](const fs::path& _P) { if (_Ops.Remove(_P)) R.CleanupFailed = true; };
             if (R.MeshPublished)  Scrub(_MeshPath);
             if (R.ScenePublished) Scrub(_ScenePath);
             Scrub(_MeshTmp);
