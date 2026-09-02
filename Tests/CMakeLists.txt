@@ -320,9 +320,10 @@ endforeach()
 # verde: a suite so exercitava os tres caminhos VALIDOS. Cada caso abaixo corresponde a um bug
 # real que foi corrigido, e o teste existe para ele nao voltar.
 #
-# WILL_FAIL cobre "sai != 0"; o PASS_REGULAR_EXPRESSION cobriria a mensagem, mas o cooker imprime
-# em stdout e o ctest ja trata o exit code como o contrato — o que importa aqui e nao produzir
-# arquivo e nao sair com exito.
+# Cada caso roda por SyntheticRejectTest.ps1, que confere o contrato INTEIRO: exit exatamente 2,
+# diagnostico impresso e nenhuma saida escrita ou removida. O WILL_FAIL do ctest provaria apenas
+# "retorno != 0" — e com sentinelas no destino um caso passava com os arquivos intactos no lugar,
+# ou seja, o gate nao distinguia "recusou" de "recusou e sujou".
 set(SMILE_SYNTHETIC_BAD_CASES
     # nome|argumentos
     "TessZero|--tess|0"                       # gerava AABB invertida e imprimia OK
@@ -345,15 +346,20 @@ foreach(BAD ${SMILE_SYNTHETIC_BAD_CASES})
     list(GET BAD_FIELDS 0 BAD_NAME)
     list(GET BAD_FIELDS 1 BAD_FLAG)
     list(GET BAD_FIELDS 2 BAD_VALUE)
+    # Wrapper em vez de WILL_FAIL: aquele prova so "retorno != 0". Com sentinelas no destino,
+    # um caso passava E os arquivos permaneciam — falso positivo contra o contrato declarado
+    # ("exit 2 e zero arquivos"). O script confere exit exato, diagnostico e saidas intocadas.
     add_test(
         NAME Smile.SyntheticScene.Reject.${BAD_NAME}
-        COMMAND SmileCooker --synthetic
-                "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/${BAD_NAME}"
-                ${BAD_FLAG} ${BAD_VALUE}
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/SyntheticRejectTest.ps1"
+                -Cooker "$<TARGET_FILE:SmileCooker>"
+                -WorkDir "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject"
+                -CaseName ${BAD_NAME}
+                -BadArgsCsv "${BAD_FLAG},${BAD_VALUE}"
     )
     set_tests_properties(Smile.SyntheticScene.Reject.${BAD_NAME} PROPERTIES
         LABELS "scene;synthetic;negative"
-        WILL_FAIL TRUE
         TIMEOUT 60
     )
 endforeach()
@@ -361,13 +367,15 @@ endforeach()
 # Dois posicionais: o modo sintetico consumia so o primeiro e ignorava o resto em silencio.
 add_test(
     NAME Smile.SyntheticScene.Reject.ExtraPositional
-    COMMAND SmileCooker --synthetic
-            "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/A"
-            "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/B"
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/SyntheticRejectTest.ps1"
+            -Cooker "$<TARGET_FILE:SmileCooker>"
+            -WorkDir "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject"
+            -CaseName ExtraPositional
+            -BadArgsCsv "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/Extra"
 )
 set_tests_properties(Smile.SyntheticScene.Reject.ExtraPositional PROPERTIES
     LABELS "scene;synthetic;negative"
-    WILL_FAIL TRUE
     TIMEOUT 60
 )
 
@@ -384,4 +392,27 @@ add_test(
 set_tests_properties(Smile.SyntheticScene.PublishRollback PROPERTIES
     LABELS "scene;synthetic;negative;integration"
     TIMEOUT 120
+)
+
+# Ramos do publicador de par do cooker. Teste C++ porque o ramo "primeiro publicado, segundo
+# falhou" NAO e alcancavel de fora do processo: travar um destino faz a falha cair no backup, ja
+# que os dois backups acontecem antes de qualquer publicacao. Aqui o filesystem e injetado.
+add_executable(SmileCookerPublishPairTests
+    CookerPublishPairTests.cpp
+)
+target_compile_features(SmileCookerPublishPairTests PRIVATE cxx_std_20)
+set_target_properties(SmileCookerPublishPairTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.Cooker.PublishPair
+    COMMAND SmileCookerPublishPairTests
+)
+set_tests_properties(Smile.Cooker.PublishPair PROPERTIES
+    LABELS "cooker;negative"
+    TIMEOUT 60
 )

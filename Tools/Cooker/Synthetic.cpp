@@ -20,8 +20,10 @@
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/RayTracing/RTTriangle.h"
+#include "PublishPair.h"
 
 #include <chrono>
+#include <functional>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -351,57 +353,23 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
     // Isto cobre falha de I/O, nao crash no meio: atomicidade real contra queda exigiria
     // generation id no nome e um manifesto publicado por ultimo, que so vale a pena quando o
     // formato tiver um indice proprio.
-    // Sufixo UNICO por execucao. Um ".old" fixo colide com sobra de execucao anterior que tenha
-    // caido no meio, e a colisao virava o pior caso possivel: o backup falhava, nada era
-    // publicado, e o rollback ainda assim apagava o par valido de destino.
+    // Sufixo UNICO por execucao: um ".old" fixo colide com sobra de uma execucao anterior que
+    // caiu no meio, e essa colisao era o gatilho do bug destrutivo.
     const std::string Tag = "." + std::to_string(
         static_cast<unsigned long long>(
             std::chrono::steady_clock::now().time_since_epoch().count())) + ".old";
-    const fs::path MeshOld  = fs::path(_OutBase).concat(".smesh").concat(Tag);
-    const fs::path SceneOld = fs::path(_OutBase).concat(".sscene").concat(Tag);
-    std::error_code Ec, Ignored;
 
-    // Estado do que REALMENTE aconteceu. Sem isto o rollback agia por intencao e nao por fato:
-    // removia destino que esta execucao nunca publicou e restaurava backup que nunca criou.
-    bool MeshBackedUp = false, SceneBackedUp = false;
-    bool MeshPublished = false, ScenePublished = false;
-
-    if (fs::exists(MeshPath, Ignored)) {
-        fs::rename(MeshPath, MeshOld, Ec);
-        MeshBackedUp = !Ec;
-    }
-    if (!Ec && fs::exists(ScenePath, Ignored)) {
-        fs::rename(ScenePath, SceneOld, Ec);
-        SceneBackedUp = !Ec;
-    }
-    if (!Ec) { fs::rename(MeshTmp, MeshPath, Ec);   MeshPublished  = !Ec; }
-    if (!Ec) { fs::rename(SceneTmp, ScenePath, Ec); ScenePublished = !Ec; }
-
-    if (Ec) {
-        std::printf("[Cooker] ERRO ao publicar o par: %s\n", Ec.message().c_str());
-        // So desfaz o que ESTA execucao fez. Remover incondicionalmente destruia o par valido
-        // quando a falha era no proprio backup.
-        if (MeshPublished)  fs::remove(MeshPath, Ignored);
-        if (ScenePublished) fs::remove(ScenePath, Ignored);
-        fs::remove(MeshTmp, Ignored);
-        fs::remove(SceneTmp, Ignored);
-
-        // Restauracao CONFERIDA: se ela falhar, o backup e o unico dado bom que sobrou e o
-        // usuario precisa saber onde ele esta — silenciar aqui perderia o arquivo de vez.
-        bool Restored = true;
-        std::error_code R;
-        if (MeshBackedUp)  { fs::rename(MeshOld, MeshPath, R);   if (R) Restored = false; }
-        if (SceneBackedUp) { fs::rename(SceneOld, ScenePath, R); if (R) Restored = false; }
-        if (!Restored) {
+    const CookerPublish::FPublishResult Pub =
+        CookerPublish::PublishPair(MeshTmp, MeshPath, SceneTmp, ScenePath, Tag);
+    if (Pub.Error) {
+        std::printf("[Cooker] ERRO ao publicar o par: %s\n", Pub.Error.message().c_str());
+        if (Pub.RestoreFailed) {
             std::printf("[Cooker] ATENCAO: falha ao restaurar o par anterior. Os arquivos bons\n"
-                        "          estao preservados em:\n            %s\n            %s\n",
-                        MeshOld.string().c_str(), SceneOld.string().c_str());
+                        "          estao preservados com o sufixo '%s' ao lado do destino.\n",
+                        Tag.c_str());
         }
         return 3;
     }
-
-    if (MeshBackedUp)  fs::remove(MeshOld, Ignored);
-    if (SceneBackedUp) fs::remove(SceneOld, Ignored);
 
     std::printf("[Cooker] Escrito: %s\n", MeshPath.string().c_str());
     std::printf("[Cooker] Escrito: %s\n", ScenePath.string().c_str());
