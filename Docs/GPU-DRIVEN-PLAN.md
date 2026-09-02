@@ -583,8 +583,30 @@ contra assets incompatíveis.
 - registrar draws potenciais/executadas, bindings, renderables, materiais, meshes e bytes de object
   constants;
 - expor ocupação/high-water mark do SRV heap;
-- criar gerador ou modo de cena sintética com 10k, 100k e 1M instâncias, preservando geometria
-  compartilhada e variação controlável de materiais;
+- ~~criar gerador ou modo de cena sintética com 10k, 100k e 1M instâncias, preservando geometria
+  compartilhada e variação controlável de materiais~~ — **feito**: `SmileCooker --synthetic`
+  ([`Tools/Cooker/Synthetic.cpp`](../Tools/Cooker/Synthetic.cpp)), com `--instances`, `--meshes`,
+  `--materials`, `--masked-percent`, `--tess` e `--spacing`. Gera um cozido v8 em vez de povoar a
+  cena em runtime, para a sintética entrar pelo **mesmo** caminho de load das reais — loader,
+  testes, painel e `profile_snapshot` não sabem que ela é sintética. As três escalas carregam
+  pelo harness real (`Smile.CookedSceneLoad.Synthetic_*`), com todas as referências e index
+  buffers validados: 1M em **163 ms** de leitura de CPU.
+
+  **Custo de GPU por instância** — o que o gate pede documentado. As cinco estruturas de
+  `SceneCapacityFor(N)` (folga de N/16, mínimo 64):
+
+  | N | capacidade | ObjectCB | TLAS desc | InstanceGeo | HiZ bounds | total |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 10k | 10.625 | 5,2 MB | 1,3 MB | 1,0 MB | 0,8 MB | **8,3 MB** |
+  | 100k | 106.250 | 51,9 MB | 13,0 MB | 10,1 MB | 7,7 MB | **82,7 MB** |
+  | 1M | 1.062.500 | 518,8 MB | 129,7 MB | 101,3 MB | 77,0 MB | **826,8 MB** |
+
+  Sem contar a AS da TLAS em si, os BLAS nem os alvos de render. **O `ObjectCB` sozinho é 63% do
+  custo por instância em 1M** — 256 B por objeto × 2 frames em voo — e é exatamente a estrutura
+  que as tabelas paginadas da Fase 4 substituem por páginas sujas. Este é o número a bater.
+
+  ⚠️ Só o caminho de CPU está verificado. Se 1M **renderiza** na 3060 Ti depende de 826 MB de
+  estruturas por instância caberem junto do resto, e isso exige o editor;
 - fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas;
 - capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.
 

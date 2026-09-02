@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -292,19 +293,54 @@ static bool LooksGlass(const std::vector<std::string>& toks) {
 }
 
 // ----------------------------------------------------------------------------
+// Definido em Synthetic.cpp. Sem header proprio: e o unico ponto de contato entre os dois TUs.
+int GenerateSyntheticScene(const fs::path& OutBase, uint32_t Instances, uint32_t MeshCount,
+                           uint32_t MaterialCount, uint32_t MaskedPercent, float Spacing,
+                           uint32_t BaseTess);
+
 int main(int argc, char** argv) {
     // --opaque-glass: vidro cooka OPACO (entra no G-buffer -> reflexoes RT pintam nele) em vez
     // de translucido. P/ cenas de casca oca (Emerald Square: predios vazios atras da janela);
     // cenas com interior real atras do vidro (Bistro) ficam no default translucido.
     bool opaqueGlass = false;
+    // --synthetic: nao ha FBX de entrada; o positional[0] vira a SAIDA. Ver Synthetic.cpp para
+    // o porque de gerar um cozido em vez de povoar a cena em runtime.
+    bool synthetic     = false;
+    uint32_t synInstances = 10000, synMeshes = 8, synMaterials = 16;
+    uint32_t synMaskedPct = 25, synTess = 4;
+    float    synSpacing   = 3.0f;
+
+    auto readU32 = [&](int& _i) -> uint32_t {
+        if (_i + 1 >= argc) return 0;
+        return static_cast<uint32_t>(std::strtoul(argv[++_i], nullptr, 10));
+    };
+
     std::vector<fs::path> positional;
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--opaque-glass") { opaqueGlass = true; continue; }
+        const std::string a = argv[i];
+        if (a == "--opaque-glass")   { opaqueGlass = true; continue; }
+        if (a == "--synthetic")      { synthetic = true; continue; }
+        if (a == "--instances")      { synInstances = readU32(i); continue; }
+        if (a == "--meshes")         { synMeshes    = readU32(i); continue; }
+        if (a == "--materials")      { synMaterials = readU32(i); continue; }
+        if (a == "--masked-percent") { synMaskedPct = readU32(i); continue; }
+        if (a == "--tess")           { synTess      = readU32(i); continue; }
+        if (a == "--spacing") {
+            if (i + 1 < argc) synSpacing = std::strtof(argv[++i], nullptr);
+            continue;
+        }
         positional.emplace_back(argv[i]);
     }
     if (positional.empty()) {
         std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao] [--opaque-glass]\n");
+        std::printf("     SmileCooker --synthetic <saida_sem_extensao>\n");
+        std::printf("       [--instances N] [--meshes M] [--materials K]\n");
+        std::printf("       [--masked-percent P] [--tess T] [--spacing S]\n");
         return 1;
+    }
+    if (synthetic) {
+        return GenerateSyntheticScene(positional[0], synInstances, synMeshes, synMaterials,
+                                      synMaskedPct, synSpacing, synTess);
     }
     fs::path inPath = positional[0];
     fs::path sceneDir = inPath.parent_path();

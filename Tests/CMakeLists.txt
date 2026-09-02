@@ -232,6 +232,12 @@ foreach(SCENE
     "BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE"
     "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN"
     "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS"
+    # Sinteticas da regua de escala. Geradas por "SmileCooker --synthetic", nao cozidas de FBX,
+    # entao NAO entram no Scenes.cook.json nem no -Verify: nao ha fonte cujo hash registrar.
+    # So sao registradas quando existem na arvore, como as demais.
+    "Synthetic/Synthetic_10k"
+    "Synthetic/Synthetic_100k"
+    "Synthetic/Synthetic_1M"
 )
     set(SCENE_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${SCENE}.sscene")
     if(EXISTS "${SCENE_FILE}")

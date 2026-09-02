@@ -6,6 +6,7 @@ set(UFBX_DIR ${CMAKE_SOURCE_DIR}/Engine/ThirdParty/ufbx)
 
 add_executable(SmileCooker
     main.cpp
+    Synthetic.cpp
     ${UFBX_DIR}/ufbx.c
 )
 
