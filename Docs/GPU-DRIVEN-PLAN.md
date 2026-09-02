@@ -592,20 +592,40 @@ contra assets incompatíveis.
   pelo harness real (`Smile.CookedSceneLoad.Synthetic_*`), com todas as referências e index
   buffers validados: 1M em **163 ms** de leitura de CPU.
 
-  **Custo de GPU por instância** — o que o gate pede documentado. As cinco estruturas de
-  `SceneCapacityFor(N)` (folga de N/16, mínimo 64):
+  As cenas são geradas **no diretório de build**, por uma fixture do ctest
+  (`Smile.SyntheticScene.Generate.*`), e não em `Assets/Scenes/`. Registrar por `if(EXISTS)`
+  sobre um diretório ignorado fazia o gate depender de arquivos locais: num checkout limpo os
+  três testes sumiam em silêncio e a suíte seguia verde com menos testes — um gate que
+  desaparece sozinho não é gate. A receita (contagens e flags) fica versionada no
+  `Tests/CMakeLists.txt`, e as mesmas contagens vão ao harness como `--expect-*`, para o teste
+  provar a escala anunciada em vez de conferir o arquivo consigo mesmo.
 
-  | N | capacidade | ObjectCB | TLAS desc | InstanceGeo | HiZ bounds | total |
-  |---:|---:|---:|---:|---:|---:|---:|
-  | 10k | 10.625 | 5,2 MB | 1,3 MB | 1,0 MB | 0,8 MB | **8,3 MB** |
-  | 100k | 106.250 | 51,9 MB | 13,0 MB | 10,1 MB | 7,7 MB | **82,7 MB** |
-  | 1M | 1.062.500 | 518,8 MB | 129,7 MB | 101,3 MB | 77,0 MB | **826,8 MB** |
+  **Custo de GPU por instância** — o que o gate pede documentado. São **cinco** estruturas
+  dimensionadas por `SceneCapacityFor(N)` (folga de N/16, mínimo 64), e o comentário no topo de
+  [`Scene.h`](../Engine/Include/Smile/Scene/Scene.h#L18) as enumera. Custo por entrada de
+  capacidade:
 
-  Sem contar a AS da TLAS em si, os BLAS nem os alvos de render. **O `ObjectCB` sozinho é 63% do
-  custo por instância em 1M** — 256 B por objeto × 2 frames em voo — e é exatamente a estrutura
-  que as tabelas paginadas da Fase 4 substituem por páginas sujas. Este é o número a bater.
+  | Estrutura | por entrada | de onde vem |
+  |---|---:|---|
+  | `ObjectCB` | 512 B | 256 B × `kFramesInFlight` (2) |
+  | TemporalMotion | 256 B | `FTemporalInstanceTransformGPU` (128 B) × 2 frames |
+  | TLAS uploads | 128 B | `D3D12_RAYTRACING_INSTANCE_DESC` (64 B) × 2 slots |
+  | `InstanceGeo` | 100 B | `FRTInstanceGeo` |
+  | HiZ | 76 B | bounds 32 B × 2 + resultado 4 B + readback 4 B × 2 |
+  | | **1.072 B** | |
 
-  ⚠️ Só o caminho de CPU está verificado. Se 1M **renderiza** na 3060 Ti depende de 826 MB de
+  | N | capacidade | ObjectCB | TemporalMotion | TLAS | InstanceGeo | HiZ | total |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 10k | 10.625 | 5,2 MiB | 2,6 MiB | 1,3 MiB | 1,0 MiB | 0,8 MiB | **10,9 MiB** |
+  | 100k | 106.250 | 51,9 MiB | 25,9 MiB | 13,0 MiB | 10,1 MiB | 7,7 MiB | **108,6 MiB** |
+  | 1M | 1.062.500 | 518,8 MiB | 259,4 MiB | 129,7 MiB | 101,3 MiB | 77,0 MiB | **1.086,2 MiB** |
+
+  Sem contar a AS da TLAS em si, o scratch, os BLAS nem os alvos de render. **O `ObjectCB` é
+  47,8% do custo por instância** — e junto com o TemporalMotion, que também é matriz por
+  instância por frame, os dois somam 71,6%. Ambos são o que as tabelas paginadas da Fase 4
+  substituem por páginas sujas. É o número a bater.
+
+  ⚠️ Só o caminho de CPU está verificado. Se 1M **renderiza** na 3060 Ti depende de 1,06 GiB de
   estruturas por instância caberem junto do resto, e isso exige o editor;
 - fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas;
 - capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.

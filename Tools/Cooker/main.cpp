@@ -23,6 +23,7 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <cerrno>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -310,9 +311,43 @@ int main(int argc, char** argv) {
     uint32_t synMaskedPct = 25, synTess = 4;
     float    synSpacing   = 3.0f;
 
-    auto readU32 = [&](int& _i) -> uint32_t {
-        if (_i + 1 >= argc) return 0;
-        return static_cast<uint32_t>(std::strtoul(argv[++_i], nullptr, 10));
+    // strtoul/strtof sem checar end pointer aceitam "abc" (vira 0), "12x" (vira 12) e estouro
+    // silencioso — e um 0 assim chegava ao gerador como parametro legitimo. Aqui a conversao
+    // precisa consumir o argumento INTEIRO e caber na faixa; erro aborta em vez de virar default.
+    bool argError = false;
+    auto readU32 = [&](int& _i, const char* _Flag) -> uint32_t {
+        if (_i + 1 >= argc) {
+            std::printf("[Cooker] ERRO: %s exige um valor\n", _Flag);
+            argError = true;
+            return 0;
+        }
+        const char* S = argv[++_i];
+        char* End = nullptr;
+        errno = 0;
+        const unsigned long V = std::strtoul(S, &End, 10);
+        if (End == S || *End != '\0' || errno == ERANGE || V > 0xFFFFFFFFul) {
+            std::printf("[Cooker] ERRO: valor invalido para %s: '%s'\n", _Flag, S);
+            argError = true;
+            return 0;
+        }
+        return static_cast<uint32_t>(V);
+    };
+    auto readF32 = [&](int& _i, const char* _Flag) -> float {
+        if (_i + 1 >= argc) {
+            std::printf("[Cooker] ERRO: %s exige um valor\n", _Flag);
+            argError = true;
+            return 0.0f;
+        }
+        const char* S = argv[++_i];
+        char* End = nullptr;
+        errno = 0;
+        const float V = std::strtof(S, &End);
+        if (End == S || *End != '\0' || errno == ERANGE || !std::isfinite(V)) {
+            std::printf("[Cooker] ERRO: valor invalido para %s: '%s'\n", _Flag, S);
+            argError = true;
+            return 0.0f;
+        }
+        return V;
     };
 
     std::vector<fs::path> positional;
@@ -320,17 +355,15 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--opaque-glass")   { opaqueGlass = true; continue; }
         if (a == "--synthetic")      { synthetic = true; continue; }
-        if (a == "--instances")      { synInstances = readU32(i); continue; }
-        if (a == "--meshes")         { synMeshes    = readU32(i); continue; }
-        if (a == "--materials")      { synMaterials = readU32(i); continue; }
-        if (a == "--masked-percent") { synMaskedPct = readU32(i); continue; }
-        if (a == "--tess")           { synTess      = readU32(i); continue; }
-        if (a == "--spacing") {
-            if (i + 1 < argc) synSpacing = std::strtof(argv[++i], nullptr);
-            continue;
-        }
+        if (a == "--instances")      { synInstances = readU32(i, "--instances"); continue; }
+        if (a == "--meshes")         { synMeshes    = readU32(i, "--meshes"); continue; }
+        if (a == "--materials")      { synMaterials = readU32(i, "--materials"); continue; }
+        if (a == "--masked-percent") { synMaskedPct = readU32(i, "--masked-percent"); continue; }
+        if (a == "--tess")           { synTess      = readU32(i, "--tess"); continue; }
+        if (a == "--spacing")        { synSpacing   = readF32(i, "--spacing"); continue; }
         positional.emplace_back(argv[i]);
     }
+    if (argError) return 2;
     if (positional.empty()) {
         std::printf("Uso: SmileCooker <entrada.fbx> [saida_sem_extensao] [--opaque-glass]\n");
         std::printf("     SmileCooker --synthetic <saida_sem_extensao>\n");

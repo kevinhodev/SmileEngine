@@ -93,13 +93,70 @@ namespace {
     }
 }
 
+namespace {
+    // Escrita verificada. fwrite/fclose sem checagem transformavam disco cheio num par de
+    // arquivos truncado com "OK" impresso na tela — e o proximo a ler seria o loader, meses
+    // depois, com uma mensagem que nao aponta para aqui.
+    bool WriteAllChecked(const fs::path& _Path, const void* _Header, size_t _HeaderBytes,
+                         const void* _A, size_t _ABytes, const void* _B, size_t _BBytes) {
+        FILE* F = std::fopen(_Path.string().c_str(), "wb");
+        if (!F) {
+            std::printf("[Cooker] ERRO ao abrir %s\n", _Path.string().c_str());
+            return false;
+        }
+        auto Put = [&](const void* _Data, size_t _Bytes) {
+            return _Bytes == 0 || std::fwrite(_Data, 1, _Bytes, F) == _Bytes;
+        };
+        const bool Ok = Put(_Header, _HeaderBytes) && Put(_A, _ABytes) && Put(_B, _BBytes);
+        // fclose PRECISA ser checado: e nele que o buffer do stdio e drenado, entao um disco
+        // cheio costuma falhar aqui e nao no fwrite.
+        const bool Closed = (std::fclose(F) == 0);
+        if (!Ok || !Closed) {
+            std::printf("[Cooker] ERRO ao escrever %s (disco cheio?)\n", _Path.string().c_str());
+            std::error_code Ec;
+            fs::remove(_Path, Ec); // nao deixa temporario truncado para tras
+            return false;
+        }
+        return true;
+    }
+}
+
 // Declarado em main.cpp; mantido fora de header proprio porque e o unico ponto de contato.
 int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32_t _MeshCount,
                            uint32_t _MaterialCount, uint32_t _MaskedPercent, float _Spacing,
                            uint32_t _BaseTess) {
+    // Validacao AQUI e nao so no CLI: o gerador e quem conhece o contrato, e um chamador futuro
+    // (script, teste, outro modo) nao deve poder produzir cozido invalido. Com --tess 0 a grade
+    // saia sem area, a AABB nascia invertida e o cooker imprimia OK — o loader e que recusava
+    // depois, com uma mensagem que nao aponta para o parametro culpado.
     if (_Instances == 0 || _MeshCount == 0 || _MaterialCount == 0) {
-        std::printf("[Cooker] ERRO: instances/meshes/materials precisam ser > 0\n");
+        std::printf("[Cooker] ERRO: --instances/--meshes/--materials precisam ser > 0\n");
         return 2;
+    }
+    if (_BaseTess == 0) {
+        std::printf("[Cooker] ERRO: --tess precisa ser >= 1 (0 gera malha sem area)\n");
+        return 2;
+    }
+    if (_MaskedPercent > 100u) {
+        std::printf("[Cooker] ERRO: --masked-percent precisa estar em [0,100]\n");
+        return 2;
+    }
+    if (!std::isfinite(_Spacing) || _Spacing <= 0.0f) {
+        std::printf("[Cooker] ERRO: --spacing precisa ser finito e > 0\n");
+        return 2;
+    }
+
+    // fopen nao cria diretorio. Garantir aqui e nao no chamador: o destino natural desta cena e
+    // um diretorio de build recem-criado, e exigir que quem chama o prepare seria uma pegadinha
+    // que so aparece na primeira execucao limpa.
+    if (_OutBase.has_parent_path()) {
+        std::error_code Ec;
+        fs::create_directories(_OutBase.parent_path(), Ec);
+        if (Ec && !fs::exists(_OutBase.parent_path())) {
+            std::printf("[Cooker] ERRO ao criar %s: %s\n",
+                        _OutBase.parent_path().string().c_str(), Ec.message().c_str());
+            return 3;
+        }
     }
 
     std::vector<Smile::SMeshEntry>      Entries;
@@ -207,31 +264,48 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
                 static_cast<double>(_Instances) / _MeshCount, Side, Side, Side, _Spacing);
     std::printf("[Cooker] Geo: %.1f MB | Cena: %.1f MB\n", GeoMB, SceneMB);
 
-    {
-        fs::path P = _OutBase; P += ".smesh";
-        FILE* F = std::fopen(P.string().c_str(), "wb");
-        if (!F) { std::printf("[Cooker] ERRO ao abrir %s\n", P.string().c_str()); return 3; }
-        Smile::SMeshHeader H{ Smile::kSMeshMagic, Smile::kCookedVersion,
-                              static_cast<uint32_t>(Entries.size()), 0 };
-        std::fwrite(&H, sizeof(H), 1, F);
-        std::fwrite(Entries.data(), sizeof(Smile::SMeshEntry), Entries.size(), F);
-        std::fwrite(Geo.data(), 1, Geo.size(), F);
-        std::fclose(F);
-        std::printf("[Cooker] Escrito: %s\n", P.string().c_str());
+    // Publicacao ATOMICA do par. Os dois arquivos so fazem sentido juntos — o .sscene indexa as
+    // malhas do .smesh —, entao escrever direto no destino permitia um .smesh novo ao lado de um
+    // .sscene antigo se a segunda escrita falhasse. Grava em temporarios, confere as duas, e so
+    // entao renomeia.
+    const fs::path MeshPath  = fs::path(_OutBase).concat(".smesh");
+    const fs::path ScenePath = fs::path(_OutBase).concat(".sscene");
+    const fs::path MeshTmp   = fs::path(_OutBase).concat(".smesh.tmp");
+    const fs::path SceneTmp  = fs::path(_OutBase).concat(".sscene.tmp");
+
+    const Smile::SMeshHeader MeshHeader{ Smile::kSMeshMagic, Smile::kCookedVersion,
+                                         static_cast<uint32_t>(Entries.size()), 0 };
+    const Smile::SSceneHeader SceneHeader{ Smile::kSSceneMagic, Smile::kCookedVersion,
+                                           static_cast<uint32_t>(Materials.size()),
+                                           static_cast<uint32_t>(Renderables.size()) };
+
+    if (!WriteAllChecked(MeshTmp, &MeshHeader, sizeof(MeshHeader),
+                         Entries.data(), Entries.size() * sizeof(Smile::SMeshEntry),
+                         Geo.data(), Geo.size())) {
+        return 3;
     }
-    {
-        fs::path P = _OutBase; P += ".sscene";
-        FILE* F = std::fopen(P.string().c_str(), "wb");
-        if (!F) { std::printf("[Cooker] ERRO ao abrir %s\n", P.string().c_str()); return 3; }
-        Smile::SSceneHeader H{ Smile::kSSceneMagic, Smile::kCookedVersion,
-                               static_cast<uint32_t>(Materials.size()),
-                               static_cast<uint32_t>(Renderables.size()) };
-        std::fwrite(&H, sizeof(H), 1, F);
-        std::fwrite(Materials.data(), sizeof(Smile::SSceneMaterial), Materials.size(), F);
-        std::fwrite(Renderables.data(), sizeof(Smile::SSceneRenderable), Renderables.size(), F);
-        std::fclose(F);
-        std::printf("[Cooker] Escrito: %s\n", P.string().c_str());
+    if (!WriteAllChecked(SceneTmp, &SceneHeader, sizeof(SceneHeader),
+                         Materials.data(), Materials.size() * sizeof(Smile::SSceneMaterial),
+                         Renderables.data(),
+                         Renderables.size() * sizeof(Smile::SSceneRenderable))) {
+        std::error_code Ec;
+        fs::remove(MeshTmp, Ec); // o par nao sai pela metade
+        return 3;
     }
+
+    std::error_code Ec;
+    fs::rename(MeshTmp, MeshPath, Ec);
+    if (!Ec) fs::rename(SceneTmp, ScenePath, Ec);
+    if (Ec) {
+        std::printf("[Cooker] ERRO ao publicar o par: %s\n", Ec.message().c_str());
+        std::error_code Ignored;
+        fs::remove(MeshTmp, Ignored);
+        fs::remove(SceneTmp, Ignored);
+        return 3;
+    }
+
+    std::printf("[Cooker] Escrito: %s\n", MeshPath.string().c_str());
+    std::printf("[Cooker] Escrito: %s\n", ScenePath.string().c_str());
     std::printf("[Cooker] OK.\n");
     return 0;
 }

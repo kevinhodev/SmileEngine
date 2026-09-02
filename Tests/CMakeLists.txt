@@ -232,12 +232,6 @@ foreach(SCENE
     "BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE"
     "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN"
     "BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS"
-    # Sinteticas da regua de escala. Geradas por "SmileCooker --synthetic", nao cozidas de FBX,
-    # entao NAO entram no Scenes.cook.json nem no -Verify: nao ha fonte cujo hash registrar.
-    # So sao registradas quando existem na arvore, como as demais.
-    "Synthetic/Synthetic_10k"
-    "Synthetic/Synthetic_100k"
-    "Synthetic/Synthetic_1M"
 )
     set(SCENE_FILE "${PROJECT_SOURCE_DIR}/Assets/Scenes/${SCENE}.sscene")
     if(EXISTS "${SCENE_FILE}")
@@ -255,4 +249,67 @@ foreach(SCENE
             TIMEOUT 300
         )
     endif()
+endforeach()
+
+# --- Regua de escala: cenas sinteticas -----------------------------------------------------
+#
+# Geradas DENTRO do diretorio de build, por uma fixture do ctest, e nao em Assets/Scenes/.
+# Assets/Scenes/ esta no .gitignore, entao registrar por `if(EXISTS)` fazia o gate depender de
+# arquivos locais: num checkout limpo os tres testes sumiam em silencio e a suite continuava
+# verde com 20 em vez de 23 — um gate que desaparece sozinho nao e gate.
+#
+# A RECEITA (contagens e flags) fica versionada aqui, e as mesmas contagens sao passadas ao
+# harness como --expect-*: assim o teste prova que o arquivo tem a escala anunciada, em vez de
+# so conferir o arquivo consigo mesmo.
+set(SMILE_SYNTHETIC_DIR "${CMAKE_CURRENT_BINARY_DIR}/SyntheticScenes")
+
+# instancias;malhas;materiais;masked% — masked_materiais = ceil(materiais * pct / 100)
+# Separador "|" e nao ";": num foreach o CMake ACHATA o ";" das strings e cada caso viraria
+# seis itens soltos. Convertido para lista logo abaixo.
+set(SMILE_SYNTHETIC_CASES
+    "10k|10000|8|16|25|4"
+    "100k|100000|8|16|25|4"
+    "1M|1000000|8|16|25|4"
+)
+
+set(SMILE_SYNTHETIC_OUTPUTS "")
+foreach(CASE ${SMILE_SYNTHETIC_CASES})
+    string(REPLACE "|" ";" CASE_FIELDS "${CASE}")
+    list(GET CASE_FIELDS 0 SYN_LABEL)
+    list(GET CASE_FIELDS 1 SYN_INSTANCES)
+    list(GET CASE_FIELDS 2 SYN_MESHES)
+    list(GET CASE_FIELDS 3 SYN_MATERIALS)
+    list(GET CASE_FIELDS 4 SYN_MASKED_PCT)
+    list(GET CASE_FIELDS 5 SYN_MASKED_COUNT)
+
+    add_test(
+        NAME Smile.SyntheticScene.Generate.${SYN_LABEL}
+        COMMAND SmileCooker --synthetic "${SMILE_SYNTHETIC_DIR}/Synthetic_${SYN_LABEL}"
+                --instances ${SYN_INSTANCES}
+                --meshes ${SYN_MESHES}
+                --materials ${SYN_MATERIALS}
+                --masked-percent ${SYN_MASKED_PCT}
+    )
+    set_tests_properties(Smile.SyntheticScene.Generate.${SYN_LABEL} PROPERTIES
+        LABELS "scene;synthetic;fixture"
+        FIXTURES_SETUP SyntheticScene_${SYN_LABEL}
+        RESOURCE_LOCK CookedSceneMemory
+        TIMEOUT 300
+    )
+
+    add_test(
+        NAME Smile.CookedSceneLoad.Synthetic_${SYN_LABEL}
+        COMMAND SmileCookedSceneLoadTests
+                "${SMILE_SYNTHETIC_DIR}/Synthetic_${SYN_LABEL}.sscene"
+                --expect-renderables ${SYN_INSTANCES}
+                --expect-meshes ${SYN_MESHES}
+                --expect-materials ${SYN_MATERIALS}
+                --expect-masked ${SYN_MASKED_COUNT}
+    )
+    set_tests_properties(Smile.CookedSceneLoad.Synthetic_${SYN_LABEL} PROPERTIES
+        LABELS "scene;synthetic;cooked-format;integration"
+        FIXTURES_REQUIRED SyntheticScene_${SYN_LABEL}
+        RESOURCE_LOCK CookedSceneMemory
+        TIMEOUT 300
+    )
 endforeach()

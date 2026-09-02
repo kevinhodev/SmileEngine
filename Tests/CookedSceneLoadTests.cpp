@@ -12,7 +12,9 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <string>
 
 namespace {
     int Failures = 0;
@@ -34,9 +36,39 @@ namespace {
 
 int main(int argc, char** argv) {
     using namespace Smile;
-    if (argc != 2) {
-        std::fprintf(stderr, "uso: SmileCookedSceneLoadTests <cena.sscene>\n");
+    if (argc < 2) {
+        std::fprintf(stderr,
+                     "uso: SmileCookedSceneLoadTests <cena.sscene>\n"
+                     "       [--expect-renderables N] [--expect-meshes M]\n"
+                     "       [--expect-materials K] [--expect-masked P]\n");
         return 2;
+    }
+
+    // Contagens ESPERADAS, vindas de fora. Sem elas o teste so comparava os vetores com o
+    // cabecalho do PROPRIO arquivo, entao uma cena de 10k internamente coerente passaria
+    // chamada de Synthetic_1M — o teste afirmaria uma escala que nunca verificou.
+    long ExpectRenderables = -1, ExpectMeshes = -1, ExpectMaterials = -1, ExpectMasked = -1;
+    for (int A = 2; A < argc; ++A) {
+        const std::string Flag = argv[A];
+        if (A + 1 >= argc) {
+            std::fprintf(stderr, "[FALHA] %s exige um valor\n", Flag.c_str());
+            return 2;
+        }
+        const char* Value = argv[++A];
+        char* End = nullptr;
+        const long N = std::strtol(Value, &End, 10);
+        if (End == Value || *End != '\0' || N < 0) {
+            std::fprintf(stderr, "[FALHA] valor invalido para %s: '%s'\n", Flag.c_str(), Value);
+            return 2;
+        }
+        if      (Flag == "--expect-renderables") ExpectRenderables = N;
+        else if (Flag == "--expect-meshes")      ExpectMeshes      = N;
+        else if (Flag == "--expect-materials")   ExpectMaterials   = N;
+        else if (Flag == "--expect-masked")      ExpectMasked      = N;
+        else {
+            std::fprintf(stderr, "[FALHA] flag desconhecida: %s\n", Flag.c_str());
+            return 2;
+        }
     }
 
     const std::filesystem::path ScenePath(argv[1]);
@@ -125,6 +157,21 @@ int main(int argc, char** argv) {
         else if (E.AABBMin[0] > E.AABBMax[0] || E.AABBMin[1] > E.AABBMax[1] ||
                  E.AABBMin[2] > E.AABBMax[2])
             Fail("mesh", "%zu tem AABB invertida", M);
+    }
+
+    // --- Contagens ESPERADAS, contra o que foi materializado. O cabecalho ja foi conferido
+    // acima; o que este bloco prova e que o arquivo e a cena que o chamador PEDIU.
+    if (ExpectRenderables >= 0 && static_cast<long>(RndCount) != ExpectRenderables)
+        Fail("escala", "renderaveis %zu != %ld esperados", RndCount, ExpectRenderables);
+    if (ExpectMeshes >= 0 && static_cast<long>(MeshCount) != ExpectMeshes)
+        Fail("escala", "meshes %zu != %ld esperadas", MeshCount, ExpectMeshes);
+    if (ExpectMaterials >= 0 && static_cast<long>(MatCount) != ExpectMaterials)
+        Fail("escala", "materiais %zu != %ld esperados", MatCount, ExpectMaterials);
+    if (ExpectMasked >= 0) {
+        long Masked = 0;
+        for (const SSceneMaterial& Mat : Scene->Materials) if (Mat.AlphaTest) ++Masked;
+        if (Masked != ExpectMasked)
+            Fail("escala", "mascarados %ld != %ld esperados", Masked, ExpectMasked);
     }
 
     std::printf("[LOAD] %s\n", ScenePath.filename().string().c_str());
