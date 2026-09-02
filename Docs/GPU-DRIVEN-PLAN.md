@@ -1,0 +1,1186 @@
+# GPU-driven rendering em escala e caminho para geometria virtual
+
+> **Estado em 2026-09-01 — PLANO, NÃO IMPLEMENTAÇÃO.** O raster principal continua CPU-driven,
+> o HiZ devolve visibilidade por readback e o formato compilado aceito pelo checkout é v8. Um
+> protótipo anterior de geometria virtual gerou assets v9 e um sidecar `.svgeo`, mas foi
+> deliberadamente abandonado e seus arquivos auxiliares foram removidos. Este documento preserva
+> somente as conclusões verificadas que ainda importam para a próxima implementação.
+>
+> **Atualização 2026-09-01, pós-recook:** os 11 pares foram recozidos com o cooker v8 deste
+> checkout. Os 22 arquivos estão em v8, `SMeshEntry` voltou a 64 B e todas as contagens
+> (renderables, meshes, materiais) reproduzem exatamente as do v9. O primeiro item da Fase 0
+> está fechado; nenhum asset v9 permanece na árvore.
+>
+> **Responsabilidades acordadas:** Opus é o implementador e único escritor dos milestones; Codex é
+> o revisor sênior read-only; o proprietário da engine decide divergências e promoção de fase. O
+> revisor não corrige o diff que revisa.
+
+## 1. Resultado pretendido
+
+A Smile deve deixar de pagar custo de CPU, bindings e submissão proporcional ao número total de
+renderables. O renderer alvo mantém cena, materiais e geometria em tabelas persistentes na GPU,
+recebe ranges compactos de instâncias, decide visibilidade na GPU e produz argumentos indiretos sem
+readback no caminho de frame.
+
+O núcleo precisa escalar antes de existir geometria virtual:
+
+```text
+CPU/editor                         GPU persistente
+-----------                        ---------------
+handles estáveis            ────>  instance/meta/transform tables
+dirty pages                 ────>  mesh/material tables
+spatial nodes aprovados     ────>  candidate instance ranges
+                                          │
+                                          ▼
+                                expandir ranges + culling
+                                          │
+                      ┌───────────────────┼───────────────────┐
+                      ▼                   ▼                   ▼
+                    depth              GBuffer             shadows
+                      │                   │                   │
+                      └──── count → prefix → scatter → indirect args
+                                          │
+                                          ▼
+                                   ExecuteIndirect
+```
+
+Essa fundação deve aceitar, sem ser reescrita, a evolução posterior:
+
+```text
+GPU-driven por instância
+        ↓
+clusters planos
+        ↓
+hierarquia de clusters + erro projetado
+        ↓
+geometry pages + streaming
+        ↓
+rasterização híbrida de micropolygon
+        ↓
+Smile Virtual Geometry
+```
+
+O objetivo não é reproduzir de imediato o sistema completo de *Assassin's Creed Mirage*, Nanite ou
+Micropolygon. É escolher contratos que não bloqueiem essa evolução.
+
+## 2. Envelope de escala
+
+As cenas atuais são casos de correção e regressão; não são o teto do projeto. O desenho deve
+suportar os seguintes regimes:
+
+| Regime | Instâncias lógicas | Residentes | Candidatas | Uso |
+|---|---:|---:|---:|---|
+| pequeno | 10 mil | 10 mil | até 10 mil | desenvolvimento e testes rápidos |
+| médio | 100 mil | 100 mil | 20–100 mil | stress de submissão e culling |
+| grande | 1 milhão | até 1 milhão | 50–250 mil | gate estrutural do GPU Scene |
+| mundo | dezenas de milhões | orçamento configurável | ranges de células visíveis | streaming e Moana-scale |
+
+Os 28 milhões de instâncias lógicas da Moana não devem implicar 28 milhões de registros completos
+residentes. Mesmo um registro de 64 B consumiria aproximadamente 1,67 GiB. Mundo lógico, conjunto
+residente e conjunto candidato são domínios distintos.
+
+Invariantes de escala:
+
+- o custo CPU por frame cresce com páginas sujas, células candidatas e classes de pipeline, não com
+  o número total de objetos;
+- a remoção ou inclusão de um objeto não renumera a identidade persistente dos sobreviventes;
+- o resultado do culling não volta à CPU para decidir o que desenhar;
+- crescimento de capacidade, rebuild estrutural e drains de fila são eventos excepcionais, nunca o
+  caminho estável de frame;
+- a cena pode conter mais instâncias lógicas do que o raster, o TLAS ou a VRAM mantêm residentes;
+- telemetria pode usar readback atrasado, mas não pode participar da decisão de renderização.
+
+Metas de desempenho só serão fixadas depois da Fase 0. A meta arquitetural inicial é reduzir
+radicalmente a submissão CPU sem piorar o critical path da GPU. Números do Mirage são referência,
+não promessa para a Smile.
+
+## 3. Evidência do estado atual
+
+### 3.1 Raster e listas de draw
+
+`Renderer::BuildDrawLists` percorre a lista inteira, escreve um `ObjectConstants` de 256 B por
+renderable, resolve material, consulta o resultado antigo do HiZ, executa frustum culling na CPU e
+ordena a lista visível. Ver
+[`RendererPasses.cpp`](../Engine/Source/Graphics/Renderer/RendererPasses.cpp#L1891).
+
+Z-prepass e GBuffer ainda iteram `VisibleScratch`, vinculam constantes por objeto/material e emitem
+uma draw por item. O wrapper final chama `DrawIndexedInstanced(IndexCount, 1, ...)` em
+[`GpuMesh.cpp`](../Engine/Source/Graphics/Resources/GpuMesh.cpp#L87).
+
+Consequências:
+
+- CPU e command list crescem com renderables visíveis;
+- o mesmo conjunto é reprocessado em passes diferentes;
+- a geometria deduplicada pelo cooker não vira instancing automaticamente;
+- o sort reduz mudanças de estado, mas não remove draws.
+
+### 3.2 HiZ com readback
+
+`FHiZOcclusion` grava o teste na GPU, copia o resultado para um readback ring e a CPU consome o slot
+depois de `kFramesInFlight`. O contrato está documentado em
+[`HiZOcclusion.h`](../Engine/Include/Smile/Graphics/Scene/HiZOcclusion.h#L16), a cópia ocorre em
+[`HiZOcclusion.cpp`](../Engine/Source/Graphics/Scene/HiZOcclusion.cpp#L269) e o mapeamento é resolvido
+em [`HiZOcclusion.cpp`](../Engine/Source/Graphics/Scene/HiZOcclusion.cpp#L282).
+
+Esse readback é incompatível com o objetivo: o buffer de visibilidade deve alimentar contagem,
+compactação e indirect args na própria GPU.
+
+### 3.3 Bindless parcial
+
+O heap global possui 16.384 slots e free list em
+[`TextureSRVHeap.h`](../Engine/Include/Smile/Graphics/Backend/D3D12/TextureSRVHeap.h#L13). O ray
+tracing já publica índices de VB, IB, payload e texturas num registro de 100 B, `FRTInstanceGeo`, em
+[`RaytracingScene.cpp`](../Engine/Source/Graphics/RayTracing/RaytracingScene.cpp#L60).
+
+O raster ainda vincula uma tabela contígua de oito texturas por material em
+[`Material.cpp`](../Engine/Source/Graphics/Resources/Material.cpp#L148). Sua root signature principal
+permite input assembler, mas ainda não usa heap diretamente indexado; ver
+[`PipelineState.cpp`](../Engine/Source/Graphics/Backend/D3D12/PipelineState.cpp#L221).
+
+A engine exige Shader Model 6.9 e DXR 1.2 em
+[`D3D12Device.cpp`](../Engine/Source/Graphics/Backend/D3D12/D3D12Device.cpp#L155), portanto o baseline
+de hardware já é compatível com descriptor heap indexing. Mesh shader tier ainda precisa ser
+consultado explicitamente antes da trilha de virtual geometry depender dele.
+
+### 3.4 Geometria e indirect já existentes
+
+As geometrias são colocadas em pools grandes na importação da cena, uma base adequada para offsets e
+geometry pages. O formato v7 também deixou de bakear transform nos vértices e deduplica partes que
+compartilham a mesma geometria.
+
+O sistema de água prova o padrão necessário:
+
+```text
+count → prefix → scatter → build args → ExecuteIndirect
+```
+
+A command signature é criada em
+[`Water.cpp`](../Engine/Source/Graphics/Water/Water.cpp#L599), as passadas são disparadas perto de
+[`Water.cpp`](../Engine/Source/Graphics/Water/Water.cpp#L1011), o shader mantém counts/offsets/cursors
+em [`WaterGenerateDraws.cs.hlsl`](../Shaders/Water/WaterGenerateDraws.cs.hlsl#L227) e o consumo ocorre
+em [`Water.cpp`](../Engine/Source/Graphics/Water/Water.cpp#L1125).
+
+O GPU-driven geral deve reutilizar os contratos provados ali, não copiar literalmente o subsistema
+de água.
+
+### 3.5 Identidade atual
+
+`FRenderable::Id` já é uma identidade estável de sessão, mas quatro consumidores ainda usam o
+índice denso da `RenderableList` como endereço GPU: TLAS `InstanceID`, transforms temporais, entrada
+do HiZ e picking. O próprio contrato está registrado em
+[`Scene.h`](../Engine/Include/Smile/Scene/Scene.h#L79).
+
+Free list e generation counter só podem entrar junto da migração desses quatro consumidores. Fazer
+um por vez produz IDs que parecem válidos, mas apontam para outro objeto após remoção/reuso.
+
+### 3.6 Cenas atuais e instancing real
+
+Os headers dos 11 pares `.sscene/.smesh` atuais indicam:
+
+| Cena | Renderables | Meshes | Relação |
+|---|---:|---:|---:|
+| MEASURE_ONE | 7.293 | 7.293 | 1:1 |
+| MEASURE_SEVEN | 10.740 | 10.740 | 1:1 |
+| MEASURE_SEVEN_COLORED_LIGHTS | 10.740 | 10.740 | 1:1 |
+| BistroExterior | 1.591 | 1.591 | 1:1 |
+| BistroInterior | 2.062 | 2.062 | 1:1 |
+| BistroInterior_Wine | 2.289 | 2.289 | 1:1 |
+| EmeraldSquare_Day | 2.479 | 281 | 8,82 instâncias/mesh |
+| EmeraldSquare_Dusk | 2.487 | 289 | 8,61 instâncias/mesh |
+| NewSponza_Main_Yup | 405 | 405 | 1:1 |
+| NewSponza_Main_Zup | 405 | 405 | 1:1 |
+| SunTemple | 1.056 | 1.056 | 1:1 |
+
+Instancing por mesh colapsa draws na Emerald, mas não é a solução geral. Bindless, classificação por
+PSO, indirect e culling atacam o custo por draw em todas as famílias.
+
+### 3.7 Arqueologia v8/v9
+
+O checkout aceita `kCookedVersion = 8` e `SMeshEntry` de 64 B em
+[`CookedFormat.h`](../Engine/Include/Smile/Scene/CookedFormat.h#L8). O loader rejeita versões
+diferentes em [`SceneLoader.cpp`](../Engine/Source/Scene/SceneLoader.cpp#L77).
+
+Os 11 assets estavam marcados como v9 até o recook de 2026-09-01 (ver a nota de estado no topo);
+hoje estão em v8. O protótipo abandonado acrescentava
+48 B ao `SMeshEntry`, produzindo um stride de 112 B e três regiões de meshlets:
+
+```text
+u64 ClusterOffset      + u32 ClusterCount
+u32 ClusterVertexCount + u64 ClusterVertexOffset
+u64 ClusterTriOffset   + u32 ClusterTriCount
+u32 TriangleIndexStride (= 3)
+```
+
+Nos 11 `.smesh` foram verificados 37.151 entries e 341.909 clusters, com máximo de 256 vértices e
+128 triângulos por cluster; `RTTriangleCount == IndexCount/3`, `ClusterTriCount == IndexCount` e os
+bounds de arquivo passaram sem falhas. O `.smesh` v9 continha apenas clusters planos: não havia
+hierarquia nem métrica de erro. O `.svgeo` experimental foi removido a pedido do proprietário e não
+é fonte de verdade.
+
+Decisões:
+
+- não aumentar a constante para 9 apenas para aceitar os arquivos;
+- não tentar ressuscitar o protótipo removido;
+- recookar uma baseline coerente v8 na Fase 0 — **feito em 2026-09-01**, ver a nota de estado no topo;
+- reservar um bump deliberado posterior para as tabelas canônicas;
+- versionar virtual geometry num sidecar independente quando houver consumidor real.
+
+## 4. Decisões de arquitetura
+
+### D1 — Um escritor, um revisor
+
+Opus implementa e corrige. Codex revisa o diff, executa diagnósticos read-only e produz findings. O
+revisor não usa `apply_patch`, formatter ou fix automático no milestone revisado. A documentação
+oficial do plano pode ser atualizada pelo implementador depois da aprovação.
+
+### D2 — Três identidades, três funções
+
+Não usar um único inteiro como identidade universal:
+
+```text
+ObjectId         u64 estável de editor/sessão
+GpuHandle        {slot, generation} estável enquanto o recurso vive
+VisibleIndex     u32 denso e transitório, válido somente no frame/pass
+```
+
+O TLAS recebe um remap do conjunto RT residente; `InstanceID` não é a identidade global da cena.
+
+### D3 — Tabelas canônicas, snapshots especializados
+
+`FRTInstanceGeo` não vira a tabela universal. O estado canônico será separado em instância, mesh e
+material. Raster, RT, temporal, picking e culling consomem views/snapshots adequados ao próprio ABI.
+
+Isso elimina a duplicação atual de campos de material por instância e permite atualizar uma linha de
+material sem reconstruir todo `InstanceGeo`.
+
+### D4 — Persistente paginado, transitório por frame
+
+Tabelas persistentes usam páginas, free list, generation counter e dirty page/range upload. Buffers
+de candidatos, visíveis, counts, offsets, cursors, `InstanceInfo` e indirect args pertencem ao frame
+slot e podem crescer por high-water mark.
+
+Não será criado um compilador genérico estilo SIG. Layouts serão escritos explicitamente e terão
+`static_assert`, espelho HLSL e testes de ABI.
+
+### D5 — Ranges desde o primeiro dispatch
+
+A entrada do culling é sempre uma lista de `FInstanceRange`. Enquanto a cena for plana, ela produz
+um único range. World cells mudam o produtor, não o consumidor.
+
+**O range endereça a lista de candidatos, nunca um intervalo de slots.** Um `{FirstSlot, SlotCount}`
+só descreve uma célula se a alocação de slots for particionada pela hierarquia — e isso conflita
+diretamente com a free list global da Fase 1: assim que houver reuso de slot e objetos migrando
+entre células, os membros de uma célula deixam de ser contíguos, e o produtor teria de emitir
+milhares de ranges unitários ou varrer objetos de outras células. A indireção por
+`CandidateInstanceIds` desacopla os dois: o range descreve um span da lista de índices, e a lista
+carrega slots arbitrários.
+
+Vale notar como a Anvil escapa disso: no artigo do Mirage os ranges são contíguos porque as
+instâncias são alocadas POR `LeafNode`, com o limite de 16.384 justificado por ranges não poderem
+atravessar páginas de alocação (§1.3.2). Ou seja, eles pagam contiguidade com um alocador
+particionado pela hierarquia. Não dá para ter free list global **e** ranges contíguos em slot; este
+plano escolhe a free list, então a contiguidade tem de viver na lista de candidatos.
+
+`CandidateInstanceIds` é sempre materializado — **não existe modo "range identidade"**. Uma flag que
+pulasse a lista faria `FirstCandidate` voltar a ser interpretado como slot, reintroduzindo o contrato
+que este parágrafo acabou de rejeitar, e o consumidor só continuaria idêntico com um
+`CandidateSourceMode` explícito nas dispatch constants mais testes para os dois modos. O custo que a
+flag economizaria não existe: para a cena plana a lista é **persistente**, reconstruída apenas em
+mudança estrutural, não por frame.
+
+### D6 — Material bindless, estado na chave
+
+Identidade e parâmetros de material não dividem batches. Estado que muda PSO permanece:
+
+```text
+BatchKey = pass
+         + pipeline/permutation
+         + geometry page/format
+         + opacity class
+         + two-sided class
+         + deformation class
+```
+
+Albedo, metal/rough, emissivo, constantes e índices de texturas ficam no `FGpuMaterialRecord`.
+
+`Blend` continua fora do caminho opaco GPU-driven inicial porque exige ordenação. `AlphaTest` entra
+depois do opaco sólido e possui PSO próprio.
+
+### D7 — Visibilidade fica na GPU
+
+Frustum, HZB e classificação produzem máscaras/listas GPU. Readback é permitido para contadores de
+debug atrasados, nunca como input de uma draw do frame.
+
+### D8 — Direct queue primeiro
+
+O primeiro caminho roda na direct queue para provar correção e custo sem introduzir ownership entre
+queues. Async compute só entra com timestamps mostrando sobreposição útil e sem prejudicar DDGI,
+ReSTIR ou outras cargas compute.
+
+### D9 — CPU fallback explícito
+
+Enquanto não forem promovidos, permanecem no caminho CPU:
+
+- transparência ordenada;
+- terrain e water;
+- picking/selection até sua fase de migração;
+- skinned/deformáveis;
+- materiais/permutations não suportados;
+- debug geometry e ferramentas do editor.
+
+O fallback é instrumentado. Crescimento silencioso do fallback é regressão.
+
+### D10 — Virtual geometry é sidecar
+
+O formato-base descreve cena, materiais, instâncias e geometria convencional. Um `.svgeo` versionado
+independentemente descreve clusters, hierarquia, erro e páginas. Alterar a hierarquia não deve
+invalidar materiais, transforms ou payload de RT.
+
+### D11 — Clusters não congelam antes do consumidor
+
+O protótipo 256/128 prova que o bake é possível, não que esses são os parâmetros corretos. Tamanho,
+encoding, normal cone, quantização e erro serão escolhidos na Fase 9 com rasterizador e métricas
+reais.
+
+### D12 — RT é consumidor, não dono
+
+BLAS/TLAS não governam a identidade do raster. Virtual geometry deve declarar política RT própria:
+LOD de BLAS, conjunto residente, proxies, cache, rebuild/refit e exclusões. Não se coloca todo o
+mundo lógico no TLAS.
+
+## 5. Contratos de dados alvo
+
+Os nomes abaixo são de trabalho. A fase responsável pode refiná-los, mas não pode quebrar os
+invariantes sem atualizar este documento.
+
+### 5.1 Handle e slot
+
+```cpp
+struct FGpuSceneHandle {
+    u32 Slot;
+    u32 Generation;
+};
+```
+
+- slot reutilizado somente depois de a última GPU fence que o referencia completar;
+- generation incrementa no reuso;
+- `ObjectId` continua separado e não é enviado inteiro para todo shader;
+- debug builds validam generation onde o custo permitir;
+- picking devolve handle/remap, não índice da `RenderableList`.
+
+### 5.2 Tabela de instâncias
+
+Preferir colunas/páginas por padrão de acesso, não um struct gordo lido por todos os passes:
+
+```text
+InstanceMeta   : MeshId, MaterialId, CellId, Flags, Generation
+InstanceBounds : center/radius ou AABB compacta
+Transform      : matriz atual em espaço declarado
+PrevTransform  : histórico somente onde necessário
+```
+
+Culling lê bounds/meta; raster lê transform/meta; RT publica seu snapshot. Separar colunas evita
+carregar duas matrizes para uma thread que só testa uma esfera.
+
+Espaços devem ser explícitos no nome/tipo. Mundo autoral e camera-relative não podem compartilhar um
+campo ambíguo.
+
+### 5.3 Tabela de meshes
+
+```text
+MeshId
+LocalBounds
+GeometryPageId
+VertexOffset / VertexCount / VertexFormat
+IndexOffset / IndexCount / IndexFormat
+SubmeshRange
+Pass/feature flags
+VirtualGeometryId opcional
+RT geometry/payload references
+```
+
+Offsets são relativos a páginas/recursos conhecidos, não endereços permanentes serializados.
+
+### 5.4 Tabela de materiais
+
+```text
+MaterialId
+TextureDescriptorBase ou índices explícitos
+ConstantOffset
+ShadingModel
+OpacityClass
+RasterFlags
+RTFlags
+PipelineClass
+```
+
+Uma mudança de textura/constante atualiza somente a linha/página do material. Mudança de
+`PipelineClass` também invalida a classificação dos usuários, mas não renumera o material.
+
+O heap atual de 16.384 descriptors deve ganhar telemetria de ocupação antes de ser considerado
+suficiente. Moana/Ptex e conteúdo futuro exigirão outro plano de texturing; virtual texturing não faz
+parte do núcleo GPU-driven, mas será necessário para o benchmark completo.
+
+### 5.5 Entrada e saída de culling
+
+```cpp
+// Range é um span da LISTA DE CANDIDATOS, não um intervalo de slots.
+struct FInstanceRange {
+    u32 FirstCandidate; // índice em CandidateInstanceIds
+    u32 CandidateCount;
+};
+// CandidateInstanceIds[FirstCandidate + i] -> FGpuSceneHandle/slot estável
+
+struct FGpuBatchKey {
+    u32 PipelineClass;
+    u32 GeometryClass;
+    u32 PassClass;
+    u32 Flags;
+};
+```
+
+Buffers transitórios mínimos:
+
+- `CandidateInstanceRanges`;
+- `CandidateInstanceIds`;
+- `PassedInstanceIds`/`PassedSubmeshIds`;
+- `BatchCounts`, `BatchOffsets`, `BatchCursors`;
+- `InstanceInfos` compactado;
+- `IndirectArgs` e `IndirectCount`;
+- contadores de overflow e diagnóstico.
+
+O MVP usa batch IDs conhecidos no load/cooker. Hash GPU ou radix sort só entram quando conteúdo
+dinâmico demonstrar que IDs pré-calculados não bastam.
+
+## 6. Pipeline alvo do frame
+
+### 6.1 Atualização persistente
+
+1. aplicar mutações estruturais que já passaram pela fence de segurança;
+2. atualizar páginas sujas de instance/meta/transform/material;
+3. publicar remaps para consumidores que usam frame slots;
+4. selecionar cells/nodes no broad phase quando ele existir;
+5. escrever `CandidateInstanceRanges`.
+
+### 6.2 Main view
+
+1. expandir ranges;
+2. testar frustum e pass masks;
+3. selecionar candidatos do depth prepass;
+4. contar/prefixar/compactar por batch;
+5. desenhar depth por `ExecuteIndirect`;
+6. construir HZB do frame;
+7. aplicar oclusão atual e conservadora aos candidatos do GBuffer;
+8. reconstruir counts/offsets/args quando necessário;
+9. desenhar GBuffer por `ExecuteIndirect`.
+
+No primeiro MVP, depth e GBuffer podem compartilhar a lista frustum-visible e o HZB atual apenas
+beneficia o GBuffer. Reprojeção do HZB anterior para reduzir o prepass é otimização posterior.
+
+### 6.3 Shadows e passes adicionais
+
+O culling por frame produz pass mask contra todos os frusta relevantes. Cada pass pode acrescentar
+teste específico:
+
+- cascata/spot frustum;
+- reprojeção de receivers para shadow casters;
+- HZB específico quando houver retorno medido;
+- regras de alpha/two-sided/deformation.
+
+Sun e local shadows não devem reconstruir a cena inteira na CPU. O caminho atual percorre `AllItems`
+em [`RendererPasses.cpp`](../Engine/Source/Graphics/Renderer/RendererPasses.cpp#L1248); essa é uma
+meta explícita da Fase 7.
+
+### 6.4 Barriers e estados
+
+Contrato mínimo por buffer:
+
+```text
+UAV clear/write
+    → UAV barrier entre produtores dependentes
+    → NON_PIXEL_SHADER_RESOURCE para consumo compute/VS
+    → INDIRECT_ARGUMENT para args/count
+```
+
+- transições pertencem ao dono do subsistema;
+- nenhum helper esconde queue wait global;
+- frame slots evitam sobrescrever recursos ainda em voo;
+- resize/capacity growth pode drenar fora do steady state e precisa de contador;
+- direct/compute ownership deve ser documentado antes de async compute.
+
+## 7. Regras para o implementador
+
+1. Um milestone funcional por diff; não misturar formato, bindless, culling e virtual geometry.
+2. Preservar o caminho CPU como A/B até o gate da fase responsável.
+3. Não mudar default no mesmo commit que introduz a alternativa.
+4. Toda estrutura compartilhada C++/HLSL recebe `static_assert` e teste de offsets/stride.
+5. Todo buffer GPU recebe nome, capacidade, high-water mark e contador de overflow.
+6. Overflow falha conservadoramente: desenhar demais é aceitável; desaparecer geometria não é.
+7. Nenhuma readback nova decide visibilidade ou draw.
+8. Não introduzir `WaitIdle`/`Flush` no frame estável para facilitar lifetime.
+9. Formatar somente arquivos tocados e manter fontes explícitas no CMake.
+10. Mudança arquitetural aprovada atualiza `ARCHITECTURE.md` no mesmo milestone.
+11. Perf só é declarada com cena, câmera, resolução, preset, build e distribuição de amostras.
+12. O pacote de revisão é produzido antes de pedir aprovação.
+
+## 8. Fases de implementação
+
+Há doze fases, numeradas de 0 a 11. Fases 0–8 entregam o renderer GPU-driven geral. Fases 9–11 são
+a trilha de virtual geometry e não bloqueiam a promoção do núcleo.
+
+## Fase 0 — Baseline coerente, formato e instrumentos
+
+### Objetivo
+
+Restaurar um checkout executável, congelar medidas e impedir que a próxima arquitetura seja avaliada
+contra assets incompatíveis.
+
+### Trabalho
+
+- ~~recookar os 11 pares `.sscene/.smesh` com o cooker v8 atual~~ — **feito em 2026-09-01**;
+- **registrar a RECEITA do recook, não só o resultado.** O cooker aceita `--opaque-glass`, que é
+  por cena e muda o shading do vidro; hoje a única fonte que diz quais cenas o usam é um comentário
+  em [`main.cpp`](../Tools/Cooker/main.cpp#L296) (Emerald Square usa, por ser casca oca; Bistro não,
+  por ter interior real atrás do vidro). Sem a receita versionada — script ou manifesto por cena —
+  o próximo recook muda o vidro da Emerald sem nenhum diff de código, que é exatamente a mudança
+  silenciosa que uma baseline existe para impedir;
+- confirmar que loader, raster e RT abrem todas as famílias relevantes;
+- registrar hashes/build e não confundir os antigos arquivos v9 com formato suportado;
+- adicionar timers CPU para `BuildDrawLists`, sort, uploads e emissão de passes;
+- registrar draws potenciais/executadas, bindings, renderables, materiais, meshes e bytes de object
+  constants;
+- expor ocupação/high-water mark do SRV heap;
+- criar gerador ou modo de cena sintética com 10k, 100k e 1M instâncias, preservando geometria
+  compartilhada e variação controlável de materiais;
+- fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas;
+- capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.
+
+### Arquivos prováveis
+
+- `Tools/Cooker/main.cpp`
+- `Engine/Include/Smile/Scene/CookedFormat.h`
+- `Engine/Source/Scene/SceneLoader.cpp`
+- `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
+- `Engine/Source/Graphics/Renderer/RendererCapture.cpp`
+- `Engine/Include/Smile/Graphics/Backend/D3D12/TextureSRVHeap.h`
+- testes de cooker/cooked format e ferramentas de benchmark
+
+### Gate de saída
+
+- todas as cenas carregam com v8 e nenhum asset v9 é necessário;
+- build Release e testes passam;
+- baseline possui commit/hash limpo, câmera, resolução e N declarados;
+- tempos CPU de preparação/submissão e tempos GPU por pass estão separados;
+- 1M instâncias sintéticas podem ser carregadas ou a limitação exata de memória é documentada;
+- nenhuma implementação GPU-driven entrou nesta fase.
+
+## Fase 1 — Identidade estável e migração dos quatro consumidores
+
+### Objetivo
+
+Separar identidade, slot GPU e índice visível sem alterar a imagem nem o método de desenho.
+
+### Trabalho
+
+- definir `FGpuSceneHandle {slot,generation}` e allocator com deferred reuse por fence;
+- manter `FRenderable::Id` como identidade de editor;
+- criar remaps explícitos para TLAS, temporal transforms, HiZ e picking;
+- impedir que `RenderableList` seja endereço persistente implícito;
+- tratar add/remove/duplicate, ocultação, reload e troca de cena;
+- testar geração, stale handles, wrap policy, remoção do primeiro/meio/último e reuso após fence;
+- manter o raster CPU-driven para isolar a migração.
+
+### Arquivos prováveis
+
+- `Engine/Include/Smile/Scene/Scene.h`
+- `Engine/Source/Scene/Scene.cpp`
+- `Engine/Source/Graphics/RayTracing/RaytracingScene.cpp`
+- `Engine/Source/Graphics/PostProcess/TemporalMotionVectors.cpp`
+- `Engine/Source/Graphics/Scene/HiZOcclusion.cpp`
+- `Engine/Source/Graphics/Editor/Picking.cpp`
+- `Engine/Source/Graphics/Renderer/RendererScene.cpp`
+
+### Gate de saída
+
+- nenhum consumidor usa posição na `RenderableList` como identidade durável;
+- selecionar, duplicar, remover e mover não troca histórico entre objetos;
+- TLAS hit, picking, motion vectors e HiZ apontam para o mesmo objeto depois de compactação/reuso;
+- comparação visual CPU antes/depois não encontra regressão;
+- testes cobrem handles obsoletos e reuse após fence.
+
+## Fase 2 — Tabelas canônicas e formato-base deliberado
+
+### Objetivo
+
+Introduzir `FGpuSceneInstance`, `FGpuMeshRecord` e `FGpuMaterialRecord` como fontes canônicas sem
+alterar ainda a submissão raster.
+
+### Trabalho
+
+- escolher layouts paginados/SoA por consumidor e orçar bytes por instância residente;
+- criar espelhos C++/HLSL com ABI testada;
+- separar material do snapshot por instância do RT;
+- fazer `FRTInstanceGeo` consumir/derivar da tabela canônica, sem virar tabela universal;
+- implementar dirty rows/pages para transform, material e estrutura;
+- definir um novo formato-base deliberado; como v9 já identificou o experimento descartado, usar uma
+  versão nova e documentada em vez de reaproveitar semanticamente o número;
+- não incluir hierarquia de clusters nessa versão;
+- declarar `VirtualGeometryId` opcional/reservado sem serializar consumidor imaginário.
+
+### Arquivos prováveis
+
+- novos headers em `Engine/Include/Smile/Graphics/Scene/`
+- novas implementações em `Engine/Source/Graphics/Scene/`
+- `Engine/Include/Smile/Scene/CookedFormat.h`
+- `Engine/Source/Scene/SceneLoader.cpp`
+- `Engine/Source/Graphics/Renderer/RendererSceneImport.cpp`
+- `Engine/Source/Graphics/RayTracing/RaytracingScene.cpp`
+- `Shaders/GI/DDGICommon.hlsli` ou um include de scene tables dedicado
+
+### Gate de saída
+
+- atualização de uma propriedade de material toca uma linha/página de material, não todos os
+  `FRTInstanceGeo` usuários;
+- **o OMM é invalidado quando suas ENTRADAS mudam.** A chave do cache não referencia material:
+  `BlasByMesh` é `map<const FGpuMesh*, map<const FOpacityMicromapData*, GPUVA>>` em
+  [`RaytracingScene.h`](../Engine/Include/Smile/Graphics/RayTracing/RaytracingScene.h#L98), e a
+  dedup do bake é o compartilhamento do `shared_ptr<FOpacityMicromapData>` em
+  [`Scene.h`](../Engine/Include/Smile/Scene/Scene.h#L94) — normalizar material para `MaterialId`
+  não quebra essa chave por si só, e trocá-la por `MaterialId` também não resolveria nada, porque o
+  conteúdo do material pode mudar mantendo o mesmo id. O risco real é de VERSIONAMENTO: o OMM é
+  derivado de malha + textura de alpha + fator de alpha + cutoff, e a Fase 2 torna exatamente esses
+  campos alcançáveis por uma indireção que hoje não notifica ninguém. Uma edição de material que
+  toca só a linha da tabela pode deixar o micro-map obsoleto em silêncio. O invariante a provar é:
+  mudou qualquer entrada do bake, o `FOpacityMicromapData` é substituído/versionado e os BLAS
+  afetados são reconstruídos. O sintoma de falha cai em folhagem alpha-tested, onde micro-map
+  errado é quase invisível numa comparação estática;
+- o caminho estável não chama `Flush`/`WaitIdle` por edição de material;
+- layouts e versões possuem testes de ABI, offsets e bounds;
+- uma cena grande reporta bytes persistentes por tabela e dirty bytes por frame;
+- raster CPU e RT mantêm paridade visual.
+
+## Fase 3 — Raster bindless sem indirect
+
+### Objetivo
+
+Remover bindings por material/draw mantendo as mesmas listas CPU e as mesmas draws. Essa separação
+permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dados.
+
+### Trabalho
+
+- **primeira tarefa, antes de qualquer desenho: confirmar capability e contrato de direct heap
+  indexing** — `ResourceBindingTier`, ordem de binding e lifetime dos descriptors. A versão da root
+  signature **não** é a questão (ver abaixo). A raster
+  serializa hoje com `D3D_ROOT_SIGNATURE_VERSION_1` e a única flag é
+  `ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT` ([`PipelineState.cpp`](../Engine/Source/Graphics/Backend/D3D12/PipelineState.cpp#L221));
+  `CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED` aparece uma única vez na engine, no caminho de compute
+  ([`ComputePipeline.cpp`](../Engine/Source/Graphics/Backend/D3D12/ComputePipeline.cpp#L162)), e
+  também passa por `D3D12SerializeRootSignature` com `VERSION_1`
+  ([`PipelineUtils.cpp`](../Engine/Source/Graphics/Backend/D3D12/PipelineUtils.cpp#L13)). Ou seja,
+  **o precedente de que funciona já existe na árvore** — DDGI, ReSTIR e SHaRC usam
+  `ResourceDescriptorHeap` em produção por esse caminho. **A flag não é recurso de root signature
+  1.1**: ela pertence a `D3D12_ROOT_SIGNATURE_FLAGS`, enum compartilhado por `_DESC` (1.0) e
+  `_DESC1` (1.1), e o requisito documentado é Shader Model 6.6 + Resource Binding Tier 3 — RS 1.1
+  trata de volatilidade/staticness de descriptors, outro eixo. A serialização `VERSION_1` do
+  compute confirma na prática. Logo **não** se espera `SerializeVersionedRootSignature` nem mudança
+  no compute; o que precisa ser verificado é outra coisa:
+  - **`ResourceBindingTier` nunca é consultado.** O device lê apenas `Options.ResourceHeapTier` de
+    `D3D12_FEATURE_DATA_D3D12_OPTIONS` ([`D3D12Device.cpp`](../Engine/Source/Graphics/Backend/D3D12/D3D12Device.cpp#L188));
+    `ResourceBindingTier` é campo *irmão* do mesmo struct e não é lido nem exposto. SM 6.6 já está
+    garantido pelo hard requirement de SM 6.9, mas o Tier 3 precisa de query explícita;
+  - ordem de `SetDescriptorHeaps` / `SetGraphicsRootSignature` no caminho raster;
+  - lifetime e null descriptors sob heap indexado diretamente.
+- migrar a root signature raster para heap diretamente indexado;
+- fazer VS/PS receber `InstanceSlot`/`MaterialId` e ler tabelas globais;
+- substituir CBV de objeto por transform/instance record quando possível;
+- manter classes de PSO para opaque, masked, two-sided, blend e permutations;
+- validar descriptor lifetime, null descriptors e heap capacity;
+- adaptar z-prepass, GBuffer e shadows opacas por etapas;
+- manter material preview/editor em caminho separado se necessário, sem duplicar o ABI canônico.
+
+### Arquivos prováveis
+
+- `Engine/Source/Graphics/Backend/D3D12/PipelineState.cpp`
+- `Engine/Source/Graphics/Resources/Material.cpp`
+- `Engine/Include/Smile/Graphics/Resources/Material.h`
+- `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
+- shaders de depth/GBuffer/shadow e includes de material
+- `Engine/Include/Smile/Graphics/Backend/D3D12/TextureSRVHeap.h`
+
+### Gate de saída
+
+- CPU draws continuam iguais, mas binds de material por item são eliminados no caminho migrado;
+- opaque, masked, two-sided, emissivo, motion vectors e TAA/DLSS guides mantêm paridade;
+- nenhum descriptor é reutilizado antes da fence;
+- SRV heap possui ocupação/overflow observável;
+- fallback não-bindless está explícito e contado.
+
+## Fase 4 — GPU Scene persistente e ranges
+
+### Objetivo
+
+Publicar a cena na GPU por páginas sujas e estabelecer `FInstanceRange` como única entrada do futuro
+culling.
+
+### Trabalho
+
+- criar buffers persistentes por frame safety, allocator e high-water mark;
+- upload inicial por páginas e updates incrementais por dirty ranges;
+- produzir um range único para cena plana;
+- **excluir a classe `RaytracingOnly` do conjunto candidato de raster.** `FRenderable::RaytracingOnly`
+  ([`Scene.h`](../Engine/Include/Smile/Scene/Scene.h#L108)) marca renderáveis que existem só para
+  TLAS e tabelas de hit — hoje o proxy do terreno — e que ficam fora de raster, prepass, CSM e
+  picking. O laço CPU atual os filtra explicitamente em
+  [`RendererPasses.cpp`](../Engine/Source/Graphics/Renderer/RendererPasses.cpp#L1922); a expansão
+  de ranges precisa herdar esse filtro, ou o terreno passa a ser desenhado duas vezes — uma pelo
+  `FTerrain` e outra pelo proxy. O D9 lista terrain/water como fallback, mas esta é uma classe
+  distinta: não é fallback, é exclusão;
+- expandir ranges na GPU e validar slots/generation em debug;
+- publicar contadores de candidatos, inválidos e overflow;
+- não executar culling ainda: todos os candidatos válidos passam;
+- medir custo de upload em cena estática, transform storm e edição de material.
+
+### Arquivos prováveis
+
+- `Engine/Include/Smile/Graphics/Scene/GpuScene.h`
+- `Engine/Source/Graphics/Scene/GpuScene.cpp`
+- `Engine/Source/Graphics/Renderer/RendererScene.cpp`
+- novos shaders `Shaders/GpuScene/`
+- manifestos CMake de engine e shaders
+
+### Gate de saída
+
+- cena estática envia zero dirty pages depois do assentamento;
+- mover um objeto não faz upload proporcional ao total;
+- remover/reusar slot respeita generation e fences;
+- 1M instâncias não exigem reconstrução/upload integral por frame;
+- range único e múltiplos ranges sintéticos produzem a mesma lista expandida.
+
+## Fase 5 — Indirect main view sem oclusão
+
+### Objetivo
+
+Trocar submissão por renderable por `ExecuteIndirect`, inicialmente desenhando o mesmo conjunto
+frustum-visible ou até todos os candidatos para maximizar depuração.
+
+### Trabalho
+
+- definir command signature e layout de args/count;
+- pré-calcular batch IDs por pass/PSO/geometry class;
+- implementar count → prefix → scatter → args reutilizando o padrão da água;
+- compactar `InstanceInfo`/visible slots;
+- executar depth e GBuffer por grupos de geometry page/PSO;
+- adicionar modo A/B CPU versus GPU-driven no mesmo build;
+- incluir canário/guard regions e contadores de out-of-bounds;
+- manter transparentes, terrain, water, editor helpers e unsupported no fallback.
+
+### Arquivos prováveis
+
+- novo `GpuDrivenRenderer`/`GpuDrawStream` em `Graphics/Renderer` ou `Graphics/Scene`
+- `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
+- `Engine/Source/Graphics/Backend/D3D12/PipelineState.cpp`
+- novos shaders de classify/count/prefix/scatter/args
+- `Shaders/Water/WaterGenerateDraws.cs.hlsl` como referência, não dependência
+
+### Gate de saída
+
+- imagem e contagens coincidem com o caminho CPU para opaque suportado;
+- argumentos, count buffer e instance ranges não ultrapassam capacidade;
+- CPU submission cai de proporcional a objetos para proporcional a classes/pages;
+- nenhuma readback decide a draw;
+- alternar A/B no mesmo bookmark não exige reload da cena.
+
+## Fase 6 — Culling GPU e HiZ residente
+
+### Objetivo
+
+Mover frustum e oclusão para a GPU, eliminar o readback do HiZ como decisão de frame e manter
+comportamento conservador.
+
+### Trabalho
+
+- culling por frame contra frusta/pass masks;
+- depth prepass baseado em frustum, com HZB anterior apenas quando conservador e medido;
+- construir HZB atual depois do depth;
+- usar HZB atual para GBuffer/late passes;
+- conectar visibilidade diretamente aos counts/offsets/args;
+- manter readback somente de métricas atrasadas;
+- inflar bounds/frustum onde jitter e precisão exigirem;
+- testar câmera dentro do bound, near-plane crossing, teleport, resize e dynamic resolution;
+- evitar small-triangle culling nesta fase.
+
+### Arquivos prováveis
+
+- `Engine/Source/Graphics/Scene/HiZOcclusion.cpp`
+- `Engine/Include/Smile/Graphics/Scene/HiZOcclusion.h`
+- `Shaders/HZB/HZBTest.cs.hlsl`
+- shaders de culling e draw stream
+- `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
+
+### Gate de saída
+
+- desligar readback de visibilidade não muda a imagem esperada;
+- câmera em movimento rápido/teleport não produz desaparecimentos falsos;
+- selected objects não precisam de exceção para mascarar atraso de readback;
+- métricas separam candidates, frustum rejected, occlusion rejected e drawn;
+- custo de culling + trabalho restante não piora o critical path nas cenas de gate.
+
+## Fase 7 — Pass masks, shadows, alpha test e fallback endurecido
+
+### Objetivo
+
+Expandir o núcleo para passes reais sem transformar cada pass em outro pipeline completo.
+
+### Trabalho
+
+- calcular pass mask no culling por frame;
+- gerar streams específicos para sun cascades e local shadows;
+- avaliar reprojeção de receivers para descartar shadow casters somente com A/B;
+- migrar masked e two-sided com classes de PSO corretas;
+- preservar `IsTwoSidedForRT`/política raster coerente para foliage, grade e vidro;
+- manter blend ordenado na CPU;
+- contar fallback por motivo e publicar top offenders;
+- migrar picking/selection para consumir stable handles/visible stream onde for seguro.
+
+### Arquivos prováveis
+
+- `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
+- `Engine/Source/Graphics/Lighting/SunShadows.cpp`
+- `Engine/Source/Graphics/Lighting/LocalShadows.cpp`
+- `Engine/Source/Graphics/Editor/Picking.cpp`
+- shaders de depth/shadow/GBuffer
+
+### Gate de saída
+
+- sun/local shadows não percorrem `AllItems` inteiro para o conjunto migrado;
+- **o cache estático do CSM sobrevive, ou sua remoção é paga por medição.** O `FSunShadows` já tem
+  metade cacheada: DSV heap próprio, invalidação por `StaticCastersVersion` e lista ordenada com os
+  estáticos primeiro ([`SunShadows.h`](../Engine/Include/Smile/Graphics/Lighting/SunShadows.h#L113)),
+  de modo que a cascata estática não é redesenhada todo frame. Um stream de sombra GPU-driven que
+  regenera tudo por frame **desfaz uma otimização que já existe**, e o gate acima não pega isso: a
+  imagem fica idêntica e só o tempo piora. É o critério de parada nº 8 da §10 na sua forma concreta
+  — aumentar o critical path sem remover custo equivalente;
+- foliage/alpha test/two-sided não ganham buracos ou inversão de culling;
+- picking e outline retornam o objeto certo após reuse de slots;
+- fallback é pequeno, explícito e possui motivo;
+- CPU path permanece disponível para bisect até a promoção da fase.
+
+## Fase 8 — World cells, streaming e promoção do núcleo
+
+### Objetivo
+
+Trocar o produtor de range plano por broad phase espacial/streaming sem alterar o consumidor GPU e
+promover o GPU-driven geral a caminho padrão quando os gates forem atendidos.
+
+### Trabalho
+
+- introduzir streaming cells e spatial nodes que mantêm **listas de handles arbitrários** e emitem
+  spans em `CandidateInstanceIds` — nunca ranges de slots (ver D5). Célula não impõe contiguidade
+  no allocator global;
+- escolher loose octree/BVH/grid medido, sem copiar o quad-tree da Anvil por dogma;
+- separar mundo lógico, residente e candidato;
+- carregar/descarregar páginas respeitando handle generations e fences;
+- suportar teleport e bursts de streaming;
+- adicionar orçamento de residency e backpressure;
+- promover GPU-driven para opaque/masked suportado;
+- manter kill switch e fallback diagnóstico por uma janela definida.
+
+### Arquivos prováveis
+
+- novos tipos em `Engine/Include/Smile/Scene/`
+- loader/streaming em `Engine/Source/Scene/`
+- `GpuScene` e renderer scene import
+- editor/outliner para estado lógico versus residente
+
+### Gate de saída
+
+- 1M residentes e milhões lógicos não causam iteração CPU integral por frame;
+- trocar range único por ranges de cells não muda shaders de culling;
+- teleport não usa handle stale nem mostra geometria liberada;
+- budgets e evictions são observáveis;
+- GPU-driven é default para o conjunto suportado e possui rollback conhecido.
+
+## Fase 9 — Clusters planos e sidecar `.svgeo`
+
+### Objetivo
+
+Introduzir um consumidor real de clusters antes de congelar o formato de virtual geometry.
+
+### Trabalho
+
+- integrar formalmente uma versão fixada do `meshoptimizer` ou alternativa escolhida;
+- registrar licença, versão e CMake;
+- gerar clusters com sweep de parâmetros, não assumir 256/128;
+- definir `.svgeo` v1 independente do `.smesh` base;
+- armazenar bounds, normal cone, vertex/triangle ranges e encoding validado;
+- rasterizar clusters selecionados com pipeline convencional/mesh shaders conforme suporte;
+- medir vertex reuse, cluster count, bytes, overdraw e culling efficiency;
+- manter geometria convencional como fallback e referência.
+
+### Arquivos prováveis
+
+- `Engine/ThirdParty/meshoptimizer/` formalmente versionado
+- `Tools/Cooker/`
+- novos tipos de sidecar em `Engine/Include/Smile/Scene/`
+- loader de virtual geometry
+- shaders de cluster culling/raster
+- query de mesh shader tier em `D3D12Device`
+
+### Gate de saída
+
+- sidecar possui schema, versão, bounds checks, checksum e testes de corrupção;
+- cluster build é determinístico;
+- parâmetros são justificados por dados em pelo menos três famílias de cena;
+- caminho sem `.svgeo` continua funcional;
+- nenhum DAG/streaming é fingido por um array plano.
+
+## Fase 10 — Hierarquia, LOD contínuo e geometry pages
+
+### Objetivo
+
+Selecionar um corte hierárquico por erro projetado e carregar somente páginas necessárias.
+
+### Trabalho
+
+- construir DAG/árvore de clusters com parent/child ranges;
+- armazenar erro geométrico e bounds conservadores;
+- selecionar clusters por erro em pixels na render resolution atual;
+- tratar jitter/dynamic resolution sem cintilação;
+- impedir cracks ou definir estratégia explícita de seams/stitching;
+- criar geometry page cache, feedback, request dedup, prioridade e eviction;
+- separar requests visíveis, prefetch e RT;
+- testar memória insuficiente e páginas atrasadas com fallback conservador;
+- integrar cell streaming e cluster streaming sem duas políticas concorrentes.
+
+### Gate de saída
+
+- transições não apresentam popping inaceitável em sequência de câmera;
+- seleção respeita erro projetado em resoluções/render scales diferentes;
+- miss de página nunca lê memória inválida nem remove toda representação do objeto;
+- VRAM respeita orçamento e evictions não drenam a GPU;
+- Moana geometry subset ou stress equivalente demonstra benefício sobre LOD tradicional.
+
+## Fase 11 — Micropolygon, materiais deferred, RT e benchmark Moana
+
+### Objetivo
+
+Fechar a trilha Nanite-like somente onde o perfil justificar, integrar consumidores restantes e
+validar escala de produção.
+
+### Trabalho
+
+- comparar hardware raster/mesh shader com software raster para microtriângulos;
+- avaliar visibility buffer/material binning em vez de expandir PSOs por material;
+- manter alpha/foliage/deformáveis em caminhos adequados, sem forçar solução única;
+- definir política RT para BLAS por LOD/cluster, cache, proxies e TLAS residente;
+- converter uma Moana Geometry subset preservando protótipos e transforms;
+- avançar para ilha completa por cells/pages, sem exigir materiais/volumes offline no primeiro gate;
+- medir CPU, GPU, VRAM, streaming, qualidade e estabilidade temporal;
+- documentar quais partes são GPU-driven geral, virtual geometry ou conteúdo específico.
+
+### Gate de saída
+
+- escolha hardware/software raster é sustentada por perf e qualidade, não analogia com outra engine;
+- material resolve não reintroduz custo por material/draw;
+- RT não exige todas as instâncias lógicas no TLAS;
+- Moana-scale preserva instancing e opera dentro de budgets declarados;
+- a feature possui fallback, diagnóstico, documentação e matriz de plataformas.
+
+## 9. Matriz de validação
+
+### 9.1 Conteúdo
+
+| Conteúdo | O que prova |
+|---|---|
+| Bistro | materiais variados, transparência, alpha e regressão visual |
+| Emerald | instancing real e muitos materiais |
+| BEEPLE MEASURE_SEVEN | maior contagem atual, submissão e memória |
+| SunTemple | shadows e referência histórica do protótipo removido |
+| sintética 10k/100k/1M | scaling controlado e overflows |
+| Moana Geometry subset | instancing massivo, clusters e streaming |
+| Moana completa | alvo final de escala, não gate do núcleo inicial |
+
+### 9.2 Câmera e tempo
+
+- bookmark estático repetível;
+- flythrough com velocidade controlada;
+- teleport;
+- near-plane crossing;
+- câmera dentro de bounds grandes;
+- render scale sweep e resolução dinâmica;
+- jitter TAA/DLSS/FSR;
+- objeto estático, dinâmico, spawn, delete e reuse;
+- resize e troca de cena.
+
+### 9.3 Materiais e passes
+
+- opaque single/two-sided;
+- alpha test foliage e alpha test não-foliage;
+- blend no fallback;
+- emissivo;
+- normal/MR separados e packed;
+- z-prepass, GBuffer, sun/local shadow;
+- picking/selection;
+- motion vectors e guides temporais;
+- RT hits/alpha/OMM quando aplicável.
+
+### 9.4 Sinais obrigatórios
+
+- tempo CPU de scene update, list/classify e submission;
+- tempo GPU de expand/cull/count/prefix/scatter/args por pass;
+- candidates, visible, rejected por motivo;
+- batches potenciais, indirect commands e draws fallback;
+- bytes persistentes, transitórios, dirty/uploaded e high-water marks;
+- descriptor occupancy;
+- overflows, stale handles, page misses e evictions;
+- waits/drains e queue bubbles;
+- imagem/capture metadata conforme protocolo.
+
+### 9.5 Gates de qualidade
+
+- comparação visual A/B no mesmo build e bookmark;
+- sequência temporal para popping, shimmer, ghosting e motion vectors;
+- bounds/culling conservador sob jitter;
+- nenhum pixel perdido é aceito como “otimização” sem classificação conhecida;
+- small-triangle culling, quando existir, usa render resolution e considera jitter;
+- backface culling respeita a classe two-sided correta, não apenas uma flag crua.
+
+## 10. Critérios de interrupção
+
+Uma fase para e volta ao implementador quando:
+
+- requer `Flush`/`WaitIdle` no frame estável;
+- cria readback necessário para desenhar;
+- usa índice denso como identidade persistente;
+- perde geometria em overflow em vez de fallback conservador;
+- mistura material identity na chave depois de bindless sem justificar PSO;
+- torna cluster/virtual geometry obrigatório para conteúdo convencional;
+- publica ganho sem baseline limpa/repetível;
+- aumenta critical path da GPU sem remover custo equivalente;
+- altera formato persistido sem versionamento e testes de bounds;
+- reviewer encontra P0/P1 ainda aberto.
+
+## 11. Sequência sugerida de commits
+
+Cada item abaixo deve ser revisável isoladamente; uma fase pode exigir mais de um commit, mas commits
+não atravessam fases sem motivo explícito.
+
+1. `docs(rendering): add gpu-driven architecture plan`
+2. `chore(cooker): version the scene recook recipe and baseline manifest` — **não** um commit de
+   assets: `/Assets/Scenes/` está no `.gitignore` (linha 36) e nenhum `.sscene`/`.smesh` é tracked,
+   então um commit de recook seria vazio. O que se versiona é a receita (script/manifesto por cena,
+   incluindo quem usa `--opaque-glass`) e a atualização da baseline. O recook em si é uma operação
+   de máquina, registrada por hash no manifesto
+3. `perf(renderer): add cpu submission and gpu-driven baseline telemetry`
+4. `refactor(scene): add stable gpu scene handles and consumer remaps`
+5. `feat(rendering): add canonical gpu scene tables`
+6. `refactor(raytracing): source instance materials from canonical table`
+7. `feat(rendering): make opaque raster materials bindless`
+8. `feat(rendering): add paged gpu scene uploads and instance ranges`
+9. `feat(rendering): generate opaque indirect draw streams`
+10. `feat(rendering): keep frustum and hiz visibility on gpu`
+11. `feat(rendering): add gpu-driven shadow streams and masked materials`
+12. `feat(scene): produce instance ranges from streaming cells`
+13. `feat(cooker): add versioned cluster sidecar`
+14. `feat(rendering): select hierarchical cluster lods`
+15. `feat(rendering): stream virtual geometry pages`
+16. `feat(rendering): add measured micropolygon raster path`
+
+## 12. Pacote obrigatório para revisão
+
+O implementador entrega, para cada milestone:
+
+```text
+Objetivo e fase
+Base commit e head commit
+Arquivos alterados
+Invariantes afetados
+Formato/ABI antes e depois
+Comandos de build/test executados
+Capturas e métricas com ambiente
+Fallback e kill switch
+Limitações conhecidas
+Riscos ainda abertos
+Diff completo
+```
+
+O revisor:
+
+1. lê o diff antes da justificativa detalhada para reduzir ancoragem;
+2. verifica correção, D3D12, ABI, lifetime, arquitetura e evidência;
+3. classifica findings por prioridade;
+4. aponta arquivo/linha, consequência, correção recomendada e teste;
+5. não modifica o working tree;
+6. repete a revisão depois das correções;
+7. não aprova uma fase apenas porque compila.
+
+Formato sugerido de finding:
+
+```text
+[P1] Título curto
+Evidência: arquivo:linha e estado observado
+Impacto: falha funcional, corrupção, stall ou dívida arquitetural
+Orientação: mudança mínima esperada
+Prova: teste/captura/métrica que fecha o finding
+```
+
+P0/P1 bloqueiam promoção. P2 precisa ser corrigido ou explicitamente aceito pelo proprietário. P3 é
+melhoria não bloqueante e não deve expandir o milestone.
+
+## 13. Comandos mínimos de validação
+
+Para todo milestone com código:
+
+```powershell
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Mudanças em shaders exigem compilação DXC bem-sucedida. Mudanças visuais exigem captura antes/depois
+com `CAPTURE-PROTOCOL.md`. Alterações de formato exigem, além disso:
+
+- round-trip ou load de arquivo válido;
+- truncation/corruption tests;
+- stride/offset assertions;
+- rejeição explícita de versão incompatível;
+- recook determinístico ou diferença explicada.
+
+Mudanças GPU-driven exigem A/B no mesmo executável enquanto o fallback existir.
+
+## 14. Decisões que não devem ser reabertas sem nova evidência
+
+- o raster bindless precede batching material-independent;
+- resultado de visibilidade não volta à CPU;
+- ranges são a entrada desde o primeiro culling;
+- IDs estáveis migram TLAS, temporal, HiZ e picking juntos;
+- `FRTInstanceGeo` é snapshot especializado, não tabela universal;
+- não será criado compilador Database/SIG;
+- GPU hash map não entra no MVP;
+- triangle culling tradicional não entra antes de clusters/mesh shaders medidos;
+- direct queue precede async compute;
+- transparência ordenada permanece fallback inicial;
+- virtual geometry é sidecar e não requisito do formato-base;
+- os parâmetros 256/128 do protótipo removido não são default aprovado;
+- a Moana é benchmark de escala, não asset a redistribuir nem requisito para fechar o núcleo.
+
+## 15. Proveniência técnica
+
+- William Bussière e Nicolas Lopez, “GPU-Driven Rendering in Assassin's Creed Mirage”, em
+  *GPU Zen 3: Advanced Rendering Techniques*.
+- Ubisoft Anvil, “Micropolygon Rendering in Anvil”, GDC 2026.
+- Disney Animation, *Moana Island Scene*, dataset de pesquisa e benchmarking.
+- `meshoptimizer`, referência candidata para clusterização e simplificação; versão e integração ainda
+  devem ser deliberadamente escolhidas na Fase 9.
+- Implementação atual da Smile citada nas seções de evidência deste documento.
+
+## 16. Ponto exato para começar
+
+Não começar por shader de culling, meshlet ou `.svgeo`. O próximo trabalho autorizado é a Fase 0:
+
+1. ~~recook v8 coerente~~ — feito; versionar a RECEITA do recook (ver Fase 0);
+2. build/test/captura baseline;
+3. telemetria CPU de preparação/submissão;
+4. cena sintética escalável;
+5. pacote de evidência para revisão read-only.
+
+Somente depois desse gate começa a migração coordenada de identidade da Fase 1.
