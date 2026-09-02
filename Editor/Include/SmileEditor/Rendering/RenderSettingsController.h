@@ -145,6 +145,10 @@ namespace SmileEditor {
         FVideoMemorySnapshot            Vram;
         FRenderSettingsSnapshot         Settings;
         FCpuProfileSnapshot             Cpu;
+        // Frame que produziu os timestamps de GPU em Direct/AsyncCompute. Fica ATRASADO em
+        // relacao a FrameIndex e a Cpu.SourceFrameIndex, porque o slot so e legivel depois do
+        // fence. Publicado para que quem agrega nao junte GPU e CPU de frames diferentes.
+        quint64                         GpuSourceFrameIndex = 0;
     };
 
     struct FProfileConfiguration {

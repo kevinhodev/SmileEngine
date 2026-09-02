@@ -358,6 +358,7 @@ namespace SmileEditor {
         Result.Vram.NonLocalUsageBytes = VM.NonLocalUsage;
         Result.Settings = CollectSettings(*Access);
         Result.Cpu      = CollectCpuStats(*Access);
+        Result.GpuSourceFrameIndex = Access->GetGpuProfiler().ResultsFrameIndex();
         return Result;
     }
 

@@ -117,10 +117,65 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
         ((left.rawMilliseconds.median as number | undefined) ?? 0),
     );
 
+  // Telemetria de CPU agregada SEMPRE, nao so quando includeSamples esta ligado. Com o default
+  // (false), a CPU sumia inteira da resposta e o smile_profile_gpu so devolvia GPU/FPS/VRAM —
+  // ou seja, a regua existia no editor e nao chegava a quem mede.
+  const cpuStats = snapshots.map((snapshot) => snapshot.cpu).filter(Boolean);
+  const passKeys = new Set<string>();
+  for (const cpu of cpuStats) for (const pass of cpu.passes) passKeys.add(pass.key);
+  const cpuSummary = cpuStats.length
+    ? {
+        // Identidades das DUAS series. A de GPU esta atrasada (o slot so e legivel depois do
+        // fence), entao elas nao sao pareaveis por posicao — cada uma se agrega por si.
+        firstSourceFrameIndex: cpuStats[0]?.sourceFrameIndex ?? null,
+        lastSourceFrameIndex: cpuStats.at(-1)?.sourceFrameIndex ?? null,
+        distinctFrames: new Set(cpuStats.map((cpu) => cpu.sourceFrameIndex)).size,
+        timingsMs: {
+          buildDrawLists: summarize(cpuStats.map((c) => c.timingsMs.buildDrawLists)),
+          cullSort: summarize(cpuStats.map((c) => c.timingsMs.cullSort)),
+          batchSort: summarize(cpuStats.map((c) => c.timingsMs.batchSort)),
+          shadowLists: summarize(cpuStats.map((c) => c.timingsMs.shadowLists)),
+          submit: summarize(cpuStats.map((c) => c.timingsMs.submit)),
+        },
+        scene: {
+          renderables: summarize(cpuStats.map((c) => c.scene.renderables)),
+          drawItems: summarize(cpuStats.map((c) => c.scene.drawItems)),
+          visibleItems: summarize(cpuStats.map((c) => c.scene.visibleItems)),
+          occludedItems: summarize(cpuStats.map((c) => c.scene.occludedItems)),
+          materials: cpuStats[0]?.scene.materials ?? null,
+          meshes: cpuStats[0]?.scene.meshes ?? null,
+        },
+        objectConstantBytes: summarize(cpuStats.map((c) => c.objectConstantBytes)),
+        srvHeap: {
+          used: summarize(cpuStats.map((c) => c.srvHeap.used)),
+          highWater: cpuStats.at(-1)?.srvHeap.highWater ?? null,
+          capacity: cpuStats[0]?.srvHeap.capacity ?? null,
+        },
+        passes: [...passKeys].map((key) => {
+          const rows = cpuStats
+            .map((cpu) => cpu.passes.find((pass) => pass.key === key))
+            .filter((pass): pass is NonNullable<typeof pass> => Boolean(pass));
+          return {
+            key,
+            considered: summarize(rows.map((row) => row.considered)),
+            draws: summarize(rows.map((row) => row.draws)),
+            materialBinds: summarize(rows.map((row) => row.materialBinds)),
+            meshBinds: summarize(rows.map((row) => row.meshBinds)),
+            skippedInvalid: summarize(rows.map((row) => row.skippedInvalid)),
+          };
+        }),
+      }
+    : null;
+
   return {
     sampleCount: snapshots.length,
     firstFrameIndex: snapshots[0]?.frameIndex ?? null,
     lastFrameIndex: snapshots.at(-1)?.frameIndex ?? null,
+    // A serie de GPU tem identidade propria e ATRASADA. Publicada para nao se confundir com
+    // frameIndex nem com cpu.*SourceFrameIndex.
+    firstGpuSourceFrameIndex: snapshots[0]?.gpuSourceFrameIndex ?? null,
+    lastGpuSourceFrameIndex: snapshots.at(-1)?.gpuSourceFrameIndex ?? null,
+    cpu: cpuSummary,
     gpu: snapshots[0]?.gpu ?? null,
     resolution: snapshots[0]
       ? {
@@ -816,10 +871,42 @@ server.registerTool(
       if (input.warmupSeconds > 0) {
         await new Promise((resolve) => setTimeout(resolve, input.warmupSeconds * 1000));
       }
+      // Amostras precisam ser de frames DISTINTOS. Ler N vezes por relogio nao garante isso:
+      // com o editor parado, throttled ou momentaneamente bloqueado, o mesmo frame entrava
+      // varias vezes na mediana/p95 e a estatistica ficava com peso falso. O sourceFrameIndex
+      // existe para ser CONSUMIDO — so avanca a coleta quando ele muda.
       const snapshots: ProfileSnapshot[] = [];
-      for (let index = 0; index < input.samples; index += 1) {
-        snapshots.push(await editorBridge.profileSnapshot(Math.max(2_000, input.intervalMs * 4)));
-        if (index + 1 < input.samples) {
+      const deadline = Date.now() + Math.max(5_000, input.samples * input.intervalMs * 8);
+      let lastFrame = -1;
+      let staleReads = 0;
+      while (snapshots.length < input.samples) {
+        if (Date.now() > deadline) {
+          throw new Error(
+            `Coleta abortada: ${snapshots.length}/${input.samples} frames distintos em ` +
+              `${staleReads} leituras repetidas. O editor pode estar pausado, em background ` +
+              `throttle ou travado.`,
+          );
+        }
+        const snapshot = await editorBridge.profileSnapshot(
+          Math.max(2_000, input.intervalMs * 4),
+        );
+        const frame = snapshot.cpu.sourceFrameIndex;
+        // Monotonico: um indice MENOR que o ultimo significa reinicio do renderer no meio da
+        // coleta, e misturar as duas metades daria uma serie sem sentido.
+        if (frame < lastFrame) {
+          throw new Error(
+            `Coleta abortada: sourceFrameIndex retrocedeu (${lastFrame} -> ${frame}); ` +
+              `o renderer reiniciou durante a amostragem.`,
+          );
+        }
+        if (frame === lastFrame) {
+          staleReads += 1;
+          await new Promise((resolve) => setTimeout(resolve, input.intervalMs));
+          continue;
+        }
+        lastFrame = frame;
+        snapshots.push(snapshot);
+        if (snapshots.length < input.samples) {
           await new Promise((resolve) => setTimeout(resolve, input.intervalMs));
         }
       }

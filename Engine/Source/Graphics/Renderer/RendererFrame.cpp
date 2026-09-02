@@ -787,7 +787,8 @@ namespace Smile {
 
         Backend->DirectQueue.BeginFrame();
 
-        Backend->DirectProfiler.BeginFrame(Backend->DirectQueue.FrameIndex());
+        Backend->DirectProfiler.BeginFrame(Backend->DirectQueue.FrameIndex(),
+                                           FrameState->FrameIndex);
         Backend->DirectProfiler.Begin(Backend->DirectQueue.List(), "Frame (GPU)");
 
         ObjectPicker.Tick();

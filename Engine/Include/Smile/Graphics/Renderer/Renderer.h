@@ -256,7 +256,7 @@ namespace Smile {
         u32  GetOccludedCount() const    { return LastOccludedCount; }
         u32  GetVisibleCount() const     { return LastVisibleCount; }
         // ⚠️ Isto e o total de RENDERAVEIS DA CENA, nao contagem de draw — o nome mente desde
-        // sempre e a UI o rotula como "total". Draws de verdade: CpuStats().TotalDraws(), que
+        // sempre e a UI o rotula como "total". Draws de verdade: CpuStats().InstrumentedSceneMeshDraws(),
         // conta no ponto de submissao. Mantido porque a StatsBridge o publica como totalDrawCount.
         u32  GetSceneRenderableCount() const;
         [[deprecated("nao e draw count; use GetSceneRenderableCount ou CpuStats().InstrumentedSceneMeshDraws()")]]

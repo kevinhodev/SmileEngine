@@ -33,13 +33,14 @@ namespace Smile {
         ReadbackMapped = reinterpret_cast<const u64*>(Ptr);
 
         PendingScopes.resize(FramesInFlight_);
+        PendingFrameIndex.assign(FramesInFlight_, 0);
         CurrentScopes.reserve(kMaxScopes);
         OpenStack.reserve(8);
         LogDebug("[GPU] Profiler de timestamps inicializado (" +
                 std::to_string(kMaxScopes) + " escopos/frame)");
     }
 
-    void FGpuProfiler::BeginFrame(u32 _FrameSlot) {
+    void FGpuProfiler::BeginFrame(u32 _FrameSlot, u64 _SourceFrameIndex) {
         if (!IsInitialized()) return;
         FrameSlot_ = _FrameSlot;
 
@@ -53,6 +54,8 @@ namespace Smile {
 
             LastResults.clear();
             LastResults.reserve(Old.size());
+            // Identidade do frame que GRAVOU este slot, nao a do frame corrente.
+            LastResultsFrameIndex = PendingFrameIndex[FrameSlot_];
             for (const FScopeRec& S : Old) {
                 const u64 T0 = Base[S.BeginQuery];
                 const u64 T1 = Base[S.EndQuery];
@@ -67,6 +70,9 @@ namespace Smile {
         CurrentScopes.clear();
         OpenStack.clear();
         NextQuery = 0;
+        // Registrado ANTES de gravar: o Resolve copia CurrentScopes para o slot, e este indice
+        // e o do frame que esta comecando agora a preencher esse mesmo slot.
+        PendingFrameIndex[FrameSlot_] = _SourceFrameIndex;
     }
 
     void FGpuProfiler::Begin(ID3D12GraphicsCommandList* _List, const char* _Name) {

@@ -254,7 +254,8 @@ namespace Smile {
                 const u64 S1 = Backend->DirectQueue.SubmitSegmentAndContinue();
 
                 ID3D12GraphicsCommandList* CCL = Backend->ComputeQueue.Begin();
-                Backend->ComputeProfiler.BeginFrame(Backend->ComputeQueue.CurrentSlot());
+                Backend->ComputeProfiler.BeginFrame(Backend->ComputeQueue.CurrentSlot(),
+                                                    FrameState->FrameIndex);
                 ID3D12DescriptorHeap* CHeaps[] = { Backend->SRVHeap.Native() };
                 CCL->SetDescriptorHeaps(_countof(CHeaps), CHeaps);
                 {

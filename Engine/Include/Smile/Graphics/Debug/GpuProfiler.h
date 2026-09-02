@@ -21,7 +21,10 @@ namespace Smile {
 
         // Ordem por frame: BeginFrame (le o slot antigo) -> Begin/End dos passes -> Resolve
         // (ultima coisa antes do Close). Nomes DEVEM ser literais/estaveis (guarda o ponteiro).
-        void BeginFrame(u32 FrameSlot);
+        // SourceFrameIndex e a identidade GLOBAL do frame que gravou os timestamps deste slot.
+        // Sem ela, Results() devolve medidas de kFramesInFlight frames atras sem dizer de qual
+        // frame vieram, e quem junta CPU com GPU correlaciona frames diferentes sem perceber.
+        void BeginFrame(u32 FrameSlot, u64 SourceFrameIndex = 0);
         void Begin(ID3D12GraphicsCommandList* List, const char* Name);
         void End(ID3D12GraphicsCommandList* List); // fecha o escopo aberto mais recente
         void Resolve(ID3D12GraphicsCommandList* List);
@@ -37,6 +40,9 @@ namespace Smile {
         };
         // Snapshot do ultimo frame lido, na ordem de gravacao ("Frame" total incluso).
         const std::vector<FScopeResult>& Results() const { return LastResults; }
+        // Frame que produziu o conteudo de Results(). Fica ATRASADO em relacao ao frame corrente
+        // (o slot so e legivel depois do fence), e e justamente por isso que ele existe.
+        u64 ResultsFrameIndex() const { return LastResultsFrameIndex; }
 
     private:
         struct FScopeRec {
@@ -61,6 +67,8 @@ namespace Smile {
         std::vector<std::vector<FScopeRec>> PendingScopes; // por slot: o que foi gravado la
         std::unordered_map<std::string, f64> Smoothed;
         std::vector<FScopeResult>           LastResults;
+        std::vector<u64>                    PendingFrameIndex; // por slot, pareado com PendingScopes
+        u64                                 LastResultsFrameIndex = 0;
     };
 
     // Escopo RAII: FGpuScope S(Profiler, List, "Nome");

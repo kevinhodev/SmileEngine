@@ -20,7 +20,14 @@
 
 namespace SmileEditor {
     namespace {
-        constexpr int kProtocolVersion = 1;
+        // v2: profile_snapshot passou a incluir o bloco "cpu" e "gpuSourceFrameIndex", e o
+        // cliente os EXIGE. Sem o bump, editor antigo e cliente novo fechavam handshake e so
+        // falhavam la na frente, dentro do profile_snapshot — erro tardio e sem causa obvia.
+        //
+        // O NOME DO PIPE fica em v1 de proposito: ele e ponto de encontro, nao declaracao de
+        // protocolo. Mantendo-o, um par incompativel ainda CONECTA e recebe rejeicao explicita
+        // de versao; renomeando, viraria "editor nao encontrado", que e um diagnostico pior.
+        constexpr int kProtocolVersion = 2;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -222,8 +229,9 @@ namespace SmileEditor {
                 });
             }
             return QJsonObject{
-                // ⚠️ Difere do frameIndex de fora: este e o frame que a amostra descreve, e o
-                // de fora ja avancou. Correlacionar CPU com GPU exige ESTE campo.
+                // ⚠️ Identidade da serie de CPU. A serie de GPU tem a sua propria
+                // (gpuSourceFrameIndex, no nivel de cima) e esta ATRASADA: as duas sao series
+                // independentes e devem ser agregadas separadamente, nunca pareadas por posicao.
                 { QStringLiteral("sourceFrameIndex"),
                   static_cast<double>(_Cpu.SourceFrameIndex) },
                 { QStringLiteral("timingsMs"), QJsonObject{
@@ -255,6 +263,11 @@ namespace SmileEditor {
         QJsonObject SerializeProfileSnapshot(const FProfileSnapshot& _Snapshot) {
             return QJsonObject{
                 { QStringLiteral("frameIndex"), static_cast<double>(_Snapshot.FrameIndex) },
+                // Os timestamps de GPU vem do slot lido kFramesInFlight frames atras, entao
+                // NAO sao do mesmo frame que a CPU. Publicar as duas identidades e o que permite
+                // agregar cada serie por si em vez de fingir uma correlacao que nao existe.
+                { QStringLiteral("gpuSourceFrameIndex"),
+                  static_cast<double>(_Snapshot.GpuSourceFrameIndex) },
                 { QStringLiteral("cpuFps"), _Snapshot.CpuFps },
                 { QStringLiteral("outputWidth"), _Snapshot.OutputWidth },
                 { QStringLiteral("outputHeight"), _Snapshot.OutputHeight },
