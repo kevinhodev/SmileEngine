@@ -641,7 +641,36 @@ contra assets incompatíveis.
   moram em DEFAULT. A resposta tem de sair do **delta de memória local/não-local medido em
   runtime** (`GetGpuMemoryInfo`), com o editor aberto na `Synthetic_1M`. Só o caminho de CPU está
   verificado;
-- fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas;
+- fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas — **infraestrutura
+  feita, poses das cenas reais pendentes**:
+
+  O achado que definiu o slice: os `.cameras.json` viviam sob `Assets/Scenes/`, que é gitignored,
+  então **nenhum bookmark era versionado**. Um baseline cuja pose de câmera existe só na máquina
+  de quem gerou não é reproduzível — "capturar do slot 0 na Bistro" produziria uma imagem
+  diferente em cada checkout, e é o mesmo modo de falha que os assets sintéticos tinham. O
+  `.gitignore` passou a excluir o conteúdo e reincluir só `*.cameras.json` (o git não reinclui
+  arquivo cujo diretório pai está excluído, então o padrão precisa dos três passos).
+
+  **Sintéticas: derivadas, não autoradas.** Elas são procedurais e moram no diretório de build,
+  então não há onde versionar uma pose escolhida à mão — e derivar da grade é melhor de qualquer
+  forma, porque a pose fica reproduzível por construção a partir da receita, que já é versionada.
+  O `--synthetic` emite os 4 slots, escalando com a grade (10k → distância 99; 1M → 450). Cada
+  slot exercita um **regime** diferente, que é o que a medida precisa separar:
+
+  | slot | pose | o que mede |
+  |---|---|---|
+  | 0 | fora, de frente, todo o volume no quadro | teto de submissão |
+  | 1 | no centro do volume | oclusão máxima — é o slot que o HiZ tem de justificar |
+  | 2 | canto, olhando para fora | piso: custo de culling quase sem submissão |
+  | 3 | oblíquo de um canto | regime intermediário, onde a fração visível responde à câmera |
+
+  Quatro ângulos bonitos do mesmo regime não distinguiriam ganho de culling de ganho de submissão.
+
+  **Pendente e não é trabalho de ferramenta:** Bistro tem 3 slots, Emerald 2, e MEASURE_SEVEN
+  nenhum (só `MEASURE_SEVEN_COLORED_LIGHTS`, com 1). As poses de cena real precisam ser
+  escolhidas olhando a cena, no editor — uma câmera de baseline mal escolhida é pior que nenhuma,
+  porque torna toda medição futura silenciosamente irrelevante. Os critérios da tabela acima
+  valem como guia. Depois de escolhidas, elas ficam versionadas automaticamente;
 - capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.
 
 ### Arquivos prováveis

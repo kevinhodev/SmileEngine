@@ -259,6 +259,6 @@ int main() {
         std::fprintf(stderr, "[PUBLISH] %d falha(s)\n", Failures);
         return 1;
     }
-    std::printf("[PUBLISH] ok - 9 cenarios, incluindo os inalcancaveis de fora do processo\n");
+    std::printf("[PUBLISH] ok - 10 cenarios, incluindo os inalcancaveis de fora do processo\n");
     return 0;
 }

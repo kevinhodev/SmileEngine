@@ -33,7 +33,15 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-/Assets/Scenes/
+# Cenas cozidas e fontes NAO sao versionadas (centenas de MB), mas os BOOKMARKS DE CAMERA sim:
+# eles sao a regua da captura deterministica, e um baseline cuja pose de camera vive so na
+# maquina de quem gerou nao e reproduzivel — "capturar do slot 0 na Bistro" viraria uma imagem
+# diferente em cada checkout. Como o git NAO reinclui arquivo cujo diretorio pai esta excluido,
+# o padrao precisa excluir o CONTEUDO, reincluir os diretorios (p/ o git percorrer) e so entao
+# reincluir a extensao.
+/Assets/Scenes/**
+!/Assets/Scenes/**/
+!/Assets/Scenes/**/*.cameras.json
 /Editor/Design/
 /.codex_deps
 /.claude

@@ -111,6 +111,72 @@ namespace {
         return true;
     }
 
+    // Bookmarks de camera DERIVADOS da grade, e nao autorados.
+    //
+    // A cena sintetica e procedural e mora no diretorio de build, entao nao ha onde versionar uma
+    // pose escolhida a mao. Derivar da geometria e melhor que autorar de qualquer forma: a pose
+    // fica reproduzivel por construcao a partir da receita, que ja e versionada.
+    //
+    // Os quatro slots existem para exercitar REGIMES DIFERENTES de culling e submissao, que e o
+    // que a Fase 0 precisa medir. Um baseline com quatro angulos bonitos do mesmo regime nao
+    // distingue ganho de culling de ganho de submissao.
+    //
+    // Convencao da camera (FCamera::GetForward): forward = (cos(p)sin(y), sin(p), cos(p)cos(y)),
+    // entao yaw 0 olha para +Z e pitch positivo olha para cima. Angulos em GRAUS no arquivo.
+    bool WriteCameraBookmarks(const fs::path& _Path, float _Half) {
+        // Distancia 3*Half poe a diagonal do cubo (Half*sqrt(3)) a ~30 graus do eixo, que e
+        // metade do FOV de 60 — ou seja, o volume inteiro cabe no quadro.
+        const float D = _Half * 3.0f;
+        struct FSlot { const char* Why; float X, Y, Z, Pitch, Yaw; };
+        const FSlot Slots[] = {
+            // 0: fora, de frente. TUDO visivel -> teto de submissao.
+            { "tudo visivel",      0.0f,        0.0f,        -D,          0.0f,   0.0f },
+            // 1: no centro do volume. Oclusao maxima -> e o slot que o HiZ tem de justificar.
+            { "dentro (oclusao)",  0.0f,        0.0f,        0.0f,        0.0f,   0.0f },
+            // 2: canto, olhando para FORA. Quase nada visivel -> mede o custo do culling
+            // praticamente sem submissao, que e o piso que o GPU-driven precisa baixar.
+            { "vazio (so culling)", _Half*1.2f, _Half*1.2f,  _Half*1.2f, 20.0f,  45.0f },
+            // 3: obliquo de um canto, a ~2.1*Half. Regime INTERMEDIARIO, onde a fracao visivel
+            // responde ao movimento e o A/B e mais sensivel.
+            { "obliquo (~metade)", -_Half*1.5f, _Half*0.8f, -_Half*1.5f, -15.0f, 45.0f },
+        };
+
+        std::string Json = "{\n    \"slots\": [\n";
+        for (int I = 0; I < 4; ++I) {
+            char Buf[512];
+            std::snprintf(Buf, sizeof(Buf),
+                "        {\n"
+                "            \"_why\": \"%s\",\n"
+                "            \"fovYDeg\": 60,\n"
+                "            \"index\": %d,\n"
+                "            \"pitch\": %.6f,\n"
+                "            \"posX\": %.6f,\n"
+                "            \"posY\": %.6f,\n"
+                "            \"posZ\": %.6f,\n"
+                "            \"yaw\": %.6f\n"
+                "        }%s\n",
+                Slots[I].Why, I, Slots[I].Pitch,
+                Slots[I].X, Slots[I].Y, Slots[I].Z, Slots[I].Yaw,
+                (I == 3) ? "" : ",");
+            Json += Buf;
+        }
+        Json += "    ],\n    \"version\": 1\n}\n";
+
+        FILE* F = std::fopen(_Path.string().c_str(), "wb");
+        if (!F) {
+            std::printf("[Cooker] ERRO ao abrir %s\n", _Path.string().c_str());
+            return false;
+        }
+        const bool Ok = std::fwrite(Json.data(), 1, Json.size(), F) == Json.size();
+        const bool Closed = (std::fclose(F) == 0);
+        if (!Ok || !Closed) {
+            std::printf("[Cooker] ERRO ao escrever %s\n", _Path.string().c_str());
+            ScrubTemp(_Path);
+            return false;
+        }
+        return true;
+    }
+
     // Escrita verificada. fwrite/fclose sem checagem transformavam disco cheio num par de
     // arquivos truncado com "OK" impresso na tela — e o proximo a ler seria o loader, meses
     // depois, com uma mensagem que nao aponta para aqui.
@@ -365,6 +431,11 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
     // Isto cobre falha de I/O, nao crash no meio: atomicidade real contra queda exigiria
     // generation id no nome e um manifesto publicado por ultimo, que so vale a pena quando o
     // formato tiver um indice proprio.
+    // Bookmarks ANTES de publicar o par: se falharem, nada foi tocado nos destinos. Depois da
+    // publicacao, uma falha aqui deixaria cena boa sem a regua que o baseline exige.
+    const float Half = 0.5f * static_cast<float>(Side) * _Spacing;
+    if (!WriteCameraBookmarks(fs::path(_OutBase).concat(".cameras.json"), Half)) return 3;
+
     // Sufixo UNICO por execucao: um ".old" fixo colide com sobra de uma execucao anterior que
     // caiu no meio, e essa colisao era o gatilho do bug destrutivo.
     const std::string Tag = "." + std::to_string(
