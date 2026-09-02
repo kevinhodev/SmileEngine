@@ -293,16 +293,41 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
         return 3;
     }
 
-    std::error_code Ec;
-    fs::rename(MeshTmp, MeshPath, Ec);
+    // Publicacao com ROLLBACK. Renomear os dois em sequencia nao basta: se o primeiro conclui e
+    // o segundo falha (destino travado, permissao), fica malha nova ao lado de cena antiga, e o
+    // loader encontra "mesh N >= N" — um par que nunca existiu junto. Os destinos existentes vao
+    // para .old antes, e qualquer falha restaura o estado anterior.
+    //
+    // Isto cobre falha de I/O, nao crash no meio: atomicidade real contra queda exigiria
+    // generation id no nome e um manifesto publicado por ultimo, que so vale a pena quando o
+    // formato tiver um indice proprio.
+    const fs::path MeshOld  = fs::path(_OutBase).concat(".smesh.old");
+    const fs::path SceneOld = fs::path(_OutBase).concat(".sscene.old");
+    std::error_code Ec, Ignored;
+
+    const bool HadMesh  = fs::exists(MeshPath, Ignored);
+    const bool HadScene = fs::exists(ScenePath, Ignored);
+    if (HadMesh)  fs::rename(MeshPath, MeshOld, Ec);
+    if (!Ec && HadScene) fs::rename(ScenePath, SceneOld, Ec);
+
+    if (!Ec) fs::rename(MeshTmp, MeshPath, Ec);
     if (!Ec) fs::rename(SceneTmp, ScenePath, Ec);
+
     if (Ec) {
         std::printf("[Cooker] ERRO ao publicar o par: %s\n", Ec.message().c_str());
-        std::error_code Ignored;
+        // Desfaz o que tiver saido, e so entao devolve os antigos. A ordem importa: restaurar
+        // por cima de um destino ja publicado falharia e deixaria o par misturado mesmo assim.
+        fs::remove(MeshPath, Ignored);
+        fs::remove(ScenePath, Ignored);
         fs::remove(MeshTmp, Ignored);
         fs::remove(SceneTmp, Ignored);
+        if (HadMesh)  fs::rename(MeshOld, MeshPath, Ignored);
+        if (HadScene) fs::rename(SceneOld, ScenePath, Ignored);
         return 3;
     }
+
+    fs::remove(MeshOld, Ignored);
+    fs::remove(SceneOld, Ignored);
 
     std::printf("[Cooker] Escrito: %s\n", MeshPath.string().c_str());
     std::printf("[Cooker] Escrito: %s\n", ScenePath.string().c_str());

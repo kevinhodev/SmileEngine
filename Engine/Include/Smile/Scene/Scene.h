@@ -25,9 +25,11 @@ namespace Smile {
     // folga das outras nao serve para nada — o `NeedsResize` do Renderer dispara pela primeira
     // que estourar. Por isso a conta mora aqui, e nao replicada em cada SetupForScene.
     //
-    // Custo: os slots sao pequenos (64 B por instance desc da TLAS, 80 B por InstanceGeo,
-    // 128 B x frames por transform) — a folga de uma cena de 1591 objetos sai na casa das
-    // centenas de KB, contra ~200 MB de pool de BLAS que o re-setup reconstroi.
+    // Custo por entrada de capacidade: 512 B de ObjectCB (256 x 2 frames), 256 B de transform do
+    // TemporalMotion (128 x 2), 128 B de instance desc da TLAS (64 x 2 slots), 100 B de InstanceGeo
+    // (ver o static_assert do FRTInstanceGeo) e 76 B do HiZ = 1072 B. A folga de uma cena de 1591
+    // objetos sai na casa das centenas de KB, contra ~200 MB de pool de BLAS que o re-setup
+    // reconstroi. Tabela por escala e por HEAP em Docs/GPU-DRIVEN-PLAN.md, Fase 0.
     constexpr u32 SceneCapacityFor(u32 RenderableCount) {
         const u32 Slack = RenderableCount / 16u;
         return RenderableCount + (Slack > 64u ? Slack : 64u);

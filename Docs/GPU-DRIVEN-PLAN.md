@@ -605,28 +605,37 @@ contra assets incompatíveis.
   [`Scene.h`](../Engine/Include/Smile/Scene/Scene.h#L18) as enumera. Custo por entrada de
   capacidade:
 
-  | Estrutura | por entrada | de onde vem |
+  ⚠️ **Separado por HEAP, e o heap importa mais que o total.** Quase tudo aqui é
+  `D3D12_HEAP_TYPE_UPLOAD` (`GpuResources::CreateUploadBuffer`), que é memória visível pela CPU —
+  **não** o orçamento de VRAM local. Somar tudo e concluir "cabe/não cabe na placa" é trocar um
+  domínio pelo outro:
+
+  | Estrutura | por entrada | heap |
   |---|---:|---|
-  | `ObjectCB` | 512 B | 256 B × `kFramesInFlight` (2) |
-  | TemporalMotion | 256 B | `FTemporalInstanceTransformGPU` (128 B) × 2 frames |
-  | TLAS uploads | 128 B | `D3D12_RAYTRACING_INSTANCE_DESC` (64 B) × 2 slots |
-  | `InstanceGeo` | 100 B | `FRTInstanceGeo` |
-  | HiZ | 76 B | bounds 32 B × 2 + resultado 4 B + readback 4 B × 2 |
+  | `ObjectCB` (256 B × 2 frames) | 512 B | UPLOAD |
+  | TemporalMotion (128 B × 2 frames) | 256 B | UPLOAD |
+  | TLAS uploads (64 B × 2 slots) | 128 B | UPLOAD |
+  | `InstanceGeo` (`FRTInstanceGeo`) | 100 B | UPLOAD |
+  | HiZ bounds (32 B × 2 slots) | 64 B | UPLOAD |
+  | HiZ readback (4 B × 2 slots) | 8 B | READBACK (memória de sistema) |
+  | HiZ resultado | 4 B | **DEFAULT** |
   | | **1.072 B** | |
 
-  | N | capacidade | ObjectCB | TemporalMotion | TLAS | InstanceGeo | HiZ | total |
-  |---:|---:|---:|---:|---:|---:|---:|---:|
-  | 10k | 10.625 | 5,2 MiB | 2,6 MiB | 1,3 MiB | 1,0 MiB | 0,8 MiB | **10,9 MiB** |
-  | 100k | 106.250 | 51,9 MiB | 25,9 MiB | 13,0 MiB | 10,1 MiB | 7,7 MiB | **108,6 MiB** |
-  | 1M | 1.062.500 | 518,8 MiB | 259,4 MiB | 129,7 MiB | 101,3 MiB | 77,0 MiB | **1.086,2 MiB** |
+  | N | capacidade | UPLOAD | READBACK | DEFAULT |
+  |---:|---:|---:|---:|---:|
+  | 10k | 10.625 | 10,7 MiB | 0,08 MiB | 0,04 MiB |
+  | 100k | 106.250 | 107,4 MiB | 0,81 MiB | 0,41 MiB |
+  | 1M | 1.062.500 | **1.074,1 MiB** | 8,1 MiB | **4,1 MiB** |
 
-  Sem contar a AS da TLAS em si, o scratch, os BLAS nem os alvos de render. **O `ObjectCB` é
-  47,8% do custo por instância** — e junto com o TemporalMotion, que também é matriz por
-  instância por frame, os dois somam 71,6%. Ambos são o que as tabelas paginadas da Fase 4
-  substituem por páginas sujas. É o número a bater.
+  Ou seja, em 1M as estruturas por instância pedem ~1,05 GiB de heap **UPLOAD** e apenas
+  **4,1 MiB de DEFAULT**. O `ObjectCB` é 47,8% do total e, com o TemporalMotion — que também é
+  matriz por instância por frame —, os dois somam 71,6% do tráfego de upload.
 
-  ⚠️ Só o caminho de CPU está verificado. Se 1M **renderiza** na 3060 Ti depende de 1,06 GiB de
-  estruturas por instância caberem junto do resto, e isso exige o editor;
+  ⚠️ **O teto de VRAM da 3060 Ti continua desconhecido** e esta tabela não responde a ele: a AS
+  resultante da TLAS, o scratch, os BLAS e os alvos de render ficam todos de fora, e são eles que
+  moram em DEFAULT. A resposta tem de sair do **delta de memória local/não-local medido em
+  runtime** (`GetGpuMemoryInfo`), com o editor aberto na `Synthetic_1M`. Só o caminho de CPU está
+  verificado;
 - fixar bookmarks/reprodução para Bistro, Emerald, MEASURE_SEVEN e sintéticas;
 - capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.
 
@@ -813,7 +822,13 @@ culling.
 - expandir ranges na GPU e validar slots/generation em debug;
 - publicar contadores de candidatos, inválidos e overflow;
 - não executar culling ainda: todos os candidatos válidos passam;
-- medir custo de upload em cena estática, transform storm e edição de material.
+- medir custo de upload em cena estática, transform storm e edição de material;
+- **aposentar o `ObjectCB` e o `TransformBuffer` do TemporalMotion.** São os dois maiores
+  consumidores por instância — 512 B e 256 B por entrada, 71,6% do upload (ver a tabela da
+  Fase 0). Sem esta tarefa explícita, a tabela paginada vira um **terceiro** buffer por instância
+  em vez de substituir os que existem, e o custo sobe em vez de cair. O `ObjectCB` some quando o
+  VS passa a ler a tabela — a Fase 3 troca o *binding*, é **aqui** que o buffer deixa de ser
+  alocado; o TemporalMotion exige migrar o consumidor do histórico para a coluna `PrevTransform`.
 
 ### Arquivos prováveis
 
@@ -829,6 +844,9 @@ culling.
 - mover um objeto não faz upload proporcional ao total;
 - remover/reusar slot respeita generation e fences;
 - 1M instâncias não exigem reconstrução/upload integral por frame;
+- **`ObjectCB` e o `TransformBuffer` do TemporalMotion deixaram de ser alocados**, verificado por
+  medição de memória e não por leitura de código: o custo por instância tem de CAIR, não somar
+  mais uma tabela;
 - range único e múltiplos ranges sintéticos produzem a mesma lista expandida.
 
 ## Fase 5 — Indirect main view sem oclusão

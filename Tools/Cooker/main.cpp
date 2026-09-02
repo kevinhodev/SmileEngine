@@ -315,18 +315,30 @@ int main(int argc, char** argv) {
     // silencioso — e um 0 assim chegava ao gerador como parametro legitimo. Aqui a conversao
     // precisa consumir o argumento INTEIRO e caber na faixa; erro aborta em vez de virar default.
     bool argError = false;
-    auto readU32 = [&](int& _i, const char* _Flag) -> uint32_t {
+    // Tetos OPERACIONAIS, nao o limite do tipo: 2^32-1 instancias e aritmeticamente valido e
+    // fisicamente impossivel, e a falha vinha como crash na alocacao em vez de mensagem.
+    auto readU32 = [&](int& _i, const char* _Flag, unsigned long long _Max) -> uint32_t {
         if (_i + 1 >= argc) {
             std::printf("[Cooker] ERRO: %s exige um valor\n", _Flag);
             argError = true;
             return 0;
         }
         const char* S = argv[++_i];
+        // Sinal negativo REJEITADO antes da conversao: strtoul("-1") devolve ULONG_MAX por
+        // definicao, e em Windows unsigned long tem 32 bits, entao ULONG_MAX == 0xFFFFFFFF passa
+        // por qualquer teste de faixa. Com isso "--instances -1" virava 4294967295 e derrubava o
+        // processo em 0xC0000409 la na alocacao.
+        if (S[0] == '-') {
+            std::printf("[Cooker] ERRO: %s nao aceita valor negativo: '%s'\n", _Flag, S);
+            argError = true;
+            return 0;
+        }
         char* End = nullptr;
         errno = 0;
-        const unsigned long V = std::strtoul(S, &End, 10);
-        if (End == S || *End != '\0' || errno == ERANGE || V > 0xFFFFFFFFul) {
-            std::printf("[Cooker] ERRO: valor invalido para %s: '%s'\n", _Flag, S);
+        const unsigned long long V = std::strtoull(S, &End, 10);
+        if (End == S || *End != '\0' || errno == ERANGE || V > _Max) {
+            std::printf("[Cooker] ERRO: valor invalido para %s: '%s' (maximo %llu)\n",
+                        _Flag, S, static_cast<unsigned long long>(_Max));
             argError = true;
             return 0;
         }
@@ -355,12 +367,23 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--opaque-glass")   { opaqueGlass = true; continue; }
         if (a == "--synthetic")      { synthetic = true; continue; }
-        if (a == "--instances")      { synInstances = readU32(i, "--instances"); continue; }
-        if (a == "--meshes")         { synMeshes    = readU32(i, "--meshes"); continue; }
-        if (a == "--materials")      { synMaterials = readU32(i, "--materials"); continue; }
-        if (a == "--masked-percent") { synMaskedPct = readU32(i, "--masked-percent"); continue; }
-        if (a == "--tess")           { synTess      = readU32(i, "--tess"); continue; }
+        // Tetos: 64M instancias (~11 GiB de .sscene, ja absurdo), 4096 malhas, 4096 materiais,
+        // tesselacao 512 (2*512^2 = 524k triangulos numa malha so).
+        if (a == "--instances")      { synInstances = readU32(i, "--instances", 64u * 1024u * 1024u); continue; }
+        if (a == "--meshes")         { synMeshes    = readU32(i, "--meshes", 4096u); continue; }
+        if (a == "--materials")      { synMaterials = readU32(i, "--materials", 4096u); continue; }
+        if (a == "--masked-percent") { synMaskedPct = readU32(i, "--masked-percent", 100u); continue; }
+        if (a == "--tess")           { synTess      = readU32(i, "--tess", 512u); continue; }
         if (a == "--spacing")        { synSpacing   = readF32(i, "--spacing"); continue; }
+        // Argumento comecando com "-" que nao foi reconhecido e ERRO, nao posicional. Antes,
+        // "--spcing 99" caia em positional, o modo sintetico consumia so o positional[0] e o
+        // comando saia com exito usando o spacing DEFAULT — um typo virava medicao errada em
+        // silencio, que e o pior desfecho possivel numa regua.
+        if (!a.empty() && a[0] == '-') {
+            std::printf("[Cooker] ERRO: opcao desconhecida: %s\n", a.c_str());
+            argError = true;
+            continue;
+        }
         positional.emplace_back(argv[i]);
     }
     if (argError) return 2;
@@ -372,6 +395,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (synthetic) {
+        // Exatamente UM posicional: o destino. Mais de um significa argumento perdido, e o modo
+        // sintetico ignoraria o excedente sem avisar.
+        if (positional.size() != 1) {
+            std::printf("[Cooker] ERRO: --synthetic exige exatamente um caminho de saida "
+                        "(recebeu %zu)\n", positional.size());
+            return 2;
+        }
         return GenerateSyntheticScene(positional[0], synInstances, synMeshes, synMaterials,
                                       synMaskedPct, synSpacing, synTess);
     }
