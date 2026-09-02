@@ -134,6 +134,11 @@ function Get-OutputRecord {
     $Record["source"]       = $Scene.source
     $Record["sourceDigest"] = Get-Fingerprint (Join-Path $RepoRoot $Scene.source)
     $Record["flags"]        = @($Scene.flags)
+    # Fonte ausente nao pode virar sourceDigest=null numa baseline gravada: a procedencia
+    # ficaria incompleta e o -Verify seguinte nao teria contra o que comparar.
+    if ($Strict -and -not $Record["sourceDigest"]) {
+        throw "fonte ausente: $($Scene.source) - a baseline nao pode ser gravada sem ela"
+    }
 
     foreach ($Ext in @("smesh", "sscene")) {
         $Full = Join-Path $RepoRoot "$OutBase.$Ext"
@@ -172,11 +177,17 @@ function Get-RepoStamp {
 function Assert-BaselineSchema {
     param($Baseline)
     $Missing = @()
-    foreach ($Field in @("generatedUtc", "commit", "config", "expectVersion",
+    foreach ($Field in @("generatedUtc", "commit", "treeDirty", "config", "expectVersion",
                          "recipeSha256", "provenanceMode", "outputs")) {
         if ($null -eq $Baseline.$Field) { $Missing += $Field }
     }
     if (-not $Baseline.cooker -or -not $Baseline.cooker.sha256) { $Missing += "cooker.sha256" }
+    # Enum fechado: sem isto qualquer string desconhecida cairia no ramo "nao e cooked" e seria
+    # tratada como adopted, escondendo uma baseline corrompida ou de versao futura.
+    if ($null -ne $Baseline.provenanceMode -and
+        @("cooked", "adopted") -notcontains $Baseline.provenanceMode) {
+        $Missing += "provenanceMode invalido ('$($Baseline.provenanceMode)'; esperado cooked ou adopted)"
+    }
     foreach ($Out in $Baseline.outputs) {
         foreach ($Field in @("outBase", "source", "sourceDigest", "flags", "smesh", "sscene")) {
             if ($null -eq $Out.$Field) { $Missing += "outputs[$($Out.outBase)].$Field" }
@@ -209,6 +220,11 @@ function Write-Baseline {
         cooker         = $CookerFingerprint
         outputs        = $Outputs
     }
+    # MESMO validador do -Verify, ANTES de gravar. Sem isto o writer aceitava sourceDigest=null
+    # (FBX ausente) ou cooker=null, sobrescrevia uma baseline valida por uma quebrada e saia com
+    # sucesso: um verificador rigoroso nao adianta se o escritor pode destruir o que ele confere.
+    Assert-BaselineSchema $Manifest
+
     $Json = $Manifest | ConvertTo-Json -Depth 8
     # PS 5.1 grava BOM com Out-File -Encoding utf8, e BOM quebra parser JSON estrito.
     [System.IO.File]::WriteAllText($BaselinePath, $Json, (New-Object System.Text.UTF8Encoding $false))
@@ -305,7 +321,11 @@ if ($Record) {
         Write-Host ("  {0}  v{1}" -f $Rec.outBase, $Rec["sscene"].version)
         $Outputs += ,$Rec
     }
-    Write-Baseline $Outputs (Get-Fingerprint $CookerPath) "adopted"
+    $AdoptedCooker = Get-Fingerprint $CookerPath
+    if (-not $AdoptedCooker) {
+        throw "cooker ausente: $CookerPath - a baseline nao pode ser gravada sem o fingerprint dele"
+    }
+    Write-Baseline $Outputs $AdoptedCooker "adopted"
     Write-Host ""
     Write-Host ("baseline escrita a partir dos assets atuais: {0}" -f $BaselinePath)
     exit 0

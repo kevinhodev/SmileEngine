@@ -564,10 +564,15 @@ contra assets incompatíveis.
   - **`provenanceMode`.** `cooked` = este script cozinhou as saídas com aquele binário naquela
     execução; `adopted` = as saídas já existiam e o hash é só do cooker que estava presente na
     hora, que pode não ser o produtor real. Sem o campo, qualquer ferramenta leria `cooker.sha256`
-    como produtor comprovado nos dois casos. Note que procedência forte e árvore limpa não são
-    simultaneamente atingíveis num mesmo commit: um recook feito junto da mudança sempre grava
-    `treeDirty: true`, e regravar depois com `-Record` rebaixaria o modo para `adopted`.
-    Entre os dois, `cooked` informa mais;
+    como produtor comprovado nos dois casos.
+
+    O fluxo que produz a baseline mais forte — `cooked` **com** `treeDirty: false` — tem três
+    passos, nesta ordem: (1) commitar a ferramenta; (2) rodar o recook completo com a árvore
+    limpa; (3) commitar só a baseline. O manifesto referencia legitimamente o commit **produtor**
+    anterior; ele não precisa referenciar o commit que o contém, e essa defasagem de um commit não
+    enfraquece nada. O que **não** funciona é regravar com `-Record` depois do commit: isso
+    rebaixaria o modo para `adopted`. Uma baseline `cooked` + `treeDirty: true` é aceitável apenas
+    como estado transitório, nunca como entrega — ela contradiz o próprio gate de baseline limpa;
   - **formato validado nas três bordas.** O bloco `expect` da receita é conferido em `-Record`, em
     `-Verify` e depois de cada cook, antes de virar hash — é o que impede a ferramenta de
     oficializar um formato que este checkout rejeita (ex.: os antigos v9).
