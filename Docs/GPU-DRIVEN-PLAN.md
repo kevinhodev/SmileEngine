@@ -677,7 +677,78 @@ contra assets incompatíveis.
   cena pesada como gate por um papel que outra cobre melhor só encarece a rodada. O sidecar dela
   continua no repositório e continua validado pelo gate (arquivo versionado tem de ser parseável);
   o que mudou é que ela não é mais **requisito** dos itens 8 e 9;
-- capturar baseline visual e de performance conforme `CAPTURE-PROTOCOL.md`.
+- capturar baseline de performance — **régua feita**, em
+  `Tools/SmileMCP/scripts/gpu-driven-baseline.mjs` (`npm run benchmark:gpu-driven`).
+
+  Percorre o corpus de gate inteiro, 5 cenas × 4 slots, e grava um relatório JSON em
+  `build/bin/Release/Captures/Benchmarks/`. O que ela mede é **custo de submissão na CPU** —
+  `BuildDrawLists`, culling/ordenação, listas de sombra e `Submit` — com as contagens que
+  explicam esse custo ao lado (renderáveis, draw items, visíveis, ocluídos, e draws/binds por
+  passe). O tempo de GPU entra como contexto e não como objeto: nenhuma fase promete baixá-lo
+  diretamente, e tratá-lo como métrica principal faria a Fase 4 parecer fracasso por medir a
+  coisa errada.
+
+  Uma cena por lançamento do editor. Não existe comando de trocar cena no bridge, e o
+  `smile_run_editor` recusa reaproveitar um editor aberto com outra `.sscene` — fechar entre
+  cenas não é zelo, é o único caminho.
+
+  **A asserção que dá sentido à rodada** é conferir a pose de volta com `smile_camera_get` depois
+  do `bookmarkSlot`. O `profile_configure` chama `Bookmarks->Restore`, mas `Restore` devolve
+  `true` mesmo quando o `SetCameraPose` recusa o teleporte (é o que o protocolo de captura faz
+  durante uma sessão travada). Sem conferir, os quatro slots poderiam medir a **mesma** câmera e
+  a baseline sairia como um número repetido quatro vezes, com aparência de quatro regimes. A
+  comparação de yaw é em módulo 360, porque o sidecar guarda o ângulo acumulado — a Emerald tem
+  slots em 538° e 452°, de quem girou mais de uma volta.
+
+  A rodada também audita o log do PID do editor por erro de D3D12/DXGI: o profiler devolve
+  números mesmo depois de a API ter reclamado, e uma rodada verde com `DEVICE_REMOVED` no log
+  não é uma rodada verde.
+
+  **Árvore limpa é requisito, não recomendação** — está no gate de saída desta fase. A régua lê o
+  `buildCommit` do editor e recusa rodar quando ele termina em `-dirty` (o `StampVersion.cmake`
+  sufixa assim quando `git status --porcelain` não está vazio, arquivo não rastreado incluído).
+  Uma baseline tirada de árvore suja não serve como "antes": meses depois ninguém consegue dizer
+  o que estava compilado. `--allow-dirty` existe para shakedown da própria régua e marca o
+  relatório com `dirtyBuild: true`; relatório assim não vale como baseline.
+
+  **Rodada de shakedown, 2026-09-02** (RTX 3060 Ti, viewport 1298×775, preset `gameplay_rr`, TOD
+  10h, 60 amostras de frames distintos por ponto). Árvore suja — vale como leitura da régua e do
+  regime, **não** como a baseline do gate. Custo de CPU por estágio, mediana em ms:
+
+  | cena / slot | build | cull | batch | shadow | submit | **total** | visíveis / N |
+  |---|--:|--:|--:|--:|--:|--:|---|
+  | bistro s0 | 0,39 | 0,06 | 0,06 | 0,11 | 0,58 | **1,20** | 914 / 1.592 |
+  | bistro s2 | 0,37 | 0,01 | 0,00 | 0,10 | 0,12 | **0,61** | 38 / 1.592 |
+  | emerald s0 | 0,51 | 0,08 | 0,05 | 0,10 | 1,34 | **2,08** | 1.589 / 2.479 |
+  | emerald s2 | 0,51 | 0,01 | 0,00 | 0,09 | 0,01 | **0,62** | 6 / 2.479 |
+  | 10k s0 | 2,03 | 0,44 | 0,23 | 0,21 | 2,49 | **5,41** | 9.999 / 10.000 |
+  | 10k s2 | 2,02 | 0,02 | 0,00 | 0,21 | 0,00 | **2,25** | 0 / 10.000 |
+  | 100k s0 | 20,76 | 5,81 | 4,00 | 2,96 | 12,33 | **45,85** | 97.756 / 100.000 |
+  | 100k s2 | 20,39 | 0,63 | 0,00 | 2,94 | 0,00 | **23,96** | 0 / 100.000 |
+  | 1M s0 | 206,93 | 55,14 | 56,47 | 31,47 | 192,58 | **542,58** | 755.521 / 1.000.000 |
+  | 1M s2 | 205,37 | 6,08 | 0,00 | 30,61 | 0,00 | **242,07** | 0 / 1.000.000 |
+
+  **O que a medida diz, e é o argumento inteiro desta série de fases:** `BuildDrawLists` não
+  responde à visibilidade. Ele custa 2,02 ms em 10k, ~20,5 ms em 100k e ~206 ms em 1M, e o valor
+  é o **mesmo** no slot 0 (tudo visível) e no slot 2 (nada visível) — 206,93 contra 205,37 em 1M.
+  `ShadowLists` se comporta igual (~31 ms em 1M nos dois). Somados, são os 242 ms que o slot 2
+  gasta para não desenhar nada: custo por objeto pago antes de qualquer decisão de culling, linear
+  em N (10,6× de 10k para 100k; 10,1× de 100k para 1M).
+
+  `CullSort`, `BatchSort` e `Submit` são os únicos que escalam com o que está visível — ou seja,
+  são a parte do trabalho que corresponde a alguma coisa. Em 1M/s0 eles somam 304 ms dos 543.
+
+  Isso fixa a ordem de ataque: o alvo das Fases 1-2 não é acelerar o culling, é **deixar de
+  percorrer a cena na CPU**. Otimizar `CullSort` melhoraria 6 ms do piso de 242.
+
+  Duas leituras laterais que saíram da mesma rodada:
+
+  - **`ObjectCB` medido**: 407 KB na Bistro, 634 KB na Emerald, e **256 MB em 1M** (256 B por
+    objeto por frame). É o número concreto por trás da aposentadoria do `ObjectCB` na Fase 4.
+  - **Heap de SRV**: o pico em todo o corpus é **7.238** descritores (Bistro); Emerald 3.913, e
+    as sintéticas 1.126 (poucos materiais por construção). Folga larga para o bindless da Fase 3.
+- capturar baseline **visual** conforme `CAPTURE-PROTOCOL.md` (o protocolo cobre só a metade
+  visual; a de performance é a régua acima).
 
 ### Arquivos prováveis
 
@@ -687,6 +758,7 @@ contra assets incompatíveis.
 - `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
 - `Engine/Source/Graphics/Renderer/RendererCapture.cpp`
 - `Engine/Include/Smile/Graphics/Backend/D3D12/TextureSRVHeap.h`
+- `Tools/SmileMCP/scripts/gpu-driven-baseline.mjs`
 - testes de cooker/cooked format e ferramentas de benchmark
 
 ### Gate de saída

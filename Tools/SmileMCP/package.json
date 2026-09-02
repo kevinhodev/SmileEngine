@@ -39,7 +39,9 @@
     "analyze:gi:half-res": "python scripts/compare-gi-half-res.py",
     "analyze:gi:half-res:motion": "python scripts/compare-gi-half-res-motion.py",
     "benchmark:gi": "npm run build && node scripts/gi-benchmark.mjs",
-    "benchmark:gi:adaptive": "npm run build && node scripts/gi-benchmark.mjs --suite adaptive"
+    "benchmark:gi:adaptive": "npm run build && node scripts/gi-benchmark.mjs --suite adaptive",
+    "benchmark:gpu-driven": "npm run build && node scripts/gpu-driven-baseline.mjs",
+    "benchmark:gpu-driven:smoke": "npm run build && node scripts/gpu-driven-baseline.mjs --scenes synthetic_10k --warmup 3 --samples 8 --interval 150"
   },
   "engines": {
     "node": ">=20"
