@@ -711,42 +711,67 @@ contra assets incompatíveis.
   o que estava compilado. `--allow-dirty` existe para shakedown da própria régua e marca o
   relatório com `dirtyBuild: true`; relatório assim não vale como baseline.
 
-  **Rodada de shakedown, 2026-09-02** (RTX 3060 Ti, viewport 1298×775, preset `gameplay_rr`, TOD
-  10h, 60 amostras de frames distintos por ponto). Árvore suja — vale como leitura da régua e do
-  regime, **não** como a baseline do gate. Custo de CPU por estágio, mediana em ms:
+  **BASELINE DE REGISTRO** — `gpu-driven-baseline-OF-RECORD-f781288.json`, em
+  `build/bin/Release/Captures/Benchmarks/`. Build `f781288`, árvore limpa. RTX 3060 Ti, viewport
+  1298×775 (saída = render), preset `gameplay_rr`, TOD 10h, 60 amostras de frames distintos por
+  ponto, 20 pontos. Pose de cada slot conferida contra o sidecar; auditoria de log limpa nas cinco
+  cenas.
+
+  O arquivo original saiu com `passed: false`, e o motivo está registrado dentro dele em
+  `acceptedAsBaseline`: a asserção que disparou é de **teardown**, depois da última medição — o
+  editor da 1M não morreu em 180 s após `close_editor`. Nenhum ponto de medição é afetado, porque
+  nada foi medido depois dela. A asserção mudou de lugar em `a9db333` (passou a ser cobrada antes
+  do lançamento da cena seguinte, que é onde a contaminação aconteceria) e o defeito do
+  `smile_close_editor` está anotado à parte — ele **afirma** que o editor parou baseado numa
+  chamada de status com 500 ms de timeout, e numa cena a ~3 FPS esse timeout estoura sem o editor
+  ter ido a lugar nenhum.
+
+  Custo de CPU por estágio, mediana em ms:
 
   | cena / slot | build | cull | batch | shadow | submit | **total** | visíveis / N |
   |---|--:|--:|--:|--:|--:|--:|---|
-  | bistro s0 | 0,39 | 0,06 | 0,06 | 0,11 | 0,58 | **1,20** | 914 / 1.592 |
-  | bistro s2 | 0,37 | 0,01 | 0,00 | 0,10 | 0,12 | **0,61** | 38 / 1.592 |
-  | emerald s0 | 0,51 | 0,08 | 0,05 | 0,10 | 1,34 | **2,08** | 1.589 / 2.479 |
-  | emerald s2 | 0,51 | 0,01 | 0,00 | 0,09 | 0,01 | **0,62** | 6 / 2.479 |
-  | 10k s0 | 2,03 | 0,44 | 0,23 | 0,21 | 2,49 | **5,41** | 9.999 / 10.000 |
-  | 10k s2 | 2,02 | 0,02 | 0,00 | 0,21 | 0,00 | **2,25** | 0 / 10.000 |
-  | 100k s0 | 20,76 | 5,81 | 4,00 | 2,96 | 12,33 | **45,85** | 97.756 / 100.000 |
-  | 100k s2 | 20,39 | 0,63 | 0,00 | 2,94 | 0,00 | **23,96** | 0 / 100.000 |
-  | 1M s0 | 206,93 | 55,14 | 56,47 | 31,47 | 192,58 | **542,58** | 755.521 / 1.000.000 |
-  | 1M s2 | 205,37 | 6,08 | 0,00 | 30,61 | 0,00 | **242,07** | 0 / 1.000.000 |
+  | bistro s0 | 0,34 | 0,05 | 0,06 | 0,10 | 0,55 | **1,10** | 913 / 1.592 |
+  | bistro s1 | 0,37 | 0,05 | 0,06 | 0,10 | 0,63 | **1,20** | 893 / 1.592 |
+  | bistro s2 | 0,38 | 0,01 | 0,00 | 0,10 | 0,12 | **0,62** | 38 / 1.592 |
+  | bistro s3 | 0,37 | 0,05 | 0,06 | 0,10 | 0,55 | **1,12** | 923 / 1.592 |
+  | emerald s0 | 0,52 | 0,08 | 0,05 | 0,10 | 1,31 | **2,07** | 1.588 / 2.479 |
+  | emerald s1 | 0,50 | 0,04 | 0,03 | 0,10 | 0,44 | **1,11** | 562 / 2.479 |
+  | emerald s2 | 0,50 | 0,01 | 0,00 | 0,10 | 0,01 | **0,62** | 6 / 2.479 |
+  | emerald s3 | 0,50 | 0,02 | 0,01 | 0,10 | 0,10 | **0,73** | 163 / 2.479 |
+  | 10k s0 | 1,95 | 0,44 | 0,22 | 0,22 | 2,54 | **5,36** | 9.999 / 10.000 |
+  | 10k s1 | 1,97 | 0,07 | 0,02 | 0,22 | 0,45 | **2,73** | 698 / 10.000 |
+  | 10k s2 | 1,97 | 0,03 | 0,00 | 0,21 | 0,00 | **2,22** | 0 / 10.000 |
+  | 10k s3 | 1,96 | 0,49 | 0,21 | 0,22 | 4,05 | **6,93** | 9.272 / 10.000 |
+  | 100k s0 | 21,09 | 5,85 | 3,59 | 2,83 | 10,38 | **43,74** | 97.732 / 100.000 |
+  | 100k s1 | 20,92 | 1,22 | 0,16 | 2,75 | 0,60 | **25,66** | 7.136 / 100.000 |
+  | 100k s2 | 20,78 | 0,61 | 0,00 | 2,74 | 0,00 | **24,13** | 0 / 100.000 |
+  | 100k s3 | 20,74 | 5,80 | 2,18 | 2,77 | 7,46 | **38,95** | 83.012 / 100.000 |
+  | 1M s0 | 203,49 | 54,77 | 56,84 | 31,91 | 192,40 | **539,41** | 755.521 / 1.000.000 |
+  | 1M s1 | 201,91 | 15,77 | 2,34 | 31,41 | 12,54 | **263,98** | 79.507 / 1.000.000 |
+  | 1M s2 | 202,74 | 6,03 | 0,00 | 31,37 | 0,00 | **240,14** | 0 / 1.000.000 |
+  | 1M s3 | 201,68 | 45,54 | 37,77 | 31,80 | 141,91 | **458,69** | 540.858 / 1.000.000 |
 
   **O que a medida diz, e é o argumento inteiro desta série de fases:** `BuildDrawLists` não
-  responde à visibilidade. Ele custa 2,02 ms em 10k, ~20,5 ms em 100k e ~206 ms em 1M, e o valor
-  é o **mesmo** no slot 0 (tudo visível) e no slot 2 (nada visível) — 206,93 contra 205,37 em 1M.
-  `ShadowLists` se comporta igual (~31 ms em 1M nos dois). Somados, são os 242 ms que o slot 2
-  gasta para não desenhar nada: custo por objeto pago antes de qualquer decisão de culling, linear
-  em N (10,6× de 10k para 100k; 10,1× de 100k para 1M).
+  responde à visibilidade. Custa 1,96 ms em 10k, ~20,9 ms em 100k e ~202 ms em 1M, e o valor é o
+  **mesmo** no slot 0 (tudo visível) e no slot 2 (nada visível) — 203,49 contra 202,74 em 1M.
+  `ShadowLists` se comporta igual (~31,4 ms nos dois). Somados, são os 240 ms que o slot 2 gasta
+  para não desenhar nada: custo por objeto pago antes de qualquer decisão de culling, linear em N
+  (10,9× de 10k para 100k; 9,8× de 100k para 1M).
 
-  `CullSort`, `BatchSort` e `Submit` são os únicos que escalam com o que está visível — ou seja,
-  são a parte do trabalho que corresponde a alguma coisa. Em 1M/s0 eles somam 304 ms dos 543.
+  `CullSort`, `BatchSort` e `Submit` são os únicos que escalam com o que está visível — a parte
+  do trabalho que corresponde a alguma coisa. Em 1M/s0 eles somam 304 ms dos 539.
 
   Isso fixa a ordem de ataque: o alvo das Fases 1-2 não é acelerar o culling, é **deixar de
-  percorrer a cena na CPU**. Otimizar `CullSort` melhoraria 6 ms do piso de 242.
+  percorrer a cena na CPU**. Otimizar o `CullSort` mexeria em 6 ms de um piso de 240.
 
-  Duas leituras laterais que saíram da mesma rodada:
+  Duas leituras laterais da mesma rodada:
 
-  - **`ObjectCB` medido**: 407 KB na Bistro, 634 KB na Emerald, e **256 MB em 1M** (256 B por
+  - **`ObjectCB` medido**: 407 KB na Bistro, 634 KB na Emerald e **256 MB em 1M** (256 B por
     objeto por frame). É o número concreto por trás da aposentadoria do `ObjectCB` na Fase 4.
-  - **Heap de SRV**: o pico em todo o corpus é **7.238** descritores (Bistro); Emerald 3.913, e
-    as sintéticas 1.126 (poucos materiais por construção). Folga larga para o bindless da Fase 3.
+  - **Heap de SRV**: o pico em todo o corpus é **7.238** descritores (Bistro); Emerald 3.913 e as
+    sintéticas 1.126 (poucos materiais por construção). Com `kCapacity` em 16.384, a cena mais
+    densa usa 44% — folga medida para o bindless da Fase 3, que consome do mesmo orçamento.
+
 - capturar baseline **visual** conforme `CAPTURE-PROTOCOL.md` (o protocolo cobre só a metade
   visual; a de performance é a régua acima).
 
