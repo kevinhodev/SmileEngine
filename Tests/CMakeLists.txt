@@ -313,3 +313,75 @@ foreach(CASE ${SMILE_SYNTHETIC_CASES})
         TIMEOUT 300
     )
 endforeach()
+
+# --- Contratos de FALHA do gerador sintetico ------------------------------------------------
+#
+# Estes testes existem porque este codigo ja regrediu em varias bordas e o ctest continuava
+# verde: a suite so exercitava os tres caminhos VALIDOS. Cada caso abaixo corresponde a um bug
+# real que foi corrigido, e o teste existe para ele nao voltar.
+#
+# WILL_FAIL cobre "sai != 0"; o PASS_REGULAR_EXPRESSION cobriria a mensagem, mas o cooker imprime
+# em stdout e o ctest ja trata o exit code como o contrato — o que importa aqui e nao produzir
+# arquivo e nao sair com exito.
+set(SMILE_SYNTHETIC_BAD_CASES
+    # nome|argumentos
+    "TessZero|--tess|0"                       # gerava AABB invertida e imprimia OK
+    "TessNaN|--tess|abc"                      # strtoul sem end pointer aceitava
+    "InstancesZero|--instances|0"
+    "InstancesNegative|--instances|-1"         # strtoul(-1) = ULONG_MAX; derrubava o processo
+    "TessNegative|--tess|-5"
+    "InstancesOverBudget|--instances|999999999"
+    "MeshesOverBudget|--meshes|99999"
+    "TessOverBudget|--tess|9999"
+    "SpacingNegative|--spacing|-1"
+    "SpacingNaN|--spacing|nan"
+    "MaskedOutOfRange|--masked-percent|150"
+    "UnknownFlag|--spcing|99"                  # typo virava posicional e usava o default
+    "DerivedCostExplodes|--meshes|4096"        # com --tess default, a tesselacao cresce com M*2
+)
+
+foreach(BAD ${SMILE_SYNTHETIC_BAD_CASES})
+    string(REPLACE "|" ";" BAD_FIELDS "${BAD}")
+    list(GET BAD_FIELDS 0 BAD_NAME)
+    list(GET BAD_FIELDS 1 BAD_FLAG)
+    list(GET BAD_FIELDS 2 BAD_VALUE)
+    add_test(
+        NAME Smile.SyntheticScene.Reject.${BAD_NAME}
+        COMMAND SmileCooker --synthetic
+                "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/${BAD_NAME}"
+                ${BAD_FLAG} ${BAD_VALUE}
+    )
+    set_tests_properties(Smile.SyntheticScene.Reject.${BAD_NAME} PROPERTIES
+        LABELS "scene;synthetic;negative"
+        WILL_FAIL TRUE
+        TIMEOUT 60
+    )
+endforeach()
+
+# Dois posicionais: o modo sintetico consumia so o primeiro e ignorava o resto em silencio.
+add_test(
+    NAME Smile.SyntheticScene.Reject.ExtraPositional
+    COMMAND SmileCooker --synthetic
+            "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/A"
+            "${CMAKE_CURRENT_BINARY_DIR}/SyntheticReject/B"
+)
+set_tests_properties(Smile.SyntheticScene.Reject.ExtraPositional PROPERTIES
+    LABELS "scene;synthetic;negative"
+    WILL_FAIL TRUE
+    TIMEOUT 60
+)
+
+# Rollback da publicacao. Precisa de script porque exige travar um arquivo enquanto o cooker
+# roda — o bug era destrutivo (apagava o par valido), entao ele ganha teste proprio.
+add_test(
+    NAME Smile.SyntheticScene.PublishRollback
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/SyntheticRollbackTest.ps1"
+            -Cooker "$<TARGET_FILE:SmileCooker>"
+            -LoadTest "$<TARGET_FILE:SmileCookedSceneLoadTests>"
+            -WorkDir "${CMAKE_CURRENT_BINARY_DIR}/SyntheticRollback"
+)
+set_tests_properties(Smile.SyntheticScene.PublishRollback PROPERTIES
+    LABELS "scene;synthetic;negative;integration"
+    TIMEOUT 120
+)

@@ -628,8 +628,13 @@ contra assets incompatíveis.
   | 1M | 1.062.500 | **1.074,1 MiB** | 8,1 MiB | **4,1 MiB** |
 
   Ou seja, em 1M as estruturas por instância pedem ~1,05 GiB de heap **UPLOAD** e apenas
-  **4,1 MiB de DEFAULT**. O `ObjectCB` é 47,8% do total e, com o TemporalMotion — que também é
-  matriz por instância por frame —, os dois somam 71,6% do tráfego de upload.
+  **4,1 MiB de DEFAULT**.
+
+  `ObjectCB` + TemporalMotion — os dois maiores, ambos matriz por instância por frame — são
+  **71,6% do footprint total reservado** (768 de 1.072 B) e **72,5% dentro do heap UPLOAD**
+  (768 de 1.060 B). São números de *footprint*, não de tráfego: quantos bytes são de fato
+  **escritos por frame** é outra medida, depende de quais buffers o frame toca, e exigiria
+  instrumentar as escritas — não está medido.
 
   ⚠️ **O teto de VRAM da 3060 Ti continua desconhecido** e esta tabela não responde a ele: a AS
   resultante da TLAS, o scratch, os BLAS e os alvos de render ficam todos de fora, e são eles que
@@ -824,7 +829,7 @@ culling.
 - não executar culling ainda: todos os candidatos válidos passam;
 - medir custo de upload em cena estática, transform storm e edição de material;
 - **aposentar o `ObjectCB` e o `TransformBuffer` do TemporalMotion.** São os dois maiores
-  consumidores por instância — 512 B e 256 B por entrada, 71,6% do upload (ver a tabela da
+  consumidores por instância — 512 B e 256 B por entrada, 71,6% do footprint reservado por instância (ver a tabela da
   Fase 0). Sem esta tarefa explícita, a tabela paginada vira um **terceiro** buffer por instância
   em vez de substituir os que existem, e o custo sobe em vez de cair. O `ObjectCB` some quando o
   VS passa a ler a tabela — a Fase 3 troca o *binding*, é **aqui** que o buffer deixa de ser

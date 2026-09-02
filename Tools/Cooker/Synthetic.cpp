@@ -21,6 +21,7 @@
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/RayTracing/RTTriangle.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -156,6 +157,55 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
             std::printf("[Cooker] ERRO ao criar %s: %s\n",
                         _OutBase.parent_path().string().c_str(), Ec.message().c_str());
             return 3;
+        }
+    }
+
+    // --- Preflight do custo DERIVADO. Tetos independentes por flag nao compoem: a tesselacao
+    // cresce com o indice da malha (BaseTess + M*2), entao "--meshes 4096 --tess 512" — cada um
+    // dentro do seu limite — leva a ultima malha a tess 8702 e o conjunto a ~220 bilhoes de
+    // triangulos. Sem esta conta, o primeiro sintoma seria um reserve gigante e o processo
+    // morrendo sem mensagem.
+    //
+    // Aritmetica em u64 com checagem de estouro em cada passo, e nao multiplicacao "que deve
+    // caber": o proposito aqui e justamente pegar o caso que nao cabe.
+    {
+        constexpr uint64_t kMaxGeoBytes   = 2ull * 1024 * 1024 * 1024; // 2 GiB de .smesh
+        constexpr uint64_t kMaxSceneBytes = 2ull * 1024 * 1024 * 1024; // 2 GiB de .sscene
+        const uint64_t LastTess = static_cast<uint64_t>(_BaseTess) + (_MeshCount - 1ull) * 2ull;
+
+        uint64_t GeoBytes = 0;
+        bool Overflow = false;
+        auto AddChecked = [&](uint64_t _A, uint64_t _B) {
+            if (_B != 0 && _A > (UINT64_MAX / _B)) { Overflow = true; return uint64_t{ 0 }; }
+            return _A * _B;
+        };
+        for (uint32_t M = 0; M < _MeshCount && !Overflow; ++M) {
+            const uint64_t T  = static_cast<uint64_t>(_BaseTess) + M * 2ull;
+            const uint64_t NV = AddChecked(T + 1ull, T + 1ull);      // vertices
+            const uint64_t NT = AddChecked(AddChecked(T, T), 2ull);  // triangulos
+            const uint64_t Bytes = AddChecked(NV, sizeof(Vertex))
+                                 + AddChecked(NT, 3ull * sizeof(uint32_t))
+                                 + AddChecked(NT, sizeof(Smile::FRTTriangle));
+            if (Overflow || GeoBytes > UINT64_MAX - Bytes) { Overflow = true; break; }
+            GeoBytes += Bytes;
+        }
+        const uint64_t SceneBytes =
+            AddChecked(_Instances, sizeof(Smile::SSceneRenderable)) +
+            AddChecked(_MaterialCount, sizeof(Smile::SSceneMaterial));
+
+        if (Overflow || GeoBytes > kMaxGeoBytes) {
+            std::printf("[Cooker] ERRO: geometria derivada excede o teto. --meshes %u com --tess "
+                        "%u leva a ultima malha a tess %llu; seriam %.1f GiB de .smesh (max 2 GiB).\n"
+                        "          A tesselacao cresce com o indice da malha (base + M*2).\n",
+                        _MeshCount, _BaseTess, static_cast<unsigned long long>(LastTess),
+                        Overflow ? 1e9 : static_cast<double>(GeoBytes) / (1024.0*1024.0*1024.0));
+            return 2;
+        }
+        if (SceneBytes > kMaxSceneBytes) {
+            std::printf("[Cooker] ERRO: cena derivada excede o teto: %u instancias seriam %.1f GiB "
+                        "de .sscene (max 2 GiB).\n", _Instances,
+                        static_cast<double>(SceneBytes) / (1024.0*1024.0*1024.0));
+            return 2;
         }
     }
 
@@ -301,33 +351,57 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
     // Isto cobre falha de I/O, nao crash no meio: atomicidade real contra queda exigiria
     // generation id no nome e um manifesto publicado por ultimo, que so vale a pena quando o
     // formato tiver um indice proprio.
-    const fs::path MeshOld  = fs::path(_OutBase).concat(".smesh.old");
-    const fs::path SceneOld = fs::path(_OutBase).concat(".sscene.old");
+    // Sufixo UNICO por execucao. Um ".old" fixo colide com sobra de execucao anterior que tenha
+    // caido no meio, e a colisao virava o pior caso possivel: o backup falhava, nada era
+    // publicado, e o rollback ainda assim apagava o par valido de destino.
+    const std::string Tag = "." + std::to_string(
+        static_cast<unsigned long long>(
+            std::chrono::steady_clock::now().time_since_epoch().count())) + ".old";
+    const fs::path MeshOld  = fs::path(_OutBase).concat(".smesh").concat(Tag);
+    const fs::path SceneOld = fs::path(_OutBase).concat(".sscene").concat(Tag);
     std::error_code Ec, Ignored;
 
-    const bool HadMesh  = fs::exists(MeshPath, Ignored);
-    const bool HadScene = fs::exists(ScenePath, Ignored);
-    if (HadMesh)  fs::rename(MeshPath, MeshOld, Ec);
-    if (!Ec && HadScene) fs::rename(ScenePath, SceneOld, Ec);
+    // Estado do que REALMENTE aconteceu. Sem isto o rollback agia por intencao e nao por fato:
+    // removia destino que esta execucao nunca publicou e restaurava backup que nunca criou.
+    bool MeshBackedUp = false, SceneBackedUp = false;
+    bool MeshPublished = false, ScenePublished = false;
 
-    if (!Ec) fs::rename(MeshTmp, MeshPath, Ec);
-    if (!Ec) fs::rename(SceneTmp, ScenePath, Ec);
+    if (fs::exists(MeshPath, Ignored)) {
+        fs::rename(MeshPath, MeshOld, Ec);
+        MeshBackedUp = !Ec;
+    }
+    if (!Ec && fs::exists(ScenePath, Ignored)) {
+        fs::rename(ScenePath, SceneOld, Ec);
+        SceneBackedUp = !Ec;
+    }
+    if (!Ec) { fs::rename(MeshTmp, MeshPath, Ec);   MeshPublished  = !Ec; }
+    if (!Ec) { fs::rename(SceneTmp, ScenePath, Ec); ScenePublished = !Ec; }
 
     if (Ec) {
         std::printf("[Cooker] ERRO ao publicar o par: %s\n", Ec.message().c_str());
-        // Desfaz o que tiver saido, e so entao devolve os antigos. A ordem importa: restaurar
-        // por cima de um destino ja publicado falharia e deixaria o par misturado mesmo assim.
-        fs::remove(MeshPath, Ignored);
-        fs::remove(ScenePath, Ignored);
+        // So desfaz o que ESTA execucao fez. Remover incondicionalmente destruia o par valido
+        // quando a falha era no proprio backup.
+        if (MeshPublished)  fs::remove(MeshPath, Ignored);
+        if (ScenePublished) fs::remove(ScenePath, Ignored);
         fs::remove(MeshTmp, Ignored);
         fs::remove(SceneTmp, Ignored);
-        if (HadMesh)  fs::rename(MeshOld, MeshPath, Ignored);
-        if (HadScene) fs::rename(SceneOld, ScenePath, Ignored);
+
+        // Restauracao CONFERIDA: se ela falhar, o backup e o unico dado bom que sobrou e o
+        // usuario precisa saber onde ele esta — silenciar aqui perderia o arquivo de vez.
+        bool Restored = true;
+        std::error_code R;
+        if (MeshBackedUp)  { fs::rename(MeshOld, MeshPath, R);   if (R) Restored = false; }
+        if (SceneBackedUp) { fs::rename(SceneOld, ScenePath, R); if (R) Restored = false; }
+        if (!Restored) {
+            std::printf("[Cooker] ATENCAO: falha ao restaurar o par anterior. Os arquivos bons\n"
+                        "          estao preservados em:\n            %s\n            %s\n",
+                        MeshOld.string().c_str(), SceneOld.string().c_str());
+        }
         return 3;
     }
 
-    fs::remove(MeshOld, Ignored);
-    fs::remove(SceneOld, Ignored);
+    if (MeshBackedUp)  fs::remove(MeshOld, Ignored);
+    if (SceneBackedUp) fs::remove(SceneOld, Ignored);
 
     std::printf("[Cooker] Escrito: %s\n", MeshPath.string().c_str());
     std::printf("[Cooker] Escrito: %s\n", ScenePath.string().c_str());
