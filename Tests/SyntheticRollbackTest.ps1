@@ -61,12 +61,21 @@ $SceneHash = Get-Sha256 "$Base.sscene"
 function Invoke-LockedRegen([string] $LockedPath, [string] $Label) {
     $Stream = [System.IO.File]::Open($LockedPath, 'Open', 'Read', 'None')
     try {
-        & $Cooker --synthetic $Base --instances 100 --meshes 8 --materials 8 | Out-Null
+        $Output = & $Cooker --synthetic $Base --instances 100 --meshes 8 --materials 8 2>&1 | Out-String
         $Code = $LASTEXITCODE
     } finally {
         $Stream.Close()
     }
-    if ($Code -eq 0) { Fail "$Label : cooker saiu 0 com destino travado" }
+    # Exit EXATAMENTE 3 (falha de I/O na publicacao), com o diagnostico especifico. Aceitar
+    # "qualquer != 0" deixava o teste verde sem NUNCA chegar ao publicador: bastava uma regressao
+    # de parser recusar estes argumentos validos com exit 2 para os hashes conferirem, o loader
+    # passar e o gate mentir.
+    if ($Code -ne 3) {
+        Fail "$Label : exit $Code, esperado 3 (falha ao publicar). Saida: $($Output.Trim())"
+    }
+    if ($Output -notmatch "ERRO ao publicar o par") {
+        Fail "$Label : nao imprimiu o diagnostico de publicacao. Saida: $($Output.Trim())"
+    }
 
     if (-not (Test-Path "$Base.smesh")) { Fail "$Label : .smesh foi APAGADO" }
     elseif ((Get-Sha256 "$Base.smesh") -ne $MeshHash) { Fail "$Label : .smesh foi substituido" }

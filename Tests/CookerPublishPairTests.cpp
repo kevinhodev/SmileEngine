@@ -34,11 +34,18 @@ namespace {
         std::vector<std::string> Renames; // "from -> to", na ordem
         int  FailOnRename = -1;           // indice (0-based) do rename que falha; -1 = nenhum
         int  RenameCount  = 0;
+        // Falha de CONSULTA e de REMOCAO por caminho. Sem poder representa-las, o fake nao
+        // conseguia expressar os dois modos que levam a perda silenciosa de dado.
+        std::set<std::string> FailExistsOn;
+        std::set<std::string> FailRemoveOn;
 
         CookerPublish::FFileOps Ops() {
             CookerPublish::FFileOps O;
-            O.Exists = [this](const fs::path& P) {
-                return Files.count(P.string()) != 0;
+            O.Exists = [this](const fs::path& P, bool& Out) -> std::error_code {
+                if (FailExistsOn.count(P.string()))
+                    return std::make_error_code(std::errc::permission_denied);
+                Out = Files.count(P.string()) != 0;
+                return {};
             };
             O.Rename = [this](const fs::path& From, const fs::path& To) -> std::error_code {
                 const int Index = RenameCount++;
@@ -52,7 +59,12 @@ namespace {
                 Files.insert(To.string());
                 return {};
             };
-            O.Remove = [this](const fs::path& P) { Files.erase(P.string()); };
+            O.Remove = [this](const fs::path& P) -> std::error_code {
+                if (FailRemoveOn.count(P.string()))
+                    return std::make_error_code(std::errc::permission_denied);
+                Files.erase(P.string());
+                return {};
+            };
             return O;
         }
     };
@@ -171,10 +183,65 @@ int main() {
         Check(R.RestoreFailed, "restore: sinaliza que a restauracao falhou");
     }
 
+    // --- 7. Falha de CONSULTA. Se `exists` erra e isso vira "nao existe", o backup e pulado e o
+    // publish SOBRESCREVE o anterior (fs::rename do MSVC usa MOVEFILE_REPLACE_EXISTING). Se o
+    // segundo publish falhar depois, nao ha backup e o dado morreu. Tem de abortar com o disco
+    // INTACTO, antes de qualquer mutacao.
+    {
+        FFakeFs F = MakeFsWithExistingPair();
+        F.FailExistsOn = { kMeshPath.string() };
+        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
+                                                  kTag, F.Ops());
+        Check(static_cast<bool>(R.Error), "exists1: reporta erro de consulta");
+        Check(F.RenameCount == 0, "exists1: NENHUM rename foi tentado");
+        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists1: par intocado");
+        Check(Has(F, kMeshTmp) && Has(F, kSceneTmp), "exists1: temporarios intocados");
+        Check(!R.MeshBackedUp && !R.MeshPublished, "exists1: nada marcado como feito");
+    }
+    // Mesma coisa para o SEGUNDO destino: a consulta dos dois acontece antes da primeira mutacao.
+    {
+        FFakeFs F = MakeFsWithExistingPair();
+        F.FailExistsOn = { kScenePath.string() };
+        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
+                                                  kTag, F.Ops());
+        Check(static_cast<bool>(R.Error), "exists2: reporta erro de consulta");
+        Check(F.RenameCount == 0, "exists2: nenhum rename tentado (consulta vem antes de tudo)");
+        Check(Has(F, kMeshPath) && Has(F, kScenePath), "exists2: par intocado");
+    }
+
+    // --- 8. Falha de REMOCAO no rollback. O mesh publicado nao pode ser removido, entao sobra
+    // MEIO PAR no disco: isso precisa aparecer em CleanupFailed, senao o resultado afirma que
+    // esta tudo desfeito quando nao esta.
+    {
+        FFakeFs F;
+        F.Files = { kMeshTmp.string(), kSceneTmp.string() }; // primeira geracao, sem backup
+        F.FailOnRename  = 1;                                 // publish da cena falha
+        F.FailRemoveOn  = { kMeshPath.string() };            // e o mesh publicado nao sai
+        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
+                                                  kTag, F.Ops());
+        Check(static_cast<bool>(R.Error), "cleanup: reporta erro");
+        Check(R.MeshPublished && !R.ScenePublished, "cleanup: meio par publicado");
+        Check(R.CleanupFailed, "cleanup: SINALIZA que a limpeza falhou");
+        Check(Has(F, kMeshPath), "cleanup: o meio par de fato ficou no disco");
+        Check(!R.RestoreFailed, "cleanup: nao havia backup a restaurar");
+    }
+
+    // --- 9. Falha de remocao no caminho FELIZ (backup nao sai). Nao ha perda de dado — o par
+    // novo esta publicado —, mas sobra lixo, e o resultado tem de dizer.
+    {
+        FFakeFs F = MakeFsWithExistingPair();
+        F.FailRemoveOn = { fs::path(kMeshPath).concat(kTag).string() };
+        const auto R = CookerPublish::PublishPair(kMeshTmp, kMeshPath, kSceneTmp, kScenePath,
+                                                  kTag, F.Ops());
+        Check(!R.Error, "feliz+lixo: publicou");
+        Check(R.CleanupFailed, "feliz+lixo: sinaliza backup nao removido");
+        Check(Has(F, fs::path(kMeshPath).concat(kTag)), "feliz+lixo: backup ficou mesmo");
+    }
+
     if (Failures > 0) {
         std::fprintf(stderr, "[PUBLISH] %d falha(s)\n", Failures);
         return 1;
     }
-    std::printf("[PUBLISH] ok - 6 cenarios, incluindo o ramo inalcancavel de fora do processo\n");
+    std::printf("[PUBLISH] ok - 9 cenarios, incluindo os inalcancaveis de fora do processo\n");
     return 0;
 }

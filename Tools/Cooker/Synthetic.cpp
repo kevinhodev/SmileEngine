@@ -368,7 +368,17 @@ int GenerateSyntheticScene(const fs::path& _OutBase, uint32_t _Instances, uint32
                         "          estao preservados com o sufixo '%s' ao lado do destino.\n",
                         Tag.c_str());
         }
+        if (Pub.CleanupFailed) {
+            std::printf("[Cooker] ATENCAO: nao foi possivel remover tudo que esta execucao criou;\n"
+                        "          pode ter sobrado temporario ou meio par no destino.\n");
+        }
         return 3;
+    }
+    if (Pub.CleanupFailed) {
+        // Publicou, mas o backup nao saiu: nao ha perda de dado, ha lixo — e lixo silencioso
+        // vira a sobra que colide com a proxima execucao.
+        std::printf("[Cooker] ATENCAO: par publicado, mas sobrou backup com o sufixo '%s'.\n",
+                    Tag.c_str());
     }
 
     std::printf("[Cooker] Escrito: %s\n", MeshPath.string().c_str());
