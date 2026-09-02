@@ -458,6 +458,29 @@ export class SmileEditorBridge {
     if (typeof snapshot.directGpuSourceFrameIndex !== "number") {
       throw new Error("Snapshot de perfil sem identidade da fila direct.");
     }
+    // O campo da async e nullable, e por isso mesmo precisa ser validado: ausente, string ou
+    // qualquer outro tipo atravessaria o cast e o resumo o leria como "fila suspensa" — uma
+    // interpretacao plausivel e errada, que e o modo de falha mais caro numa regua.
+    const asyncIndex = snapshot.asyncComputeSourceFrameIndex;
+    if (asyncIndex !== null && typeof asyncIndex !== "number") {
+      throw new Error(
+        "Snapshot de perfil com identidade da fila async invalida " +
+          `(esperado number ou null, veio ${typeof asyncIndex}).`,
+      );
+    }
+    // Pareamento: timings e identidade sao a MESMA afirmacao vista de dois lados, e divergirem
+    // significa que o editor publicou um estado que nao existe.
+    if (snapshot.asyncCompute.length === 0 && asyncIndex !== null) {
+      throw new Error(
+        `Snapshot incoerente: fila async sem timings mas com identidade ${asyncIndex}.`,
+      );
+    }
+    if (snapshot.asyncCompute.length > 0 && asyncIndex === null) {
+      throw new Error(
+        `Snapshot incoerente: fila async com ${snapshot.asyncCompute.length} escopos ` +
+          "mas sem identidade de frame.",
+      );
+    }
     return snapshot as ProfileSnapshot;
   }
 
