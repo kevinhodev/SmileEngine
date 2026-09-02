@@ -151,6 +151,30 @@ function passOf(profile, name, queue) {
   return profile.passes.find((candidate) => candidate.name === name && candidate.queue === queue);
 }
 
+// smile_close_editor devolve quando o named pipe e a janela fecham — o PROCESSO ainda pode estar
+// vivo depois disso, liberando BLAS/TLAS. Foi observado na 1M: o editor continuou vivo minutos
+// apos o PASS da rodada. Enquanto ele nao morre, a VRAM dele ainda esta tomada, e medir a cena
+// seguinte por cima disso mistura duas cenas na mesma leitura. `kill(pid, 0)` nao envia sinal;
+// so pergunta se o processo existe (ESRCH quando nao).
+async function waitForProcessExit(pid, label, timeoutMilliseconds = 180_000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") return;
+      // EPERM: existe, mas sem permissao para sinalizar. Continua sendo "vivo".
+      if (error.code !== "EPERM") throw error;
+    }
+    assert(
+      Date.now() < deadline,
+      `${label}: o editor PID ${pid} continuou vivo ${timeoutMilliseconds / 1000}s depois do ` +
+        `fechamento; medir a proxima cena por cima dele misturaria as duas`,
+    );
+    await delay(500);
+  }
+}
+
 async function readSidecar(relativePath) {
   const bytes = await readFile(path.join(smileRoot, relativePath), "utf8");
   const parsed = JSON.parse(bytes);
@@ -364,6 +388,7 @@ async function measureScene(sceneEntry) {
 
   if (!currentLaunch.alreadyRunning) {
     await call("smile_close_editor", { timeoutSeconds: 120 });
+    await waitForProcessExit(currentLaunch.pid, sceneEntry.id);
   }
   currentLaunch = undefined;
   return sceneRuns;
@@ -406,6 +431,7 @@ try {
     const status = await call("smile_editor_status", { timeoutSeconds: 1 });
     if (status.connected && currentLaunch && !currentLaunch.alreadyRunning) {
       await call("smile_close_editor", { timeoutSeconds: 120 });
+      await waitForProcessExit(currentLaunch.pid, "cleanup");
     }
   } catch (cleanupError) {
     console.error(`[baseline] cleanup: ${cleanupError}`);
