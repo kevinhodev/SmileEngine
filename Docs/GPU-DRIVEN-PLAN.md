@@ -538,14 +538,22 @@ contra assets incompatíveis.
 ### Trabalho
 
 - ~~recookar os 11 pares `.sscene/.smesh` com o cooker v8 atual~~ — **feito em 2026-09-01**;
-- **registrar a RECEITA do recook, não só o resultado.** O cooker aceita `--opaque-glass`, que é
-  por cena e muda o shading do vidro; hoje a única fonte que diz quais cenas o usam é um comentário
-  em [`main.cpp`](../Tools/Cooker/main.cpp#L296) (Emerald Square usa, por ser casca oca; Bistro não,
-  por ter interior real atrás do vidro). Sem a receita versionada — script ou manifesto por cena —
-  o próximo recook muda o vidro da Emerald sem nenhum diff de código, que é exatamente a mudança
-  silenciosa que uma baseline existe para impedir;
-- confirmar que loader, raster e RT abrem todas as famílias relevantes;
-- registrar hashes/build e não confundir os antigos arquivos v9 com formato suportado;
+- ~~**registrar a RECEITA do recook, não só o resultado**~~ — **feito**:
+  [`Tools/Scenes.cook.json`](../Tools/Scenes.cook.json) (receita, incluindo quais cenas usam
+  `--opaque-glass` e por quê) + [`Tools/CookScenes.ps1`](../Tools/CookScenes.ps1) (runner com
+  `-Record`/`-Verify`) + `Tools/cook-baseline.json` (hashes). Antes disso a única fonte que dizia
+  quem usa a flag era um comentário em [`main.cpp`](../Tools/Cooker/main.cpp#L296), e um recook sem
+  a receita mudaria o vidro da Emerald sem nenhum diff de código;
+- confirmar que loader, raster e RT abrem todas as famílias relevantes — **loader FEITO** (11/11
+  carregam via `LoadCookedSceneData` no harness headless de
+  [`OpacityMicromapBakeTests`](../Tests/OpacityMicromapBakeTests.cpp), com validação de índices;
+  6 cenas também exercitam o bake de OMM, e as 5 restantes — Sponza ×2, BEEPLE ×3 — saem com
+  `exit 6`, que é "zero pares masked", não falha de carga). **Raster e RT continuam por verificar**:
+  exigem o editor rodando, não há harness headless;
+- ~~registrar hashes/build~~ — **feito** pelo `cook-baseline.json` (SHA256, bytes, versão e
+  contadores de cabeçalho por arquivo, mais commit e config). `-Verify` é o gate "os assets são os
+  da baseline?". Recook confirmado **determinístico**: recozinhar uma cena reproduz o SHA256;
+- não confundir os antigos arquivos v9 com formato suportado;
 - adicionar timers CPU para `BuildDrawLists`, sort, uploads e emissão de passes;
 - registrar draws potenciais/executadas, bindings, renderables, materiais, meshes e bytes de object
   constants;

@@ -1,0 +1,194 @@
+{
+    "generatedUtc":  "2026-09-02T02:49:31Z",
+    "commit":  "f725a65",
+    "config":  "Release",
+    "outputs":  [
+                    {
+                        "outBase":  "Assets/Scenes/main_sponza/NewSponza_Main_Yup_003",
+                        "smesh":  {
+                                      "sha256":  "7A3B05201909B1F5A71D6B5187343FCEE82EE4A4125D98E50285F1081C99AD6B",
+                                      "bytes":  229887512,
+                                      "version":  8,
+                                      "countC":  405,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "9EE6A8DB718191BB42EF9B82AEA046A73BF1D34703619D36DDCF888BCAE1BB13",
+                                       "bytes":  119568,
+                                       "version":  8,
+                                       "countC":  28,
+                                       "countD":  405
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/main_sponza/NewSponza_Main_Zup_003",
+                        "smesh":  {
+                                      "sha256":  "7A3B05201909B1F5A71D6B5187343FCEE82EE4A4125D98E50285F1081C99AD6B",
+                                      "bytes":  229887512,
+                                      "version":  8,
+                                      "countC":  405,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "7E74D1A4FB710645A91C1EDE9B283C17D8B3DE53AC2EBB81811D4C9D27B94790",
+                                       "bytes":  119568,
+                                       "version":  8,
+                                       "countC":  28,
+                                       "countD":  405
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/SunTemple/SunTemple",
+                        "smesh":  {
+                                      "sha256":  "F8C4CE26959C98C51E347B91DFFDA3A5E3B333E5D0830EB6B27F5B5314293A73",
+                                      "bytes":  44265936,
+                                      "version":  8,
+                                      "countC":  1056,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "538728DB46CD3693AFBD5E3BFC603A1B898127284A9CA42565DA4FBA0D8B5363",
+                                       "bytes":  268624,
+                                       "version":  8,
+                                       "countC":  48,
+                                       "countD":  1056
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/Bistro/BistroExterior",
+                        "smesh":  {
+                                      "sha256":  "4349111F6D2EE0CDA73F7E81B1503C9D041BF1F132563E72D0536B724DD8FBCA",
+                                      "bytes":  216552656,
+                                      "version":  8,
+                                      "countC":  1591,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "AD4527F5673317C1EBBAC678E6F6B7F6FFB447D2775971B996A452022241BC72",
+                                       "bytes":  507600,
+                                       "version":  8,
+                                       "countC":  132,
+                                       "countD":  1591
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/Bistro/BistroInterior",
+                        "smesh":  {
+                                      "sha256":  "332B96F082B56552E8B9D5BB57662A001EA4F5C8C391E443EFC98F8F64C17370",
+                                      "bytes":  71471836,
+                                      "version":  8,
+                                      "countC":  2062,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "B2DE93F8707D59EC5A4028F67F69F535F9682774FA4D91C90D51EBFC0A4F7A2F",
+                                       "bytes":  485332,
+                                       "version":  8,
+                                       "countC":  71,
+                                       "countD":  2062
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/Bistro/BistroInterior_Wine",
+                        "smesh":  {
+                                      "sha256":  "BA80D4F04287BEF3042AA94E6B7526D7FC2C09E1E4E7DF699E73993E5E51995B",
+                                      "bytes":  91933076,
+                                      "version":  8,
+                                      "countC":  2289,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "1D4C4974FFA83235C5A32A89C7564B7336D04C9646F596DB95D74B17B9CB1136",
+                                       "bytes":  530456,
+                                       "version":  8,
+                                       "countC":  74,
+                                       "countD":  2289
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Day",
+                        "smesh":  {
+                                      "sha256":  "E27C98D24E79165094E77B5898FE394A482D58174F7AC55960E012CB95A3838A",
+                                      "bytes":  214754712,
+                                      "version":  8,
+                                      "countC":  281,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "F86EA417D994F609F231742E14047339D74773435BA4A59CA8A6CA3BFA94B851",
+                                       "bytes":  815600,
+                                       "version":  8,
+                                       "countC":  220,
+                                       "countD":  2479
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Dusk",
+                        "smesh":  {
+                                      "sha256":  "BF48487582B867AE8F20EB7E86C9243C4D2014A9B2F98825692D23DEED5EFA93",
+                                      "bytes":  214755384,
+                                      "version":  8,
+                                      "countC":  289,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "F21144CCC52E54B81A0240ED9265D892F8920A4BE4C9C46E4C2125CCD6004E82",
+                                       "bytes":  820456,
+                                       "version":  8,
+                                       "countC":  222,
+                                       "countD":  2487
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE",
+                        "smesh":  {
+                                      "sha256":  "8E489AA23DEC316F3284026878DBFC98B546B62269201E54CE593805404448A4",
+                                      "bytes":  453560844,
+                                      "version":  8,
+                                      "countC":  7293,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "74B008D5D2AE52FF0E424C497E7A3815558CDA70B9E8CF8243CEB4FF7B7C0D62",
+                                       "bytes":  1569768,
+                                       "version":  8,
+                                       "countC":  166,
+                                       "countD":  7293
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN",
+                        "smesh":  {
+                                      "sha256":  "26B852BF0B1253CFAD86B9CE29DB9AE8544384A861F64EAE51B93DAC1853346C",
+                                      "bytes":  501723184,
+                                      "version":  8,
+                                      "countC":  10740,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "77F565AE84FED850702E432C7F0789EF6DB98F801BEC673DE7C3CA5F32B2AEE9",
+                                       "bytes":  2104032,
+                                       "version":  8,
+                                       "countC":  124,
+                                       "countD":  10740
+                                   }
+                    },
+                    {
+                        "outBase":  "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS",
+                        "smesh":  {
+                                      "sha256":  "26B852BF0B1253CFAD86B9CE29DB9AE8544384A861F64EAE51B93DAC1853346C",
+                                      "bytes":  501723184,
+                                      "version":  8,
+                                      "countC":  10740,
+                                      "countD":  0
+                                  },
+                        "sscene":  {
+                                       "sha256":  "1DBBFE3D7FADA8762E3B211E2F51B677ADA30F00B1E2E7AB1F9AB83F857E699B",
+                                       "bytes":  2105756,
+                                       "version":  8,
+                                       "countC":  125,
+                                       "countD":  10740
+                                   }
+                    }
+                ]
+}

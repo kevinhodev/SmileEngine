@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "Receita de cozimento das cenas. Existe porque Assets/Scenes/ esta no .gitignore:",
+    "os .smesh/.sscene NAO sao versionados, entao sem este arquivo a unica fonte que dizia",
+    "quais cenas usam --opaque-glass era um comentario em Tools/Cooker/main.cpp. Um recook",
+    "feito sem a receita muda o vidro da Emerald Square sem nenhum diff de codigo.",
+    "Rodar com Tools/CookScenes.ps1. Ver Docs/GPU-DRIVEN-PLAN.md, Fase 0."
+  ],
+  "cooker": "build/bin/Release/SmileCooker.exe",
+  "scenes": [
+    {
+      "source": "Assets/Scenes/main_sponza/NewSponza_Main_Yup_003.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/main_sponza/NewSponza_Main_Zup_003.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/SunTemple/SunTemple.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/Bistro/BistroExterior.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/Bistro/BistroInterior.fbx",
+      "flags": [],
+      "why": "sem --opaque-glass: ha interior real atras do vidro, entao ele fica translucido"
+    },
+    {
+      "source": "Assets/Scenes/Bistro/BistroInterior_Wine.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Day.fbx",
+      "flags": ["--opaque-glass"],
+      "why": "casca oca: predios vazios atras da janela, entao o vidro cozinha OPACO e as reflexoes de RT pintam nele"
+    },
+    {
+      "source": "Assets/Scenes/EmeraldSquare_v4_1/EmeraldSquare_Dusk.fbx",
+      "flags": ["--opaque-glass"],
+      "why": "mesma cena da Day, mesmo tratamento de vidro"
+    },
+    {
+      "source": "Assets/Scenes/BEEPLE Zero-Day/MEASURE_ONE/MEASURE_ONE.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN.fbx",
+      "flags": []
+    },
+    {
+      "source": "Assets/Scenes/BEEPLE Zero-Day/MEASURE_SEVEN/MEASURE_SEVEN_COLORED_LIGHTS.fbx",
+      "flags": []
+    }
+  ]
+}
