@@ -544,13 +544,39 @@ await withSandbox(async ({ root, baselines, captures }) => {
     await makeReport(captures2, { pngBytes: outroPngBytes, overrides: { buildCommit: "def5678" } }),
     "relatorio2.json",
   );
+  // DOIS mecanismos distintos, e o segundo e o que importa. O failpoint 'apos-commit' so prova
+  // que uma excecao pos-commit e tratada; 'apos-commit-rm' lanca DENTRO do rm, caindo no mesmo
+  // .catch em que um EPERM ou EBUSY cairia. Sem ele, a colecao de erros de limpeza podia ficar
+  // sendo preenchida e nunca consultada — que era exatamente o defeito.
+  for (const ponto of ["apos-commit", "apos-commit-rm"]) {
+    const parcial = await run([file2, "--as", "fase0", "--replace"], baselines, {
+      SMILE_PROMOTE_FAILPOINT: ponto,
+    });
+    check(parcial.code === 2, ponto + ": sai com codigo 2", "exit=" + parcial.code);
+    check(
+      /retiring-/.test(parcial.saida),
+      ponto + ": nomeia onde ficaram os restos",
+      parcial.saida.trim(),
+    );
+    check(
+      (await readdir(baselines)).every((entry) => !entry.startsWith(".staging-")),
+      ponto + ": o finally rodou e o staging foi removido",
+    );
+    // Reposiciona para o proximo ciclo comecar do mesmo estado.
+    await rm(path.join(baselines, "Reference", "fase0"), { recursive: true, force: true });
+    for (const sobra of (await readdir(baselines)).filter((e) => e.includes(".retiring-"))) {
+      await rm(path.join(baselines, sobra), { recursive: true, force: true });
+    }
+    await run([file, "--as", "fase0", "--replace"], baselines);
+  }
+
   const result = await run([file2, "--as", "fase0", "--replace"], baselines, {
     SMILE_PROMOTE_FAILPOINT: "apos-commit",
   });
 
   check(result.code === 2, "falha pos-commit sai com codigo proprio (2), nao 1", `exit=${result.code}`);
   check(
-    /publicado, mas a limpeza/.test(result.saida) && !/nada foi publicado/.test(result.saida),
+    /publicado, mas a limpeza/i.test(result.saida) && !/nada foi publicado/.test(result.saida),
     "a mensagem diz que PUBLICOU e que a limpeza falhou",
     result.saida.trim(),
   );
@@ -564,6 +590,80 @@ await withSandbox(async ({ root, baselines, captures }) => {
     sha(await readFile(path.join(baselines, "Reference", "fase0", "cena_a_slot0.png"))) ===
       sha(outroPngBytes),
     "o pacote novo esta publicado, como a mensagem afirma",
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3f. Consulta que falha DENTRO da transacao faz rollback, e nao process.exit.
+//
+// existe() e usado no trocar(), ja depois de as referencias terem sido movidas. Se ele encerrasse
+// o processo (fail() -> process.exit) em vez de lancar, o Node sairia sem passar pelo catch nem
+// pelo finally: pacote pela metade, sem rollback e com o staging para tras. O failpoint fica
+// dentro do proprio helper, porque e a unica forma de exercitar esse ponto de fora.
+await withSandbox(async ({ root, baselines, captures }) => {
+  const file = await writeReport(root, await makeReport(captures));
+  check((await run([file, "--as", "fase0"], baselines)).code === 0, "publicacao de referencia");
+
+  const alvos = [
+    path.join(baselines, "fase0.json"),
+    path.join(baselines, "MANIFEST.md"),
+    ...(await readdir(path.join(baselines, "Reference", "fase0"))).map((f) =>
+      path.join(baselines, "Reference", "fase0", f),
+    ),
+  ];
+  const antes = new Map();
+  for (const alvo of alvos) antes.set(alvo, sha(await readFile(alvo)));
+
+  const captures2 = path.join(root, "Captures2");
+  await mkdir(captures2, { recursive: true });
+  const file2 = await writeReport(
+    root,
+    await makeReport(captures2, { pngBytes: outroPngBytes, overrides: { buildCommit: "def5678" } }),
+    "relatorio2.json",
+  );
+  const result = await run([file2, "--as", "fase0", "--replace"], baselines, {
+    SMILE_PROMOTE_FAILPOINT: "consulta-de-existencia",
+  });
+
+  check(result.code === 1, "consulta que falha na transacao aborta", "exit=" + result.code);
+  check(
+    /nada foi publicado/.test(result.saida),
+    "a mensagem diz que nada foi publicado",
+    result.saida.trim(),
+  );
+  for (const [alvo, hashOriginal] of antes) {
+    check(
+      (await readFile(alvo).then(sha).catch(() => null)) === hashOriginal,
+      "rollback preservou " + path.basename(alvo),
+    );
+  }
+  // O sintoma que denuncia o process.exit: sem passar pelo finally, o staging sobra.
+  check(
+    (await readdir(baselines)).every((entry) => !entry.startsWith(".staging-")),
+    "o finally rodou e o staging foi removido",
+    (await readdir(baselines)).join(", "),
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3g. Erro ao LER o MANIFEST nao pode virar 'manifesto ausente'.
+//
+// readFile(...).catch(() => "") apagaria em silencio as notas de waiver — a justificativa escrita
+// de cada excecao aceita, que so existe ali. MANIFEST.md como DIRETORIO da EISDIR, que nao e
+// ENOENT, sem depender de permissao (que no Windows nao e confiavel para isto).
+await withSandbox(async ({ root, baselines, captures }) => {
+  const file = await writeReport(root, await makeReport(captures));
+  await mkdir(path.join(baselines, "MANIFEST.md"), { recursive: true });
+  const result = await run([file, "--as", "fase0"], baselines);
+  check(result.code !== 0, "erro de leitura do MANIFEST aborta", result.saida.trim());
+  check(
+    /nao consegui ler o MANIFEST/.test(result.saida),
+    "a recusa e POR NAO CONSEGUIR LER, e nao por tropecar adiante",
+    result.saida.trim(),
+  );
+  check(
+    !existsSync(path.join(baselines, "fase0.json")),
+    "nada foi publicado quando o MANIFEST nao pode ser lido",
   );
 });
 

@@ -42,13 +42,23 @@ function fail(message) {
 // concluia que nao havia nada para preservar: a imutabilidade era ignorada e o rename do Windows
 // substituia o arquivo sem backup. Um erro de consulta tem de abortar ANTES da primeira mutacao,
 // e nao virar uma resposta.
+// Estes helpers LANCAM, e nao chamam fail(). A diferenca importa: fail() faz process.exit(1)
+// imediato, e `existe` e usado DENTRO da transacao (no trocar()). Um erro de consulta ali
+// encerraria o Node sem passar pelo catch nem pelo finally — com as referencias ja trocadas e o
+// relatorio ainda nao, ou seja pacote pela metade e sem rollback, que e exatamente o desfecho que
+// a transacao existe para impedir. Fora da transacao, quem chama converte em diagnostico.
 async function existe(alvo, oQueE) {
   try {
+    // Failpoint AQUI DENTRO, e nao no chamador: e o unico jeito de provar que uma consulta que
+    // falha no meio da transacao faz ROLLBACK em vez de encerrar o processo. Com fail() no lugar do
+    // throw, o exit pularia o finally e o staging ficaria para tras — que e o sintoma que o teste
+    // procura.
+    talvezFalhar("consulta-de-existencia");
     await stat(alvo);
     return true;
   } catch (error) {
     if (error.code === "ENOENT") return false;
-    fail(`nao consegui consultar ${oQueE} ('${alvo}'): ${error.code ?? error.message}`);
+    throw new Error(`nao consegui consultar ${oQueE} ('${alvo}'): ${error.code ?? error.message}`);
   }
 }
 
@@ -59,9 +69,13 @@ async function listar(diretorio, oQueE) {
     return await readdir(diretorio);
   } catch (error) {
     if (error.code === "ENOENT") return [];
-    fail(`nao consegui listar ${oQueE} ('${diretorio}'): ${error.code ?? error.message}`);
+    throw new Error(`nao consegui listar ${oQueE} ('${diretorio}'): ${error.code ?? error.message}`);
   }
 }
+
+// Ponte para os call sites que estao FORA da transacao: ali um erro tem de virar diagnostico
+// limpo, e nao stack trace.
+const ouFalha = (promessa) => promessa.catch((error) => fail(error.message));
 
 function argumentValue(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -360,11 +374,12 @@ await mkdir(baselineDirectory, { recursive: true });
 const mesmoNome = (a, b) =>
   process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
-const jaNaRaiz = (await listar(baselineDirectory, "o diretorio de baselines")).filter((entry) =>
+const jaNaRaiz = (await ouFalha(listar(baselineDirectory, "o diretorio de baselines"))).filter(
+  (entry) =>
   mesmoNome(entry, `${name}.json`),
 );
 const jaEmRefs = (
-  await listar(path.join(baselineDirectory, "Reference"), "o diretorio de referencias")
+  await ouFalha(listar(path.join(baselineDirectory, "Reference"), "o diretorio de referencias"))
 ).filter((entry) => mesmoNome(entry, name));
 
 if ((jaNaRaiz.length > 0 || jaEmRefs.length > 0) && !process.argv.includes("--replace")) {
@@ -390,7 +405,7 @@ if (divergentes.length > 0) {
 // o nosso substituindo/entrando. Calcular aqui permite que ele entre na MESMA transacao — gravado
 // depois, uma falha na escrita dele deixaria referencias novas descritas por um manifesto velho.
 const publicados = new Map();
-for (const file of (await listar(baselineDirectory, "o diretorio de baselines"))
+for (const file of (await ouFalha(listar(baselineDirectory, "o diretorio de baselines")))
   .filter((entry) => entry.endsWith(".json"))
   .sort()) {
   publicados.set(file, await readFile(path.join(baselineDirectory, file), "utf8"));
@@ -431,7 +446,17 @@ for (const file of [...publicados.keys()].sort()) {
   });
 }
 
-const previous = await readFile(manifestPath, "utf8").catch(() => "");
+// So ENOENT vira vazio. Qualquer outro erro de leitura (permissao, I/O) apagaria em silencio
+// as notas de waiver ja registradas — que sao justamente a justificativa escrita de cada
+// excecao aceita, o unico lugar onde ela existe.
+const previous = await ouFalha(
+  readFile(manifestPath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return "";
+    throw new Error(
+      `nao consegui ler o MANIFEST ('${manifestPath}'): ${error.code ?? error.message}`,
+    );
+  }),
+);
 const preservedNotes = new Map(
   [...previous.matchAll(/^- `([^`]+)` — (.+)$/gm)].map((match) => [match[1], match[2]]),
 );
@@ -481,6 +506,10 @@ const stagingRefs = path.join(staging, "refs");
 const retiredSuffix = `.retiring-${process.pid}`;
 const desfazer = [];
 let publicado = false;
+// Nenhum process.exit acontece DENTRO do try/catch/finally: exit pula o finally, e o staging
+// ficaria para tras — foi o que aconteceu ao mover a limpeza para la. O desfecho e registrado
+// aqui e so reportado depois que o finally ja limpou.
+let erroFatal = null;
 const backupsNaoRemovidos = [];
 
 try {
@@ -534,10 +563,14 @@ try {
   desfazer.length = 0;
   publicado = true;
 
-  // A limpeza dos backups acontece DEPOIS do commit, e por isso fica fora da transacao. Antes ela
-  // era feita aqui dentro: um rm que falhasse caia no catch e o script dizia "nada foi publicado",
-  // com o pacote novo ja no ar — a mensagem mais enganosa possivel, porque manda o operador
-  // procurar um problema que nao existe e ignorar o que existe.
+  // A limpeza dos backups acontece DEPOIS do commit. Ela ainda esta dentro deste try, mas o estado
+  // `publicado` muda o significado de uma falha aqui: nao e rollback, e limpeza pendente. Antes
+  // disso, um rm que falhasse caia no catch e o script dizia "nada foi publicado" com o pacote novo
+  // ja no ar — a mensagem mais enganosa possivel, porque manda o operador procurar um problema que
+  // nao existe e ignorar o que existe.
+  //
+  // Dois failpoints, porque sao dois mecanismos: este cobre uma excecao qualquer depois do commit,
+  // e o apos-commit-rm cobre o caso real de o proprio rm falhar.
   talvezFalhar("apos-commit");
   for (const [alvo, existia] of [
     [referenceDirectory, refsExistiam],
@@ -546,35 +579,50 @@ try {
   ]) {
     if (!existia) continue;
     const backup = `${alvo}${retiredSuffix}`;
-    await rm(backup, { recursive: true, force: true }).catch((error) =>
-      backupsNaoRemovidos.push(`${backup} (${error.code ?? error.message})`),
-    );
+    // O failpoint fica AQUI DENTRO, e nao antes do laco: la ele so provava que uma excecao
+    // pos-commit e tratada, e nao o mecanismo real de "o rm falhou". Lancando dentro do try do
+    // rm, o erro cai no mesmo .catch que um EPERM ou EBUSY cairia.
+    await (async () => {
+      talvezFalhar("apos-commit-rm");
+      await rm(backup, { recursive: true, force: true });
+    })().catch((error) => backupsNaoRemovidos.push(`${backup} (${error.code ?? error.message})`));
   }
 } catch (error) {
   if (publicado) {
-    // Falha DEPOIS do commit nao e rollback. O pacote esta publicado; o que sobrou e limpeza.
-    console.error(
-      `[promote] publicado, mas a limpeza dos backups falhou: ${error.message}\n` +
-        `[promote] remova a mao o que sobrou de '*${retiredSuffix}' em ${baselineDirectory}`,
-    );
-    process.exit(2);
+    // Falha DEPOIS do commit nao e rollback: o pacote esta publicado e o que sobrou e limpeza.
+    // Registrada para ser reportada depois do finally — sair daqui com process.exit pularia o
+    // finally e deixaria o staging para tras.
+    backupsNaoRemovidos.push(error.message);
+  } else {
+    // Desfaz na ordem inversa. Falha ao restaurar NAO e engolida: sem isto, o antigo podia ficar
+    // so sob o nome de recuperacao e ninguem saberia onde procurar.
+    const naoRestaurados = [];
+    for (const passo of desfazer.reverse()) {
+      await passo().catch((restoreError) => naoRestaurados.push(String(restoreError)));
+    }
+    erroFatal =
+      naoRestaurados.length > 0
+        ? `${error.message}\n[promote] E O ROLLBACK FALHOU: ${naoRestaurados.join("; ")}\n` +
+          `[promote] o conteudo anterior pode estar sob '*${retiredSuffix}' em ${baselineDirectory}`
+        : `${error.message} — nada foi publicado`;
   }
-  // Desfaz na ordem inversa. Falha ao restaurar NAO e engolida: sem isto, o antigo podia ficar so
-  // sob o nome de recuperacao e ninguem saberia onde procurar.
-  const naoRestaurados = [];
-  for (const passo of desfazer.reverse()) {
-    await passo().catch((restoreError) => naoRestaurados.push(String(restoreError)));
-  }
-  await rm(staging, { recursive: true, force: true }).catch(() => {});
-  if (naoRestaurados.length > 0) {
-    fail(
-      `${error.message}\n[promote] E O ROLLBACK FALHOU: ${naoRestaurados.join("; ")}\n` +
-        `[promote] o conteudo anterior pode estar sob '*${retiredSuffix}' em ${baselineDirectory}`,
-    );
-  }
-  fail(`${error.message} — nada foi publicado`);
 } finally {
   await rm(staging, { recursive: true, force: true }).catch(() => {});
+}
+
+// Falha de limpeza e reportada DEPOIS do finally, com o staging ja removido. Antes ela era
+// coletada em backupsNaoRemovidos e nunca consultada: um rm que falhasse de verdade terminava com
+// exit 0 e o operador nunca sabia que sobrou lixo com o conteudo da baseline anterior.
+if (erroFatal) fail(erroFatal);
+
+if (backupsNaoRemovidos.length > 0) {
+  console.error(
+    `[promote] PUBLICADO, mas a limpeza dos backups falhou:\n` +
+      backupsNaoRemovidos.map((linha) => `[promote]   ${linha}`).join("\n") +
+      `\n[promote] o pacote novo esta ativo; remova a mao o que sobrou de '*${retiredSuffix}' em ` +
+      `${baselineDirectory}`,
+  );
+  process.exit(2);
 }
 
 if (imageRows.length > 0) {
