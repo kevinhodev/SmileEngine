@@ -130,11 +130,11 @@ namespace Smile {
         // um diagnostico.
         //
         // O InstanceID do DXR tambem tem 24 bits, entao o mesmo teto vale para ele.
-        if (_Scene.Renderables().size() > kMaxTemporalInstanceId)
+        if (_Scene.Renderables().size() > kMaxTemporalInstanceCount)
             throw std::runtime_error(
                 "TLAS com mais renderaveis que o InstanceID consegue enderecar (" +
                 std::to_string(_Scene.Renderables().size()) + " > " +
-                std::to_string(kMaxTemporalInstanceId) + ")");
+                std::to_string(kMaxTemporalInstanceCount) + ")");
 
         _Out.clear();
         _Out.reserve(_Scene.Renderables().size());

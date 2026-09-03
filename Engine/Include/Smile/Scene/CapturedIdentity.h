@@ -28,16 +28,24 @@ namespace Smile {
         u64             Id = 0;
     };
 
-    // Maior id de instancia que sobrevive ao round-trip pelo canal float da superficie temporal.
+    // Maior ID de instancia que sobrevive ao round-trip pelo canal float da superficie temporal.
     //
     // Espelha SMILE_TEMPORAL_MAX_INSTANCE_ID em Shaders/Temporal/TemporalMotionCommon.hlsli. O
-    // valor gravado la e (id + 1) num float32, exato ate 2^24 -- entao o teto do ID e 2^24 - 2.
+    // valor gravado la e (id + 1) num float32, que representa inteiros exatamente ate 2^24
+    // INCLUSIVE -- entao o maior ID e 2^24 - 1, cujo encoded e exatamente 2^24. Medido nas duas
+    // bordas: 0xFFFFFF volta certo, 0x1000000 nao.
     //
-    // Existe do lado da CPU porque a recusa tem de acontecer na CONSTRUCAO: passar do teto nao
-    // produz erro em lugar nenhum, produz o objeto VIZINHO em silencio. Medido: o id 2^23
-    // decodificava como 2^23 + 1 com o "+0.5f" que o decoder tinha, e mesmo sem ele a faixa acaba
-    // em 2^24 - 2.
-    inline constexpr u32 kMaxTemporalInstanceId = 16777214u;
+    // E o mesmo teto do InstanceID do DXR, que tem 24 bits.
+    inline constexpr u32 kMaxTemporalInstanceId = 0xFFFFFFu; // 16.777.215
+
+    // Maior CONTAGEM enderecavel. Constante separada de proposito: o guard compara contagem com
+    // contagem, e nao contagem com maximo de ID -- com indices comecando em zero, uma cena de
+    // kMaxTemporalInstanceId + 1 renderaveis cabe inteira. Misturar as duas grandezas recusava
+    // duas contagens validas.
+    //
+    // A recusa mora na CONSTRUCAO da TLAS porque passar do teto nao produz erro em lugar nenhum:
+    // produz o objeto VIZINHO, em silencio.
+    inline constexpr u32 kMaxTemporalInstanceCount = kMaxTemporalInstanceId + 1u; // 16.777.216
 
     // Valor gravado na GPU para a entrada `Index` da tabela. O +1 reserva o 0 para "vazio", que e
     // o que o alvo contem onde nenhum draw tocou.

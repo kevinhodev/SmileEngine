@@ -9,7 +9,9 @@
 // transforms do motion vector de RT --, e o teste guarda MATRIZES DISTINTAS por frame justamente
 // para que trocar uma pela outra apareca.
 
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -211,7 +213,7 @@ int main() {
         };
 
         for (u32 Id : { 0u, 1u, 1000u, 8388606u, 8388607u, 8388608u, 8388609u,
-                        kMaxTemporalInstanceId - 1u, kMaxTemporalInstanceId }) {
+                        16777214u, kMaxTemporalInstanceId }) {
             Check(RoundTrip(Id) == Id, "o id volta igual pelo canal float");
             if (RoundTrip(Id) != Id)
                 std::cerr << "        id " << Id << " voltou " << RoundTrip(Id) << "\n";
@@ -221,6 +223,77 @@ int main() {
         Check(RoundTripComMeio(8388608u) != 8388608u,
               "a versao com +0.5f errava em 2^23 (e por isso ela saiu)");
         Check(RoundTripComMeio(1000u) == 1000u, "e acertava abaixo da borda");
+
+        // O maior ID cabe, e o seguinte nao: e a diferenca entre ID e CONTAGEM.
+        Check(RoundTrip(kMaxTemporalInstanceId) == kMaxTemporalInstanceId,
+              "o maior ID (0xFFFFFF) volta certo: o encoded dele e exatamente 2^24");
+        Check(kMaxTemporalInstanceCount == kMaxTemporalInstanceId + 1u,
+              "a contagem enderecavel e um a mais que o maior ID, porque o indice comeca em 0");
+
+        // 2^24 como ID nao volta -- o encoded seria 2^24 + 1, que o float32 nao representa.
+        {
+            const u32   Estoura = kMaxTemporalInstanceId + 1u;
+            const float Encoded = static_cast<float>(Estoura + 1u);
+            Check(static_cast<u32>(Encoded) - 1u != Estoura,
+                  "o primeiro ID acima do teto nao volta -- e por isso o teto existe");
+        }
+    }
+
+    // 9. O DECODER DE PRODUCAO, e nao so a aritmetica.
+    //
+    // As lambdas acima demonstram POR QUE o "+0.5f" estava errado, mas sao independentes do
+    // HLSL: reintroduzir o defeito no shader nao mudaria nenhuma assercao delas. Este caso
+    // fecha isso lendo o decoder real.
+    //
+    // E uma guarda de FONTE, e nao de comportamento: executar HLSL exigiria GPU, e esta suite
+    // roda no CI sem uma. O criterio que ela cumpre e o que importa na pratica -- reintroduzir
+    // o "+ 0.5f" no decoder real deixa o gate vermelho.
+    {
+        const char* kCaminho = SMILE_TEMPORAL_COMMON_PATH;
+        std::ifstream Arquivo(kCaminho);
+        Check(Arquivo.is_open(), "o decoder de producao foi encontrado");
+        if (Arquivo.is_open()) {
+            std::stringstream Buffer;
+            Buffer << Arquivo.rdbuf();
+            const std::string Fonte = Buffer.str();
+
+            const size_t Inicio = Fonte.find("bool TemporalDecodeInstance");
+            Check(Inicio != std::string::npos, "achou TemporalDecodeInstance");
+            if (Inicio != std::string::npos) {
+                const size_t Fim  = Fonte.find("\n}", Inicio);
+                const std::string Bruto = Fonte.substr(Inicio, Fim - Inicio);
+
+                // Sem os COMENTARIOS. O proprio comentario que explica por que o "+ 0.5f" saiu
+                // contem o texto "+ 0.5f", e procurar no corpo cru acusava a explicacao como se
+                // fosse o defeito -- um teste que falha por causa da propria documentacao.
+                std::string Corpo;
+                {
+                    std::istringstream Linhas(Bruto);
+                    std::string Linha;
+                    while (std::getline(Linhas, Linha)) {
+                        const size_t Comentario = Linha.find("//");
+                        Corpo += (Comentario == std::string::npos) ? Linha
+                                                                   : Linha.substr(0, Comentario);
+                        Corpo += "\n";
+                    }
+                }
+
+                Check(Corpo.find("(uint)encoded") != std::string::npos,
+                      "o decoder converte o encoded direto, sem somar nada");
+                Check(Corpo.find("+ 0.5") == std::string::npos &&
+                          Corpo.find("+0.5") == std::string::npos,
+                      "o decoder NAO soma 0.5 -- isso cortava a faixa util em 2^23");
+            }
+
+            // E o teto declarado no shader tem de ser o mesmo da CPU: duas constantes que
+            // divergem em silencio sao piores que uma constante errada, porque cada lado
+            // parece coerente sozinho.
+            const std::string Esperado =
+                "#define SMILE_TEMPORAL_MAX_INSTANCE_ID " +
+                std::to_string(kMaxTemporalInstanceId) + "u";
+            Check(Fonte.find(Esperado) != std::string::npos,
+                  "o teto do shader bate com kMaxTemporalInstanceId da CPU");
+        }
     }
 
     if (Failures > 0) {

@@ -667,6 +667,11 @@ target_compile_features(SmileSlotKeyedHistoryTests PRIVATE cxx_std_20)
 target_include_directories(SmileSlotKeyedHistoryTests PRIVATE
     ${PROJECT_SOURCE_DIR}/Engine/Include
 )
+# Caminho do decoder de producao. O teste le o FONTE do shader porque executar HLSL exigiria GPU,
+# e o criterio que importa e que reintroduzir o "+0.5f" la deixe este gate vermelho.
+target_compile_definitions(SmileSlotKeyedHistoryTests PRIVATE
+    SMILE_TEMPORAL_COMMON_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/TemporalMotionCommon.hlsli"
+)
 set_target_properties(SmileSlotKeyedHistoryTests PROPERTIES
     AUTOMOC OFF
     AUTOUIC OFF

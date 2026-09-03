@@ -1199,9 +1199,18 @@ TLAS, `InstanceGeo` e remap compartilhem a mesma convenção.
 
 **4. A faixa de 24 bits — fechado.** O decoder fazia `(uint)(encoded + 0.5f)`, e essa soma não é
 representável em float32 a partir de 2²³: o id 8.388.608 voltava como 8.388.609, o objeto vizinho,
-sem erro nenhum. O `+0.5f` saiu (o valor vem de um `Load`, sem filtragem, de um canal que recebeu
-inteiro exato), a faixa passou a ir até 2²⁴−2, e o `CollectInstances` recusa cena acima disso — é o
-último ponto em que o estouro ainda é diagnóstico e não objeto errado.
+sem erro nenhum. O `+0.5f` saiu — o valor vem de um `Load`, sem filtragem, de um canal que recebeu
+inteiro exato, então truncar já é exato.
+
+O teto ficou onde de fato está: o float32 representa inteiros exatamente até 2²⁴ **inclusive**,
+então o maior ID é `0xFFFFFF` = 16.777.215 (cujo *encoded* é exatamente 2²⁴), que é também o teto
+do `InstanceID` de 24 bits do DXR. A **contagem** endereçável é 16.777.216, um a mais, porque o
+índice começa em zero — e por isso são duas constantes, com o guard comparando contagem com
+contagem. Misturar as duas grandezas recusava duas cenas válidas.
+
+O gate do decoder lê o **fonte do shader de produção**, e não só a aritmética: executar HLSL exigiria
+GPU, e o critério que importa é que reintroduzir o `+0.5f` lá deixe o teste vermelho — verificado,
+junto com a divergência de teto entre shader e CPU.
 
 **Testes centrais do slice:** `[A,B,C] → [B,C]`, renderável pulado na TLAS, slot reciclado, objeto
 removido sem reuso, e tabela anterior ainda em consumo.

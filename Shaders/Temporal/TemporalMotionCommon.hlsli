@@ -8,11 +8,13 @@ struct FTemporalInstanceTransform {
 
 // Maior id que sobrevive ao round-trip pelo canal float da superficie.
 //
-// O valor gravado e (id + 1) num float32, que representa inteiros exatamente ate 2^24. O teto
-// aqui e 2^24 - 2 para o id, ou seja 2^24 - 1 para o valor gravado. Quem constroi a TLAS recusa
-// contagens acima disso: sem essa recusa, o excesso nao daria erro -- daria o OBJETO ERRADO, em
-// silencio.
-#define SMILE_TEMPORAL_MAX_INSTANCE_ID 16777214u
+// O valor gravado e (id + 1) num float32, que representa inteiros exatamente ate 2^24 INCLUSIVE --
+// entao o maior ID e 2^24 - 1 (0xFFFFFF), cujo encoded e exatamente 2^24. E o mesmo teto do
+// InstanceID do DXR, que tem 24 bits.
+//
+// Quem constroi a TLAS recusa contagens acima de 2^24 (ver kMaxTemporalInstanceCount, no lado da
+// CPU): sem essa recusa, o excesso nao daria erro -- daria o OBJETO VIZINHO, em silencio.
+#define SMILE_TEMPORAL_MAX_INSTANCE_ID 16777215u
 
 bool TemporalDecodeInstance(float encoded, uint instanceCount, out uint instanceId) {
     // Sem o "+ 0.5f" que estava aqui. Ele parecia arredondamento defensivo e na pratica
