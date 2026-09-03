@@ -909,11 +909,50 @@ então os 191 ms desse caso são o `RebuildRenderableIndex()` praticamente isola
 caso, ~191 são o rebuild do mapa (O(N) incondicional) e ~13 ms são o memmove do `erase`, a única
 parte que a posição afeta.
 
-Duas consequências. Primeira: ~200 ms por edição na 1M **não** é irrelevante — é um engasgo visível,
-e vira requisito se churn estrutural em runtime entrar no escopo. Segunda, e é a que importa para o
-desenho: o custo **não** vem da escolha de manter o `erase` estável. Swap-and-pop economizaria os
-~13 ms e deixaria os ~190 ms de rebuild no lugar. Se um dia isso precisar cair, o conserto é
-manutenção **incremental** do mapa `Id → índice`, não a ordem da lista nem o Outliner.
+Medido três vezes na 1M para confirmar que não é ruído: início 207–215 ms, meio 203–208 ms, fim
+192–196 ms.
+
+**O(N) por edição é ACEITO nesta fase, e não há conserto barato.** ~200 ms na 1M não é irrelevante —
+é um engasgo visível —, mas nada no escopo da Fase 1 o remove, e é importante não prometer que
+remove. Em particular, **manutenção incremental do mapa não resolve**: com `erase` estável, remover
+no início ou no meio muda o índice de *todos* os elementos posteriores, então manter `Id → índice`
+correto obriga a atualizar a cauda inteira — continua O(N). Ela só torna a remoção no **fim** O(1),
+que já é o caso mais barato, e deixa o pior caso onde está.
+
+Eliminar de verdade exigiria trocar o que sustenta a ordem: swap-and-pop, tombstones com slot-map,
+ou armazenamento estável/paginado com outra indireção. Todos passam pelos ranges do Outliner e pela
+visibilidade persistida por offset, e nenhum ajuda o caminho por frame. Fica **fora** da Fase 1, e
+se churn estrutural frequente em runtime virar requisito, abre-se uma migração própria do Outliner
+para membership por `ObjectId`.
+
+O que a medição de fato decide para o desenho é mais modesto e mais útil: a posição na lista não é
+o eixo de custo, então não vale complicar a Fase 1 para evitar deslocamento. O eixo é N.
+
+### Os quatro consumidores, como estão hoje
+
+Levantado, e o HiZ confirmado por três pontos independentes — ele é **por objeto**, indexado pelo
+índice denso da cena, e não por batch:
+
+| consumidor | endereço hoje | evidência |
+|---|---|---|
+| TLAS | `Inst.InstanceID = ThisIdx` | `RaytracingScene.cpp:162` |
+| TemporalMotion | `PreviousModels[i]` | `TemporalMotionVectors.cpp:190` |
+| Picking | `ObjectId = índice + 1` | `Picking.h:30` |
+| HiZ | `WriteBounds(FrameSlot, SceneIndex, …)` → shader `VisibleOut[i]` → CPU `OcclusionVis[A.SceneIndex]` | `HiZOcclusion.cpp:216`, `Shaders/HZB/HZBTest.cs.hlsl:37`, `RendererPasses.cpp:2014` |
+
+Nenhum deles está quebrado hoje, e vale registrar porque eu errei isso primeiro: os índices são
+frágeis mas **protegidos por descarte global**. Há duas rotas independentes — o
+`SceneState->PreviousModels.clear()` explícito no `OnSceneStructureChanged`
+(`RendererScene.cpp:178`, com comentário nomeando o risco) e o domínio `SceneStructure`, que inclui
+`TemporalMotion | HiZOcclusion` (`HistoryDomain.h:248`). A Fase 1 **endurece** isso; não conserta
+uma quebra em produção.
+
+### Desenho do remap do HiZ
+
+Remap em **ring por frame**: `HiZTestIndex → GpuHandle {slot, generation}`. Ao consumir o readback
+atrasado, valida-se a `generation` e publica-se visibilidade **por slot**. Isso preserva o dispatch
+compacto — sem varrer os buracos da capacidade — e faz o resultado de um objeto que morreu entre o
+teste e o readback ser descartado em vez de aplicado ao ocupante novo do índice.
 
 ### Arquivos prováveis
 

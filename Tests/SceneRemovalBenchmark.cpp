@@ -14,9 +14,11 @@
 // CPU pura, como o SceneIdentityTests: sem device, sem malha de verdade (a FScene guarda o
 // FGpuMesh* e nunca o segue).
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -52,7 +54,22 @@ int main(int argc, char** argv) {
     Smile::u32 Count = 1'000'000;
     for (int A = 1; A < argc; ++A) {
         if (std::string(argv[A]) == "--count" && A + 1 < argc) {
-            Count = static_cast<Smile::u32>(std::strtoul(argv[++A], nullptr, 10));
+            // Parse COMPLETO. `strtoul` sozinho aceitava zero e texto invalido como zero, e dai
+            // `Lista.size() - 1` fazia underflow e o acesso caia em 0xC0000005 — o benchmark
+            // morria com violacao de acesso em vez de reclamar do argumento.
+            const std::string Bruto = argv[++A];
+            errno = 0;
+            char* Fim = nullptr;
+            const unsigned long long Valor = std::strtoull(Bruto.c_str(), &Fim, 10);
+            if (Bruto.empty() || Bruto.find('-') != std::string::npos || Fim == Bruto.c_str() ||
+                *Fim != '\0' || errno == ERANGE || Valor == 0 ||
+                Valor > std::numeric_limits<Smile::u32>::max()) {
+                std::fprintf(stderr,
+                             "--count invalido: '%s' (esperado inteiro em [1, %u])\n",
+                             Bruto.c_str(), std::numeric_limits<Smile::u32>::max());
+                return 2;
+            }
+            Count = static_cast<Smile::u32>(Valor);
             continue;
         }
         std::fprintf(stderr, "argumento desconhecido: %s\n", argv[A]);
@@ -73,11 +90,15 @@ int main(int argc, char** argv) {
 
     for (const FCaso& Caso : Casos) {
         Smile::FScene Local = BuildScene(Count);
-        const auto& Lista = Local.Renderables();
+        // Tamanho por VALOR, e nao por referencia. `Renderables()` devolve referencia ao mesmo
+        // vetor, entao comparar o size() depois com o size() de uma referencia guardada antes era
+        // comparar o vetor consigo mesmo: a condicao nunca poderia detectar uma implementacao que
+        // devolvesse true sem remover nada.
+        const size_t TamanhoAntes = Local.Renderables().size();
         const size_t Posicao = Caso.Fracao >= 1.0
-            ? Lista.size() - 1
-            : static_cast<size_t>(static_cast<double>(Lista.size()) * Caso.Fracao);
-        const Smile::u64 Id = Lista[Posicao].Id;
+            ? TamanhoAntes - 1
+            : static_cast<size_t>(static_cast<double>(TamanhoAntes) * Caso.Fracao);
+        const Smile::u64 Id = Local.Renderables()[Posicao].Id;
 
         const auto Start = Clock::now();
         const bool Removido = Local.RemoveRenderable(Id);
@@ -85,9 +106,19 @@ int main(int argc, char** argv) {
 
         std::printf("[bench] remocao no %-7s (indice %9zu): %8.2f ms  %s\n",
                     Caso.Rotulo, Posicao, Ms, Removido ? "" : "FALHOU");
-        if (!Removido) return 1;
-        if (Local.Renderables().size() != Lista.size()) {
-            std::fprintf(stderr, "[bench] a lista nao encolheu\n");
+        if (!Removido) {
+            std::fprintf(stderr, "[bench] RemoveRenderable devolveu false\n");
+            return 1;
+        }
+        if (Local.Renderables().size() != TamanhoAntes - 1) {
+            std::fprintf(stderr, "[bench] a lista tem %zu, esperado %zu\n",
+                         Local.Renderables().size(), TamanhoAntes - 1);
+            return 1;
+        }
+        // E o Id removido nao pode mais resolver: o encolhimento sozinho nao prova que saiu o
+        // objeto CERTO, nem que o mapa Id->indice foi atualizado.
+        if (Local.IndexOfRenderable(Id) >= 0) {
+            std::fprintf(stderr, "[bench] o Id removido continua resolvendo\n");
             return 1;
         }
     }
