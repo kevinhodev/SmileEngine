@@ -1182,9 +1182,23 @@ anterior *daquele frame slot* (`CommandQueue.cpp:63`), mas a tabela de F também
 começar F+2, esperar F não prova que F+1 terminou de lê-la. Sobrescrever o UPLOAD ali é corrida.
 A escolha tem de ser explícita, entre:
 
-- tabelas em DEFAULT, em ping-pong, atualizadas por cópias ordenadas na GPU com staging protegido; ou
-- armazenamento UPLOAD cujo reuso espere o **último** consumidor, com número de slices dimensionado
-  para isso.
+**Decidido: DEFAULT em ping-pong, com staging UPLOAD protegido pelas fences.** O contrato:
+
+- a CPU preenche o staging do frame **depois** da espera do `BeginFrame`;
+- a cópia para DEFAULT roda na **fila direta**, antes dos consumidores, com as transições
+  necessárias;
+- a sobrescrita da tabela de F por F+2 fica ordenada **depois** das leituras de F+1 na GPU. A CPU
+  não sobrescreve diretamente a memória que esses shaders consultam;
+- se outra fila passar a consumir a tabela, entram **dependências explícitas** — a ordenação da
+  direta não cobre outra fila automaticamente;
+- o orçamento conta DEFAULT + staging + o remap atual, e não só as duas tabelas de handles.
+
+Isso separa o lifetime do upload do lifetime do histórico, e evita acrescentar uma espera de CPU
+pelo consumidor do frame seguinte.
+
+A alternativa descartada era UPLOAD com mais slices. Com `kFramesInFlight = 2`, dois slices são
+inseguros pelo motivo acima; dimensionar para o último consumidor amarraria o número de slices a um
+atraso que hoje não está declarado em lugar nenhum.
 
 Tabela, superfície, contagem e validade pertencem ao **mesmo frame** — inclusive depois de pausa do
 passe, resize e reload.

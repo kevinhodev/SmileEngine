@@ -51,6 +51,21 @@ namespace Smile {
     // o que o alvo contem onde nenhum draw tocou.
     inline u32 EncodeCapturedIdentity(size_t Index) { return static_cast<u32>(Index) + 1u; }
 
+    // Entrada da tabela de identidades de um frame, no layout que vai para a GPU.
+    //
+    // 8 bytes por instancia, e os dois campos sao necessarios: o slot diz ONDE a residencia esta, e
+    // a generation diz se ela ainda e a MESMA. Sem a generation, um slot reciclado devolveria o
+    // ocupante novo para um id gravado pelo antigo -- a troca silenciosa de identidade que esta
+    // fase existe para eliminar.
+    //
+    // Layout fixado aqui porque o shader le a mesma memoria; mudar a ordem sem mudar o HLSL nao
+    // daria erro de compilacao, daria dados trocados.
+    struct FGpuIdentityEntry {
+        u32 Slot       = FGpuSceneHandle::kInvalidSlot;
+        u32 Generation = 0;
+    };
+    static_assert(sizeof(FGpuIdentityEntry) == 8, "layout compartilhado com o HLSL");
+
     // Inverso do Encode. Devolve identidade ZERADA (Id == 0) para o vazio e para qualquer valor
     // fora da tabela.
     //

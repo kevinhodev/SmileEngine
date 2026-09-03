@@ -80,10 +80,11 @@ namespace Smile {
 
         // Capacidade com folga (SceneCapacityFor), nao o tamanho exato da cena: assim um objeto
         // criado no editor cabe sem refazer buffer e SRVs. InstanceCount_ passa a ser a
-        // CAPACIDADE — e ele que o UpdatePerFrame usa como stride do slice por frame e no gate
-        // `PreviousModels.size() == InstanceCount_`, entao o PreviousModels abaixo tem de ser
-        // dimensionado igual, senao o gate falha para sempre e o motion vector nunca reusa
-        // historico (todo frame sairia com movimento zero).
+        // CAPACIDADE, e e ele que o UpdatePerFrame usa como stride do slice por frame.
+        //
+        // O PreviousModels ja nao depende dessa contagem: ele e indexado por SLOT DE RESIDENCIA e
+        // dimensionado pela capacidade do pool. O gate antigo comparava os dois tamanhos, e sumiu
+        // junto com o enderecamento posicional.
         const u32 Capacity = SceneCapacityFor(Count);
         InstanceCount_ = Capacity;
         TlasSRVSlot = TlasSlot;
