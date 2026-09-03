@@ -356,9 +356,12 @@ invariantes sem atualizar este documento.
 ### 5.1 Handle e slot
 
 ```cpp
-inline constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
-
 struct FGpuSceneHandle {
+    // Escopada na struct, e nao no namespace: `kInvalidSlot` ja existe duas vezes na engine
+    // (FTextureSRVHeap, FBvhDebugView) para SLOT DE DESCRIPTOR HEAP, que e outro conceito. Uma
+    // terceira em escopo de Smile leria como o mesmo nome significando duas coisas.
+    static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
+
     // Com inicializador, e nao sem: sem ele, `FGpuSceneHandle{}` produz {0,0} — que identificaria
     // o primeiro ocupante do slot 0 — e `FGpuSceneHandle H;` deixa os dois indeterminados.
     u32 Slot       = kInvalidSlot;
@@ -959,7 +962,7 @@ frágeis mas **protegidos por descarte global**. Há duas rotas independentes �
 `TemporalMotion | HiZOcclusion` (`HistoryDomain.h:248`). A Fase 1 **endurece** isso; não conserta
 uma quebra em produção.
 
-### Contrato do allocator: três estados, fixados desde o início
+### Contrato do allocator: quatro estados, fixados desde o início
 
 | estado | significado |
 |---|---|
@@ -1075,9 +1078,17 @@ Todos CPU puros, sem device, no espírito do `SceneIdentityTests`:
 8. wrap leva a `Exhausted` **depois** das fences, e o contador de esgotados sobe exatamente uma vez
    por slot, mesmo com `Collect` chamado várias vezes.
 
+**Como testar o wrap sem 4 bilhões de ciclos:** não se exercita a política gastando as generations
+de verdade — seriam 2³² alocações por slot, e o teste levaria horas para provar uma transição. A
+transição é exposta por um caminho controlado de teste (helper puro que semeia a generation, ou
+acesso restrito ao teste), e o que se verifica é o **comportamento na borda**: em `UINT32_MAX`, o
+slot vai para `Exhausted` depois das fences e o contador sobe uma vez.
+
 Mais um de **integração**, que os CPU-puros não alcançam: confirmar que o dono real do allocator
-**não é recriado** na troca de cena. A política de persistência é o que impede a ressurreição, e ela
-mora fora do allocator — um teste que só exercita o allocator isolado nunca a vê quebrar.
+**não é recriado** na troca de cena, **e que a capacidade fica inalterada** depois dela. As duas
+coisas, não só a primeira: um owner que persiste com o pool dobrado passaria na metade do teste e
+falharia no que importa. A política de persistência mora fora do allocator, então um teste que só
+exercita o allocator isolado nunca a vê quebrar.
 
 ### Quando o ticket captura as fences
 
