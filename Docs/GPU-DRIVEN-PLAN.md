@@ -754,15 +754,18 @@ contra assets incompatíveis.
   **O que a medida diz, e é o argumento inteiro desta série de fases:** `BuildDrawLists` não
   responde à visibilidade. Custa 1,96 ms em 10k, ~20,9 ms em 100k e ~202 ms em 1M, e o valor é o
   **mesmo** no slot 0 (tudo visível) e no slot 2 (nada visível) — 203,49 contra 202,74 em 1M.
-  `ShadowLists` se comporta igual (~31,4 ms nos dois). Somados, são os 240 ms que o slot 2 gasta
-  para não desenhar nada: custo por objeto pago antes de qualquer decisão de culling, linear em N
-  (10,9× de 10k para 100k; 9,8× de 100k para 1M).
+  `ShadowLists` se comporta igual (~31,4 ms nos dois). Somados, dão **234,11 ms** — o custo por
+  objeto pago antes de qualquer decisão de culling, linear em N (10,9× de 10k para 100k; 9,8× de
+  100k para 1M). O piso completo do slot 2 é 240,14 ms, porque ainda entram 6,03 ms de `CullSort`:
+  ele escala com o que está visível, mas não chega a zero, já que percorrer para descartar também
+  custa.
 
   `CullSort`, `BatchSort` e `Submit` são os únicos que escalam com o que está visível — a parte
   do trabalho que corresponde a alguma coisa. Em 1M/s0 eles somam 304 ms dos 539.
 
   Isso fixa a ordem de ataque: o alvo das Fases 1-2 não é acelerar o culling, é **deixar de
-  percorrer a cena na CPU**. Otimizar o `CullSort` mexeria em 6 ms de um piso de 240.
+  percorrer a cena na CPU**. Zerar o `CullSort` inteiro mexeria em 6 dos 240 ms de piso; os outros
+  234 são travessia que nenhuma otimização de culling alcança.
 
   Duas leituras laterais da mesma rodada:
 

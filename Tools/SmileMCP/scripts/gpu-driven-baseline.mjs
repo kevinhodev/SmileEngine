@@ -91,6 +91,15 @@ const scenes = sceneFilter
 // vazio (arquivo nao rastreado inclusive), entao a checagem e barata e nao precisa de git aqui.
 // --allow-dirty existe para shakedown da propria regua, e marca o relatorio como nao-gate.
 const allowDirty = process.argv.includes("--allow-dirty");
+// A metade VISUAL da baseline, pelo CAPTURE-PROTOCOL.md. Sai da mesma pose, da mesma build e do
+// mesmo regime da metade de performance porque e a MESMA passagem — separar as duas em rodadas
+// diferentes e comparar imagens de cameras que so parecem iguais.
+//
+// --capture-only pula o profiling (aquecimento + 60 amostras) e so captura: e a passagem rapida
+// para quando a metade de performance ja esta tirada.
+const captureOnly = process.argv.includes("--capture-only");
+const doCapture = captureOnly || process.argv.includes("--capture");
+const captureWarmupFrames = Number(argumentValue("--capture-warmup", "128"));
 const preset = argumentValue("--preset", "gameplay_rr");
 const warmupSeconds = Number(argumentValue("--warmup", "15"));
 const samples = Number(argumentValue("--samples", "60"));
@@ -248,6 +257,8 @@ const report = {
     intervalMs,
     settleMilliseconds,
     slots,
+    captureOnly,
+    capture: doCapture ? { warmupFrames: captureWarmupFrames, preset: "scientific" } : false,
     statistic: "mediana e p95 sobre amostras de frames DISTINTOS (sourceFrameIndex)",
   },
   scenes: scenes.map(({ id, label, kind, scene, sidecar }) => ({ id, label, kind, scene, sidecar })),
@@ -343,6 +354,31 @@ async function measureScene(sceneEntry) {
     const camera = await call("smile_camera_get");
     assertPoseMatches(sceneEntry.id, slot, expected, camera);
 
+    let capture;
+    if (doCapture) {
+      // includeImage: false de proposito — o PNG fica em disco ao lado do manifesto; trazer 20
+      // imagens pelo transporte do MCP nao ajuda ninguem.
+      capture = await call("smile_capture_frame", {
+        bookmarkSlot: slot,
+        warmupFrames: captureWarmupFrames,
+        preset: "scientific",
+        pinTimeOfDay: true,
+        timeOfDayHours,
+        includeImage: false,
+        timeoutSeconds: 900,
+      });
+      console.log(
+        `[baseline] ${sceneEntry.id}/slot${slot}: capturado ` +
+          `${capture.pngPath ?? capture.png ?? "(ver manifesto)"}`,
+      );
+    }
+
+    if (captureOnly) {
+      report.captures ??= [];
+      report.captures.push({ scene: sceneEntry.id, slot, pose: expected, capture });
+      continue;
+    }
+
     await delay(settleMilliseconds);
     const profile = await call("smile_profile_gpu", {
       warmupSeconds,
@@ -403,7 +439,15 @@ async function measureScene(sceneEntry) {
       resolution: profile.resolution,
       gpu: profile.gpu,
     };
-    sceneRuns.push({ ...row, profileConfiguration: configured, profile });
+    // Publica no relatorio AQUI, ponto a ponto, e nao no retorno da funcao. Com a publicacao no
+    // fim, qualquer excecao entre a ultima medicao e o `return` — o teardown, a auditoria de log,
+    // a checagem de resolucao — descartava os quatro pontos detalhados da cena inteira, deixando
+    // so a linha reduzida do summary. Foi o que aconteceu com a 1M: 20 summary e 16 runs, sem os
+    // tempos de GPU por passe dela, que sao gate da Fase 0. Medido e nao gravado e o pior desfecho
+    // possivel, porque o relatorio continua parecendo completo.
+    const detailed = { ...row, profileConfiguration: configured, profile, capture };
+    sceneRuns.push(detailed);
+    report.runs.push(detailed);
     report.summary.push(row);
 
     console.log(
@@ -413,6 +457,17 @@ async function measureScene(sceneEntry) {
         `frame=${frame.rawMilliseconds.median.toFixed(3)} ms, ` +
         `srv=${cpu.srvHeap.highWater}/${cpu.srvHeap.capacity}`,
     );
+  }
+
+  // No modo so-captura nao ha profiling, entao nao ha resolucao/GPU por ponto para comparar.
+  if (captureOnly) {
+    await auditLogs(sceneEntry.id, currentLaunch.pid);
+    if (!currentLaunch.alreadyRunning) {
+      await call("smile_close_editor", { timeoutSeconds: 120 });
+      pendingExitPid = currentLaunch.pid;
+    }
+    currentLaunch = undefined;
+    return sceneRuns;
   }
 
   // Resolucao e GPU tem de ser as mesmas nos quatro slots: se o preset realocou alvos no meio, os
@@ -442,6 +497,13 @@ async function writeReport() {
   const directory = path.join(smileRoot, "build", "bin", "Release", "Captures", "Benchmarks");
   await mkdir(directory, { recursive: true });
   const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  // Um ponto medido que nao virou run detalhado e evidencia perdida em silencio: o relatorio
+  // continua com a linha no summary e parece completo. Gravado sempre, conferido no caminho verde.
+  report.integrity = {
+    summaryPoints: report.summary.length,
+    detailedRuns: report.runs.length,
+    complete: report.summary.length === report.runs.length,
+  };
   const suffix = report.passed ? "" : "-FAILED";
   reportPath = path.join(directory, `gpu-driven-baseline${suffix}-${stamp}.json`);
   await writeFile(reportPath, JSON.stringify(report, null, 2), "utf8");
@@ -451,8 +513,14 @@ async function writeReport() {
 try {
   await client.connect(transport);
   for (const sceneEntry of scenes) {
-    report.runs.push(...(await measureScene(sceneEntry)));
+    // measureScene ja publicou cada ponto em report.runs assim que o mediu.
+    await measureScene(sceneEntry);
   }
+  assert(
+    captureOnly || report.runs.length === report.summary.length,
+    `relatorio incompleto: ${report.summary.length} pontos no summary contra ` +
+      `${report.runs.length} runs detalhados`,
+  );
   report.finishedAt = new Date().toISOString();
   report.passed = true;
   console.log(`[baseline] PASS: ${await writeReport()}`);
