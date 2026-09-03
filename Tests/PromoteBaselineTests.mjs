@@ -27,12 +27,15 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-function run(args, baselineDirectory) {
+function run(args, baselineDirectory, extraEnv = {}) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
       [promoter, ...args],
-      { cwd: repoRoot, env: { ...process.env, SMILE_BASELINE_DIR: baselineDirectory } },
+      {
+        cwd: repoRoot,
+        env: { ...process.env, SMILE_BASELINE_DIR: baselineDirectory, ...extraEnv },
+      },
       (error, stdout, stderr) =>
         resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr) }),
     );
@@ -49,6 +52,15 @@ const pngBytes = Buffer.from(
   "hex",
 );
 
+// Segundo PNG (1x1 preto), com bytes DIFERENTES do primeiro: sem isso, um vazamento de conteudo
+// entre duas publicacoes passaria despercebido porque o hash bateria por coincidencia.
+const outroPngBytes = Buffer.from(
+  "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753" +
+    "de0000000c4944415408d76360000002000155a2b1180000000049454e44ae42" +
+    "6082",
+  "hex",
+);
+
 // Relatorio sintetico com proveniencia FORTE, no formato que a regua emite hoje.
 async function makeReport(capturesDirectory, options = {}) {
   const scenes = options.scenes ?? ["cena_a"];
@@ -58,7 +70,7 @@ async function makeReport(capturesDirectory, options = {}) {
     for (const slot of slots) {
       const stem = `${scene}_slot${slot}_longo_20260101-000000`;
       const png = path.join(capturesDirectory, `${stem}.png`);
-      await writeFile(png, pngBytes);
+      await writeFile(png, options.pngBytes ?? pngBytes);
       if (options.omitManifestFor !== `${scene}_${slot}`) {
         await writeFile(
           path.join(capturesDirectory, `${stem}.json`),
@@ -76,18 +88,32 @@ async function makeReport(capturesDirectory, options = {}) {
   return {
     schema: 1,
     passed: true,
+    // O promotor deriva daqui os caminhos que as fingerprints TEM de cobrir; sem isto ele recusa,
+    // que e o comportamento novo (antes bastavam tres nomes quaisquer).
+    scenes: scenes.map((scene) => ({
+      id: scene,
+      scene: `Assets/${scene}.sscene`,
+      sidecar: `Assets/${scene}.cameras.json`,
+    })),
     startedAt: "2026-01-01T00:00:00.000Z",
     buildCommit: "abc1234",
     regime: { captureOnly: true },
     gitState: { head: "a".repeat(40), workingTreeClean: true, dirtyEntries: [] },
-    mcpServer: { distSha256: "b".repeat(64), sourceSha256: "c".repeat(64), stale: false },
+    mcpServer: {
+      distSha256: "b".repeat(64),
+      sourceSha256: "c".repeat(64),
+      distFiles: 4,
+      sourceFiles: 4,
+      builtInFlow: true,
+      stale: false,
+    },
     sceneFingerprints: Object.fromEntries(
       scenes.map((scene) => [
         scene,
         {
-          [`${scene}.sscene`]: fingerprint(),
-          [`${scene}.smesh`]: fingerprint(),
-          [`${scene}.cameras.json`]: fingerprint(),
+          [`Assets/${scene}.sscene`]: fingerprint(),
+          [`Assets/${scene}.smesh`]: fingerprint(),
+          [`Assets/${scene}.cameras.json`]: fingerprint(),
         },
       ]),
     ),
@@ -135,6 +161,60 @@ await withSandbox(async ({ root, baselines, captures }) => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// 1b. Escape de diretorio pelo campo `scene` do RELATORIO.
+//
+// Proteger so o --as deixava a porta aberta do outro lado: `scene` vem do relatorio e entrava
+// direto no nome do arquivo. No Win32, um scene ../../vitima resolve para fora ate de Baselines.
+await withSandbox(async ({ root, baselines, captures }) => {
+  // As vitimas ficam ONDE O ESCAPE CAIRIA. O staging e <baselines>/.staging-<name>-<pid>/refs,
+  // entao "../../X" resolve para <baselines>/X e "../../../X" para <root>/X. Na primeira versao
+  // deste teste a vitima estava so na raiz, fora da mira de "../../" — e o teste passava mesmo com
+  // as duas camadas de defesa removidas.
+  const vitimas = new Map([
+    [path.join(baselines, "vitima_slot0.png"), "NAO PODE SER TOCADO (baselines)"],
+    [path.join(root, "vitima_slot0.png"), "NAO PODE SER TOCADO (raiz)"],
+  ]);
+  for (const [alvo, conteudo] of vitimas) await writeFile(alvo, conteudo, "utf8");
+
+  for (const scene of [
+    "../../vitima",
+    "../../../vitima",
+    "..\..\vitima",
+    "..\..\..\vitima",
+    "a/b",
+    "..",
+    "",
+    "con",
+  ]) {
+    // O relatorio tem de ser COERENTE com o nome malicioso. Se scenes/sceneFingerprints ficarem
+    // com o nome antigo, o gate de proveniencia recusa por divergencia de conjunto e a publicacao
+    // aborta muito antes da escrita — foi assim que a primeira versao deste teste passou mesmo
+    // com as duas camadas de defesa removidas: ela verificava so que o exit era != 0, e o exit
+    // vinha de outro motivo.
+    const report = await makeReport(captures, { scenes: ["cena_a"] });
+    report.captures = report.captures.map((entry) => ({ ...entry, scene }));
+    report.scenes = [{ id: scene, scene: "Assets/x.sscene", sidecar: "Assets/x.cameras.json" }];
+    report.sceneFingerprints = {
+      [scene]: {
+        "Assets/x.sscene": { bytes: 10, sha256: "d".repeat(64) },
+        "Assets/x.smesh": { bytes: 10, sha256: "d".repeat(64) },
+        "Assets/x.cameras.json": { bytes: 10, sha256: "d".repeat(64) },
+      },
+    };
+    const file = await writeReport(root, report, `escape_${Buffer.from(scene).toString("hex")}.json`);
+    const result = await run([file, "--as", "fase0"], baselines);
+    check(result.code !== 0, `scene ${JSON.stringify(scene)} tem de ser recusado`, result.stdout.trim());
+  }
+  for (const [alvo, conteudo] of vitimas) {
+    check(
+      (await readFile(alvo, "utf8").catch(() => null)) === conteudo,
+      `nenhum scene malicioso tocou ${path.relative(root, alvo)}`,
+    );
+  }
+  check(!existsSync(path.join(baselines, "Reference", "fase0")), "nada foi publicado");
+});
+
+// ---------------------------------------------------------------------------------------------
 // 2. Namespace imutavel: nao sobrescreve baseline ja publicada sem --replace.
 await withSandbox(async ({ root, baselines, captures }) => {
   const file = await writeReport(root, await makeReport(captures));
@@ -173,33 +253,176 @@ await withSandbox(async ({ root, baselines, captures }) => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// 3. Falha no meio da escrita nao deixa a baseline pela metade.
+// 2b. Imutabilidade decidida pelo PACOTE, e nao so pelo diretorio de referencias.
+//
+// Uma baseline so de performance nao tem imagens, entao pulava o bloco de referencias inteiro e
+// sobrescrevia o <name>.json calado. Idem quando o JSON existe mas o diretorio de refs nao.
+await withSandbox(async ({ root, baselines, captures }) => {
+  // Relatorio SEM capturas: tem summary/runs e nenhuma imagem.
+  const semImagens = async (overrides = {}) => {
+    const base = await makeReport(captures);
+    base.captures = [];
+    base.summary = [{ scene: "cena_a", slot: 0 }];
+    base.runs = [{ scene: "cena_a", slot: 0 }];
+    return { ...base, ...overrides };
+  };
+
+  const file = await writeReport(root, await semImagens(), "perf.json");
+  const primeira = await run([file, "--as", "soperf"], baselines);
+  check(primeira.code === 0, "baseline so de performance publica", primeira.stderr.trim());
+  check(
+    !existsSync(path.join(baselines, "Reference", "soperf")),
+    "baseline sem imagens nao cria diretorio de referencias",
+  );
+  const hashOriginal = sha(await readFile(path.join(baselines, "soperf.json")));
+
+  const file2 = await writeReport(
+    root,
+    await semImagens({ buildCommit: "def5678" }),
+    "perf2.json",
+  );
+  const segunda = await run([file2, "--as", "soperf"], baselines);
+  check(
+    segunda.code !== 0,
+    "republicar baseline SEM IMAGENS sem --replace tem de ser recusado",
+    segunda.stdout.trim(),
+  );
+  check(
+    sha(await readFile(path.join(baselines, "soperf.json"))) === hashOriginal,
+    "o relatorio anterior sobreviveu a recusa",
+  );
+
+  const comReplace = await run([file2, "--as", "soperf", "--replace"], baselines);
+  check(comReplace.code === 0, "--replace publica de proposito", comReplace.stderr.trim());
+
+  // JSON existe, diretorio de referencias nao: a existencia tem de ser decidida pelo pacote.
+  const comImagens = await writeReport(root, await makeReport(captures), "comimagens.json");
+  const colisao = await run([comImagens, "--as", "soperf"], baselines);
+  check(
+    colisao.code !== 0,
+    "publicar sobre um <name>.json existente, mesmo sem refs, tem de ser recusado",
+    colisao.stdout.trim(),
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// 2c. `passed` ausente e recusado tambem no caminho LEGADO (sem gitState).
+//
+// O gate de proveniencia forte ja barra isso, entao um relatorio legado e o unico jeito de
+// exercitar a checagem do topo — que aceitava o campo ausente por so testar `=== false`.
+await withSandbox(async ({ root, baselines, captures }) => {
+  const legado = async (overrides) => {
+    const base = await makeReport(captures);
+    delete base.gitState;
+    delete base.mcpServer;
+    delete base.sceneFingerprints;
+    return { ...base, ...overrides };
+  };
+
+  const semPassed = await legado({});
+  delete semPassed.passed;
+  const a = await writeReport(root, semPassed, "legado_sem_passed.json");
+  const semFlag = await run([a, "--as", "fase0", "--allow-legacy-provenance", "--note", "x"], baselines);
+  check(semFlag.code !== 0, "legado com passed AUSENTE e recusado sem --allow-failed", semFlag.stdout.trim());
+
+  const semNota = await run(
+    [a, "--as", "fase0", "--allow-legacy-provenance", "--allow-failed"],
+    baselines,
+  );
+  check(semNota.code !== 0, "--allow-failed com passed ausente ainda exige --note", semNota.stdout.trim());
+
+  const completo = await run(
+    [a, "--as", "fase0", "--allow-legacy-provenance", "--allow-failed", "--note", "aceito de proposito"],
+    baselines,
+  );
+  check(completo.code === 0, "com as duas flags e nota, publica", completo.stdout.trim());
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3. Falha DURANTE a escrita nao deixa o pacote pela metade.
+//
+// A versao anterior deste teste nao provava nada: ela removia um PNG de origem antes de invocar o
+// promotor, entao a validacao antecipada abortava e a publicacao nunca chegava a escrever. Alem
+// disso comparava so a LISTA DE NOMES, com as duas rodadas usando os mesmos bytes — um vazamento
+// de conteudo passaria batido.
+//
+// Agora: bytes DIFERENTES na segunda rodada (para o hash acusar substituicao) e um failpoint
+// injetado em cada etapa da publicacao, para exercitar rollback de escrita, de troca das
+// referencias, do relatorio e do manifesto.
 await withSandbox(async ({ root, baselines, captures }) => {
   const file = await writeReport(root, await makeReport(captures, { slots: [0, 1, 2, 3] }));
   const bom = await run([file, "--as", "fase0"], baselines);
   check(bom.code === 0, "publicacao de referencia", bom.stderr.trim());
-  const antes = (await readdir(path.join(baselines, "Reference", "fase0"))).sort();
 
-  // Um dos PNGs de origem some entre uma publicacao e outra: a segunda tem de abortar ANTES de
-  // tocar no destino, e nao a meio caminho.
+  // Estado que tem de sobreviver a todas as falhas, conferido por CONTEUDO.
+  const alvos = [
+    path.join(baselines, "fase0.json"),
+    path.join(baselines, "MANIFEST.md"),
+    ...(await readdir(path.join(baselines, "Reference", "fase0"))).map((f) =>
+      path.join(baselines, "Reference", "fase0", f),
+    ),
+  ];
+  const antes = new Map();
+  for (const alvo of alvos) antes.set(alvo, sha(await readFile(alvo)));
+
+  // Segunda rodada com BYTES diferentes: se algum artefato vazar, o hash muda.
   const captures2 = path.join(root, "Captures2");
   await mkdir(captures2, { recursive: true });
-  const relatorio2 = await makeReport(captures2, { slots: [0, 1, 2, 3] });
-  await rm(relatorio2.captures[2].capture.pngPath);
-  const file2 = await writeReport(root, relatorio2, "relatorio2.json");
+  const file2 = await writeReport(
+    root,
+    await makeReport(captures2, {
+      slots: [0, 1, 2, 3],
+      pngBytes: outroPngBytes,
+      overrides: { buildCommit: "def5678" },
+    }),
+    "relatorio2.json",
+  );
+  check(sha(pngBytes) !== sha(outroPngBytes), "os dois PNGs de teste tem bytes diferentes");
 
-  const ruim = await run([file2, "--as", "fase0", "--replace"], baselines);
-  check(ruim.code !== 0, "PNG de origem ausente derruba a publicacao", ruim.stdout.trim());
-  const depois = (await readdir(path.join(baselines, "Reference", "fase0"))).sort();
-  check(
-    JSON.stringify(antes) === JSON.stringify(depois),
-    "a baseline anterior nao ficou metade nova e metade antiga",
-    `antes=${antes.length} depois=${depois.length}`,
+  for (const ponto of [
+    "apos-escrever-referencias",
+    "apos-escrever-relatorio",
+    "apos-trocar-referencias",
+    "apos-trocar-relatorio",
+    "apos-trocar-manifesto",
+  ]) {
+    const result = await run([file2, "--as", "fase0", "--replace"], baselines, {
+      SMILE_PROMOTE_FAILPOINT: ponto,
+    });
+    check(result.code !== 0, `failpoint '${ponto}' derruba a publicacao`, result.stdout.trim());
+    check(
+      !/ROLLBACK FALHOU/.test(result.stdout),
+      `failpoint '${ponto}': o rollback nao pode falhar`,
+      result.stdout.trim(),
+    );
+
+    for (const [alvo, hashOriginal] of antes) {
+      const atual = await readFile(alvo).then(sha).catch(() => null);
+      check(
+        atual === hashOriginal,
+        `failpoint '${ponto}': ${path.basename(alvo)} continua com o conteudo anterior`,
+        atual === null ? "o arquivo sumiu" : "o conteudo foi substituido",
+      );
+    }
+    const sobras = (await readdir(baselines)).filter(
+      (entry) => entry.startsWith(".staging-") || entry.includes(".retiring-"),
+    );
+    check(sobras.length === 0, `failpoint '${ponto}': sem residuos`, sobras.join(", "));
+    const sobrasRef = (await readdir(path.join(baselines, "Reference"))).filter((entry) =>
+      entry.includes(".retiring-"),
+    );
+    check(sobrasRef.length === 0, `failpoint '${ponto}': sem residuo em Reference/`,
+          sobrasRef.join(", "));
+  }
+
+  // Sem failpoint, a mesma publicacao passa e TROCA de verdade — senao o teste acima estaria
+  // apenas provando que nada nunca e escrito.
+  const ok = await run([file2, "--as", "fase0", "--replace"], baselines);
+  check(ok.code === 0, "sem failpoint a publicacao conclui", ok.stderr.trim());
+  const pngDepois = sha(
+    await readFile(path.join(baselines, "Reference", "fase0", "cena_a_slot0.png")),
   );
-  check(
-    (await readdir(baselines)).every((entry) => !entry.startsWith(".staging-")),
-    "nao sobrou diretorio de staging",
-  );
+  check(pngDepois === sha(outroPngBytes), "a publicacao bem-sucedida substituiu o conteudo");
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -242,6 +465,11 @@ await withSandbox(async ({ root, baselines, captures }) => {
     ["fingerprints vazias", { sceneFingerprints: {} }],
     ["fingerprint de outra cena", { sceneFingerprints: { outra: {} } }],
     ["build suja no carimbo", { buildCommit: "abc1234-dirty" }],
+    ["mcpServer sem sourceSha256", { mcpServer: { distSha256: "b".repeat(64), distFiles: 4, sourceFiles: 4, builtInFlow: true, stale: false } }],
+    ["mcpServer sem builtInFlow", { mcpServer: { distSha256: "b".repeat(64), sourceSha256: "c".repeat(64), distFiles: 4, sourceFiles: 4, stale: false } }],
+    ["mcpServer sem contagem de arquivos", { mcpServer: { distSha256: "b".repeat(64), sourceSha256: "c".repeat(64), builtInFlow: true, stale: false } }],
+    ["fingerprints com tres nomes ERRADOS", { sceneFingerprints: { cena_a: { "outro/a.sscene": { bytes: 10, sha256: "d".repeat(64) }, "outro/a.smesh": { bytes: 10, sha256: "d".repeat(64) }, "outro/a.cameras.json": { bytes: 10, sha256: "d".repeat(64) } } } }],
+    ["report.scenes ausente", { scenes: undefined }],
   ];
   for (const [nome, overrides] of casos) {
     const report = await makeReport(captures, { overrides });

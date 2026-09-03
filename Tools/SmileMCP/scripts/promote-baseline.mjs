@@ -61,14 +61,21 @@ if (report.buildCommit.endsWith("-dirty")) fail(`build '${report.buildCommit}' s
 // perf-f781288 e, e o porque esta escrito nele —, mas isso tem de ser uma decisao DECLARADA. Sem
 // esta checagem, qualquer relatorio failed cujo summary batesse com runs entrava calado, e a
 // diferenca entre "aceito com justificativa" e "ninguem reparou" desaparecia.
-if (report.passed === false && !process.argv.includes("--allow-failed")) {
-  fail(
-    `o relatorio esta marcado passed:false (${(report.error ?? "sem erro registrado")
-      .split("\n")[0]
-      .slice(0, 120)}). Use --allow-failed --note "<por que e aceitavel>" se for o caso.`,
-  );
+// `!== true` e nao `=== false`: passed AUSENTE nao e o mesmo que passou, e entrava calado tanto
+// pela porta principal quanto pela do --allow-failed, que so exigia --note quando o campo estava
+// explicitamente false.
+if (report.passed !== true) {
+  if (!process.argv.includes("--allow-failed")) {
+    fail(
+      report.passed === false
+        ? `o relatorio esta marcado passed:false (${(report.error ?? "sem erro registrado")
+            .split("\n")[0]
+            .slice(0, 120)}). Use --allow-failed --note "<por que e aceitavel>" se for o caso.`
+        : 'o relatorio nao declara passed:true. Use --allow-failed --note "<por que e aceitavel>".',
+    );
+  }
+  if (!note) fail("--allow-failed exige --note explicando a aceitacao");
 }
-if (report.passed === false && !note) fail("--allow-failed exige --note explicando a aceitacao");
 
 // O carimbo da build so prova o estado na COMPILACAO. Uma rodada feita com --allow-dirty sai com
 // passed:true e buildCommit limpo, e passaria por aqui sem nada acusar — foi exatamente o caso do
@@ -94,11 +101,23 @@ if (report.gitState) {
 
   // O dist executado faz parte da proveniencia tanto quanto o HEAD: sem isto, um bridge obsoleto
   // continua invisivel no pacote.
+  // Nao basta ter distSha256: sem sourceSha256 e builtInFlow, o hash diz QUAL dist rodou mas nao
+  // que ele corresponde a estes fontes — que e justamente o furo que o mtime deixava.
   const server = report.mcpServer;
-  if (!server || !/^[0-9a-f]{64}$/.test(server.distSha256 ?? "") || server.stale !== false) {
+  const hex64 = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
+  if (
+    !server ||
+    !hex64(server.distSha256) ||
+    !hex64(server.sourceSha256) ||
+    server.builtInFlow !== true ||
+    server.stale !== false ||
+    !Number.isInteger(server.distFiles) || server.distFiles <= 0 ||
+    !Number.isInteger(server.sourceFiles) || server.sourceFiles <= 0
+  ) {
     fail(
-      "a rodada nao registrou um dist do MCP integro (hash de 64 hex e stale:false); " +
-        "nao da para dizer que codigo de servidor foi executado",
+      "a rodada nao registrou um dist do MCP integro (distSha256 e sourceSha256 de 64 hex, " +
+        "builtInFlow:true, stale:false e contagens positivas); nao da para dizer que codigo de " +
+        "servidor foi executado nem que ele corresponde aos fontes",
     );
   }
 
@@ -117,12 +136,29 @@ if (report.gitState) {
         (sobrando.length ? `; fingerprint de cena nao medida: ${sobrando.join(", ")}` : ""),
     );
   }
+  // Exigir "tres entradas" deixava passar quaisquer tres nomes. Os caminhos certos sao derivaveis
+  // de report.scenes, que ja guarda o .sscene e o sidecar de cada cena — entao se compara o
+  // conjunto esperado, e nao a contagem.
+  const declaradas = new Map((report.scenes ?? []).map((entry) => [entry.id, entry]));
   for (const [scene, entry] of Object.entries(report.sceneFingerprints ?? {})) {
-    const files = Object.entries(entry ?? {});
-    if (files.length !== 3) {
-      fail(`${scene}: ${files.length} asset(s) com fingerprint, esperados 3 (.sscene/.smesh/.cameras.json)`);
+    const declarada = declaradas.get(scene);
+    if (!declarada?.scene || !declarada?.sidecar) {
+      fail(`${scene}: o relatorio nao declara os caminhos da cena em report.scenes`);
     }
-    for (const [file, value] of files) {
+    const esperados = [
+      declarada.scene,
+      declarada.scene.replace(/\.sscene$/, ".smesh"),
+      declarada.sidecar,
+    ].sort();
+    const presentes = Object.keys(entry ?? {}).sort();
+    if (JSON.stringify(esperados) !== JSON.stringify(presentes)) {
+      fail(
+        `${scene}: fingerprints nao sao dos arquivos esperados.\n` +
+          `        esperados: ${esperados.join(", ")}\n` +
+          `        presentes: ${presentes.join(", ") || "(nenhum)"}`,
+      );
+    }
+    for (const [file, value] of Object.entries(entry)) {
       if (!value || !Number.isInteger(value.bytes) || value.bytes <= 0 ||
           !/^[0-9a-f]{64}$/.test(value.sha256 ?? "")) {
         fail(`${scene}: fingerprint invalida para ${file}`);
@@ -137,6 +173,7 @@ if (report.gitState) {
 } else if (!note) {
   fail("--allow-legacy-provenance exige --note");
 }
+
 
 const points = report.summary?.length ?? 0;
 const runs = report.runs?.length ?? 0;
@@ -157,128 +194,92 @@ const defaultName = `${path.basename(source, ".json").replace(/^gpu-driven-basel
   "baseline"}-${report.buildCommit}`;
 const name = argumentValue("--as", defaultName).replace(/\.json$/, "");
 
-// --as entrava direto no path.join. `--as ../../Tools/cook-baseline` resolvia para fora de
-// Docs/Baselines e sobrescrevia o arquivo de la — um publicador que aceita caminho arbitrario nao
-// publica, ele escreve onde mandarem. Um unico componente, e sem os nomes que o Windows reserva.
-if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name === "." || name === "..") {
-  fail(
-    `nome de baseline invalido: '${name}'. Use um unico componente com letras, digitos, ponto, ` +
-      `hifen ou sublinhado, comecando por letra ou digito.`,
-  );
+// Um unico componente seguro. --as entrava direto no path.join, e `--as ../../Tools/cook-baseline`
+// resolvia para fora de Docs/Baselines e sobrescrevia o arquivo de la: um publicador que aceita
+// caminho arbitrario nao publica, escreve onde mandarem.
+const SEGMENTO_SEGURO = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const RESERVADO_WINDOWS = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+function exigirSegmentoSeguro(valor, oQueE) {
+  if (typeof valor !== "string" || !SEGMENTO_SEGURO.test(valor) || valor === "." || valor === "..") {
+    fail(
+      `${oQueE} invalido: ${JSON.stringify(valor)}. Use um unico componente com letras, digitos, ` +
+        `ponto, hifen ou sublinhado, comecando por letra ou digito.`,
+    );
+  }
+  if (RESERVADO_WINDOWS.test(valor)) fail(`${oQueE} '${valor}' e um nome reservado pelo Windows`);
 }
-if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) {
-  fail(`'${name}' e um nome reservado pelo Windows`);
-}
+exigirSegmentoSeguro(name, "nome de baseline");
 
 const destination = path.join(baselineDirectory, `${name}.json`);
-
-// Cinto e suspensorio: mesmo com o nome validado, confere que os dois alvos caem DENTRO de
-// Docs/Baselines. Uma regex sozinha e uma promessa; isto e a verificacao.
-const insideBaselines = (candidate) => {
-  const relative = path.relative(baselineDirectory, candidate);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-};
-
-// Hash de cada PNG de referencia. Serve para IDENTIFICAR qual imagem gerou o relatorio — nao para
-// verificar uma recaptura.
-//
-// A ideia de guardar so o hash e economizar os ~23 MiB de imagem foi testada e nao para em pe: a
-// captura NAO reproduz byte a byte. Recapturando a Bistro do mesmo build, mesmo bookmark e mesmo
-// N=128, os quatro slots deram hash diferente. A diferenca e pequena — 11,5% dos subpixels, delta
-// medio 1,08 e maximo 20 em 255 — ou seja ruido residual de RT/denoiser, e nao outra imagem; mas
-// comparacao exata nao sobrevive a isso.
-//
-// Consequencia pratica, e vale para quem for comparar na Fase 1: os PNGs de referencia ficam
-// versionados em `Docs/Baselines/Reference/`, e a comparacao visual tem de ser por TOLERANCIA
-// (delta maximo, fracao de pixels acima de um limiar), nunca por igualdade de hash.
-// O promotor e dono da COPIA e do NOME das referencias. Na primeira versao ele so hasheava o PNG
-// de origem e gravava o basename longo, enquanto a copia para Reference/ era um passo a parte que
-// renomeava para <cena>_slot<N>.png: dois donos para a mesma decisao, e o pacote publicado ficou
-// com 20 nomes que nao existiam em lugar nenhum. Nome e copia saem daqui, juntos, para nao poderem
-// divergir de novo.
-// Namespace POR BASELINE. Cena e slot nao bastam como identidade: quando a Fase 1 promover o seu
-// proprio bistro_slot0.png, ele sobrescreveria o da Fase 0 e o hash guardado na baseline antiga
-// passaria a divergir do arquivo — a referencia do "antes" desapareceria justamente na hora de
-// comparar com ela.
 const referenceDirectory = path.join(baselineDirectory, "Reference", name);
-if (!insideBaselines(destination) || !insideBaselines(referenceDirectory)) {
-  fail(`o destino sairia de Docs/Baselines ('${destination}')`);
+
+// Cinto e suspensorio: a regex e a promessa, isto e a verificacao. Vale para TODO caminho que este
+// script escreve, e nao so para os derivados de --as.
+function dentroDe(raiz, candidato) {
+  const relativo = path.relative(raiz, candidato);
+  return relativo !== "" && !relativo.startsWith("..") && !path.isAbsolute(relativo);
 }
+if (!dentroDe(baselineDirectory, destination) || !dentroDe(baselineDirectory, referenceDirectory)) {
+  fail(`o destino sairia de ${baselineDirectory} ('${destination}')`);
+}
+
+// Ponto de falha injetavel, so para o teste. Sem ele nao ha como provar que a publicacao volta
+// atras no meio: remover um PNG antes de comecar aborta na validacao e nunca chega a escrever, e
+// um teste que so exercita a validacao nao prova transacao nenhuma.
+const failpoint = process.env.SMILE_PROMOTE_FAILPOINT ?? "";
+function talvezFalhar(ponto) {
+  if (failpoint === ponto) throw new Error(`falha injetada no ponto '${ponto}'`);
+}
+
+// ---- Montagem em memoria -----------------------------------------------------------------------
+// Nada e escrito antes de tudo estar pronto e conferido.
+
 const imageRows = [...(report.runs ?? []), ...(report.captures ?? [])]
   .map((entry) => ({ scene: entry.scene, slot: entry.slot, png: entry.capture?.pngPath }))
   .filter((entry) => entry.png);
 
-if (imageRows.length > 0) {
-  // Le e valida TUDO antes de escrever qualquer coisa. Com a escrita intercalada, um manifesto
-  // ausente no meio deixava PNG novo publicado ao lado de manifesto velho — pacote pela metade,
-  // e pior que pacote nenhum porque parece completo.
-  for (const row of imageRows) {
-    row.file = `${row.scene}_slot${row.slot}.png`;
-    row.manifestFile = row.file.replace(/\.png$/, ".json");
-    row.bytes = await readFile(row.png).catch(() => null);
-    if (!row.bytes) fail(`PNG de origem nao encontrado: ${row.png}`);
-    row.sha256 = createHash("sha256").update(row.bytes).digest("hex");
-
-    // O manifesto que o CAPTURE-PROTOCOL emite ao lado do PNG declara preset, N, resolucao e o
-    // estado inteiro do renderer. Sem ele a imagem e um pixel sem procedencia, entao o par e
-    // OBRIGATORIO — antes isto era um aviso, e aviso nao impede publicar.
-    const sourceManifest = row.png.replace(/\.png$/i, ".json");
-    const manifestBytes = await readFile(sourceManifest, "utf8").catch(() => null);
-    if (!manifestBytes) fail(`sem manifesto ao lado de ${path.basename(row.png)}; o par e exigido`);
-    let manifest;
-    try {
-      manifest = JSON.parse(manifestBytes);
-    } catch {
-      fail(`manifesto ilegivel: ${sourceManifest}`);
-    }
-    // O campo `image` aponta para o nome LONGO de origem, que nao existe aqui dentro. Copiar o
-    // manifesto verbatim deixava 20 referencias internas quebradas mesmo com os PNGs corretos.
-    manifest.sourceImage = manifest.image;
-    manifest.image = row.file;
-    row.manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
-    row.manifestSha256 = createHash("sha256").update(row.manifestText, "utf8").digest("hex");
+for (const row of imageRows) {
+  // `scene` e `slot` vem do RELATORIO, e nao da linha de comando: proteger so o --as deixava a
+  // porta aberta do outro lado. Um scene "../../vitima" fazia o caminho final sair do staging e,
+  // no Windows, ate de Docs/Baselines.
+  exigirSegmentoSeguro(row.scene, "nome de cena no relatorio");
+  if (!Number.isInteger(row.slot) || row.slot < 0 || row.slot > 99) {
+    fail(`slot invalido no relatorio: ${JSON.stringify(row.slot)}`);
   }
 
-  // Publicacao em STAGING + troca no fim. Validar as entradas antes nao torna a escrita atomica:
-  // os 40 artefatos iam para o destino um a um, e uma falha de disco ou permissao no meio deixava
-  // a baseline metade nova e metade antiga — estado que nao existe em rodada nenhuma e que o
-  // MANIFEST descreveria errado. Aqui o destino so e tocado quando tudo ja esta escrito.
-  //
-  // E o namespace e IMUTAVEL por default: uma baseline publicada e um registro, e sobrescreve-la
-  // em silencio e a mesma perda que o namespace foi criado para impedir. --replace para reeditar
-  // de proposito.
-  const alreadyPublished = await stat(referenceDirectory).then(() => true).catch(() => false);
-  if (alreadyPublished && !process.argv.includes("--replace")) {
-    fail(
-      `a baseline '${name}' ja tem referencias publicadas em Docs/Baselines/Reference/${name}/. ` +
-        `Use outro --as, ou --replace para substitui-la de proposito.`,
-    );
-  }
+  row.file = `${row.scene}_slot${row.slot}.png`;
+  row.manifestFile = `${row.scene}_slot${row.slot}.json`;
 
-  const staging = path.join(baselineDirectory, `.staging-${name}-${process.pid}`);
-  await rm(staging, { recursive: true, force: true });
-  await mkdir(staging, { recursive: true });
+  row.bytes = await readFile(row.png).catch(() => null);
+  if (!row.bytes) fail(`PNG de origem nao encontrado: ${row.png}`);
+  row.sha256 = createHash("sha256").update(row.bytes).digest("hex");
+
+  // O manifesto que o CAPTURE-PROTOCOL emite ao lado do PNG declara preset, N, resolucao e o
+  // estado do renderer. Sem ele a imagem e um pixel sem procedencia, entao o par e OBRIGATORIO —
+  // antes isto era so um aviso, e aviso nao impede publicar.
+  const sourceManifest = row.png.replace(/\.png$/i, ".json");
+  const manifestBytes = await readFile(sourceManifest, "utf8").catch(() => null);
+  if (!manifestBytes) fail(`sem manifesto ao lado de ${path.basename(row.png)}; o par e exigido`);
+  let manifest;
   try {
-    for (const row of imageRows) {
-      await writeFile(path.join(staging, row.file), row.bytes);
-      await writeFile(path.join(staging, row.manifestFile), row.manifestText, "utf8");
-    }
-    // rename de diretorio nao sobrescreve destino existente no Windows: o antigo sai do caminho
-    // primeiro, e so e apagado quando o novo ja esta no lugar.
-    const retired = `${referenceDirectory}.retiring-${process.pid}`;
-    if (alreadyPublished) await rename(referenceDirectory, retired);
-    try {
-      await mkdir(path.dirname(referenceDirectory), { recursive: true });
-      await rename(staging, referenceDirectory);
-    } catch (error) {
-      if (alreadyPublished) await rename(retired, referenceDirectory).catch(() => {});
-      throw error;
-    }
-    await rm(retired, { recursive: true, force: true });
-  } finally {
-    await rm(staging, { recursive: true, force: true });
+    manifest = JSON.parse(manifestBytes);
+  } catch {
+    fail(`manifesto ilegivel: ${sourceManifest}`);
   }
+  // O campo `image` aponta para o nome LONGO de origem, que nao existe aqui dentro. Copiar cru
+  // deixava as referencias internas quebradas mesmo com os PNGs corretos.
+  manifest.sourceImage = manifest.image;
+  manifest.image = row.file;
+  row.manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+  row.manifestSha256 = createHash("sha256").update(row.manifestText, "utf8").digest("hex");
+}
 
+const duplicadas = imageRows
+  .map((row) => row.file)
+  .filter((file, index, todas) => todas.indexOf(file) !== index);
+if (duplicadas.length > 0) fail(`cena/slot repetidos no relatorio: ${[...new Set(duplicadas)].join(", ")}`);
+
+if (imageRows.length > 0) {
   report.capturedImages = imageRows.map((row) => ({
     scene: row.scene,
     slot: row.slot,
@@ -288,23 +289,48 @@ if (imageRows.length > 0) {
     sha256: row.sha256,
     manifestSha256: row.manifestSha256,
   }));
-  console.log(`[promote] ${imageRows.length} par(es) PNG+manifesto em Docs/Baselines/Reference/${name}/`);
 }
 
-await mkdir(baselineDirectory, { recursive: true });
 const minified = JSON.stringify(report);
-await writeFile(destination, minified, "utf8");
 const digest = createHash("sha256").update(minified, "utf8").digest("hex");
 
-// O manifesto e reconstruido a partir do que esta em disco, e nao acrescentado no fim: assim ele
-// nao diverge quando um arquivo e removido ou regravado a mao.
-const files = (await readdir(baselineDirectory))
+// ---- Imutabilidade do pacote -------------------------------------------------------------------
+// Decidida pelo PACOTE INTEIRO, e nao so pelo diretorio de referencias. Antes, um relatorio sem
+// imagens — uma baseline so de performance — pulava o bloco de referencias e sobrescrevia o
+// <name>.json calado; e o mesmo acontecia quando o JSON existia mas o diretorio nao.
+await mkdir(baselineDirectory, { recursive: true });
+const jsonPublicado = await stat(destination).then(() => true).catch(() => false);
+const refsPublicadas = await stat(referenceDirectory).then(() => true).catch(() => false);
+if ((jsonPublicado || refsPublicadas) && !process.argv.includes("--replace")) {
+  fail(
+    `a baseline '${name}' ja esta publicada` +
+      (jsonPublicado ? ` (${name}.json)` : "") +
+      (refsPublicadas ? ` (Reference/${name}/)` : "") +
+      `. Use outro --as, ou --replace para substitui-la de proposito.`,
+  );
+}
+
+// ---- Manifesto, calculado ANTES da troca --------------------------------------------------------
+// Ele e derivado do que estara em disco depois desta publicacao: os relatorios ja publicados, com
+// o nosso substituindo/entrando. Calcular aqui permite que ele entre na MESMA transacao — gravado
+// depois, uma falha na escrita dele deixaria referencias novas descritas por um manifesto velho.
+const publicados = new Map();
+for (const file of (await readdir(baselineDirectory).catch(() => []))
   .filter((entry) => entry.endsWith(".json"))
-  .sort();
+  .sort()) {
+  publicados.set(file, await readFile(path.join(baselineDirectory, file), "utf8"));
+}
+publicados.set(`${name}.json`, minified);
+
 const rows = [];
-for (const file of files) {
-  const bytes = await readFile(path.join(baselineDirectory, file), "utf8");
-  const parsed = JSON.parse(bytes);
+for (const file of [...publicados.keys()].sort()) {
+  const bytes = publicados.get(file);
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes);
+  } catch {
+    fail(`ja existe um ${file} ilegivel em ${baselineDirectory}; resolva antes de publicar`);
+  }
   rows.push({
     file,
     sha256: createHash("sha256").update(bytes, "utf8").digest("hex"),
@@ -318,12 +344,13 @@ for (const file of files) {
       .join(" "),
     when: (parsed.startedAt ?? "").slice(0, 10),
     // Relatorios anteriores a 2026-09-03 so tem o carimbo assado na build. Os novos tambem medem
-    // HEAD e `git status` NA HORA da rodada, mais o hash dos assets carregados — evidencia mais
-    // forte, e a coluna existe para nao confundir as duas.
+    // HEAD e `git status` NA HORA da rodada, mais o hash dos assets e do dist do MCP — evidencia
+    // mais forte, e a coluna existe para nao confundir as duas.
     provenance: parsed.gitState
       ? `HEAD ${(parsed.gitState.head ?? "").slice(0, 7)}` +
         (parsed.gitState.workingTreeClean === false ? " (arvore suja)" : "") +
-        (parsed.sceneFingerprints ? " + assets" : "")
+        (parsed.sceneFingerprints ? " + assets" : "") +
+        (parsed.mcpServer?.builtInFlow ? " + mcp" : "")
       : "so carimbo",
     note: file === `${name}.json` ? note : undefined,
   });
@@ -365,8 +392,96 @@ if (notes.length > 0) {
   for (const [file, value] of notes) lines.push(`- \`${file}\` — ${value}`);
 }
 lines.push("");
+const manifestText = lines.join("\n");
 
-await writeFile(manifestPath, lines.join("\n"), "utf8");
+// ---- Publicacao ---------------------------------------------------------------------------------
+// Tres artefatos mudam juntos: as referencias, o <name>.json e o MANIFEST.md. Antes so as imagens
+// eram trocadas por staging, e os outros dois eram gravados direto depois — uma falha ali deixava
+// referencias novas com relatorio velho, ou manifesto descrevendo o que nao esta em disco.
+//
+// Aqui tudo e escrito no staging primeiro; a troca no destino acontece so no fim, e o que ja tinha
+// sido movido volta se algum passo falhar.
+const staging = path.join(baselineDirectory, `.staging-${name}-${process.pid}`);
+const stagingRefs = path.join(staging, "refs");
+const retiredSuffix = `.retiring-${process.pid}`;
+const desfazer = [];
+
+try {
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(stagingRefs, { recursive: true });
+
+  for (const row of imageRows) {
+    const png = path.join(stagingRefs, row.file);
+    const man = path.join(stagingRefs, row.manifestFile);
+    // Ultima linha de defesa: mesmo com cena validada, nenhum caminho pode sair do staging.
+    if (!dentroDe(stagingRefs, png) || !dentroDe(stagingRefs, man)) {
+      fail(`o caminho da referencia sairia do staging ('${row.file}')`);
+    }
+    await writeFile(png, row.bytes);
+    await writeFile(man, row.manifestText, "utf8");
+  }
+  talvezFalhar("apos-escrever-referencias");
+
+  await writeFile(path.join(staging, "report.json"), minified, "utf8");
+  await writeFile(path.join(staging, "MANIFEST.md"), manifestText, "utf8");
+  talvezFalhar("apos-escrever-relatorio");
+
+  // Troca. rename de diretorio nao sobrescreve destino existente no Windows, entao o antigo sai do
+  // caminho primeiro e so e apagado quando o novo ja esta no lugar.
+  const trocar = async (origem, destino) => {
+    const existia = await stat(destino).then(() => true).catch(() => false);
+    if (existia) {
+      await rename(destino, `${destino}${retiredSuffix}`);
+      desfazer.push(async () => rename(`${destino}${retiredSuffix}`, destino));
+    }
+    await rename(origem, destino);
+    desfazer.push(async () => rename(destino, origem));
+    return existia;
+  };
+
+  // O Reference/ precisa existir ANTES do rename: na primeira publicacao ele nao existe, e o
+  // rename falha com ENOENT.
+  if (imageRows.length > 0) await mkdir(path.dirname(referenceDirectory), { recursive: true });
+  const refsExistiam = imageRows.length > 0 ? await trocar(stagingRefs, referenceDirectory) : false;
+  talvezFalhar("apos-trocar-referencias");
+
+  const jsonExistia = await trocar(path.join(staging, "report.json"), destination);
+  talvezFalhar("apos-trocar-relatorio");
+
+  const manifestoExistia = await trocar(path.join(staging, "MANIFEST.md"), manifestPath);
+  talvezFalhar("apos-trocar-manifesto");
+
+  // Commit: so agora o antigo pode sumir.
+  desfazer.length = 0;
+  for (const [alvo, existia] of [
+    [referenceDirectory, refsExistiam],
+    [destination, jsonExistia],
+    [manifestPath, manifestoExistia],
+  ]) {
+    if (existia) await rm(`${alvo}${retiredSuffix}`, { recursive: true, force: true });
+  }
+} catch (error) {
+  // Desfaz na ordem inversa. Falha ao restaurar NAO e engolida: sem isto, o antigo podia ficar so
+  // sob o nome de recuperacao e ninguem saberia onde procurar.
+  const naoRestaurados = [];
+  for (const passo of desfazer.reverse()) {
+    await passo().catch((restoreError) => naoRestaurados.push(String(restoreError)));
+  }
+  await rm(staging, { recursive: true, force: true }).catch(() => {});
+  if (naoRestaurados.length > 0) {
+    fail(
+      `${error.message}\n[promote] E O ROLLBACK FALHOU: ${naoRestaurados.join("; ")}\n` +
+        `[promote] o conteudo anterior pode estar sob '*${retiredSuffix}' em ${baselineDirectory}`,
+    );
+  }
+  fail(`${error.message} — nada foi publicado`);
+} finally {
+  await rm(staging, { recursive: true, force: true }).catch(() => {});
+}
+
+if (imageRows.length > 0) {
+  console.log(`[promote] ${imageRows.length} par(es) PNG+manifesto em Reference/${name}/`);
+}
 console.log(`[promote] ${path.relative(smileRoot, destination)}`);
 console.log(`[promote] sha256 ${digest}`);
 console.log(`[promote] manifesto com ${rows.length} arquivo(s)`);
