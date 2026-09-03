@@ -621,20 +621,36 @@ await withSandbox(async ({ root, baselines, captures }) => {
     await makeReport(captures2, { pngBytes: outroPngBytes, overrides: { buildCommit: "def5678" } }),
     "relatorio2.json",
   );
+  // '#3' e o alvo que importa. existe() e chamado uma vez por artefato trocado, e sem alvo o
+  // failpoint disparava sempre na PRIMEIRA chamada — que acontece dentro da primeira troca, antes
+  // de qualquer referencia ter sido movida. O teste provava limpeza SEM MUTACAO, e nao o estado
+  // parcial que o comentario dizia provar. Na terceira passagem, referencias e relatorio ja foram
+  // trocados: e ali que um process.exit deixaria o pacote novo ativo e sem rollback.
   const result = await run([file2, "--as", "fase0", "--replace"], baselines, {
-    SMILE_PROMOTE_FAILPOINT: "consulta-de-existencia",
+    SMILE_PROMOTE_FAILPOINT: "consulta-de-existencia#3",
   });
 
   check(result.code === 1, "consulta que falha na transacao aborta", "exit=" + result.code);
+  // A propria mensagem prova ate onde a transacao chegou: passagem 3 so acontece depois das duas
+  // trocas anteriores terem sido aplicadas.
+  check(
+    /passagem 3/.test(result.saida),
+    "a falha ocorreu na TERCEIRA troca, com as duas anteriores ja aplicadas",
+    result.saida.trim(),
+  );
   check(
     /nada foi publicado/.test(result.saida),
     "a mensagem diz que nada foi publicado",
     result.saida.trim(),
   );
+  // Com o rollback funcionando, tudo volta aos bytes antigos. Se existe() voltasse a chamar
+  // fail(), o exit pularia o catch e estes artefatos ficariam com os bytes NOVOS ja movimentados.
   for (const [alvo, hashOriginal] of antes) {
+    const atual = await readFile(alvo).then(sha).catch(() => null);
     check(
-      (await readFile(alvo).then(sha).catch(() => null)) === hashOriginal,
+      atual === hashOriginal,
       "rollback preservou " + path.basename(alvo),
+      atual === sha(outroPngBytes) ? "ficou com os bytes NOVOS" : "hash inesperado",
     );
   }
   // O sintoma que denuncia o process.exit: sem passar pelo finally, o staging sobra.
@@ -664,6 +680,64 @@ await withSandbox(async ({ root, baselines, captures }) => {
   check(
     !existsSync(path.join(baselines, "fase0.json")),
     "nada foi publicado quando o MANIFEST nao pode ser lido",
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3h. Falha ao limpar o STAGING nao pode ser silenciosa.
+//
+// O erro do rm(staging) no finally era descartado: uma promocao BEM-SUCEDIDA saia com codigo 0
+// deixando residuos, e numa falha anterior ninguem era avisado de que os artefatos novos
+// continuavam no staging. E limpeza de staging, distinta da limpeza dos backups.
+await withSandbox(async ({ root, baselines, captures }) => {
+  const file = await writeReport(root, await makeReport(captures));
+
+  // Caso 1: publicacao que DA CERTO, mas nao consegue limpar o staging.
+  const ok = await run([file, "--as", "fase0"], baselines, {
+    SMILE_PROMOTE_FAILPOINT: "limpeza-do-staging",
+  });
+  check(
+    ok.code === 2,
+    "promocao com staging nao removido sai com 2, e nao com 0",
+    "exit=" + ok.code,
+  );
+  check(
+    /staging nao pode ser removido/.test(ok.saida),
+    "a mensagem distingue staging de backup",
+    ok.saida.trim(),
+  );
+  // O pacote em si foi publicado: o problema e so o lixo.
+  check(
+    existsSync(path.join(baselines, "fase0.json")) &&
+      existsSync(path.join(baselines, "Reference", "fase0", "cena_a_slot0.png")),
+    "o pacote ficou publicado, apesar do residuo",
+  );
+  check(
+    (await readdir(baselines)).some((entry) => entry.startsWith(".staging-")),
+    "o residuo que a mensagem denuncia existe de fato",
+  );
+
+  // Caso 2: falha de publicacao E staging nao removido — a mensagem tem de dizer as duas coisas.
+  for (const sobra of (await readdir(baselines)).filter((e) => e.startsWith(".staging-"))) {
+    await rm(path.join(baselines, sobra), { recursive: true, force: true });
+  }
+  const captures2 = path.join(root, "Captures2");
+  await mkdir(captures2, { recursive: true });
+  const file2 = await writeReport(
+    root,
+    await makeReport(captures2, { pngBytes: outroPngBytes, overrides: { buildCommit: "def5678" } }),
+    "relatorio2.json",
+  );
+  const ruim = await run([file2, "--as", "fase0", "--replace"], baselines, {
+    SMILE_PROMOTE_FAILPOINT: "apos-escrever-relatorio",
+  });
+  // O promotor aceita um failpoint por vez, entao este caso confere apenas que a falha de
+  // PUBLICACAO continua reportada como tal depois da mudanca no finally.
+  check(ruim.code === 1, "falha de publicacao continua saindo com 1", "exit=" + ruim.code);
+  check(
+    /nada foi publicado/.test(ruim.saida),
+    "e continua dizendo que nada foi publicado",
+    ruim.saida.trim(),
   );
 });
 

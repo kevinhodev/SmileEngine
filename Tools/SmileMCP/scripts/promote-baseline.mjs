@@ -273,8 +273,18 @@ if (!dentroDe(baselineDirectory, destination) || !dentroDe(baselineDirectory, re
 // atras no meio: remover um PNG antes de comecar aborta na validacao e nunca chega a escrever, e
 // um teste que so exercita a validacao nao prova transacao nenhuma.
 const failpoint = process.env.SMILE_PROMOTE_FAILPOINT ?? "";
+// Aceita "<ponto>" e "<ponto>#N", onde N e a enesima passagem por ele. O contador existe porque
+// existe() e chamado uma vez por artefato trocado: sem alvo, o failpoint disparava sempre na
+// PRIMEIRA chamada, que acontece antes de qualquer referencia ter sido movida — o teste provava
+// limpeza sem mutacao, e nao o estado parcial que dizia provar.
+const contagemDeFailpoint = new Map();
 function talvezFalhar(ponto) {
-  if (failpoint === ponto) throw new Error(`falha injetada no ponto '${ponto}'`);
+  const [alvoPonto, alvoOrdem] = failpoint.split("#");
+  if (alvoPonto !== ponto) return;
+  const ordem = (contagemDeFailpoint.get(ponto) ?? 0) + 1;
+  contagemDeFailpoint.set(ponto, ordem);
+  if (alvoOrdem !== undefined && Number(alvoOrdem) !== ordem) return;
+  throw new Error(`falha injetada no ponto '${ponto}' (passagem ${ordem})`);
 }
 
 // ---- Montagem em memoria -----------------------------------------------------------------------
@@ -510,6 +520,7 @@ let publicado = false;
 // ficaria para tras — foi o que aconteceu ao mover a limpeza para la. O desfecho e registrado
 // aqui e so reportado depois que o finally ja limpou.
 let erroFatal = null;
+let stagingNaoRemovido = null;
 const backupsNaoRemovidos = [];
 
 try {
@@ -520,8 +531,12 @@ try {
     const png = path.join(stagingRefs, row.file);
     const man = path.join(stagingRefs, row.manifestFile);
     // Ultima linha de defesa: mesmo com cena validada, nenhum caminho pode sair do staging.
+    // `throw`, e nao fail(): este guard esta DENTRO do try, e fail() e process.exit — se ele
+    // disparasse, catch e finally nao rodariam e o staging ficaria abandonado. Hoje os nomes ja
+    // foram validados antes, entao o caminho e inalcancavel; mas "nenhum exit dentro da transacao"
+    // so e verdade se for verdade em todos os pontos, inclusive nos que ninguem espera alcancar.
     if (!dentroDe(stagingRefs, png) || !dentroDe(stagingRefs, man)) {
-      fail(`o caminho da referencia sairia do staging ('${row.file}')`);
+      throw new Error(`o caminho da referencia sairia do staging ('${row.file}')`);
     }
     await writeFile(png, row.bytes);
     await writeFile(man, row.manifestText, "utf8");
@@ -607,21 +622,46 @@ try {
         : `${error.message} — nada foi publicado`;
   }
 } finally {
-  await rm(staging, { recursive: true, force: true }).catch(() => {});
+  // O erro daqui era descartado: uma promocao bem-sucedida podia sair com codigo 0 deixando
+  // residuos, e numa falha anterior ninguem era avisado de que os artefatos novos continuavam no
+  // staging. E limpeza de STAGING, distinta da limpeza dos backups, e reportada como tal.
+  // O failpoint entra DENTRO do try do rm, pelo mesmo motivo do apos-commit-rm: e o unico jeito
+  // de exercitar "o rm falhou" sem depender de conseguir travar um diretorio no Windows.
+  await (async () => {
+    talvezFalhar("limpeza-do-staging");
+    await rm(staging, { recursive: true, force: true });
+  })().catch((error) => {
+    stagingNaoRemovido = `${staging} (${error.code ?? error.message})`;
+  });
 }
 
 // Falha de limpeza e reportada DEPOIS do finally, com o staging ja removido. Antes ela era
 // coletada em backupsNaoRemovidos e nunca consultada: um rm que falhasse de verdade terminava com
 // exit 0 e o operador nunca sabia que sobrou lixo com o conteudo da baseline anterior.
-if (erroFatal) fail(erroFatal);
-
-if (backupsNaoRemovidos.length > 0) {
-  console.error(
-    `[promote] PUBLICADO, mas a limpeza dos backups falhou:\n` +
-      backupsNaoRemovidos.map((linha) => `[promote]   ${linha}`).join("\n") +
-      `\n[promote] o pacote novo esta ativo; remova a mao o que sobrou de '*${retiredSuffix}' em ` +
-      `${baselineDirectory}`,
+if (erroFatal) {
+  fail(
+    stagingNaoRemovido
+      ? `${erroFatal}\n[promote] e o staging tambem nao pode ser removido: ${stagingNaoRemovido}`
+      : erroFatal,
   );
+}
+
+if (stagingNaoRemovido) {
+  console.error(
+    `[promote] PUBLICADO, mas o staging nao pode ser removido: ${stagingNaoRemovido}\n` +
+      `[promote] os artefatos novos continuam la; remova a mao`,
+  );
+}
+
+if (backupsNaoRemovidos.length > 0 || stagingNaoRemovido) {
+  if (backupsNaoRemovidos.length > 0) {
+    console.error(
+      `[promote] PUBLICADO, mas a limpeza dos backups falhou:\n` +
+        backupsNaoRemovidos.map((linha) => `[promote]   ${linha}`).join("\n") +
+        `\n[promote] o pacote novo esta ativo; remova a mao o que sobrou de '*${retiredSuffix}' em ` +
+        `${baselineDirectory}`,
+    );
+  }
   process.exit(2);
 }
 
