@@ -65,6 +65,44 @@ if (report.passed === false && !process.argv.includes("--allow-failed")) {
 }
 if (report.passed === false && !note) fail("--allow-failed exige --note explicando a aceitacao");
 
+// O carimbo da build so prova o estado na COMPILACAO. Uma rodada feita com --allow-dirty sai com
+// passed:true e buildCommit limpo, e passaria por aqui sem nada acusar — foi exatamente o caso do
+// smoke desta sessao (buildCommit c452b1c, gitState.workingTreeClean false).
+//
+// Relatorio que TEM gitState e julgado por ele; relatorio legado, que so tem o carimbo, precisa de
+// excecao declarada — nao se promove evidencia fraca por omissao.
+if (report.gitState) {
+  if (report.gitState.workingTreeClean !== true) {
+    fail(
+      `a rodada foi feita com a arvore suja (${report.gitState.dirtyEntries?.length ?? "?"} ` +
+        `entrada(s)) ou sem o git responder. Baseline exige arvore limpa NA MEDICAO.`,
+    );
+  }
+  if (!/^[0-9a-f]{40}$/.test(report.gitState.head ?? "")) {
+    fail("a rodada nao registrou um HEAD valido; nao da para dizer de que arvore ela saiu");
+  }
+  const fingerprinted = Object.values(report.sceneFingerprints ?? {});
+  const scenesMeasured = new Set(
+    [...(report.summary ?? []), ...(report.captures ?? [])].map((entry) => entry.scene),
+  );
+  if (fingerprinted.length !== scenesMeasured.size) {
+    fail(
+      `impressoes de asset incompletas: ${fingerprinted.length} cena(s) com fingerprint contra ` +
+        `${scenesMeasured.size} medida(s)`,
+    );
+  }
+  if (fingerprinted.some((entry) => Object.values(entry).some((file) => file === null))) {
+    fail("alguma cena tem asset sem fingerprint; o pacote nao diria o que foi carregado");
+  }
+} else if (!process.argv.includes("--allow-legacy-provenance")) {
+  fail(
+    "o relatorio nao tem gitState/sceneFingerprints (rodada anterior a essa instrumentacao). " +
+      'Use --allow-legacy-provenance --note "<por que>" para promove-lo mesmo assim.',
+  );
+} else if (!note) {
+  fail("--allow-legacy-provenance exige --note");
+}
+
 const points = report.summary?.length ?? 0;
 const runs = report.runs?.length ?? 0;
 const captures = report.captures?.length ?? 0;
@@ -102,45 +140,62 @@ const destination = path.join(baselineDirectory, `${name}.json`);
 // renomeava para <cena>_slot<N>.png: dois donos para a mesma decisao, e o pacote publicado ficou
 // com 20 nomes que nao existiam em lugar nenhum. Nome e copia saem daqui, juntos, para nao poderem
 // divergir de novo.
-const referenceDirectory = path.join(baselineDirectory, "Reference");
+// Namespace POR BASELINE. Cena e slot nao bastam como identidade: quando a Fase 1 promover o seu
+// proprio bistro_slot0.png, ele sobrescreveria o da Fase 0 e o hash guardado na baseline antiga
+// passaria a divergir do arquivo — a referencia do "antes" desapareceria justamente na hora de
+// comparar com ela.
+const referenceDirectory = path.join(baselineDirectory, "Reference", name);
 const imageRows = [...(report.runs ?? []), ...(report.captures ?? [])]
   .map((entry) => ({ scene: entry.scene, slot: entry.slot, png: entry.capture?.pngPath }))
   .filter((entry) => entry.png);
 
 if (imageRows.length > 0) {
+  // Le e valida TUDO antes de escrever qualquer coisa. Com a escrita intercalada, um manifesto
+  // ausente no meio deixava PNG novo publicado ao lado de manifesto velho — pacote pela metade,
+  // e pior que pacote nenhum porque parece completo.
+  for (const row of imageRows) {
+    row.file = `${row.scene}_slot${row.slot}.png`;
+    row.manifestFile = row.file.replace(/\.png$/, ".json");
+    row.bytes = await readFile(row.png).catch(() => null);
+    if (!row.bytes) fail(`PNG de origem nao encontrado: ${row.png}`);
+    row.sha256 = createHash("sha256").update(row.bytes).digest("hex");
+
+    // O manifesto que o CAPTURE-PROTOCOL emite ao lado do PNG declara preset, N, resolucao e o
+    // estado inteiro do renderer. Sem ele a imagem e um pixel sem procedencia, entao o par e
+    // OBRIGATORIO — antes isto era um aviso, e aviso nao impede publicar.
+    const sourceManifest = row.png.replace(/\.png$/i, ".json");
+    const manifestBytes = await readFile(sourceManifest, "utf8").catch(() => null);
+    if (!manifestBytes) fail(`sem manifesto ao lado de ${path.basename(row.png)}; o par e exigido`);
+    let manifest;
+    try {
+      manifest = JSON.parse(manifestBytes);
+    } catch {
+      fail(`manifesto ilegivel: ${sourceManifest}`);
+    }
+    // O campo `image` aponta para o nome LONGO de origem, que nao existe aqui dentro. Copiar o
+    // manifesto verbatim deixava 20 referencias internas quebradas mesmo com os PNGs corretos.
+    manifest.sourceImage = manifest.image;
+    manifest.image = row.file;
+    row.manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+    row.manifestSha256 = createHash("sha256").update(row.manifestText, "utf8").digest("hex");
+  }
+
   await mkdir(referenceDirectory, { recursive: true });
   for (const row of imageRows) {
-    // Cena e slot SAO a identidade da referencia. O nome longo original carrega knobs e hora, que
-    // ja estao no manifesto do proprio protocolo, copiado ao lado.
-    row.file = `${row.scene}_slot${row.slot}.png`;
-    const bytes = await readFile(row.png).catch(() => null);
-    if (!bytes) {
-      row.sha256 = null;
-      continue;
-    }
-    row.sha256 = createHash("sha256").update(bytes).digest("hex");
-    await writeFile(path.join(referenceDirectory, row.file), bytes);
-    // O manifesto que o CAPTURE-PROTOCOL emite ao lado do PNG: e o que declara preset, N,
-    // resolucao e estado. Sem ele a imagem e um pixel sem procedencia.
-    const sidecar = row.png.replace(/\.png$/i, ".json");
-    const sidecarBytes = await readFile(sidecar).catch(() => null);
-    if (sidecarBytes) {
-      await writeFile(path.join(referenceDirectory, row.file.replace(/\.png$/, ".json")),
-                      sidecarBytes);
-    } else {
-      console.warn(`[promote] sem manifesto ao lado de ${path.basename(row.png)}`);
-    }
+    await writeFile(path.join(referenceDirectory, row.file), row.bytes);
+    await writeFile(path.join(referenceDirectory, row.manifestFile), row.manifestText, "utf8");
   }
+
   report.capturedImages = imageRows.map((row) => ({
     scene: row.scene,
     slot: row.slot,
-    file: `Reference/${row.file}`,
+    file: `Reference/${name}/${row.file}`,
+    manifest: `Reference/${name}/${row.manifestFile}`,
     sourceFile: path.basename(row.png),
     sha256: row.sha256,
+    manifestSha256: row.manifestSha256,
   }));
-  const missing = imageRows.filter((row) => !row.sha256).length;
-  if (missing > 0) fail(`${missing} PNG(s) de origem nao encontrados; o pacote sairia quebrado`);
-  console.log(`[promote] ${imageRows.length} referencia(s) copiadas para Docs/Baselines/Reference/`);
+  console.log(`[promote] ${imageRows.length} par(es) PNG+manifesto em Docs/Baselines/Reference/${name}/`);
 }
 
 await mkdir(baselineDirectory, { recursive: true });

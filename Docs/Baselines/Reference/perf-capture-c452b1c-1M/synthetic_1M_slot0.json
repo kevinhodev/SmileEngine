@@ -3,7 +3,7 @@
   "time": "2026-09-02T21:11:54",
   "build": "c452b1c",
   "buildDate": "2026-09-02 18:30",
-  "image": "Synthetic_1M_slot0_sci_N128_PrFd-gi-ddgi-rgi-rdiA0M0-brdfRatio-refl-rcUQC4D1KV1R0T_20260902-211154.png",
+  "image": "synthetic_1M_slot0.png",
   "scene": "Synthetic_1M",
   "bookmarkSlot": 0,
   "preset": "scientific",
@@ -163,5 +163,6 @@
   "timeOfDayHours": 10,
   "timeOfDayEnabled": true,
   "pinnedTimeOfDayRequested": 10,
-  "pinnedTimeOfDayApplied": 10
+  "pinnedTimeOfDayApplied": 10,
+  "sourceImage": "Synthetic_1M_slot0_sci_N128_PrFd-gi-ddgi-rgi-rdiA0M0-brdfRatio-refl-rcUQC4D1KV1R0T_20260902-211154.png"
 }

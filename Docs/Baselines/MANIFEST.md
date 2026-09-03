@@ -16,12 +16,12 @@ Gerado por `Tools/SmileMCP/scripts/promote-baseline.mjs` — nao editar a tabela
 
 | arquivo | sha256 |
 |---|---|
-| `capture-c452b1c-4scenes.json` | `2277a487a63c1caa62db44e8eb68e2b8e14bf2e1acf905f26de6e34ee6c98ded` |
-| `perf-capture-c452b1c-1M.json` | `9fa8443b567eb4a70338c9474b87d4d77887d27710088c69daf4978df9ac80c9` |
+| `capture-c452b1c-4scenes.json` | `dfe88f459b26927e238c575bb7e8cc8423037029d6bfcfa1ca56564530cbb5fa` |
+| `perf-capture-c452b1c-1M.json` | `be10d0b9dd865ad955b32e5ba74d3ba1522859ae0138d90e8c587372b6e25e3b` |
 | `perf-f781288-4scenes.json` | `f1a7f357c358c9f7352bc2bf7f483fb83468a404ce942da4cdc31e88a913344b` |
 
 ## Notas
 
-- `capture-c452b1c-4scenes.json` — Metade VISUAL das 4 primeiras cenas: 16 capturas (N=128, preset cientifico, TOD 10h). Sem profiling, por isso sem summary/runs.
-- `perf-capture-c452b1c-1M.json` — synthetic_1M completa: 4 pontos, 4 runs com GPU por passe, mais PNG+manifesto por slot. Recaptura do que faltava em perf-f781288-4scenes. Rodada com --capture, entao os tempos estao ~1,4% acima do equivalente sem captura.
-- `perf-f781288-4scenes.json` — Perf das 4 primeiras cenas (16 pontos, 16 runs completos). passed:false e incompleto pelo MESMO motivo: uma assercao de teardown disparou depois da ultima medicao (o editor da 1M nao morreu em 180 s apos close_editor), antes de os runs detalhados da 1M serem publicados. As 4 linhas de synthetic_1M no summary sao so medianas de CPU; a 1M completa vive em perf-capture-c452b1c-1M.json. Engine/Editor/Shaders sao identicos entre f781288 e c452b1c (git diff vazio), entao as duas comparam.
+- `capture-c452b1c-4scenes.json` — Metade VISUAL das 4 primeiras cenas: 16 capturas (N=128, preset cientifico, TOD 10h). Sem profiling, por isso sem summary/runs. Proveniencia legada: anterior ao registro de gitState/fingerprints.
+- `perf-capture-c452b1c-1M.json` — synthetic_1M completa: 4 pontos, 4 runs com GPU por passe, mais PNG+manifesto por slot. Rodada com --capture, entao os tempos estao ~1,4% acima do equivalente sem captura. Proveniencia legada: anterior ao registro de gitState/fingerprints.
+- `perf-f781288-4scenes.json` — Perf das 4 primeiras cenas (16 pontos, 16 runs completos). passed:false e incompleto pelo MESMO motivo: uma assercao de teardown disparou depois da ultima medicao, antes de os runs detalhados da 1M serem publicados; as 4 linhas de synthetic_1M no summary sao so medianas de CPU, e a 1M completa vive em perf-capture-c452b1c-1M.json. Proveniencia legada: a rodada e anterior ao registro de gitState/fingerprints, e a limpeza da arvore so consta do carimbo da build (f781288). Engine/Editor/Shaders identicos entre f781288 e c452b1c.

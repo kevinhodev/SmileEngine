@@ -15,7 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -250,6 +250,60 @@ async function readGitState() {
     // null = o git nao respondeu; nao e o mesmo que "limpo", e o relatorio tem de distinguir.
     workingTreeClean: status === null ? null : status === "",
     dirtyEntries: status ? status.split("\n").filter(Boolean) : [],
+  };
+}
+
+// Identidade do servidor MCP que esta REALMENTE sendo executado. O script chama
+// `node dist/index.js`, e o dist e produto de build, ignorado pelo git — entao nem o HEAD limpo nem
+// as impressoes de cena revelam um bridge obsoleto. Aconteceu: o conserto do close_editor estava
+// commitado e nao compilado, e as rodadas usaram o caminho antigo sem nada acusar.
+async function fingerprintMcpServer() {
+  const files = { src: [], dist: [] };
+  const walk = async (directory, bucket, extension) => {
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(full, bucket, extension);
+      else if (entry.name.endsWith(extension)) bucket.push(full);
+    }
+  };
+  await walk(path.join(packageRoot, "src"), files.src, ".ts");
+  await walk(path.join(packageRoot, "dist"), files.dist, ".js");
+
+  const newest = async (list) => {
+    let best = null;
+    for (const file of list) {
+      const info = await stat(file).catch(() => null);
+      if (info && (!best || info.mtimeMs > best.mtimeMs)) best = { file, mtimeMs: info.mtimeMs };
+    }
+    return best;
+  };
+  const oldest = async (list) => {
+    let best = null;
+    for (const file of list) {
+      const info = await stat(file).catch(() => null);
+      if (info && (!best || info.mtimeMs < best.mtimeMs)) best = { file, mtimeMs: info.mtimeMs };
+    }
+    return best;
+  };
+  const newestSource = await newest(files.src);
+  const oldestBuilt = await oldest(files.dist);
+
+  // Hash do que efetivamente entra no processo, para o relatorio poder ser conferido depois.
+  const digest = createHash("sha256");
+  for (const file of files.dist.sort()) {
+    digest.update(path.relative(packageRoot, file).replace(/\\/g, "/"));
+    digest.update(await readFile(file).catch(() => Buffer.alloc(0)));
+  }
+  return {
+    distFiles: files.dist.length,
+    distSha256: files.dist.length > 0 ? digest.digest("hex") : null,
+    newestSource: newestSource ? path.relative(packageRoot, newestSource.file) : null,
+    oldestBuilt: oldestBuilt ? path.relative(packageRoot, oldestBuilt.file) : null,
+    // Sem dist nenhum o script nem roda; com src mais novo que o build, o que roda nao e o que
+    // esta no fonte.
+    stale:
+      files.dist.length === 0 ||
+      Boolean(newestSource && oldestBuilt && newestSource.mtimeMs > oldestBuilt.mtimeMs),
   };
 }
 
@@ -575,13 +629,38 @@ try {
   // ou num script, e a rodada sairia afirmando uma limpeza que ja nao existe. Conferido UMA vez,
   // antes de abrir editor nenhum: falhar depois de carregar a 1M custa minutos para dizer algo que
   // ja se sabia.
-  report.gitState = await readGitState();
+  report.mcpServer = await fingerprintMcpServer();
+  // O script executa `dist/index.js` direto, entao o git limpo e as impressoes de cena NAO veem um
+  // bridge obsoleto: foi assim que estas rodadas usaram o close_editor antigo durante horas, com o
+  // conserto ja commitado mas nao compilado. O que roda tem de estar na proveniencia.
+  // SEM escape por --allow-dirty, ao contrario das outras: arvore suja e um shakedown legitimo,
+  // mas dist obsoleto significa medir codigo que nao e o do fonte — nao existe rodada em que isso
+  // seja o que se quis fazer, e `npm run build` custa segundos.
   assert(
-    allowDirty || report.gitState.workingTreeClean !== false,
-    `a arvore esta suja AGORA (${report.gitState.dirtyEntries.length} entrada(s), ex.: ` +
-      `${report.gitState.dirtyEntries.slice(0, 3).join(", ")}), embora a build tenha sido ` +
-      `compilada limpa. Commite, ou use --allow-dirty para uma rodada que NAO vale como baseline.`,
+    !report.mcpServer.stale,
+    `o dist/ do MCP esta atras do src/ (${report.mcpServer.newestSource} e mais novo que ` +
+      `${report.mcpServer.oldestBuilt}). Rode 'npm run build' — o script executa dist/index.js, ` +
+      `entao um bridge obsoleto nao aparece em git status nenhum.`,
   );
+
+  report.gitState = await readGitState();
+  // `!== false` deixava passar o `null` de "o git nao respondeu", e um relatorio verde com HEAD
+  // desconhecido e pior que um vermelho: ele afirma procedencia que ninguem verificou. Exigir
+  // `=== true` E um HEAD valido faz o silencio do git virar falha, que e o que ele e.
+  assert(
+    allowDirty || report.gitState.workingTreeClean === true,
+    report.gitState.workingTreeClean === null
+      ? "o git nao respondeu; sem HEAD e sem status nao da para dizer de que arvore esta rodada " +
+        "saiu. Resolva, ou use --allow-dirty para uma rodada que NAO vale como baseline."
+      : `a arvore esta suja AGORA (${report.gitState.dirtyEntries.length} entrada(s), ex.: ` +
+        `${report.gitState.dirtyEntries.slice(0, 3).join(", ")}), embora a build tenha sido ` +
+        `compilada limpa. Commite, ou use --allow-dirty para uma rodada que NAO vale como baseline.`,
+  );
+  assert(
+    allowDirty || /^[0-9a-f]{40}$/.test(report.gitState.head ?? ""),
+    `HEAD invalido ou ausente ('${report.gitState.head}')`,
+  );
+
 
   await client.connect(transport);
   for (const sceneEntry of scenes) {

@@ -804,9 +804,16 @@ contra assets incompatíveis.
   contra 539,4 ms sem, ~1,4% acima. Por isso o modo faz parte da **chave da rodada**: comparar um
   número tirado com `--capture` contra outro sem é comparar dois regimes.
 
-  **As referências estão versionadas em `Docs/Baselines/Reference/`** (~23 MiB, PNG + o manifesto
-  que o protocolo emite ao lado). Custam espaço e ficam mesmo assim, pela mesma razão dos JSON: o
-  que não sobrevive a um clone não é referência.
+  **As referências estão versionadas em `Docs/Baselines/Reference/<baseline>/`** — com namespace
+  pelo nome da baseline, porque `<cena>_slot<N>` sozinho não é identidade: quando a Fase 1 publicar
+  o seu próprio `bistro_slot0.png`, ele sobrescreveria o da Fase 0 e o hash guardado aqui passaria
+  a divergir do arquivo, apagando a referência do "antes" justamente na hora de comparar com ela.
+  O manifesto do protocolo vai junto, com o campo `image` reescrito para o nome publicado (copiado
+  cru, ele apontava para o nome longo de origem, que não existe no pacote) e o original preservado
+  em `sourceImage`. PNG e manifesto são publicados como **par obrigatório** — antes a ausência do
+  manifesto era só um aviso, e aviso não impede publicar imagem nova ao lado de manifesto velho.
+  Os ~23 MiB custam espaço e ficam mesmo assim, pela mesma razão dos JSON: o que não sobrevive a um
+  clone não é referência.
 
   **Achado que muda como comparar: a captura NÃO reproduz byte a byte.** Recapturando a Bistro do
   mesmo build, mesmo bookmark e mesmo N, os quatro slots deram hash diferente. A diferença é
