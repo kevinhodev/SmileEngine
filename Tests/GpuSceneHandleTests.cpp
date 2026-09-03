@@ -36,6 +36,9 @@ namespace Smile {
         static u32 LastCollectVisits(const FGpuSceneSlots& Slots) {
             return Slots.LastCollectVisits_;
         }
+        static bool LastCollectFreeListRealloc(const FGpuSceneSlots& Slots) {
+            return Slots.LastCollectFreeListRealloc_;
+        }
     };
 }
 
@@ -279,6 +282,54 @@ int main() {
         Check(FGpuSceneSlotsTestAccess::RetiredListSize(Pool) == 0,
               "dez ciclos de retire/collect nao deixam residuo na lista");
         Check(Pool.RetiredCount() == 0, "nem no contador");
+    }
+
+    // 11. O Collect nao realoca a FreeList DURANTE a compactacao.
+    //
+    // O caminho de corrupcao: o slot vira Free e sai do RetiredCount_ ANTES do push_back, e o
+    // resize da RetiredList so acontece no fim. Um push que lancasse no meio deixaria entradas ja
+    // processadas na lista, e o Collect seguinte as reprocessaria — underflow do contador e indice
+    // duplicado na free list, entregando o mesmo slot a dois donos.
+    //
+    // Injetar falha de alocacao no std::vector exigiria allocator proprio; o que se verifica e a
+    // propriedade que torna a falha impossivel: com a reserva feita antes da primeira mutacao,
+    // nenhum push_back do laco realoca.
+    {
+        FGpuSceneSlots Pool;
+        FGpuSceneHandle Muitos[128];
+        for (FGpuSceneHandle& H : Muitos) H = Pool.Allocate();
+
+        // Um por vez, com a FreeList ja povoada de ciclos anteriores.
+        for (int Ciclo = 0; Ciclo < 4; ++Ciclo) {
+            Pool.Retire(Muitos[Ciclo], FGpuFenceSet{ 1, 1 });
+            Pool.Collect(FGpuFenceSet{ 1, 1 });
+            Check(!FGpuSceneSlotsTestAccess::LastCollectFreeListRealloc(Pool),
+                  "collect de um slot nao realoca a FreeList");
+        }
+
+        // E o caso que mais cresce a lista de uma vez: todos aposentados juntos.
+        Pool.RetireAll(FGpuFenceSet{ 2, 2 });
+        const u32 Liberados = Pool.Collect(FGpuFenceSet{ 2, 2 });
+        Check(Liberados == 124, "os 124 restantes voltam a Free");
+        Check(!FGpuSceneSlotsTestAccess::LastCollectFreeListRealloc(Pool),
+              "nem o collect em massa realoca a FreeList no meio da compactacao");
+
+        // Depois de tudo isso, os contadores continuam sos e a free list nao tem duplicata.
+        Check(Pool.RetiredCount() == 0, "nenhum aposentado pendente");
+        Check(Pool.LiveCount() == 0, "nenhum vivo");
+        Check(Pool.Capacity() == 128, "a capacidade nao mudou");
+
+        // Alocar tudo de novo tem de devolver 128 slots DISTINTOS: indice duplicado na free list
+        // apareceria aqui como o mesmo slot entregue duas vezes.
+        bool Distintos = true;
+        bool Visto[128] = {};
+        for (int i = 0; i < 128; ++i) {
+            const FGpuSceneHandle H = Pool.Allocate();
+            if (H.Slot >= 128 || Visto[H.Slot]) Distintos = false;
+            else Visto[H.Slot] = true;
+        }
+        Check(Distintos, "os 128 slots sao entregues uma vez cada, sem duplicata");
+        Check(Pool.Capacity() == 128, "e sem crescer o pool");
     }
 
     if (Failures > 0) {

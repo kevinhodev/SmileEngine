@@ -144,6 +144,11 @@ namespace Smile {
         // TAMANHO da lista, que uma implementacao que varre tudo tambem mantem correto. Um u32 num
         // laco que ja roda nao aparece em perfil.
         u32                LastCollectVisits_ = 0;
+        // A FreeList realocou DURANTE a compactacao? Tem de ser sempre false: a reserva no inicio
+        // do Collect existe para que nenhum push_back do laco possa lancar depois de o estado ja
+        // ter mudado. Instrumentado porque a alternativa seria injetar falha de alocacao no
+        // std::vector, e a propriedade que importa e "nao realoca no meio".
+        bool               LastCollectFreeListRealloc_ = false;
         // Teto de slots. kInvalidSlot e o primeiro valor em que o cast para u32 produziria o
         // proprio slot invalido; e membro para o teste poder exercitar a borda sem alocar bilhoes
         // de entradas.

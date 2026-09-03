@@ -63,9 +63,19 @@ namespace Smile {
         // Compactacao no lugar: quem nao pode sair fica, quem saiu some da lista. Cada slot aparece
         // no maximo uma vez, porque Retire so age sobre slot Live e a saida de Retired acontece
         // aqui, junto com a remocao da entrada.
+        // Capacidade garantida ANTES da primeira mutacao. O push_back na FreeList acontece depois
+        // de o slot ja ter virado Free e saido do RetiredCount_, e o resize da RetiredList so no
+        // fim: se ele lancasse no meio, as entradas ja processadas continuariam na lista e o
+        // Collect seguinte as reprocessaria — underflow do RetiredCount_ e indice DUPLICADO na
+        // free list, ou seja o mesmo slot entregue a dois donos. Com a reserva feita aqui, nenhum
+        // push_back do laco realoca; e se a reserva falhar, ela falha antes de qualquer estado ter
+        // mudado.
+        FreeList.reserve(FreeList.size() + RetiredList.size());
+
         u32    Liberados = 0;
         size_t Escrita   = 0;
         LastCollectVisits_ = 0;
+        const size_t FreeListCapacidadeInicial = FreeList.capacity();
         for (size_t Leitura = 0; Leitura < RetiredList.size(); ++Leitura) {
             const u32 Index = RetiredList[Leitura];
             FSlot&    Entry = Slots[Index];
@@ -93,6 +103,8 @@ namespace Smile {
             ++Liberados;
         }
         RetiredList.resize(Escrita);
+        // Se isto disparar, a reserva acima esta errada e o caminho de corrupcao voltou a existir.
+        LastCollectFreeListRealloc_ = FreeList.capacity() != FreeListCapacidadeInicial;
         return Liberados;
     }
 
