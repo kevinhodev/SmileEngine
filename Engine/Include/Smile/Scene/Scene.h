@@ -89,6 +89,12 @@ namespace Smile {
         // sobreviver a uma mudanca da lista: selecao, undo futuro, serializacao futura.
         u64         Id = 0;
 
+        // Residencia GPU. Separada do Id (identidade de EDITOR) e da posicao na lista (ordem
+        // AUTORAL): e a identidade que os quatro consumidores de GPU vao passar a usar no lugar
+        // do indice. Invalido significa "sem residencia" — a FScene ainda tem o objeto, mas
+        // nada de GPU pode enderecar por ele.
+        FGpuSceneHandle GpuHandle;
+
         std::string Name;
         FTransform  Transform;
         FGpuMesh*   Mesh     = nullptr;
@@ -148,7 +154,14 @@ namespace Smile {
         // FRenderable::Id). Estes metodos deixam a FScene consistente e o RENDERER desatualizado —
         // o caminho suportado com a cena carregada e Renderer::RemoveRenderable/DuplicateRenderable,
         // que fecham o ciclo do lado da GPU. A ordem dos sobreviventes e preservada.
-        bool         RemoveRenderable(u64 Id);
+        //
+        // As fences sao EXIGIDAS, sem default. Sem elas a sincronia handle/renderavel ficaria
+        // por convencao; com elas, a FScene nao consegue largar um renderavel sem aposentar o
+        // handle dele. E um default {0,0} seria pior que nenhum: significaria "reusavel ja", em
+        // silencio, que e exatamente o reuso cedo demais que o ticket existe para impedir.
+        //
+        // O valor tem de vir de uma FRONTEIRA DE SUBMISSAO (ver Renderer::CurrentFenceSet).
+        bool         RemoveRenderable(u64 Id, const FGpuFenceSet& Required);
         FRenderable* DuplicateRenderable(u64 Id);
 
         FRenderable*       FindRenderable(u64 Id);
@@ -180,7 +193,7 @@ namespace Smile {
         // ref invalido se o Id nao existe (inclusive para Id 0).
         FSceneObjectRef FindObject(u64 Id) const;
 
-        void Clear();
+        void Clear(const FGpuFenceSet& Required);
 
         // Versao dos transforms dos renderables — quem muta transform (gizmo do editor)
         // bumpa; o Renderer compara por frame p/ reconstruir SO a TLAS (BLAS intactos).

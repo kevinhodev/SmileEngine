@@ -2,6 +2,7 @@
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/UploadQueue.h"
 #include "Smile/Core/HResultCheck.h"
+#include "Smile/Core/Logger.h"
 #include <cstring>
 
 namespace Smile {
@@ -152,6 +153,18 @@ namespace Smile {
         RenderableList.push_back(_Renderable);
         FRenderable& Added = RenderableList.back();
         Added.Id = AllocObjectId(); // identidade nova mesmo se veio de uma copia
+
+        // Residencia nova tambem: uma COPIA nao pode herdar o handle da fonte, senao dois
+        // renderaveis apontariam para o mesmo slot e o primeiro a ser removido aposentaria a
+        // residencia do outro.
+        Added.GpuHandle = GpuSlots_.Allocate();
+        if (Added.GpuHandle.Slot == FGpuSceneHandle::kInvalidSlot) {
+            // Alto, e nao silencioso. O objeto existe na cena e NAO tem residencia GPU: ele nao
+            // vai aparecer, e "sumiu sem erro" e o pior diagnostico possivel. Na pratica so se
+            // chega aqui por defeito, porque o teto e 2^32 slots.
+            LogError("AddRenderable: sem slot de GPU para '" + Added.Name +
+                     "'; o objeto fica sem residencia e nao sera desenhado");
+        }
         RenderableIndexById_.emplace(Added.Id,
                                      static_cast<u32>(RenderableList.size() - 1));
         ++StructureVersion_;
@@ -166,13 +179,17 @@ namespace Smile {
         return Added;
     }
 
-    bool FScene::RemoveRenderable(u64 _Id) {
+    bool FScene::RemoveRenderable(u64 _Id, const FGpuFenceSet& _Required) {
         const int Index = IndexOfRenderable(_Id);
         if (Index < 0) return false;
         // Erase ESTAVEL, nao swap-and-pop: as pastas do Scene Outliner sao ranges [begin,end)
         // sobre esta lista, e trocar o removido com o ultimo jogaria uma mesh de outro asset
         // para dentro de uma pasta alheia. O memmove de ~2,5k structs e irrelevante numa acao
         // de editor.
+        // Aposenta a residencia ANTES do erase: depois dele o renderavel nao existe mais e o
+        // handle se perderia, deixando o slot Live para sempre — vazamento silencioso de
+        // capacidade, que so apareceria como pool crescendo sem explicacao.
+        GpuSlots_.Retire(RenderableList[Index].GpuHandle, _Required);
         RenderableList.erase(RenderableList.begin() + Index);
         RebuildRenderableIndex();
         ++StructureVersion_;
@@ -245,7 +262,12 @@ namespace Smile {
         return LightList.back();
     }
 
-    void FScene::Clear() {
+    void FScene::Clear(const FGpuFenceSet& _Required) {
+        // Aposenta TODA residencia antes de largar a lista, pelo mesmo motivo do
+        // RemoveRenderable. Quem chama e responsavel por coletar depois que as fences passarem,
+        // e ANTES de povoar a cena nova: alocar antes do Collect nao quebra identidade, mas faz
+        // o pool dobrar.
+        GpuSlots_.RetireAll(_Required);
         RenderableList.clear();
         RenderableIndexById_.clear();
         MeshLibrary.clear();

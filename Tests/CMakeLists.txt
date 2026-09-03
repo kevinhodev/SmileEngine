@@ -535,6 +535,7 @@ endif()
 # sem device.
 add_executable(SmileSceneRemovalBenchmark
     SceneRemovalBenchmark.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/GpuSceneHandle.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/GpuMesh.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/Material.cpp

@@ -85,8 +85,21 @@ namespace Smile {
         if (!_Additive) {
             // Frames em voo ainda podem referenciar recursos, descritores e CBVs da cena anterior.
             Backend->DirectQueue.Flush();
+            // A compute tambem: o Clear vai aposentar as residencias, e o ticket exige as DUAS
+            // filas. Drenar so a direta deixaria o Collect abaixo sem poder liberar nada.
+            Backend->ComputeQueue.WaitIdle();
 
-            SceneState->Scene.Clear();
+            // Sequencia DRENADA do reload, e a ordem importa:
+            //     Clear/RetireAll(required) -> Collect(completed) -> alocar a nova cena.
+            // Alocar antes do Collect nao quebra identidade -- os handles antigos continuam
+            // invalidos --, mas faz o pool DOBRAR: os slots velhos ainda estao em Retired, a
+            // cena nova nao acha nada em Free e cria outro tanto. Numa cena de 1M isso e 1M de
+            // slots vazando por reload.
+            const FGpuFenceSet Required = CurrentFenceSet();
+            SceneState->Scene.Clear(Required);
+            // Depois dos dois drenos acima, o concluido alcancou o submetido: o Collect aqui
+            // devolve tudo, e a cena nova reusa em vez de crescer.
+            SceneState->Scene.GpuSlots().Collect(Required);
             for (auto& m : ImportedMaterials) m->Release(Backend->SRVHeap);
             ImportedMaterials.clear();
             for (auto& t : ImportedTextures) t->Release(Backend->SRVHeap);

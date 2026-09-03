@@ -17,6 +17,14 @@
 
 #include "Smile/Scene/Scene.h"
 
+namespace Smile {
+    // Teto do pool injetavel. A borda real fica em 2^32 slots, e alcanca-la de verdade nao e
+    // opcao; o que interessa e o COMPORTAMENTO quando Allocate recusa.
+    struct FGpuSceneSlotsTestAccess {
+        static void SetMaxSlots(FGpuSceneSlots& Slots, u32 Max) { Slots.MaxSlots = Max; }
+    };
+}
+
 namespace {
     int Failures = 0;
 
@@ -26,6 +34,11 @@ namespace {
             std::cerr << "  FAIL: " << Message << '\n';
         }
     }
+
+    // Sem GPU neste teste, entao nada esta em voo e um slot aposentado pode ser reusado
+    // imediatamente. E o unico contexto em que {0,0} e a resposta CERTA, e nao um atalho: no
+    // renderer o valor vem de Renderer::CurrentFenceSet(), numa fronteira de submissao.
+    const Smile::FGpuFenceSet kSemGpu{ 0, 0 };
 
     // A FScene guarda o FGpuMesh* e nunca o segue; qualquer endereco distinto serve de
     // identidade de malha para o que esta sendo testado aqui.
@@ -84,7 +97,7 @@ namespace {
         const Smile::u64 VersaoEstrutura = Scene.StructureVersion();
         const Smile::u64 VersaoTransform = Scene.TransformsVersion();
 
-        Check(Scene.RemoveRenderable(Ids[2]), "remocao de Id valido falhou");
+        Check(Scene.RemoveRenderable(Ids[2], kSemGpu), "remocao de Id valido falhou");
 
         Check(Scene.Renderables().size() == 5, "a lista nao encolheu");
         Check(Scene.IndexOfRenderable(Ids[2]) == -1, "Id removido ainda resolve");
@@ -101,13 +114,13 @@ namespace {
               "a remocao nao preservou a ordem dos sobreviventes");
 
         // Remover o primeiro e o ultimo sao as bordas do memmove.
-        Check(Scene.RemoveRenderable(Ids[0]), "remocao do primeiro falhou");
+        Check(Scene.RemoveRenderable(Ids[0], kSemGpu), "remocao do primeiro falhou");
         CheckIndexIsCoherent(Scene, "apos remover o primeiro");
-        Check(Scene.RemoveRenderable(Ids[5]), "remocao do ultimo falhou");
+        Check(Scene.RemoveRenderable(Ids[5], kSemGpu), "remocao do ultimo falhou");
         CheckIndexIsCoherent(Scene, "apos remover o ultimo");
 
-        Check(!Scene.RemoveRenderable(Ids[2]), "remover duas vezes o mesmo Id deu certo");
-        Check(!Scene.RemoveRenderable(0), "remover o Id 0 deu certo");
+        Check(!Scene.RemoveRenderable(Ids[2], kSemGpu), "remover duas vezes o mesmo Id deu certo");
+        Check(!Scene.RemoveRenderable(0, kSemGpu), "remover o Id 0 deu certo");
         Check(Scene.Renderables().size() == 3, "remocao invalida mexeu na lista");
     }
 
@@ -146,7 +159,7 @@ namespace {
         Scene.AddRenderable(Make("B", 2));
 
         const Smile::u64 VersaoEstrutura = Scene.StructureVersion();
-        Scene.Clear();
+        Scene.Clear(kSemGpu);
 
         Check(Scene.Renderables().empty(), "Clear nao esvaziou a lista");
         Check(Scene.StructureVersion() != VersaoEstrutura, "Clear nao bumpou StructureVersion");
@@ -197,7 +210,7 @@ namespace {
         Check(!Scene.FindObject(999999).IsValid(),  "FindObject de Id inexistente resolveu");
 
         // Remover a mesh nao pode fazer o Id dela passar a resolver como luz (nem o contrario).
-        Check(Scene.RemoveRenderable(Todos[0]), "remocao falhou");
+        Check(Scene.RemoveRenderable(Todos[0], kSemGpu), "remocao falhou");
         Check(!Scene.FindObject(Todos[0]).IsValid(), "Id de mesh removida ainda resolve");
         Check(Scene.FindObject(Todos[1]).IsLight(),  "a luz perdeu a identidade com a remocao");
     }
@@ -210,7 +223,7 @@ namespace {
         for (int i = 0; i < 4; ++i)
             Ids.push_back(Scene.AddRenderable(Make(("M" + std::to_string(i)).c_str(), i + 1)).Id);
 
-        Scene.RemoveRenderable(Ids[1]);
+        Scene.RemoveRenderable(Ids[1], kSemGpu);
         CheckIndexIsCoherent(Scene, "ciclo: apos remover");
 
         const Smile::FRenderable* Copia = Scene.DuplicateRenderable(Ids[3]);
@@ -219,7 +232,7 @@ namespace {
 
         if (Copia) {
             const Smile::u64 IdCopia = Copia->Id;
-            Check(Scene.RemoveRenderable(IdCopia), "ciclo: remover a copia falhou");
+            Check(Scene.RemoveRenderable(IdCopia, kSemGpu), "ciclo: remover a copia falhou");
             CheckIndexIsCoherent(Scene, "ciclo: apos remover a copia");
             Check(Scene.IndexOfRenderable(Ids[3]) >= 0,
                   "ciclo: remover a copia derrubou o original");
@@ -240,25 +253,29 @@ namespace {
         Smile::FScene Scene;
         Smile::FGpuSceneSlots& Slots = Scene.GpuSlots();
 
+        // O handle vem do PROPRIO renderavel: o AddRenderable ja aloca. Alocar de fora aqui
+        // gastaria dois slots por objeto e mediria um pool que nao existe.
         Smile::FGpuSceneHandle CenaAntiga[8];
         for (int i = 0; i < 8; ++i) {
-            Scene.AddRenderable(Make(("velho" + std::to_string(i)).c_str(), 0x100 + i));
-            CenaAntiga[i] = Slots.Allocate();
+            CenaAntiga[i] =
+                Scene.AddRenderable(Make(("velho" + std::to_string(i)).c_str(), 0x100 + i)).GpuHandle;
+            Check(Slots.IsAlive(CenaAntiga[i]), "o renderavel nasce com residencia viva");
         }
         const Smile::u32 CapacidadeAntes = Slots.Capacity();
         Check(CapacidadeAntes == 8, "oito slots na cena antiga");
 
         // O renderer e quem aposenta, porque e quem tem as fences. A ordem e
         // RetireAll -> Collect -> alocar; alocar antes do Collect dobraria o pool.
+        // O Clear ja aposenta tudo: e a FScene que nao pode largar um renderavel sem aposentar a
+        // residencia dele. Chamar RetireAll por fora seria redundante e mascararia essa garantia.
         const Smile::FGpuFenceSet Required{ 77, 12 };
-        Slots.RetireAll(Required);
-        Scene.Clear();
+        Scene.Clear(Required);
         Check(Slots.Collect(Required) == 8, "o Collect drenado devolve os oito slots");
 
         Smile::FGpuSceneHandle CenaNova[8];
         for (int i = 0; i < 8; ++i) {
-            Scene.AddRenderable(Make(("novo" + std::to_string(i)).c_str(), 0x200 + i));
-            CenaNova[i] = Slots.Allocate();
+            CenaNova[i] =
+                Scene.AddRenderable(Make(("novo" + std::to_string(i)).c_str(), 0x200 + i)).GpuHandle;
         }
 
         Check(Slots.Capacity() == CapacidadeAntes,
@@ -275,6 +292,96 @@ namespace {
                     TodasMaiores = false;
         Check(TodasMaiores, "todo slot reusado volta com generation maior");
     }
+
+    // Duplicata recebe residencia PROPRIA.
+    //
+    // A copia carrega o GpuHandle da fonte por valor, e se o AddRenderable nao o substituisse os
+    // dois renderaveis apontariam para o mesmo slot: o primeiro a ser removido aposentaria a
+    // residencia do outro, que continuaria na cena apontando para um slot que a GPU pode ja ter
+    // dado a um terceiro objeto.
+    void TestDuplicataRecebeResidenciaPropria() {
+        std::cout << "  duplicata recebe residencia propria\n";
+        Smile::FScene Scene;
+        const Smile::FRenderable& Fonte = Scene.AddRenderable(Make("fonte", 1));
+        const Smile::FGpuSceneHandle HandleFonte = Fonte.GpuHandle;
+        const Smile::u64 IdFonte = Fonte.Id;
+
+        const Smile::FRenderable* Copia = Scene.DuplicateRenderable(IdFonte);
+        Check(Copia != nullptr, "duplicar falhou");
+        if (!Copia) return;
+
+        Check(Copia->GpuHandle != HandleFonte,
+              "a copia nao herda o handle da fonte");
+        Check(Copia->GpuHandle.Slot != HandleFonte.Slot,
+              "e nem o slot: sao residencias distintas");
+        Check(Scene.GpuSlots().IsAlive(HandleFonte) && Scene.GpuSlots().IsAlive(Copia->GpuHandle),
+              "as duas residencias estao vivas ao mesmo tempo");
+
+        // Remover a fonte nao pode derrubar a residencia da copia.
+        const Smile::FGpuSceneHandle HandleCopia = Copia->GpuHandle;
+        Check(Scene.RemoveRenderable(IdFonte, kSemGpu), "remover a fonte falhou");
+        Check(!Scene.GpuSlots().IsAlive(HandleFonte), "a residencia da fonte foi aposentada");
+        Check(Scene.GpuSlots().IsAlive(HandleCopia), "a da copia continua viva");
+    }
+
+    // Remocao aposenta a residencia, e nao a deixa Live para sempre.
+    void TestRemocaoAposentaAResidencia() {
+        std::cout << "  remocao aposenta a residencia\n";
+        Smile::FScene Scene;
+        std::vector<Smile::u64> Ids;
+        std::vector<Smile::FGpuSceneHandle> Handles;
+        for (int i = 0; i < 4; ++i) {
+            const Smile::FRenderable& R = Scene.AddRenderable(Make(("R" + std::to_string(i)).c_str(), i + 1));
+            Ids.push_back(R.Id);
+            Handles.push_back(R.GpuHandle);
+        }
+        Check(Scene.GpuSlots().LiveCount() == 4, "quatro residencias vivas");
+
+        Check(Scene.RemoveRenderable(Ids[1], kSemGpu), "remocao falhou");
+        Check(!Scene.GpuSlots().IsAlive(Handles[1]), "a residencia do removido morreu");
+        Check(Scene.GpuSlots().LiveCount() == 3, "sobram tres vivas");
+        for (int i : { 0, 2, 3 })
+            Check(Scene.GpuSlots().IsAlive(Handles[i]), "as outras nao foram afetadas");
+
+        // E o slot volta a ser usavel depois do Collect, sem o pool crescer.
+        const Smile::u32 CapacidadeAntes = Scene.GpuSlots().Capacity();
+        Scene.GpuSlots().Collect(kSemGpu);
+        const Smile::FRenderable& Novo = Scene.AddRenderable(Make("novo", 9));
+        Check(Scene.GpuSlots().Capacity() == CapacidadeAntes,
+              "o slot aposentado foi reusado, sem crescer o pool");
+        Check(Novo.GpuHandle.Slot == Handles[1].Slot,
+              "e e exatamente o slot que vagou");
+        Check(Novo.GpuHandle.Generation > Handles[1].Generation,
+              "com generation maior");
+    }
+
+    // Pool no teto: o objeto entra na cena SEM residencia, e isso e visivel.
+    void TestSemSlotDisponivel() {
+        std::cout << "  objeto sem slot fica sem residencia, de forma visivel\n";
+        Smile::FScene Scene;
+        Smile::FGpuSceneSlotsTestAccess::SetMaxSlots(Scene.GpuSlots(), 2);
+
+        const Smile::FGpuSceneHandle A = Scene.AddRenderable(Make("A", 1)).GpuHandle;
+        const Smile::FGpuSceneHandle B = Scene.AddRenderable(Make("B", 2)).GpuHandle;
+        Check(Scene.GpuSlots().IsAlive(A) && Scene.GpuSlots().IsAlive(B), "os dois cabem");
+
+        const Smile::FRenderable& C = Scene.AddRenderable(Make("C", 3));
+        Check(C.GpuHandle.Slot == Smile::FGpuSceneHandle::kInvalidSlot,
+              "o terceiro entra com handle invalido");
+        Check(!Scene.GpuSlots().IsAlive(C.GpuHandle), "que nao esta vivo");
+        Check(Scene.GpuSlots().AllocationFailures() == 1,
+              "a recusa e contada: nao pode ser silenciosa");
+
+        // O objeto EXISTE na cena mesmo assim -- a FScene nao mente sobre o que tem.
+        Check(Scene.Renderables().size() == 3, "o objeto entrou na cena");
+        Check(Scene.IndexOfRenderable(C.Id) == 2, "e resolve por Id normalmente");
+
+        // E removar um objeto sem residencia nao pode corromper contadores.
+        const Smile::u32 VivosAntes = Scene.GpuSlots().LiveCount();
+        Check(Scene.RemoveRenderable(C.Id, kSemGpu), "remover o sem-residencia falhou");
+        Check(Scene.GpuSlots().LiveCount() == VivosAntes,
+              "remover quem nao tinha residencia nao mexe na contagem de vivos");
+    }
 }
 
 int main() {
@@ -286,6 +393,9 @@ int main() {
     TestIdentidadeUnicaEntreMeshELuz();
     TestCicloDeEdicao();
     TestClearNaoRessuscitaHandleDeGpu();
+    TestDuplicataRecebeResidenciaPropria();
+    TestRemocaoAposentaAResidencia();
+    TestSemSlotDisponivel();
 
     if (Failures == 0) {
         std::cout << "  OK\n";

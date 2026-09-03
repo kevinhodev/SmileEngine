@@ -105,7 +105,9 @@ int main(int argc, char** argv) {
         const Smile::u64 Id = Local.Renderables()[Posicao].Id;
 
         const auto Start = Clock::now();
-        const bool Removido = Local.RemoveRenderable(Id);
+        // Sem GPU aqui, entao nada esta em voo: {0,0} e a resposta certa, e nao um atalho. E o
+        // custo medido continua sendo o da lista e do mapa — aposentar um handle e O(1).
+        const bool Removido = Local.RemoveRenderable(Id, Smile::FGpuFenceSet{ 0, 0 });
         const double Ms = Milliseconds(Clock::now() - Start);
 
         std::printf("[bench] remocao no %-7s (indice %9zu): %8.2f ms  %s\n",

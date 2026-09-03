@@ -7,6 +7,7 @@
 #include <vector>
 #include <memory>
 #include <optional>
+#include "Smile/Scene/GpuSceneHandle.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
@@ -299,6 +300,13 @@ namespace Smile {
         void ClearSelection();
         // Alteram a cena e sincronizam os subsistemas indexados por renderable.
         bool RemoveRenderable(u64 Id);
+
+        // Ultimos valores SUBMETIDOS nas duas filas, para o ticket de aposentadoria de um slot
+        // de cena. So e valido numa FRONTEIRA DE SUBMISSAO -- entre o EndFrame e o proximo
+        // BeginFrame --, que e onde as mutacoes externas acontecem, porque o RendererHandle
+        // serializa elas com o RenderFrame pelo mesmo lock. Chamado durante a gravacao de uma
+        // command list, o valor NAO cobriria essa list e o slot voltaria a Free cedo demais.
+        FGpuFenceSet CurrentFenceSet() const;
         u64  DuplicateRenderable(u64 Id);
 
         // Invalida apenas a regiao afetada do DDGI. Em mudancas espaciais, informe os bounds

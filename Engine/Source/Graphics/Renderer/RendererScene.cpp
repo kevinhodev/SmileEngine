@@ -136,13 +136,22 @@ namespace Smile {
         return SceneState->Selection.IsLight() ? static_cast<int>(SceneState->Selection.Index) : -1;
     }
 
+    FGpuFenceSet Renderer::CurrentFenceSet() const {
+        return FGpuFenceSet{ Backend->DirectQueue.LastSignaledValue(),
+                             Backend->ComputeQueue.LastSignaledValue() };
+    }
+
     bool Renderer::RemoveRenderable(u64 _Id) {
         // AABB capturada ANTES da remocao: depois dela o objeto nao existe mais e nao ha de onde
         // tirar a regiao que o GI precisa reavaliar.
         const FRenderable* Doomed = SceneState->Scene.FindRenderable(_Id);
         if (!Doomed) return false;
         const Vec3 Min = Doomed->AABBMin, Max = Doomed->AABBMax;
-        if (!SceneState->Scene.RemoveRenderable(_Id)) return false;
+        // A mutacao NAO espera a GPU: o slot vai para Retired agora, guardando ate onde cada
+        // fila precisa chegar. O objeto some da cena CPU imediatamente e nao entra no proximo
+        // frame submetido; frames ja em voo ainda podem mostra-lo, e e justamente por isso que
+        // o slot espera.
+        if (!SceneState->Scene.RemoveRenderable(_Id, CurrentFenceSet())) return false;
         OnSceneStructureChanged(&Min, &Max);
         return true;
     }
