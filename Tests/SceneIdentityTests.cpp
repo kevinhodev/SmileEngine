@@ -382,6 +382,42 @@ namespace {
         Check(Scene.GpuSlots().LiveCount() == VivosAntes,
               "remover quem nao tinha residencia nao mexe na contagem de vivos");
     }
+
+    // Ciclo remover->adicionar SEM Collect faz o pool crescer indefinidamente.
+    //
+    // Este teste existe para documentar por que a coleta e POR FRAME no renderer, e nao so no
+    // reload. O Retire acontece em toda remocao; se o Collect so rodasse ao carregar outra cena,
+    // cada ciclo tomaria um slot novo e a capacidade so encolheria no proximo load -- numa sessao
+    // de edicao longa isso e crescimento sem teto, invisivel ate virar memoria a mais.
+    void TestCicloSemCollectCresceOPool() {
+        std::cout << "  ciclo sem Collect cresce o pool (por isso a coleta e por frame)\n";
+        Smile::FScene Scene;
+        Smile::u64 Id = Scene.AddRenderable(Make("inicial", 1)).Id;
+        Check(Scene.GpuSlots().Capacity() == 1, "um slot");
+
+        // Sem Collect entre os ciclos: cada remocao deixa um slot em Retired, e a adicao
+        // seguinte nao pode reusa-lo.
+        for (int i = 0; i < 5; ++i) {
+            Check(Scene.RemoveRenderable(Id, kSemGpu), "remocao falhou");
+            Id = Scene.AddRenderable(Make("novo", 2)).Id;
+        }
+        Check(Scene.GpuSlots().Capacity() == 6,
+              "cinco ciclos sem Collect deixam seis slots: o pool cresceu");
+        Check(Scene.GpuSlots().RetiredCount() == 5,
+              "e cinco continuam presos em Retired");
+
+        // Com o Collect, o mesmo ciclo nao cresce nada -- que e o que o renderer faz por frame.
+        Smile::FScene Outra;
+        Smile::u64 IdB = Outra.AddRenderable(Make("inicial", 1)).Id;
+        for (int i = 0; i < 5; ++i) {
+            Check(Outra.RemoveRenderable(IdB, kSemGpu), "remocao falhou");
+            Outra.GpuSlots().Collect(kSemGpu);
+            IdB = Outra.AddRenderable(Make("novo", 2)).Id;
+        }
+        Check(Outra.GpuSlots().Capacity() == 1,
+              "com Collect a cada ciclo, o pool fica em um slot");
+        Check(Outra.GpuSlots().RetiredCount() == 0, "e nada fica preso");
+    }
 }
 
 int main() {
@@ -396,6 +432,7 @@ int main() {
     TestDuplicataRecebeResidenciaPropria();
     TestRemocaoAposentaAResidencia();
     TestSemSlotDisponivel();
+    TestCicloSemCollectCresceOPool();
 
     if (Failures == 0) {
         std::cout << "  OK\n";

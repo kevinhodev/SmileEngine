@@ -141,6 +141,11 @@ namespace Smile {
                              Backend->ComputeQueue.LastSignaledValue() };
     }
 
+    FGpuFenceSet Renderer::CompletedFenceSet() const {
+        return FGpuFenceSet{ Backend->DirectQueue.NativeFence()->GetCompletedValue(),
+                             Backend->ComputeQueue.NativeFence()->GetCompletedValue() };
+    }
+
     bool Renderer::RemoveRenderable(u64 _Id) {
         // AABB capturada ANTES da remocao: depois dela o objeto nao existe mais e nao ha de onde
         // tirar a regiao que o GI precisa reavaliar.

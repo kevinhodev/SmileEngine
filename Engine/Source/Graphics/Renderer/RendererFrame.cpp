@@ -730,6 +730,19 @@ namespace Smile {
 
         if (!Initialized) return;
 
+        // Devolve a Free os slots de cena cuja GPU ja passou. Aqui, por frame, e nao so no reload:
+        // Retire acontece em TODA remocao, e se o Collect so rodasse ao carregar outra cena, um
+        // ciclo remover->adicionar cresceria o pool permanentemente — remover muitos e repovoar
+        // dobraria a capacidade, e ela so encolheria no proximo load.
+        //
+        // Custa O(aposentados), nao O(capacidade): no caso comum, com nada aposentado, nao toca
+        // slot nenhum. E usa os valores CONCLUIDOS, que e a grandeza certa para liberar; o
+        // CurrentFenceSet e o alvo, gravado no ticket na hora da morte.
+        //
+        // Fica aqui, e nao pendurado no dreno do OnSceneStructureChanged, porque a propria Fase 1
+        // vai remover aquele dreno: uma coleta que dependesse dele morreria junto.
+        SceneState->Scene.GpuSlots().Collect(CompletedFenceSet());
+
         // Dirty flags da UI sao coalescidas por dominio antes de abrir o command list.
         if (SceneState->MaterialRTStateDirty) {
             SceneState->MaterialRTStateDirty = false;
@@ -975,6 +988,12 @@ namespace Smile {
         CpuStatsBuilding.SrvHeapUsed      = Backend->SRVHeap.UsedSlots();
         CpuStatsBuilding.SrvHeapHighWater = Backend->SRVHeap.HighWaterSlots();
         CpuStatsBuilding.SrvHeapCapacity  = Backend->SRVHeap.CapacitySlots();
+
+        const FGpuSceneSlots& Slots = SceneState->Scene.GpuSlots();
+        CpuStatsBuilding.GpuSlotsCapacity  = Slots.Capacity();
+        CpuStatsBuilding.GpuSlotsLive      = Slots.LiveCount();
+        CpuStatsBuilding.GpuSlotsRetired   = Slots.RetiredCount();
+        CpuStatsBuilding.GpuSlotsExhausted = Slots.ExhaustedCount();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.
         CpuStatsBuilding.SourceFrameIndex = FrameState->FrameIndex;

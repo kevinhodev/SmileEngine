@@ -124,6 +124,15 @@ namespace Smile {
         u32 SrvHeapHighWater = 0;
         u32 SrvHeapCapacity  = 0;
 
+        // Pool de residencia GPU (FGpuSceneSlots). Publicado porque o modo de falha dele e
+        // CRESCIMENTO SILENCIOSO: um Collect que deixasse de rodar faria o pool subir a cada
+        // ciclo remover->adicionar sem nada quebrar, e so apareceria como memoria a mais meses
+        // depois. Aposentados presos e capacidade acima dos vivos sao o sintoma.
+        u32 GpuSlotsCapacity  = 0;
+        u32 GpuSlotsLive      = 0;
+        u32 GpuSlotsRetired   = 0;
+        u32 GpuSlotsExhausted = 0;
+
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
         // e GPU de frames diferentes sem perceber.

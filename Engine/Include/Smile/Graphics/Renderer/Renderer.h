@@ -307,6 +307,11 @@ namespace Smile {
         // serializa elas com o RenderFrame pelo mesmo lock. Chamado durante a gravacao de uma
         // command list, o valor NAO cobriria essa list e o slot voltaria a Free cedo demais.
         FGpuFenceSet CurrentFenceSet() const;
+
+        // Valores CONCLUIDOS nas duas filas. Grandeza diferente do CurrentFenceSet: aquele e o
+        // alvo (ate onde a GPU precisa chegar), este e o progresso (ate onde ela chegou). Um slot
+        // aposentado so volta a Free quando o concluido alcanca o exigido nas DUAS.
+        FGpuFenceSet CompletedFenceSet() const;
         u64  DuplicateRenderable(u64 Id);
 
         // Invalida apenas a regiao afetada do DDGI. Em mudancas espaciais, informe os bounds
