@@ -118,6 +118,7 @@ set_tests_properties(Smile.SkyAmbientSH PROPERTIES
 # GpuResources e o d3d12.lib apenas para resolver simbolos.
 add_executable(SmileSceneIdentityTests
     SceneIdentityTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/GpuSceneHandle.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/GpuMesh.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/Material.cpp

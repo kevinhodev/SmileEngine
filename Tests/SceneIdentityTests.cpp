@@ -225,6 +225,56 @@ namespace {
                   "ciclo: remover a copia derrubou o original");
         }
     }
+
+    // A residencia GPU sobrevive a troca de cena, e o pool nao cresce por causa dela.
+    //
+    // Este e o par do TestClearNaoReciclaIds para o outro eixo de identidade: la o argumento e
+    // que um Id reusado faria uma referencia velha apontar em silencio para outro objeto; aqui e
+    // que uma generation reposta faria um handle da cena anterior voltar a casar com o mesmo par
+    // {slot, generation}. A FScene guarda o allocator, e o Clear NAO o reseta.
+    //
+    // O que os testes CPU-puros do allocator nao alcancam e justamente isto: a politica de
+    // persistencia mora no DONO, e um pool testado isolado nunca a ve quebrar.
+    void TestClearNaoRessuscitaHandleDeGpu() {
+        std::cout << "  troca de cena nao ressuscita handle de GPU\n";
+        Smile::FScene Scene;
+        Smile::FGpuSceneSlots& Slots = Scene.GpuSlots();
+
+        Smile::FGpuSceneHandle CenaAntiga[8];
+        for (int i = 0; i < 8; ++i) {
+            Scene.AddRenderable(Make(("velho" + std::to_string(i)).c_str(), 0x100 + i));
+            CenaAntiga[i] = Slots.Allocate();
+        }
+        const Smile::u32 CapacidadeAntes = Slots.Capacity();
+        Check(CapacidadeAntes == 8, "oito slots na cena antiga");
+
+        // O renderer e quem aposenta, porque e quem tem as fences. A ordem e
+        // RetireAll -> Collect -> alocar; alocar antes do Collect dobraria o pool.
+        const Smile::FGpuFenceSet Required{ 77, 12 };
+        Slots.RetireAll(Required);
+        Scene.Clear();
+        Check(Slots.Collect(Required) == 8, "o Collect drenado devolve os oito slots");
+
+        Smile::FGpuSceneHandle CenaNova[8];
+        for (int i = 0; i < 8; ++i) {
+            Scene.AddRenderable(Make(("novo" + std::to_string(i)).c_str(), 0x200 + i));
+            CenaNova[i] = Slots.Allocate();
+        }
+
+        Check(Slots.Capacity() == CapacidadeAntes,
+              "a capacidade fica inalterada: o allocator do dono persiste e reusa");
+        for (const Smile::FGpuSceneHandle& H : CenaAntiga)
+            Check(!Slots.IsAlive(H), "nenhum handle da cena anterior ressuscita");
+        for (const Smile::FGpuSceneHandle& H : CenaNova)
+            Check(Slots.IsAlive(H), "os handles da cena nova estao vivos");
+
+        bool TodasMaiores = true;
+        for (const Smile::FGpuSceneHandle& Novo : CenaNova)
+            for (const Smile::FGpuSceneHandle& Velho : CenaAntiga)
+                if (Novo.Slot == Velho.Slot && Novo.Generation <= Velho.Generation)
+                    TodasMaiores = false;
+        Check(TodasMaiores, "todo slot reusado volta com generation maior");
+    }
 }
 
 int main() {
@@ -235,6 +285,7 @@ int main() {
     TestClearNaoReciclaIds();
     TestIdentidadeUnicaEntreMeshELuz();
     TestCicloDeEdicao();
+    TestClearNaoRessuscitaHandleDeGpu();
 
     if (Failures == 0) {
         std::cout << "  OK\n";

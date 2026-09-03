@@ -257,5 +257,15 @@ namespace Smile {
         // NextObjectId_ NAO volta a zero: um Id nunca pode ser reusado dentro
         // da sessao, senao uma referencia velha (selecao, undo futuro) passaria a apontar em
         // silencio para um objeto diferente da cena nova em vez de simplesmente nao resolver.
+        //
+        // GpuSlots_ NAO e resetado nem recriado, pelo MESMO argumento aplicado a residencia GPU:
+        // uma instancia nova nasceria com todas as generations em 0, e um handle da cena anterior
+        // voltaria a casar com o mesmo par {slot, generation}. Como a generation de cada slot
+        // cresce monotonicamente e nunca e reposta, o slot de um handle antigo so volta a ser
+        // alocado com generation MAIOR — e a ressurreicao fica impossivel sem operacao em massa.
+        //
+        // Quem aposenta os slots da cena velha e o RENDERER, que e quem tem as fences: o caminho e
+        // RetireAll(required) -> Collect(completed) -> alocar a nova cena, nessa ordem. Alocar
+        // antes do Collect nao quebra identidade, mas faz o pool DOBRAR.
     }
 }

@@ -3,6 +3,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Material.h"
+#include "Smile/Scene/GpuSceneHandle.h"
 #include "Smile/Scene/Light.h"
 #include <memory>
 #include <string>
@@ -204,6 +205,14 @@ namespace Smile {
         u64  StaticCastersVersion() const { return StaticCastersVersion_; }
         void BumpStaticCastersVersion()   { ++StaticCastersVersion_; }
 
+        // Residencia GPU dos renderaveis. Mora aqui, ao lado do RenderableIndexById_ e do
+        // NextObjectId_, porque e a mesma familia de coisa: identidade que precisa sobreviver a
+        // mudancas da lista. E persiste pelo mesmo argumento que ja esta escrito no Clear() para o
+        // NextObjectId_ — reusar identidade dentro da sessao faz uma referencia velha apontar em
+        // silencio para outro objeto.
+        FGpuSceneSlots&       GpuSlots()       { return GpuSlots_; }
+        const FGpuSceneSlots& GpuSlots() const { return GpuSlots_; }
+
     private:
         void RebuildRenderableIndex();
 
@@ -219,5 +228,7 @@ namespace Smile {
         u64                                    StaticCastersVersion_ = 0;
         // UM contador para os dois tipos. Ver ESceneObject.
         u64                                    NextObjectId_      = 0;
+        // NAO e resetado no Clear, pela mesma razao do NextObjectId_. Ver o comentario la.
+        FGpuSceneSlots                         GpuSlots_;
     };
 }
