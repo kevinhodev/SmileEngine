@@ -356,11 +356,19 @@ invariantes sem atualizar este documento.
 ### 5.1 Handle e slot
 
 ```cpp
+inline constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
+
 struct FGpuSceneHandle {
-    u32 Slot;
-    u32 Generation;
+    // Com inicializador, e nao sem: sem ele, `FGpuSceneHandle{}` produz {0,0} — que identificaria
+    // o primeiro ocupante do slot 0 — e `FGpuSceneHandle H;` deixa os dois indeterminados.
+    u32 Slot       = kInvalidSlot;
+    u32 Generation = 0;          // 0 e reservada: nunca alocado / invalido
 };
 ```
+
+**Ressalva sobre as "duas guardas":** elas nao sao independentes em todo caminho. `memset` e
+`calloc` produzem `{0,0}`, contornando o inicializador de `Slot`, e nesse caso quem protege e
+**apenas** a generation zero. E por isso que a generation 0 e reservada, e nao so uma convencao.
 
 - slot reutilizado somente depois de a última GPU fence que o referencia completar;
 - generation incrementa no reuso;
@@ -957,7 +965,17 @@ uma quebra em produção.
 |---|---|
 | `Free` | slot disponível para alocação |
 | `Live` | slot ocupado por um renderável existente |
-| `Retired` | o objeto morreu, e o slot **não** pode ser reusado até as fences passarem |
+| `Retired` | o objeto morreu; indisponível **até as fences passarem** |
+| `Exhausted` | generation esgotada; indisponível **para sempre** |
+
+São **quatro**, e o quarto não é luxo. `Retired` foi definido como temporário — "até as fences
+passarem" —, e aposentar no wrap carregava nele um segundo significado, "indisponível para sempre".
+Com os dois no mesmo estado o `Collect` fica ambíguo e pode contar o mesmo slot esgotado
+repetidamente, inflando o contador de overflow até ele deixar de significar coisa alguma.
+
+A transição é `Retired -> Exhausted` **depois** das fences, quando `Generation == UINT32_MAX`, e o
+contador de esgotados incrementa **exatamente uma vez**, nessa transição. Um slot `Exhausted` nunca
+mais aparece em `Collect`.
 
 `IsAlive(handle)` exige **estado `Live` E `generation` igual** — as duas coisas, não uma.
 Comparar só a generation não identifica handle vivo: entre a remoção e o reuso o slot está
@@ -1001,8 +1019,9 @@ especial.
 
 **Overflow.** Generation é `u32` e cresce estritamente. Se ela desse a volta, um handle antigo o
 bastante voltaria a casar com o ocupante atual — a troca silenciosa de identidade que o handle
-existe para impedir, e a pior possível, porque `IsAlive` a aprovaria. Regra: **wrap aposenta o slot
-permanentemente**; ele nunca mais volta a `Free`.
+existe para impedir, e a pior possível, porque `IsAlive` a aprovaria. Regra: o slot vai para **`Exhausted`** e nunca
+mais volta a `Free`. A transição acontece **depois** das fences (`Retired -> Exhausted`), e não no
+momento do incremento: o slot ainda precisa esperar a GPU soltar o ocupante anterior.
 
 Vale o número, porque decide se isso é uma decisão dura ou um não-evento: são 2³² reusos **do mesmo
 slot**. A 60 FPS, com aquele slot sendo reciclado a cada frame, dá ~2,3 anos de churn contínuo. O
@@ -1017,6 +1036,18 @@ dele só volta a ser alocado com generation **maior**.
 
 `Clear`/troca de cena **aposenta todo slot `Live` pelo caminho normal**, com ticket de fence; não há
 atalho que devolva slots direto a `Free`, porque isso seria reuso sem incremento de generation.
+
+**A sequência do reload é drenada, e a ordem importa mais do que parece:**
+
+```
+Clear/RetireAll(required)  ->  Collect(completed >= required)  ->  alocar a nova cena
+```
+
+Alocar a cena nova **antes** do `Collect` não é incorreto do ponto de vista de identidade — o handle
+antigo continua inválido de qualquer jeito —, mas faz o pool **dobrar**: com 1M de slots ainda em
+`Retired`, a nova cena não acha nada em `Free` e cria outro 1M. E é uma falha que o teste ingênuo
+não pega, porque ele só olha o handle antigo. Por isso o teste de reload exige as três coisas
+juntas: **o mesmo slot reutilizado**, com **generation maior**, e **capacidade inalterada**.
 
 Duas coisas ficam explicitamente proibidas, e é o que o teste 6 protege:
 
@@ -1037,8 +1068,16 @@ Todos CPU puros, sem device, no espírito do `SceneIdentityTests`:
 3. reuso incrementa a generation;
 4. o handle anterior continua inválido depois do reuso;
 5. wrap não transforma um handle muito antigo em válido (o slot é aposentado, e o contador sobe);
-6. `Clear`/troca de cena seguida de nova alocação não ressuscita handle da cena anterior;
-7. uma fila ter passado e a outra não mantém o slot `Retired` — `Collect` parcial não libera.
+6. `Clear`/troca de cena seguida de nova alocação não ressuscita handle da cena anterior — e, na
+   sequência drenada, **reutiliza o mesmo slot com generation maior e capacidade inalterada**. Só
+   "o handle antigo continua inválido" deixaria passar o pool dobrando;
+7. uma fila ter passado e a outra não mantém o slot `Retired` — `Collect` parcial não libera;
+8. wrap leva a `Exhausted` **depois** das fences, e o contador de esgotados sobe exatamente uma vez
+   por slot, mesmo com `Collect` chamado várias vezes.
+
+Mais um de **integração**, que os CPU-puros não alcançam: confirmar que o dono real do allocator
+**não é recriado** na troca de cena. A política de persistência é o que impede a ressurreição, e ela
+mora fora do allocator — um teste que só exercita o allocator isolado nunca a vê quebrar.
 
 ### Quando o ticket captura as fences
 
