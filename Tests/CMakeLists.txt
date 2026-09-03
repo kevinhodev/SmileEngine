@@ -522,3 +522,48 @@ if(SMILE_NODE_EXECUTABLE)
 else()
     message(STATUS "node nao encontrado: Smile.PromoteBaseline nao sera registrado")
 endif()
+
+# Benchmark do custo de remocao estrutural na FScene, por posicao na lista.
+#
+# Mede, nao afirma: a Fase 1 mantem o `erase` estavel de proposito, e o preco declarado dessa
+# escolha e O(N) por edicao de editor. "Irrelevante" e uma afirmacao sobre magnitude, e magnitude
+# se mede. Sem assercao de tempo — cravar um limite aqui daria um teste que falha por a maquina
+# estar ocupada, e isso para de informar.
+#
+# Reaproveita a mesma lista de fontes do SmileSceneIdentityTests: o mesmo recorte de CPU pura,
+# sem device.
+add_executable(SmileSceneRemovalBenchmark
+    SceneRemovalBenchmark.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/Scene.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/GpuMesh.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Resources/Material.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/TextureSRVHeap.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/GpuResources.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Backend/D3D12/UploadQueue.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Debug/VramTracker.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/ThirdParty/D3D12MA/D3D12MemAlloc.cpp
+)
+target_compile_features(SmileSceneRemovalBenchmark PRIVATE cxx_std_20)
+target_include_directories(SmileSceneRemovalBenchmark PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+    ${PROJECT_SOURCE_DIR}/Engine/ThirdParty
+)
+target_link_libraries(SmileSceneRemovalBenchmark PRIVATE d3d12 dxgi)
+set_target_properties(SmileSceneRemovalBenchmark PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+# No ctest com contagem PEQUENA, so para o caminho nao apodrecer. A medicao de 1M e manual, para
+# nao pendurar dois segundos e ~500 MB em cada rodada da suite.
+add_test(
+    NAME Smile.SceneRemovalBenchmark.Smoke
+    COMMAND SmileSceneRemovalBenchmark --count 20000
+)
+set_tests_properties(Smile.SceneRemovalBenchmark.Smoke PROPERTIES
+    LABELS "scene;benchmark"
+    TIMEOUT 120
+)

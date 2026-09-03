@@ -873,6 +873,48 @@ Separar identidade, slot GPU e índice visível sem alterar a imagem nem o méto
 - testar geração, stale handles, wrap policy, remoção do primeiro/meio/último e reuso após fence;
 - manter o raster CPU-driven para isolar a migração.
 
+### Decisão registrada: o `erase` estável fica
+
+O `RenderableList` mantém **ordem autoral** e remoção por `erase` estável. Swap-and-pop quebraria
+os ranges `[begin,end)` das pastas do Scene Outliner, a visibilidade persistida por offset e a
+semântica dos assets — muita superfície, e nada disso ajuda o caminho por frame. Pensando em 1M, o
+destino provável nem é um `vector` monolítico com swap-and-pop, e sim armazenamento paginado; então
+migrar o Outliner para membership por `ObjectId` é trabalho próprio, deliberadamente **fora** desta
+fase.
+
+Os três papéis ficam separados assim:
+
+| papel | quem |
+|---|---|
+| ordem autoral | posição em `RenderableList` |
+| identidade de editor | `ObjectId` |
+| identidade de residência GPU | `GpuHandle {slot, generation}` |
+
+Slot aposentado até a fence; `generation` incrementa no reuso. Nenhum consumidor pode guardar
+índice da lista entre mutações.
+
+### Limitação medida: O(N) por edição de editor
+
+O preço declarado do `erase` estável é `erase + RebuildRenderableIndex()` continuar O(N). Medido
+(`Tests/SceneRemovalBenchmark.cpp`, `Smile.SceneRemovalBenchmark.Smoke` no ctest com N pequeno; a
+rodada de 1M é manual):
+
+| N | remoção no início | no meio | no fim |
+|--:|--:|--:|--:|
+| 20.000 | 1,22 ms | 1,28 ms | 1,07 ms |
+| 1.000.000 | 204,10 ms | 203,98 ms | 191,19 ms |
+
+**A posição quase não importa, e isso identifica a causa.** Remover no fim move um elemento só,
+então os 191 ms desse caso são o `RebuildRenderableIndex()` praticamente isolado: dos 204 ms do pior
+caso, ~191 são o rebuild do mapa (O(N) incondicional) e ~13 ms são o memmove do `erase`, a única
+parte que a posição afeta.
+
+Duas consequências. Primeira: ~200 ms por edição na 1M **não** é irrelevante — é um engasgo visível,
+e vira requisito se churn estrutural em runtime entrar no escopo. Segunda, e é a que importa para o
+desenho: o custo **não** vem da escolha de manter o `erase` estável. Swap-and-pop economizaria os
+~13 ms e deixaria os ~190 ms de rebuild no lugar. Se um dia isso precisar cair, o conserto é
+manutenção **incremental** do mapa `Id → índice`, não a ordem da lista nem o Outliner.
+
 ### Arquivos prováveis
 
 - `Engine/Include/Smile/Scene/Scene.h`
