@@ -11,17 +11,47 @@
 // O bridge fala por named pipe com o editor, entao aqui ele e exercitado por um FAKE de pipe: o
 // que esta sob teste e a validacao, nao o transporte.
 
-import assert from "node:assert";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const bridgeUrl = new URL(
-  "../Tools/SmileMCP/dist/editor-bridge.js",
-  `file://${here.replace(/\\/g, "/")}/`,
-);
+const packageRoot = path.resolve(here, "..", "Tools", "SmileMCP");
+
+// COMPILA o bridge antes de importar, para um diretorio proprio.
+//
+// Importar de Tools/SmileMCP/dist tornava o teste nao reproduzivel: `dist/` e ignorado pelo git
+// e nenhum fixture roda `npm run build`. Num checkout limpo o teste morria com
+// ERR_MODULE_NOT_FOUND; com um dist antigo em disco, pior -- ficava VERDE validando codigo que
+// nao e o do fonte, que e exatamente o defeito que a regua de baseline ja tinha tido.
+//
+// Chama o tsc por `node .../tsc` e nao por `npm run build`: npm no Windows e um .cmd, e o Node
+// moderno recusa spawna-lo sem shell (EINVAL).
+const outDir = mkdtempSync(path.join(os.tmpdir(), "smile-bridge-"));
+try {
+  execFileSync(
+    process.execPath,
+    [
+      path.join(packageRoot, "node_modules", "typescript", "bin", "tsc"),
+      "-p",
+      path.join(packageRoot, "tsconfig.json"),
+      "--outDir",
+      outDir,
+    ],
+    { cwd: packageRoot, stdio: "pipe" },
+  );
+} catch (error) {
+  console.error(
+    "[FALHA] nao consegui compilar o bridge:\n" +
+      String(error.stdout ?? "") + String(error.stderr ?? error.message),
+  );
+  rmSync(outDir, { recursive: true, force: true });
+  process.exit(1);
+}
+const bridgeUrl = pathToFileURL(path.join(outDir, "editor-bridge.js"));
 
 let failures = 0;
 function check(condition, what, detail = "") {
@@ -70,14 +100,23 @@ async function comEditorFalso(payload, body) {
         } catch {
           continue;
         }
-        socket.write(
-          JSON.stringify({
-            version: 4,
-            id: pedido.id,
-            ok: true,
-            result: typeof payload === "function" ? payload(pedido) : payload,
-          }) + "\n",
-        );
+        // `payload` como STRING vai crua, sem passar por JSON.stringify. Isso existe porque o
+        // stringify converte NaN e Infinity em null, e um caso escrito com Infinity provaria
+        // apenas que null e recusado -- uma regressao para `typeof v === "number"` continuaria
+        // passando no teste. `1e400` e Infinity na borda JSON, e e escrivel a mao.
+        const corpo =
+          typeof payload === "string"
+            ? // JSON.stringify e nao String: o id do bridge e STRING, e interpola-lo cru
+              // produzia JSON invalido -- o teste falhava por payload malformado, e nao pelo
+              // que ele queria provar.
+              payload.replace("__ID__", JSON.stringify(pedido.id))
+            : JSON.stringify({
+                version: 4,
+                id: pedido.id,
+                ok: true,
+                result: typeof payload === "function" ? payload(pedido) : payload,
+              });
+        socket.write(corpo + "\n");
       }
     });
     socket.on("error", () => {});
@@ -144,10 +183,11 @@ for (const valor of [null, "oito", 42, []]) {
   await esperaErro(p, "gpuSlots", `gpuSlots como ${JSON.stringify(valor)}`);
 }
 
-// 4. Campo faltando, ou com tipo/valor invalido. NaN e Infinity sao `number` e passariam por um
-//    typeof -- e um contador que vira NaN contamina a agregacao inteira em silencio.
+// 4. Campo faltando, ou fora do contrato. Os valores vem de u32 no editor, entao negativo,
+//    fracionario e acima de UINT32_MAX sao estados que a origem nao produz -- se chegarem, o
+//    payload nao veio de onde diz que veio.
 for (const campo of ["capacity", "live", "retired", "exhausted"]) {
-  for (const valor of [undefined, "8", null, NaN, Infinity]) {
+  for (const valor of [undefined, "8", null, true, -1, 1.5, 4294967296]) {
     const p = snapshotValido();
     if (valor === undefined) delete p.cpu.gpuSlots[campo];
     else p.cpu.gpuSlots[campo] = valor;
@@ -155,8 +195,33 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
   }
 }
 
+// 4b. Infinity pela borda JSON de verdade. NaN nao tem representacao JSON, entao nao ha caso
+//     para ele aqui -- o que chega no lugar e null, ja coberto acima.
+{
+  const cru =
+    '{"version":4,"id":__ID__,"ok":true,"result":' +
+    JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
+    "}";
+  await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");
+}
+
+// 5. Estados IMPOSSIVEIS: os contadores particionam a capacidade, entao a soma nao pode
+//    exceder. `live > capacity` e um snapshot que o allocator nao consegue produzir.
+{
+  const p = snapshotValido();
+  p.cpu.gpuSlots = { capacity: 8, live: 9, retired: 0, exhausted: 0 };
+  await esperaErro(p, "capacity", "live acima da capacidade");
+}
+{
+  const p = snapshotValido();
+  p.cpu.gpuSlots = { capacity: 8, live: 5, retired: 3, exhausted: 1 };
+  await esperaErro(p, "capacity", "live + retired + exhausted acima da capacidade");
+}
+
+rmSync(outDir, { recursive: true, force: true });
+
 if (failures > 0) {
   console.error(`[BRIDGE] ${failures} falha(s)`);
   process.exit(1);
 }
-console.log("[BRIDGE] ok - cpu.gpuSlots exigido e validado na borda");
+console.log("[BRIDGE] ok - cpu.gpuSlots exigido, validado no contrato u32 e coerente");

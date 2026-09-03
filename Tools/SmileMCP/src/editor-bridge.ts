@@ -520,14 +520,30 @@ export class SmileEditorBridge {
       throw new Error("Snapshot de perfil sem o bloco cpu.gpuSlots (protocolo 4).");
     }
     for (const campo of ["capacity", "live", "retired", "exhausted"] as const) {
-      // Number.isFinite e nao typeof: NaN e Infinity sao number e passariam, e um contador de
-      // slots que vira NaN contamina toda a agregacao em silencio.
-      if (!Number.isFinite(slots[campo])) {
+      // O contrato e u32, e finito nao e o contrato: Number.isFinite aceita negativo, fracao e
+      // valores acima de UINT32_MAX, nenhum deles produzivel pela origem. Se um chegar, o
+      // payload nao veio de onde diz que veio, e tratar isso como numero valido propagaria a
+      // mentira para dentro da agregacao.
+      const valor = slots[campo];
+      if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
         throw new Error(
           `Snapshot de perfil com cpu.gpuSlots.${campo} invalido ` +
-            `(esperado number finito, veio ${typeof slots[campo]}).`,
+            `(esperado inteiro em [0, 4294967295], veio ${typeof valor} ${String(valor)}).`,
         );
       }
+    }
+    // Os quatro contadores PARTICIONAM a capacidade: cada slot esta em exatamente um estado
+    // (Free, Live, Retired ou Exhausted). Uma soma acima da capacidade descreve um pool que o
+    // allocator nao consegue produzir -- e o tipo de incoerencia que passaria por qualquer
+    // checagem campo a campo, porque cada numero isolado continua plausivel.
+    const capacity = slots.capacity as number;
+    const ocupados = (slots.live as number) + (slots.retired as number) +
+                     (slots.exhausted as number);
+    if (ocupados > capacity) {
+      throw new Error(
+        `Snapshot de perfil com cpu.gpuSlots incoerente: live+retired+exhausted = ${ocupados} ` +
+          `acima de capacity ${capacity}.`,
+      );
     }
     if (typeof snapshot.directGpuSourceFrameIndex !== "number") {
       throw new Error("Snapshot de perfil sem identidade da fila direct.");

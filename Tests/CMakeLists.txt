@@ -623,8 +623,11 @@ set_tests_properties(Smile.GpuSceneHandle PROPERTIES
 # TypeError, longe da causa. O teste exercita o bridge por um FAKE de named pipe -- o que esta sob
 # teste e a validacao, nao o transporte.
 #
-# Depende do dist compilado, entao roda depois de `npm run build`. CONDICIONAL ao node, como o
-# Smile.PromoteBaseline, e pela mesma razao: node nao e dependencia de build da engine.
+# O TESTE compila o bridge sozinho, para um diretorio temporario proprio. Antes ele importava de
+# Tools/SmileMCP/dist, que e ignorado pelo git e nao e produzido por fixture nenhuma: num checkout
+# limpo o teste morria com ERR_MODULE_NOT_FOUND, e com um dist antigo em disco ficava VERDE
+# validando codigo que nao era o do fonte. CONDICIONAL ao node, como o Smile.PromoteBaseline, e
+# pela mesma razao: node nao e dependencia de build da engine.
 if(SMILE_NODE_EXECUTABLE)
     add_test(
         NAME Smile.EditorBridgeValidation
