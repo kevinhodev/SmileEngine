@@ -12,7 +12,7 @@
 // que esta sob teste e a validacao, nao o transporte.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -30,12 +30,24 @@ const packageRoot = path.resolve(here, "..", "Tools", "SmileMCP");
 //
 // Chama o tsc por `node .../tsc` e nao por `npm run build`: npm no Windows e um .cmd, e o Node
 // moderno recusa spawna-lo sem shell (EINVAL).
+// O tsc vem de node_modules, entao as dependencias precisam estar instaladas. O CMake so
+// confere o node, e um checkout limpo sem `npm ci` chegaria aqui com MODULE_NOT_FOUND -- um
+// diagnostico que nao diz o que fazer. Falha cedo, dizendo.
+const tscPath = path.join(packageRoot, "node_modules", "typescript", "bin", "tsc");
+if (!existsSync(tscPath)) {
+  console.error(
+    "[FALHA] dependencias do SmileMCP nao instaladas: " + tscPath + " nao existe.\n" +
+      "        Rode `npm ci` em Tools/SmileMCP antes desta suite.",
+  );
+  process.exit(1);
+}
+
 const outDir = mkdtempSync(path.join(os.tmpdir(), "smile-bridge-"));
 try {
   execFileSync(
     process.execPath,
     [
-      path.join(packageRoot, "node_modules", "typescript", "bin", "tsc"),
+      tscPath,
       "-p",
       path.join(packageRoot, "tsconfig.json"),
       "--outDir",
@@ -51,6 +63,12 @@ try {
   rmSync(outDir, { recursive: true, force: true });
   process.exit(1);
 }
+// package.json com type=module no diretorio de saida. O tsc emite import/export, mas o
+// temporario fica FORA do package.json do SmileMCP: sem este marcador o Node so acerta por
+// deteccao automatica de sintaxe, que e do Node 24 -- com ela desligada, ou no Node 20 que o
+// projeto declara suportar (engines: >=20), o import falha antes de qualquer assercao rodar.
+writeFileSync(path.join(outDir, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+
 const bridgeUrl = pathToFileURL(path.join(outDir, "editor-bridge.js"));
 
 let failures = 0;

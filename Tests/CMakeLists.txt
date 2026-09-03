@@ -628,7 +628,23 @@ set_tests_properties(Smile.GpuSceneHandle PROPERTIES
 # limpo o teste morria com ERR_MODULE_NOT_FOUND, e com um dist antigo em disco ficava VERDE
 # validando codigo que nao era o do fonte. CONDICIONAL ao node, como o Smile.PromoteBaseline, e
 # pela mesma razao: node nao e dependencia de build da engine.
-if(SMILE_NODE_EXECUTABLE)
+# O teste compila o bridge com o tsc de node_modules, entao o node sozinho nao basta: sem
+# "npm ci" em Tools/SmileMCP o tsc nao existe e o teste falharia com MODULE_NOT_FOUND.
+# Verificado aqui de proposito, em vez de descoberto na execucao, e a mensagem no configure diz o
+# que fazer.
+#
+# Registrar condicionalmente e o OPOSTO do que se faz com sidecar versionado (ali a ausencia e
+# regressao e o gate tem de cair). Aqui a ausencia e de dependencia de terceiro, nao rastreada,
+# e um teste vermelho por ambiente para de informar. O proprio teste tambem confere, para quem o
+# invocar direto.
+set(SMILE_MCP_TSC "${PROJECT_SOURCE_DIR}/Tools/SmileMCP/node_modules/typescript/bin/tsc")
+if(SMILE_NODE_EXECUTABLE AND NOT EXISTS "${SMILE_MCP_TSC}")
+    message(STATUS
+        "Tools/SmileMCP/node_modules ausente: Smile.EditorBridgeValidation nao sera registrado "
+        "(rode 'npm ci' em Tools/SmileMCP)")
+endif()
+
+if(SMILE_NODE_EXECUTABLE AND EXISTS "${SMILE_MCP_TSC}")
     add_test(
         NAME Smile.EditorBridgeValidation
         COMMAND "${SMILE_NODE_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/Tests/EditorBridgeValidationTests.mjs"
