@@ -8,7 +8,9 @@ import path from "node:path";
 // cliente. O bump faz o par incompativel falhar no HANDSHAKE, com causa explicita, em vez de
 // so quebrar dentro do profile_snapshot. O nome do pipe segue em v1: e rendezvous, nao
 // protocolo — mantendo-o, a rejeicao e "versao incompativel" e nao "editor nao encontrado".
-const PROTOCOL_VERSION = 3;
+// 4: o bloco cpu.gpuSlots. A agregacao passa a exigi-lo, entao um editor antigo tem de ser
+// recusado em vez de produzir "undefined" no lugar do numero.
+const PROTOCOL_VERSION = 4;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -113,6 +115,9 @@ export interface CpuProfileStats {
   };
   objectConstantBytes: number;
   srvHeap: { used: number; highWater: number; capacity: number };
+  // Pool de residencia GPU. Retired parado com capacity acima de live e o sintoma de um Collect
+  // que deixou de rodar -- crescimento que nao quebra nada e so aparece como memoria a mais.
+  gpuSlots: { capacity: number; live: number; retired: number; exhausted: number };
   passes: CpuSubmitPass[];
 }
 

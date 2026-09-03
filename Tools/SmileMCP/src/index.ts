@@ -154,6 +154,15 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           highWater: cpuStats.at(-1)?.srvHeap.highWater ?? null,
           capacity: cpuStats[0]?.srvHeap.capacity ?? null,
         },
+        // capacity e exhausted como ULTIMO valor, e nao mediana: os dois so crescem, e a mediana
+        // de uma serie monotonica esconde justamente o crescimento que interessa. live e retired
+        // sao distribuicao, entao vao resumidos.
+        gpuSlots: {
+          capacity: cpuStats.at(-1)?.gpuSlots.capacity ?? null,
+          live: summarize(cpuStats.map((c) => c.gpuSlots.live)),
+          retired: summarize(cpuStats.map((c) => c.gpuSlots.retired)),
+          exhausted: cpuStats.at(-1)?.gpuSlots.exhausted ?? null,
+        },
         passes: [...passKeys].map((key) => {
           const rows = cpuStats
             .map((cpu) => cpu.passes.find((pass) => pass.key === key))

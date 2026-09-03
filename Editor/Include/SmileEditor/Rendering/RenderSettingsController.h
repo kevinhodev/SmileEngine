@@ -129,6 +129,13 @@ namespace SmileEditor {
         quint32 SrvHeapHighWater = 0;
         quint32 SrvHeapCapacity  = 0;
 
+        // Pool de residencia GPU. Ver o comentario em FCpuFrameStats: o modo de falha e
+        // crescimento silencioso, e por isso ele tem de CHEGAR a um consumidor.
+        quint32 GpuSlotsCapacity  = 0;
+        quint32 GpuSlotsLive      = 0;
+        quint32 GpuSlotsRetired   = 0;
+        quint32 GpuSlotsExhausted = 0;
+
         QVector<FCpuSubmitPassSnapshot> Passes;
     };
 

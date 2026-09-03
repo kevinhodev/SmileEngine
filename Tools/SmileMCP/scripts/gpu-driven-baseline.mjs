@@ -266,10 +266,13 @@ async function readGitState() {
 // conteudo, e nao por relogio.
 async function buildMcpServer() {
   await new Promise((resolve, reject) => {
+    // shell: true no Windows. O Node moderno recusa spawnar .bat/.cmd sem shell (EINVAL, desde a
+    // correcao de CVE-2024-27980), e npm no Windows E um .cmd -- sem isto a regua quebra na
+    // primeira linha, antes de qualquer medicao.
     execFile(
       process.platform === "win32" ? "npm.cmd" : "npm",
       ["run", "build"],
-      { cwd: packageRoot },
+      { cwd: packageRoot, shell: process.platform === "win32" },
       (error, stdout, stderr) =>
         error
           ? reject(new Error(`'npm run build' falhou no MCP: ${stderr || stdout || error.message}`))

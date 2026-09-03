@@ -212,6 +212,7 @@ namespace SmileEditor {
     int          StatsBridge::GetMaterialBinds() const { return Snapshot.MaterialBinds; }
     QString      StatsBridge::GetObjectConstantsText() const { return Snapshot.ObjectConstantsText; }
     QString      StatsBridge::GetSrvHeapText() const { return Snapshot.SrvHeapText; }
+    QString      StatsBridge::GetGpuSlotsText() const { return Snapshot.GpuSlotsText; }
     double       StatsBridge::GetSrvHeapFrac() const { return Snapshot.SrvHeapFrac; }
 
     // Estatísticas de caster pertencem à última atualização da cascata; cascatas congeladas
@@ -518,6 +519,18 @@ namespace SmileEditor {
             Next.SrvHeapFrac = Cpu.SrvHeapCapacity
                                    ? static_cast<double>(Cpu.SrvHeapHighWater) / Cpu.SrvHeapCapacity
                                    : 0.0;
+            // Vivos / capacidade, com aposentados e esgotados ao lado. A leitura que importa e a
+            // DIFERENCA: capacidade muito acima dos vivos, com aposentados parados, e um Collect
+            // que deixou de rodar. Esgotados aparecem so quando existem, porque em uso normal sao
+            // sempre zero e uma coluna de zeros vira ruido.
+            Next.GpuSlotsText =
+                QStringLiteral("%1 / %2  (aposentados %3%4)")
+                    .arg(Cpu.GpuSlotsLive)
+                    .arg(Cpu.GpuSlotsCapacity)
+                    .arg(Cpu.GpuSlotsRetired)
+                    .arg(Cpu.GpuSlotsExhausted
+                             ? QStringLiteral(", esgotados %1").arg(Cpu.GpuSlotsExhausted)
+                             : QString());
         }
 
         Snapshot = std::move(Next);

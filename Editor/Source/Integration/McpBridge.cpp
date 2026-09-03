@@ -28,7 +28,10 @@ namespace SmileEditor {
         // O NOME DO PIPE fica em v1 de proposito: ele e ponto de encontro, nao declaracao de
         // protocolo. Mantendo-o, um par incompativel ainda CONECTA e recebe rejeicao explicita
         // de versao; renomeando, viraria "editor nao encontrado", que e um diagnostico pior.
-        constexpr int kProtocolVersion = 3;
+        // 4: o bloco cpu.gpuSlots (pool de residencia GPU). Sobe porque o cliente passa a exigir
+        // o campo na agregacao; um editor antigo devolveria um snapshot sem ele e o MCP so
+        // reportaria "undefined" no lugar de recusar.
+        constexpr int kProtocolVersion = 4;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -257,6 +260,14 @@ namespace SmileEditor {
                     { QStringLiteral("used"),      static_cast<double>(_Cpu.SrvHeapUsed) },
                     { QStringLiteral("highWater"), static_cast<double>(_Cpu.SrvHeapHighWater) },
                     { QStringLiteral("capacity"),  static_cast<double>(_Cpu.SrvHeapCapacity) },
+                } },
+                // Pool de residencia GPU. Serializado porque o modo de falha e crescimento
+                // silencioso: sem chegar a um consumidor, "esta visivel" seria mentira.
+                { QStringLiteral("gpuSlots"), QJsonObject{
+                    { QStringLiteral("capacity"),  static_cast<double>(_Cpu.GpuSlotsCapacity) },
+                    { QStringLiteral("live"),      static_cast<double>(_Cpu.GpuSlotsLive) },
+                    { QStringLiteral("retired"),   static_cast<double>(_Cpu.GpuSlotsRetired) },
+                    { QStringLiteral("exhausted"), static_cast<double>(_Cpu.GpuSlotsExhausted) },
                 } },
                 { QStringLiteral("passes"), Passes },
             };

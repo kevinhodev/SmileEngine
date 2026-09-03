@@ -45,6 +45,9 @@ namespace SmileEditor {
         Q_PROPERTY(QString objectConstantsText READ GetObjectConstantsText NOTIFY Updated)
         Q_PROPERTY(QString srvHeapText READ GetSrvHeapText NOTIFY Updated)
         Q_PROPERTY(double srvHeapFrac READ GetSrvHeapFrac NOTIFY Updated)
+        // Pool de residencia GPU. Aposentados presos e capacidade acima dos vivos sao o
+        // sintoma de um Collect que parou de rodar -- que nao quebra nada, so cresce.
+        Q_PROPERTY(QString gpuSlotsText READ GetGpuSlotsText NOTIFY Updated)
 
     public:
         explicit StatsBridge(QObject* Parent = nullptr);
@@ -75,6 +78,7 @@ namespace SmileEditor {
         int          GetMaterialBinds() const;
         QString      GetObjectConstantsText() const;
         QString      GetSrvHeapText() const;
+        QString      GetGpuSlotsText() const;
         double       GetSrvHeapFrac() const;
 
     signals:
@@ -110,7 +114,8 @@ namespace SmileEditor {
             int          SceneMeshDraws = 0;
             int          MaterialBinds  = 0;
             QString      ObjectConstantsText = QStringLiteral("—");
-            QString      SrvHeapText = QStringLiteral("—");
+            QString      SrvHeapText  = QStringLiteral("—");
+            QString      GpuSlotsText = QStringLiteral("—");
             double       SrvHeapFrac = 0.0;
         } Snapshot;
 
