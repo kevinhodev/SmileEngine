@@ -1140,6 +1140,22 @@ fronteira entre frames, o último submetido já cobre tudo que pode referenciar 
 contrato só abriria a armadilha da fila **ociosa**, em que `Completed` nunca alcança um `Required`
 de "próxima" e o slot fica preso em `Retired` para sempre.
 
+### Pendência: o id temporal vem da TLAS
+
+Os históricos de CPU (`PrevMVP` do raster e transforms do motion vector de RT) já são endereçados
+por slot de residência. O que **não** ficou resolvido é a interpretação do id na GPU: o
+`PathTracingCommon.hlsli` grava `CommittedInstanceID() + 1` na superfície, e o `DualMotion.cs.hlsl`
+lê esse id da superfície **anterior** para indexar `InstanceTransforms` do frame **atual**.
+
+Com `[A, B, C]`, remover A faz o id 1 gravado para B no frame passado passar a identificar C. O
+histórico está certo e a leitura é que erra — e nenhum trabalho de CPU conserta isso, porque o id
+gravado na superfície é o índice da TLAS.
+
+Fica amarrado à **migração da TLAS** (quarto consumidor), e é pré-requisito para remover a
+invalidação global: enquanto o descarte existir, ele protege; sem ele e sem a TLAS migrada, o
+defeito passa a ser observável. Manter o raster CPU-driven não impede o remap necessário nos
+shaders temporais — são coisas separadas.
+
 ### Desenho do remap do HiZ
 
 Remap em **ring por frame**: `HiZTestIndex → GpuHandle {slot, generation}`. Ao consumir o readback

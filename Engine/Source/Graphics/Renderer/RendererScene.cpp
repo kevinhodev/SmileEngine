@@ -199,7 +199,7 @@ namespace Smile {
         ObjectPicker.CancelPending();
         SceneState->Selection = SceneState->Scene.FindObject(SceneState->Selection.Id);
         // PreviousModels e indexado pela ordem da cena, que acabou de mudar.
-        SceneState->PreviousModels.clear();
+        SceneState->PreviousModels.Invalidate();
 
         // Estruturas de GPU compartilham a folga de SceneCapacityFor; ao excede-la, todo o setup
         // de cena precisa ser refeito porque TLAS, InstanceGeo e SRVs possuem capacidade fixa.

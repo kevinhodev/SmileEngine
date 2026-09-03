@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Smile/Scene/GpuSceneHandle.h"
+#include "Smile/Scene/SlotKeyedHistory.h"
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
@@ -112,11 +112,7 @@ namespace Smile {
         //
         // O handle vai junto porque slot sozinho nao basta: um slot reciclado apontaria para o
         // transform do ocupante anterior, e a generation e o que distingue os dois.
-        struct FPreviousModel {
-            Mat44           Model  = Mat44::Identity();
-            FGpuSceneHandle Handle;
-        };
-        std::vector<FPreviousModel> PreviousModels;
+        TSlotKeyedHistory<Mat44> PreviousModels;
         u32 InstanceCount_ = 0;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Surface[kFrames];

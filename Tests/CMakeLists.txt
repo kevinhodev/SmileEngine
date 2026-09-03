@@ -654,3 +654,30 @@ if(SMILE_NODE_EXECUTABLE AND EXISTS "${SMILE_MCP_TSC}")
         TIMEOUT 120
     )
 endif()
+
+# Historico por slot de residencia. CPU puro: sem device, sem d3d12.
+#
+# Existe porque o teste da migracao verificava a estabilidade dos HANDLES e nao o historico --
+# reverter para indice posicional, ou remover a comparacao de generation, nao mudaria nada nele.
+# Aqui os VALORES guardados sao conferidos, com matrizes distintas por objeto e por frame.
+add_executable(SmileSlotKeyedHistoryTests
+    SlotKeyedHistoryTests.cpp
+)
+target_compile_features(SmileSlotKeyedHistoryTests PRIVATE cxx_std_20)
+target_include_directories(SmileSlotKeyedHistoryTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+set_target_properties(SmileSlotKeyedHistoryTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+add_test(
+    NAME Smile.SlotKeyedHistory
+    COMMAND SmileSlotKeyedHistoryTests
+)
+set_tests_properties(Smile.SlotKeyedHistory PROPERTIES
+    LABELS "scene;identity;gpu-driven"
+    TIMEOUT 60
+)

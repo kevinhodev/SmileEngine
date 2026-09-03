@@ -64,7 +64,7 @@ namespace Smile {
         }
         TransformBuffer.Reset();
         MappedTransforms = nullptr;
-        PreviousModels.clear();
+        PreviousModels.Invalidate();
         InstanceCount_ = 0;
         TlasSRVSlot = InstanceGeoSRVSlot = kInvalidSlot;
         SceneReady = false;
@@ -108,11 +108,11 @@ namespace Smile {
         // fica identidade ate um objeto novo ocupar o slot.
         // Dimensionado pela capacidade de SLOTS, e nao de instancias: o indice agora e o slot,
         // e ele pode passar da contagem de renderaveis quando ha buracos no pool.
-        PreviousModels.assign(std::max(Capacity, Scene.GpuSlots().Capacity()), FPreviousModel{});
+        PreviousModels.Invalidate();
+        PreviousModels.EnsureCapacity(std::max(Capacity, Scene.GpuSlots().Capacity()));
         for (u32 i = 0; i < Count; ++i) {
             const FRenderable& R = Scene.Renderables()[i];
-            if (R.GpuHandle.Slot >= PreviousModels.size()) continue;
-            PreviousModels[R.GpuHandle.Slot] = { R.Transform.Matrix(), R.GpuHandle };
+            PreviousModels.Store(R.GpuHandle, R.Transform.Matrix());
         }
         SceneReady = true;
     }
@@ -190,29 +190,31 @@ namespace Smile {
         const u32 Count = std::min(InstanceCount_, static_cast<u32>(Scene.Renderables().size()));
         auto* Dst = reinterpret_cast<FTemporalInstanceTransformGPU*>(MappedTransforms) +
                     static_cast<size_t>(FrameSlot) * InstanceCount_;
-        // O DESTINO continua indexado como a GPU espera (o id que o GBuffer grava); o que
-        // deixou de ser posicional e o HISTORICO. Migrar o endereçamento da GPU mexeria no
-        // raster e nos shaders, e esta fase o mantem CPU-driven de proposito.
-        if (PreviousModels.size() < Scene.GpuSlots().Capacity())
-            PreviousModels.resize(Scene.GpuSlots().Capacity(), FPreviousModel{});
+        // O que deixou de ser posicional aqui e o HISTORICO de CPU. O DESTINO continua indexado
+        // pelo InstanceID da TLAS, que hoje e o indice na lista: o PathTracingCommon grava
+        // CommittedInstanceID() + 1 na superficie, e o DualMotion le esse id da superficie
+        // ANTERIOR para indexar InstanceTransforms do frame ATUAL.
+        //
+        // PENDENCIA, e ela nao e resolvida por este slice: com [A, B, C], remover A faz o id 1
+        // gravado para B no frame passado passar a identificar C -- o historico por slot esta
+        // certo, e a INTERPRETACAO do id antigo esta errada. So a migracao da TLAS fecha isso, e
+        // ate la o descarte global e o que protege. Ver GPU-DRIVEN-PLAN, Fase 1.
+        PreviousModels.EnsureCapacity(Scene.GpuSlots().Capacity());
 
         for (u32 i = 0; i < Count; ++i) {
             const FRenderable& R       = Scene.Renderables()[i];
             const Mat44        Current = R.Transform.Matrix();
-            const u32          Slot    = R.GpuHandle.Slot;
 
-            // Sem historico utilizavel, Previous = Current: motion vector zero, que e o
-            // desfecho certo para um objeto que acabou de nascer ou cujo slot foi reciclado --
-            // herdar o transform do ocupante anterior produziria um smear vindo do nada.
-            Mat44 Previous = Current;
-            const bool TemHistorico =
-                HistoryValid && Slot < PreviousModels.size() &&
-                PreviousModels[Slot].Handle == R.GpuHandle;
-            if (TemHistorico) Previous = PreviousModels[Slot].Model;
+            // Sem historico daquele objeto, Previous = Current, o que zera o movimento DO
+            // OBJETO -- nao o motion vector de tela, que continua carregando o movimento da
+            // camera. E o desfecho certo para quem acabou de nascer ou cujo slot foi
+            // reciclado: herdar o transform do ocupante anterior inventaria um passado.
+            const Mat44 Previous =
+                HistoryValid ? PreviousModels.PreviousOr(R.GpuHandle, Current) : Current;
 
             Dst[i].CurrentToPrevious = Current.Inverse() * Previous;
             Dst[i].PreviousToCurrent = Previous.Inverse() * Current;
-            if (Slot < PreviousModels.size()) PreviousModels[Slot] = { Current, R.GpuHandle };
+            PreviousModels.Store(R.GpuHandle, Current);
         }
         for (u32 i = Count; i < InstanceCount_; ++i) {
             Dst[i].CurrentToPrevious = Mat44::Identity();

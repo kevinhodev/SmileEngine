@@ -22,11 +22,7 @@ namespace Smile {
         //
         // O handle vai junto porque slot sozinho nao basta: um slot reciclado apontaria para o
         // Model do ocupante anterior, e a generation e o que distingue os dois.
-        struct FPreviousModel {
-            Mat44           Model = Mat44::Identity();
-            FGpuSceneHandle Handle;
-        };
-        std::vector<FPreviousModel> PreviousModels;
+        TSlotKeyedHistory<Mat44> PreviousModels;
 
         // Bounds definidos pelo loader e reutilizados por rebuilds que nao recarregam a cena.
         Vec3 BoundsMin{ 0.0f, 0.0f, 0.0f };

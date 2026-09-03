@@ -1967,8 +1967,7 @@ namespace Smile {
             AllItems.reserve(RList.size());
             // Dimensionado pela capacidade de SLOTS, e nao pelo tamanho da lista: o indice
             // agora e o slot, que pode passar da contagem de renderaveis quando ha buracos.
-            SceneState->PreviousModels.resize(SceneState->Scene.GpuSlots().Capacity(),
-                                              FRendererSceneState::FPreviousModel{});
+            SceneState->PreviousModels.EnsureCapacity(SceneState->Scene.GpuSlots().Capacity());
             const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
@@ -1982,12 +1981,7 @@ namespace Smile {
                 // Sem historico DAQUELE objeto, PrevModel = Model: motion vector zero, que e o
                 // desfecho certo para quem acabou de nascer ou cujo slot foi reciclado --
                 // herdar o Model do ocupante anterior produziria um smear vindo do nada.
-                const u32 PrevSlot = R.GpuHandle.Slot;
-                const bool TemHistorico =
-                    PrevSlot < SceneState->PreviousModels.size() &&
-                    SceneState->PreviousModels[PrevSlot].Handle == R.GpuHandle;
-                const Mat44 PrevModel =
-                    TemHistorico ? SceneState->PreviousModels[PrevSlot].Model : Model;
+                const Mat44 PrevModel = SceneState->PreviousModels.PreviousOr(R.GpuHandle, Model);
                 ObjectConstants OC;
                 OC.MVP            = Model * Vw.ViewProjection;
                 OC.ModelMatrix    = Model;
@@ -2000,8 +1994,7 @@ namespace Smile {
                     SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
-                if (PrevSlot < SceneState->PreviousModels.size())
-                    SceneState->PreviousModels[PrevSlot] = { Model, R.GpuHandle };
+                SceneState->PreviousModels.Store(R.GpuHandle, Model);
             }
         }
         // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a
