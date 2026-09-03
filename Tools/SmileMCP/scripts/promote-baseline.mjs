@@ -647,9 +647,12 @@ if (erroFatal) {
 }
 
 if (stagingNaoRemovido) {
+  // A redacao depende de onde parou, e este ramo e o de DEPOIS do commit: os tres artefatos ja
+  // sairam do staging por rename, entao o que sobra e um diretorio vazio (medido). Dizer que "os
+  // artefatos novos continuam la" mandava procurar conteudo que nao esta mais ali.
   console.error(
     `[promote] PUBLICADO, mas o staging nao pode ser removido: ${stagingNaoRemovido}\n` +
-      `[promote] os artefatos novos continuam la; remova a mao`,
+      `[promote] o pacote esta ativo e o diretorio que sobrou esta vazio; remova a mao`,
   );
 }
 
