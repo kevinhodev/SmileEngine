@@ -904,10 +904,10 @@ rodada de 1M é manual):
 | 20.000 | 1,22 ms | 1,28 ms | 1,07 ms |
 | 1.000.000 | 204,10 ms | 203,98 ms | 191,19 ms |
 
-**A posição quase não importa, e isso identifica a causa.** Remover no fim move um elemento só,
-então os 191 ms desse caso são o `RebuildRenderableIndex()` praticamente isolado: dos 204 ms do pior
-caso, ~191 são o rebuild do mapa (O(N) incondicional) e ~13 ms são o memmove do `erase`, a única
-parte que a posição afeta.
+**A posição quase não importa, e isso identifica a causa.** Remover o último elemento desloca
+**zero** elementos, então os 191 ms desse caso são o `RebuildRenderableIndex()` isolado — não há
+memmove nenhum ali. Dos 204 ms do pior caso, ~191 são o rebuild do mapa (O(N) incondicional) e
+~13 ms são o memmove do `erase`, a única parte que a posição afeta.
 
 Medido três vezes na 1M para confirmar que não é ruído: início 207–215 ms, meio 203–208 ms, fim
 192–196 ms.
@@ -965,7 +965,45 @@ protege contra a janela entre morte e reuso.
 código: `FCommandQueue` (direta) e `FAsyncComputeQueue` são classes separadas, cada uma com o seu
 `FenceValue`, e não existe fence agregada que prove a conclusão das duas — é por isso que
 `OnSceneStructureChanged` faz `DirectQueue.Flush()` **e** `ComputeQueue.WaitIdle()` em sequência
-(`RendererScene.cpp:201-202`, e o mesmo par em 70-71 e 213-214). Um slot só volta a `Free` quando as duas passaram.
+(`RendererScene.cpp:201-202`, e o mesmo par em 70-71 e 213-214).
+
+```cpp
+struct FGpuFenceSet { u64 Direct; u64 AsyncCompute; };
+
+void Retire(FGpuSceneHandle Handle, FGpuFenceSet RequiredFences);
+void Collect(FGpuFenceSet CompletedFences);
+```
+
+Uma fila ter passado e a outra não mantém o slot `Retired`: só volta a `Free` quando
+`Completed.Direct >= Required.Direct` **e** `Completed.AsyncCompute >= Required.AsyncCompute`. O
+allocator recebe **números** do renderer e não conhece D3D12 — fica CPU puro e testável, que é o
+que permite cobrir geração, handle obsoleto, wrap e reuso sem device.
+
+### Quando o ticket captura as fences
+
+Dois valores são necessários e **não suficientes**: o ticket só é seguro se for capturado depois de
+**toda command list capaz de referenciar o slot já ter sido submetida**. Com uma lista ainda em
+gravação, o último valor sinalizado não a cobre, e o slot voltaria a `Free` cedo — o objeto novo
+tomaria o lugar enquanto a GPU ainda lê o velho.
+
+Vale registrar o que o código permite, porque isso fecha o desenho: **nenhuma das duas filas expõe
+`LastSignaled` ou `Completed` publicamente** — `FenceValue` é privado em ambas. O que é público é o
+valor **retornado por uma submissão** (`FCommandQueue::SubmitSegmentAndContinue`,
+`FAsyncComputeQueue::SubmitAfter`) e o `NativeFence()`. Não existe, portanto, caminho de fora para
+ler "último sinalizado" e errar por descuido.
+
+A regra fica: **mutações estruturais são aplicadas numa fronteira de submissão**, e o ticket recebe
+os valores que aquela fronteira sinalizou. Hoje isso é trivialmente satisfeito, porque
+`OnSceneStructureChanged` drena as duas filas antes de mexer na cena — nada em voo, nada em
+gravação. À medida que a Fase 1 remover o dreno, a fronteira passa a ser *depois* da submissão de
+fim de frame e *antes* do próximo `BeginFrame`.
+
+Onde não houver fronteira, o ticket usa a **próxima** fence que cobrirá o pendente, e não a última
+sinalizada. A engine já tem esse padrão: `FUploadQueue::PendingFence()` devolve `FenceValue + 1`
+exatamente com esse sentido. A armadilha a evitar é uma fila **ociosa**: se nada mais for submetido
+nela, `Completed` nunca alcança um `Required` de "próxima", e o slot fica preso em `Retired` para
+sempre. Por isso `Required` só pode ser "próxima" para uma fila que de fato tem trabalho gravado e
+não submetido; para uma fila parada, é a última sinalizada, que já passou.
 
 ### Desenho do remap do HiZ
 
