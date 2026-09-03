@@ -61,7 +61,11 @@ int main(int argc, char** argv) {
             errno = 0;
             char* Fim = nullptr;
             const unsigned long long Valor = std::strtoull(Bruto.c_str(), &Fim, 10);
-            if (Bruto.empty() || Bruto.find('-') != std::string::npos || Fim == Bruto.c_str() ||
+            // Rejeita QUALQUER sinal, e nao so o negativo: a notacao do erro promete "inteiro em
+            // [1, max]", e "+1" passando enquanto "-1" nao passa e uma politica acidental. Um
+            // count com sinal e sinal de engano na linha de comando.
+            if (Bruto.empty() || Bruto.find_first_of("+-") != std::string::npos ||
+                Fim == Bruto.c_str() ||
                 *Fim != '\0' || errno == ERANGE || Valor == 0 ||
                 Valor > std::numeric_limits<Smile::u32>::max()) {
                 std::fprintf(stderr,

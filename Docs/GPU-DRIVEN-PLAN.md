@@ -947,12 +947,39 @@ frágeis mas **protegidos por descarte global**. Há duas rotas independentes �
 `TemporalMotion | HiZOcclusion` (`HistoryDomain.h:248`). A Fase 1 **endurece** isso; não conserta
 uma quebra em produção.
 
+### Contrato do allocator: três estados, fixados desde o início
+
+| estado | significado |
+|---|---|
+| `Free` | slot disponível para alocação |
+| `Live` | slot ocupado por um renderável existente |
+| `Retired` | o objeto morreu, e o slot **não** pode ser reusado até as fences passarem |
+
+`IsAlive(handle)` exige **estado `Live` E `generation` igual** — as duas coisas, não uma.
+Comparar só a generation não identifica handle vivo: entre a remoção e o reuso o slot está
+`Retired` e a generation **ainda não mudou**, então um resultado atrasado de um objeto já removido
+passaria pela comparação. A generation só protege contra o ocupante *seguinte*; o estado é o que
+protege contra a janela entre morte e reuso.
+
+**O ticket de aposentadoria carrega uma fence por FILA, e não uma fence genérica.** Verificado no
+código: `FCommandQueue` (direta) e `FAsyncComputeQueue` são classes separadas, cada uma com o seu
+`FenceValue`, e não existe fence agregada que prove a conclusão das duas — é por isso que
+`OnSceneStructureChanged` faz `DirectQueue.Flush()` **e** `ComputeQueue.WaitIdle()` em sequência
+(`RendererScene.cpp:201-202`, e o mesmo par em 70-71 e 213-214). Um slot só volta a `Free` quando as duas passaram.
+
 ### Desenho do remap do HiZ
 
 Remap em **ring por frame**: `HiZTestIndex → GpuHandle {slot, generation}`. Ao consumir o readback
-atrasado, valida-se a `generation` e publica-se visibilidade **por slot**. Isso preserva o dispatch
-compacto — sem varrer os buracos da capacidade — e faz o resultado de um objeto que morreu entre o
-teste e o readback ser descartado em vez de aplicado ao ocupante novo do índice.
+atrasado, valida-se com `IsAlive(handle)` — não só a generation, pela razão acima — e publica-se
+visibilidade **por slot**.
+
+A visibilidade publicada por slot tem de **carregar/estampar a generation**, ou ser **zerada na
+alocação**: sem isso, um resultado que sobreviveu ao readback chegaria ao próximo ocupante do slot,
+que é a mesma troca de identidade que o handle existe para impedir, só deslocada um nível.
+
+Isso preserva o dispatch compacto — sem varrer os buracos da capacidade — e faz o resultado de um
+objeto que morreu entre o teste e o readback ser descartado em vez de aplicado a quem tomou o lugar
+dele.
 
 ### Arquivos prováveis
 

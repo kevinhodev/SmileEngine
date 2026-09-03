@@ -567,3 +567,21 @@ set_tests_properties(Smile.SceneRemovalBenchmark.Smoke PROPERTIES
     LABELS "scene;benchmark"
     TIMEOUT 120
 )
+
+# Casos NEGATIVOS do parser do benchmark.
+#
+# Um script, e nao PASS_REGULAR_EXPRESSION do ctest: com ela o ctest IGNORA o codigo de retorno,
+# entao o gate provaria a mensagem e aceitaria a violacao de acesso — que e exatamente o defeito
+# que ele existe para impedir (o `--count 0` derrubava o processo com 0xC0000005). Mesmo argumento
+# do gate do cooker acima, e mesmo padrao: o script confere exit EXATAMENTE 2, o diagnostico, e
+# que o caminho valido continua passando.
+add_test(
+    NAME Smile.SceneRemovalBenchmark.Reject
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/SceneRemovalRejectTest.ps1"
+            -Benchmark "$<TARGET_FILE:SmileSceneRemovalBenchmark>"
+)
+set_tests_properties(Smile.SceneRemovalBenchmark.Reject PROPERTIES
+    LABELS "scene;benchmark;negative"
+    TIMEOUT 120
+)
