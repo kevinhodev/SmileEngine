@@ -257,6 +257,27 @@ async function readGitState() {
 // `node dist/index.js`, e o dist e produto de build, ignorado pelo git — entao nem o HEAD limpo nem
 // as impressoes de cena revelam um bridge obsoleto. Aconteceu: o conserto do close_editor estava
 // commitado e nao compilado, e as rodadas usaram o caminho antigo sem nada acusar.
+// Compila o servidor MCP DENTRO do fluxo, antes de qualquer medicao.
+//
+// So comparar mtime nao prova correspondencia: um dist antigo copiado ou restaurado depois dos
+// fontes fica com mtime mais novo e passa no teste, e o hash registra qual dist rodou sem dizer se
+// ele corresponde ao HEAD. Compilar aqui elimina a duvida na origem — o que roda passou pelo tsc
+// nesta invocacao. O digest dos FONTES vai junto no relatorio, para amarrar dist e src por
+// conteudo, e nao por relogio.
+async function buildMcpServer() {
+  await new Promise((resolve, reject) => {
+    execFile(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["run", "build"],
+      { cwd: packageRoot },
+      (error, stdout, stderr) =>
+        error
+          ? reject(new Error(`'npm run build' falhou no MCP: ${stderr || stdout || error.message}`))
+          : resolve(),
+    );
+  });
+}
+
 async function fingerprintMcpServer() {
   const files = { src: [], dist: [] };
   const walk = async (directory, bucket, extension) => {
@@ -288,19 +309,28 @@ async function fingerprintMcpServer() {
   const newestSource = await newest(files.src);
   const oldestBuilt = await oldest(files.dist);
 
-  // Hash do que efetivamente entra no processo, para o relatorio poder ser conferido depois.
-  const digest = createHash("sha256");
-  for (const file of files.dist.sort()) {
-    digest.update(path.relative(packageRoot, file).replace(/\\/g, "/"));
-    digest.update(await readFile(file).catch(() => Buffer.alloc(0)));
-  }
+  // Hash do que efetivamente entra no processo, e tambem dos FONTES. O mtime nao amarra os dois:
+  // um dist antigo copiado ou restaurado depois dos fontes fica com relogio mais novo e passaria.
+  // Guardar os dois digests permite conferir depois, por conteudo, o par que rodou.
+  const digestOf = async (list) => {
+    const digest = createHash("sha256");
+    for (const file of list.sort()) {
+      digest.update(path.relative(packageRoot, file).replace(/\\/g, "/"));
+      digest.update(await readFile(file).catch(() => Buffer.alloc(0)));
+    }
+    return digest.digest("hex");
+  };
   return {
     distFiles: files.dist.length,
-    distSha256: files.dist.length > 0 ? digest.digest("hex") : null,
+    sourceFiles: files.src.length,
+    distSha256: files.dist.length > 0 ? await digestOf(files.dist) : null,
+    sourceSha256: files.src.length > 0 ? await digestOf(files.src) : null,
+    // O tsc rodou nesta invocacao, antes de qualquer medicao: o dist do relatorio e produto DESTES
+    // fontes, e nao de um build de origem desconhecida.
+    builtInFlow: true,
     newestSource: newestSource ? path.relative(packageRoot, newestSource.file) : null,
     oldestBuilt: oldestBuilt ? path.relative(packageRoot, oldestBuilt.file) : null,
-    // Sem dist nenhum o script nem roda; com src mais novo que o build, o que roda nao e o que
-    // esta no fonte.
+    // Backstop: depois de compilar aqui, isto so dispara se o build nao produziu nada.
     stale:
       files.dist.length === 0 ||
       Boolean(newestSource && oldestBuilt && newestSource.mtimeMs > oldestBuilt.mtimeMs),
@@ -629,6 +659,9 @@ try {
   // ou num script, e a rodada sairia afirmando uma limpeza que ja nao existe. Conferido UMA vez,
   // antes de abrir editor nenhum: falhar depois de carregar a 1M custa minutos para dizer algo que
   // ja se sabia.
+  // Compila ANTES de medir: assim o dist que roda e produto destes fontes, e nao de um build
+  // de origem desconhecida que so por acaso tem o relogio a frente.
+  await buildMcpServer();
   report.mcpServer = await fingerprintMcpServer();
   // O script executa `dist/index.js` direto, entao o git limpo e as impressoes de cena NAO veem um
   // bridge obsoleto: foi assim que estas rodadas usaram o close_editor antigo durante horas, com o

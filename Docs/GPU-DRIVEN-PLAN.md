@@ -716,6 +716,13 @@ contra assets incompatíveis.
   promovidos por `Tools/SmileMCP/scripts/promote-baseline.mjs`: uma baseline que não sobrevive a
   um clone não é baseline, é lembrança.
 
+  O publicador tem teste próprio (`Tests/PromoteBaselineTests.mjs`, no `ctest` como
+  `Smile.PromoteBaseline`), que roda num diretório temporário. Ele existe porque todos os defeitos
+  do promotor foram achados por revisão humana lendo o código — escape de diretório pelo `--as`,
+  sobrescrita silenciosa da baseline anterior, publicação não transacional, manifesto apontando
+  para PNG inexistente —, e nenhum dos outros testes o executa. Publicação é transacional
+  (staging + troca no fim) e o namespace é **imutável**: republicar por cima exige `--replace`.
+
   | arquivo | build | o que tem |
   |---|---|---|
   | `perf-f781288-4scenes.json` | `f781288` | perf das 4 primeiras cenas, 16 pontos com run completo |

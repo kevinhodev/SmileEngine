@@ -498,3 +498,27 @@ foreach(REAL_SIDECAR
         TIMEOUT 60
     )
 endforeach()
+
+# Testes do publicador de baselines (Tools/SmileMCP/scripts/promote-baseline.mjs).
+#
+# Ele escreve em Docs/Baselines, que e versionado, e nunca teve teste: todos os defeitos dele
+# foram achados por revisao humana lendo o codigo — escape de diretorio pelo --as, sobrescrita
+# silenciosa da baseline anterior, publicacao nao transacional, manifesto apontando para PNG
+# inexistente. Cada um desses casos virou teste, num diretorio temporario (SMILE_BASELINE_DIR).
+#
+# CONDICIONAL ao node existir, ao contrario dos sidecars versionados: o node nao e dependencia de
+# build da engine, e exigi-lo aqui quebraria o gate de quem so compila C++. A ausencia aparece no
+# configure, entao nao e um gate que some sem avisar.
+find_program(SMILE_NODE_EXECUTABLE NAMES node node.exe)
+if(SMILE_NODE_EXECUTABLE)
+    add_test(
+        NAME Smile.PromoteBaseline
+        COMMAND "${SMILE_NODE_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/Tests/PromoteBaselineTests.mjs"
+    )
+    set_tests_properties(Smile.PromoteBaseline PROPERTIES
+        LABELS "tools;baselines"
+        TIMEOUT 180
+    )
+else()
+    message(STATUS "node nao encontrado: Smile.PromoteBaseline nao sera registrado")
+endif()

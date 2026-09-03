@@ -18,13 +18,18 @@
 //      --allow-failed      aceita relatorio com passed:false        (precisa de --note)
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const smileRoot = path.resolve(scriptDirectory, "../../..");
-const baselineDirectory = path.join(smileRoot, "Docs", "Baselines");
+// SMILE_BASELINE_DIR existe para o TESTE: o promotor escreve em Docs/Baselines, que e versionado,
+// e um teste que exercitasse os caminhos de falha nele sujaria o repositorio. Fora do teste,
+// ninguem passa isto.
+const baselineDirectory = process.env.SMILE_BASELINE_DIR
+  ? path.resolve(process.env.SMILE_BASELINE_DIR)
+  : path.join(smileRoot, "Docs", "Baselines");
 const manifestPath = path.join(baselineDirectory, "MANIFEST.md");
 
 function fail(message) {
@@ -81,18 +86,48 @@ if (report.gitState) {
   if (!/^[0-9a-f]{40}$/.test(report.gitState.head ?? "")) {
     fail("a rodada nao registrou um HEAD valido; nao da para dizer de que arvore ela saiu");
   }
-  const fingerprinted = Object.values(report.sceneFingerprints ?? {});
+  // passed AUSENTE era aceito, porque a checagem acima so barra `=== false`. Um relatorio sem o
+  // campo entrava como se tivesse passado.
+  if (report.passed !== true && !process.argv.includes("--allow-failed")) {
+    fail("o relatorio nao declara passed:true; use --allow-failed --note se for aceitavel");
+  }
+
+  // O dist executado faz parte da proveniencia tanto quanto o HEAD: sem isto, um bridge obsoleto
+  // continua invisivel no pacote.
+  const server = report.mcpServer;
+  if (!server || !/^[0-9a-f]{64}$/.test(server.distSha256 ?? "") || server.stale !== false) {
+    fail(
+      "a rodada nao registrou um dist do MCP integro (hash de 64 hex e stale:false); " +
+        "nao da para dizer que codigo de servidor foi executado",
+    );
+  }
+
+  // Contagem e ausencia de null nao bastavam: um objeto vazio, ou chaves de OUTRAS cenas, passavam
+  // pelos dois testes. Comparar os CONJUNTOS, e exigir os tres arquivos com bytes e sha valido.
   const scenesMeasured = new Set(
     [...(report.summary ?? []), ...(report.captures ?? [])].map((entry) => entry.scene),
   );
-  if (fingerprinted.length !== scenesMeasured.size) {
+  const scenesFingerprinted = new Set(Object.keys(report.sceneFingerprints ?? {}));
+  const faltando = [...scenesMeasured].filter((scene) => !scenesFingerprinted.has(scene));
+  const sobrando = [...scenesFingerprinted].filter((scene) => !scenesMeasured.has(scene));
+  if (faltando.length > 0 || sobrando.length > 0) {
     fail(
-      `impressoes de asset incompletas: ${fingerprinted.length} cena(s) com fingerprint contra ` +
-        `${scenesMeasured.size} medida(s)`,
+      `impressoes de asset nao correspondem as cenas medidas` +
+        (faltando.length ? `; sem fingerprint: ${faltando.join(", ")}` : "") +
+        (sobrando.length ? `; fingerprint de cena nao medida: ${sobrando.join(", ")}` : ""),
     );
   }
-  if (fingerprinted.some((entry) => Object.values(entry).some((file) => file === null))) {
-    fail("alguma cena tem asset sem fingerprint; o pacote nao diria o que foi carregado");
+  for (const [scene, entry] of Object.entries(report.sceneFingerprints ?? {})) {
+    const files = Object.entries(entry ?? {});
+    if (files.length !== 3) {
+      fail(`${scene}: ${files.length} asset(s) com fingerprint, esperados 3 (.sscene/.smesh/.cameras.json)`);
+    }
+    for (const [file, value] of files) {
+      if (!value || !Number.isInteger(value.bytes) || value.bytes <= 0 ||
+          !/^[0-9a-f]{64}$/.test(value.sha256 ?? "")) {
+        fail(`${scene}: fingerprint invalida para ${file}`);
+      }
+    }
   }
 } else if (!process.argv.includes("--allow-legacy-provenance")) {
   fail(
@@ -121,7 +156,28 @@ if (points !== runs && !report.regime?.captureOnly) {
 const defaultName = `${path.basename(source, ".json").replace(/^gpu-driven-baseline-?/, "") ||
   "baseline"}-${report.buildCommit}`;
 const name = argumentValue("--as", defaultName).replace(/\.json$/, "");
+
+// --as entrava direto no path.join. `--as ../../Tools/cook-baseline` resolvia para fora de
+// Docs/Baselines e sobrescrevia o arquivo de la — um publicador que aceita caminho arbitrario nao
+// publica, ele escreve onde mandarem. Um unico componente, e sem os nomes que o Windows reserva.
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name === "." || name === "..") {
+  fail(
+    `nome de baseline invalido: '${name}'. Use um unico componente com letras, digitos, ponto, ` +
+      `hifen ou sublinhado, comecando por letra ou digito.`,
+  );
+}
+if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) {
+  fail(`'${name}' e um nome reservado pelo Windows`);
+}
+
 const destination = path.join(baselineDirectory, `${name}.json`);
+
+// Cinto e suspensorio: mesmo com o nome validado, confere que os dois alvos caem DENTRO de
+// Docs/Baselines. Uma regex sozinha e uma promessa; isto e a verificacao.
+const insideBaselines = (candidate) => {
+  const relative = path.relative(baselineDirectory, candidate);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+};
 
 // Hash de cada PNG de referencia. Serve para IDENTIFICAR qual imagem gerou o relatorio — nao para
 // verificar uma recaptura.
@@ -145,6 +201,9 @@ const destination = path.join(baselineDirectory, `${name}.json`);
 // passaria a divergir do arquivo — a referencia do "antes" desapareceria justamente na hora de
 // comparar com ela.
 const referenceDirectory = path.join(baselineDirectory, "Reference", name);
+if (!insideBaselines(destination) || !insideBaselines(referenceDirectory)) {
+  fail(`o destino sairia de Docs/Baselines ('${destination}')`);
+}
 const imageRows = [...(report.runs ?? []), ...(report.captures ?? [])]
   .map((entry) => ({ scene: entry.scene, slot: entry.slot, png: entry.capture?.pngPath }))
   .filter((entry) => entry.png);
@@ -180,10 +239,44 @@ if (imageRows.length > 0) {
     row.manifestSha256 = createHash("sha256").update(row.manifestText, "utf8").digest("hex");
   }
 
-  await mkdir(referenceDirectory, { recursive: true });
-  for (const row of imageRows) {
-    await writeFile(path.join(referenceDirectory, row.file), row.bytes);
-    await writeFile(path.join(referenceDirectory, row.manifestFile), row.manifestText, "utf8");
+  // Publicacao em STAGING + troca no fim. Validar as entradas antes nao torna a escrita atomica:
+  // os 40 artefatos iam para o destino um a um, e uma falha de disco ou permissao no meio deixava
+  // a baseline metade nova e metade antiga — estado que nao existe em rodada nenhuma e que o
+  // MANIFEST descreveria errado. Aqui o destino so e tocado quando tudo ja esta escrito.
+  //
+  // E o namespace e IMUTAVEL por default: uma baseline publicada e um registro, e sobrescreve-la
+  // em silencio e a mesma perda que o namespace foi criado para impedir. --replace para reeditar
+  // de proposito.
+  const alreadyPublished = await stat(referenceDirectory).then(() => true).catch(() => false);
+  if (alreadyPublished && !process.argv.includes("--replace")) {
+    fail(
+      `a baseline '${name}' ja tem referencias publicadas em Docs/Baselines/Reference/${name}/. ` +
+        `Use outro --as, ou --replace para substitui-la de proposito.`,
+    );
+  }
+
+  const staging = path.join(baselineDirectory, `.staging-${name}-${process.pid}`);
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true });
+  try {
+    for (const row of imageRows) {
+      await writeFile(path.join(staging, row.file), row.bytes);
+      await writeFile(path.join(staging, row.manifestFile), row.manifestText, "utf8");
+    }
+    // rename de diretorio nao sobrescreve destino existente no Windows: o antigo sai do caminho
+    // primeiro, e so e apagado quando o novo ja esta no lugar.
+    const retired = `${referenceDirectory}.retiring-${process.pid}`;
+    if (alreadyPublished) await rename(referenceDirectory, retired);
+    try {
+      await mkdir(path.dirname(referenceDirectory), { recursive: true });
+      await rename(staging, referenceDirectory);
+    } catch (error) {
+      if (alreadyPublished) await rename(retired, referenceDirectory).catch(() => {});
+      throw error;
+    }
+    await rm(retired, { recursive: true, force: true });
+  } finally {
+    await rm(staging, { recursive: true, force: true });
   }
 
   report.capturedImages = imageRows.map((row) => ({
