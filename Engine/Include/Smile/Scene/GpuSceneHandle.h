@@ -76,6 +76,9 @@ namespace Smile {
     public:
         // Aloca um slot para um objeto novo. A generation do slot incrementa, entao um handle
         // anterior daquele slot nunca volta a casar.
+        //
+        // Devolve handle INVALIDO quando o pool nao pode mais crescer (ver AllocationFailures).
+        // O chamador tem de conferir — IsAlive/Slot != kInvalidSlot —, e nao presumir sucesso.
         FGpuSceneHandle Allocate();
 
         // O objeto morreu. O slot vai para Retired IMEDIATAMENTE — a mutacao nao espera a GPU —,
@@ -89,6 +92,10 @@ namespace Smile {
         // Devolve a Free todo slot Retired cujas DUAS fences ja passaram. Slot cuja generation
         // esgotou vai para Exhausted em vez de Free, e o contador sobe uma vez so.
         // Retorna quantos voltaram a Free.
+        //
+        // Custa O(aposentados), e nao O(capacidade): percorre a lista de Retired, nao os slots.
+        // Varrer todos recolocaria uma passada integral de CPU por frame, que e o custo que esta
+        // fase existe para remover — na cena de 1M seriam 1M de slots visitados para liberar um.
         u32 Collect(const FGpuFenceSet& Completed);
 
         // Vivo = estado Live E generation igual. As duas coisas: a generation protege contra o
@@ -112,9 +119,14 @@ namespace Smile {
         // Slots perdidos por overflow de generation. Exposto de proposito: a politica e segura mas
         // reduz a capacidade, e reducao silenciosa vira mistério meses depois.
         u32 ExhaustedCount() const { return ExhaustedCount_; }
+        // Alocacoes recusadas por teto de slots. Mesma razao do ExhaustedCount: recusa silenciosa
+        // vira misterio meses depois.
+        u32 AllocationFailures() const { return AllocationFailures_; }
 
     private:
         friend struct FGpuSceneSlotsTestAccess;
+
+        void RetireSlot(u32 Slot, const FGpuFenceSet& Required);
 
         struct FSlot {
             u32           Generation = 0;
@@ -124,8 +136,21 @@ namespace Smile {
 
         std::vector<FSlot> Slots;
         std::vector<u32>   FreeList;
+        // Indices dos slots em Retired. Existe para o Collect custar O(aposentados); sem ela ele
+        // varreria a capacidade inteira todo frame.
+        std::vector<u32>   RetiredList;
+        // Slots VISITADOS pelo ultimo Collect. Existe para a invariante "O(aposentados), e nao
+        // O(capacidade)" ser verificavel: sem contar as visitas, um teste so consegue aferir o
+        // TAMANHO da lista, que uma implementacao que varre tudo tambem mantem correto. Um u32 num
+        // laco que ja roda nao aparece em perfil.
+        u32                LastCollectVisits_ = 0;
+        // Teto de slots. kInvalidSlot e o primeiro valor em que o cast para u32 produziria o
+        // proprio slot invalido; e membro para o teste poder exercitar a borda sem alocar bilhoes
+        // de entradas.
+        u32                MaxSlots        = FGpuSceneHandle::kInvalidSlot;
         u32                LiveCount_      = 0;
         u32                RetiredCount_   = 0;
         u32                ExhaustedCount_ = 0;
+        u32                AllocationFailures_ = 0;
     };
 }

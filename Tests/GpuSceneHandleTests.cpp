@@ -25,6 +25,17 @@ namespace Smile {
         static EGpuSlotState StateOf(const FGpuSceneSlots& Slots, u32 Slot) {
             return Slots.Slots[Slot].State;
         }
+        // Teto de slots injetavel: a borda de crescimento fica em 0xFFFFFFFF, e alcanca-la de
+        // verdade exigiria alocar bilhoes de entradas.
+        static void SetMaxSlots(FGpuSceneSlots& Slots, u32 Max) { Slots.MaxSlots = Max; }
+        // Tamanho da lista de aposentados: e o que prova que o Collect percorre O(aposentados) e
+        // nao O(capacidade).
+        static size_t RetiredListSize(const FGpuSceneSlots& Slots) {
+            return Slots.RetiredList.size();
+        }
+        static u32 LastCollectVisits(const FGpuSceneSlots& Slots) {
+            return Slots.LastCollectVisits_;
+        }
     };
 }
 
@@ -205,6 +216,69 @@ int main() {
         Pool.Retire(Antigo, kZero); // dono anterior tentando aposentar
         Check(Pool.IsAlive(Atual), "handle obsoleto nao aposenta o ocupante atual");
         Check(Pool.LiveCount() == 1, "e a contagem de vivos nao se corrompe");
+    }
+
+    // 9. Allocate recusa em vez de devolver o slot invalido.
+    {
+        FGpuSceneSlots Pool;
+        FGpuSceneSlotsTestAccess::SetMaxSlots(Pool, 2);
+        const FGpuSceneHandle A = Pool.Allocate();
+        const FGpuSceneHandle B = Pool.Allocate();
+        Check(Pool.IsAlive(A) && Pool.IsAlive(B), "os dois primeiros alocam");
+
+        const FGpuSceneHandle C = Pool.Allocate();
+        Check(C.Slot == FGpuSceneHandle::kInvalidSlot, "no teto devolve handle invalido");
+        Check(!Pool.IsAlive(C), "e ele nao vive");
+        Check(Pool.Capacity() == 2, "o pool nao cresceu alem do teto");
+        Check(Pool.AllocationFailures() == 1, "a recusa e contada, nao silenciosa");
+
+        // E o teto nao impede reuso: liberar um slot volta a permitir alocar.
+        Pool.Retire(A, FGpuFenceSet{ 1, 1 });
+        Pool.Collect(FGpuFenceSet{ 1, 1 });
+        const FGpuSceneHandle D = Pool.Allocate();
+        Check(Pool.IsAlive(D), "depois do Collect, alocar volta a funcionar no teto");
+        Check(Pool.Capacity() == 2, "reusando, nao crescendo");
+    }
+
+    // 10. Collect custa O(aposentados), e nao O(capacidade).
+    {
+        FGpuSceneSlots Pool;
+        FGpuSceneHandle Muitos[64];
+        for (FGpuSceneHandle& H : Muitos) H = Pool.Allocate();
+        Check(Pool.Capacity() == 64, "64 slots vivos");
+        Check(FGpuSceneSlotsTestAccess::RetiredListSize(Pool) == 0,
+              "sem aposentados, a lista esta vazia: o Collect nao tem o que percorrer");
+
+        Pool.Retire(Muitos[7], FGpuFenceSet{ 5, 5 });
+        Check(FGpuSceneSlotsTestAccess::RetiredListSize(Pool) == 1, "um aposentado na lista");
+
+        // O TAMANHO da lista nao prova nada sozinho: uma implementacao que varre a capacidade
+        // inteira tambem a mantem correta. O que prova e a contagem de VISITAS.
+        Check(Pool.Collect(FGpuFenceSet{ 4, 4 }) == 0, "fence insuficiente nao libera");
+        Check(FGpuSceneSlotsTestAccess::LastCollectVisits(Pool) == 1,
+              "com um ticket pendente entre 64 slots, o Collect visita UM");
+        Check(FGpuSceneSlotsTestAccess::RetiredListSize(Pool) == 1,
+              "e o slot continua na lista para a proxima tentativa");
+
+        Check(Pool.Collect(FGpuFenceSet{ 5, 5 }) == 1, "fence suficiente libera");
+        Check(FGpuSceneSlotsTestAccess::LastCollectVisits(Pool) == 1, "e visitou UM de novo");
+        Check(FGpuSceneSlotsTestAccess::RetiredListSize(Pool) == 0,
+              "e a lista esvazia: nada sobra para percorrer");
+
+        // Sem aposentado nenhum, o Collect nao toca slot algum — nem os 64 vivos.
+        Check(Pool.Collect(FGpuFenceSet{ 99, 99 }) == 0, "collect sem aposentados nao libera nada");
+        Check(FGpuSceneSlotsTestAccess::LastCollectVisits(Pool) == 0,
+              "e visita ZERO slots: nada de varredura por capacidade");
+
+        // Ciclos repetidos nao podem fazer a lista crescer sem limite.
+        for (int Ciclo = 0; Ciclo < 10; ++Ciclo) {
+            const FGpuSceneHandle H = Pool.Allocate();
+            Pool.Retire(H, FGpuFenceSet{ 10, 10 });
+            Pool.Collect(FGpuFenceSet{ 10, 10 });
+        }
+        Check(FGpuSceneSlotsTestAccess::RetiredListSize(Pool) == 0,
+              "dez ciclos de retire/collect nao deixam residuo na lista");
+        Check(Pool.RetiredCount() == 0, "nem no contador");
     }
 
     if (Failures > 0) {
