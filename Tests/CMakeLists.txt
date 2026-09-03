@@ -615,3 +615,23 @@ set_tests_properties(Smile.GpuSceneHandle PROPERTIES
     LABELS "scene;identity;gpu-driven"
     TIMEOUT 60
 )
+
+# Validacao de borda do snapshot de perfil, no bridge TypeScript.
+#
+# O protocolo 4 subiu para EXIGIR cpu.gpuSlots, e exigencia sem validacao existe so no numero da
+# versao: um payload sem o bloco atravessava o cast e quebrava adiante no summarizeProfile com
+# TypeError, longe da causa. O teste exercita o bridge por um FAKE de named pipe -- o que esta sob
+# teste e a validacao, nao o transporte.
+#
+# Depende do dist compilado, entao roda depois de `npm run build`. CONDICIONAL ao node, como o
+# Smile.PromoteBaseline, e pela mesma razao: node nao e dependencia de build da engine.
+if(SMILE_NODE_EXECUTABLE)
+    add_test(
+        NAME Smile.EditorBridgeValidation
+        COMMAND "${SMILE_NODE_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/Tests/EditorBridgeValidationTests.mjs"
+    )
+    set_tests_properties(Smile.EditorBridgeValidation PROPERTIES
+        LABELS "tools;mcp;negative"
+        TIMEOUT 120
+    )
+endif()

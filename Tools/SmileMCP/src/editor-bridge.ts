@@ -510,6 +510,25 @@ export class SmileEditorBridge {
         !Array.isArray(cpu.passes)) {
       throw new Error("Snapshot de perfil sem telemetria de CPU.");
     }
+    // gpuSlots e OBRIGATORIO no protocolo 4 -- foi por exigi-lo que a versao subiu. Sem validar
+    // aqui, a exigencia existe so no numero da versao: um payload v4 sem o bloco, ou com um campo
+    // string/undefined, atravessa o cast e quebra la adiante no summarizeProfile com TypeError.
+    // Erro na BORDA diz o que veio errado do editor; TypeError no agregador diz "cannot read
+    // properties of undefined" numa linha que nao tem nada a ver com a causa.
+    const slots = cpu.gpuSlots as Partial<CpuProfileStats["gpuSlots"]> | undefined;
+    if (!slots || typeof slots !== "object") {
+      throw new Error("Snapshot de perfil sem o bloco cpu.gpuSlots (protocolo 4).");
+    }
+    for (const campo of ["capacity", "live", "retired", "exhausted"] as const) {
+      // Number.isFinite e nao typeof: NaN e Infinity sao number e passariam, e um contador de
+      // slots que vira NaN contamina toda a agregacao em silencio.
+      if (!Number.isFinite(slots[campo])) {
+        throw new Error(
+          `Snapshot de perfil com cpu.gpuSlots.${campo} invalido ` +
+            `(esperado number finito, veio ${typeof slots[campo]}).`,
+        );
+      }
+    }
     if (typeof snapshot.directGpuSourceFrameIndex !== "number") {
       throw new Error("Snapshot de perfil sem identidade da fila direct.");
     }
