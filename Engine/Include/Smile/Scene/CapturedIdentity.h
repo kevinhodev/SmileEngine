@@ -28,6 +28,17 @@ namespace Smile {
         u64             Id = 0;
     };
 
+    // Maior id de instancia que sobrevive ao round-trip pelo canal float da superficie temporal.
+    //
+    // Espelha SMILE_TEMPORAL_MAX_INSTANCE_ID em Shaders/Temporal/TemporalMotionCommon.hlsli. O
+    // valor gravado la e (id + 1) num float32, exato ate 2^24 -- entao o teto do ID e 2^24 - 2.
+    //
+    // Existe do lado da CPU porque a recusa tem de acontecer na CONSTRUCAO: passar do teto nao
+    // produz erro em lugar nenhum, produz o objeto VIZINHO em silencio. Medido: o id 2^23
+    // decodificava como 2^23 + 1 com o "+0.5f" que o decoder tinha, e mesmo sem ele a faixa acaba
+    // em 2^24 - 2.
+    inline constexpr u32 kMaxTemporalInstanceId = 16777214u;
+
     // Valor gravado na GPU para a entrada `Index` da tabela. O +1 reserva o 0 para "vazio", que e
     // o que o alvo contem onde nenhum draw tocou.
     inline u32 EncodeCapturedIdentity(size_t Index) { return static_cast<u32>(Index) + 1u; }

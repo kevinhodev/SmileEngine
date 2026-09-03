@@ -6,8 +6,23 @@ struct FTemporalInstanceTransform {
     row_major float4x4 PreviousToCurrent;
 };
 
+// Maior id que sobrevive ao round-trip pelo canal float da superficie.
+//
+// O valor gravado e (id + 1) num float32, que representa inteiros exatamente ate 2^24. O teto
+// aqui e 2^24 - 2 para o id, ou seja 2^24 - 1 para o valor gravado. Quem constroi a TLAS recusa
+// contagens acima disso: sem essa recusa, o excesso nao daria erro -- daria o OBJETO ERRADO, em
+// silencio.
+#define SMILE_TEMPORAL_MAX_INSTANCE_ID 16777214u
+
 bool TemporalDecodeInstance(float encoded, uint instanceCount, out uint instanceId) {
-    const uint value = (uint)(encoded + 0.5f);
+    // Sem o "+ 0.5f" que estava aqui. Ele parecia arredondamento defensivo e na pratica
+    // CORTAVA A FAIXA PELA METADE: a soma em float32 nao e representavel a partir de 2^23,
+    // entao o id 8388608 decodificava como 8388609 -- o objeto vizinho, sem erro nenhum.
+    // Medido nas duas bordas (2^23 e 2^24 - 2).
+    //
+    // A defesa nao era necessaria: o valor vem de um Load (sem filtragem) de um canal que
+    // recebeu um inteiro exato, entao truncar ja e exato.
+    const uint value = (uint)encoded;
     instanceId = value > 0u ? value - 1u : 0u;
     return value > 0u && instanceId < instanceCount;
 }

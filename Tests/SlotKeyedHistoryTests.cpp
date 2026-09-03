@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "Smile/Math/Mat44.h"
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Scene/SlotKeyedHistory.h"
 
 namespace {
@@ -185,6 +186,41 @@ int main() {
               "guardar pelo zerado nao cria historico");
         Check(Igual(H.PreviousOr(Vivo, Atual), Marca(7, 1)),
               "e, sobretudo, nao APAGA o historico valido que estava la");
+    }
+
+    // 8. Round-trip do id de instancia pelo canal FLOAT da superficie temporal.
+    //
+    // O shader grava (id + 1) num float32 e o decoder le de volta. O decoder tinha um "+ 0.5f"
+    // que parecia arredondamento defensivo e CORTAVA A FAIXA PELA METADE: a soma nao e
+    // representavel a partir de 2^23, entao o id 8388608 voltava como 8388609 -- o objeto
+    // vizinho, sem erro nenhum.
+    //
+    // Este teste espelha a conta do shader em float32 (float, nao double, senao ele nao mede o
+    // que o shader faz) e cobre as duas bordas.
+    {
+        auto RoundTrip = [](u32 Id) {
+            const float Encoded = static_cast<float>(Id + 1u);
+            const u32   Value   = static_cast<u32>(Encoded);
+            return Value > 0u ? Value - 1u : 0u;
+        };
+        // Com o "+0.5f" antigo, para provar que o teste distingue as duas versoes.
+        auto RoundTripComMeio = [](u32 Id) {
+            const float Encoded = static_cast<float>(Id + 1u);
+            const u32   Value   = static_cast<u32>(Encoded + 0.5f);
+            return Value > 0u ? Value - 1u : 0u;
+        };
+
+        for (u32 Id : { 0u, 1u, 1000u, 8388606u, 8388607u, 8388608u, 8388609u,
+                        kMaxTemporalInstanceId - 1u, kMaxTemporalInstanceId }) {
+            Check(RoundTrip(Id) == Id, "o id volta igual pelo canal float");
+            if (RoundTrip(Id) != Id)
+                std::cerr << "        id " << Id << " voltou " << RoundTrip(Id) << "\n";
+        }
+
+        // E a versao antiga erra EXATAMENTE em 2^23 -- se isto parar de valer, o decoder mudou.
+        Check(RoundTripComMeio(8388608u) != 8388608u,
+              "a versao com +0.5f errava em 2^23 (e por isso ela saiu)");
+        Check(RoundTripComMeio(1000u) == 1000u, "e acertava abaixo da borda");
     }
 
     if (Failures > 0) {

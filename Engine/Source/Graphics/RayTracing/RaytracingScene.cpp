@@ -3,6 +3,7 @@
 #include "Smile/Graphics/Backend/D3D12/D3D12Device.h"
 #include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Mesh.h" // sizeof(Vertex): stride do SRV bindless de VB
@@ -123,6 +124,18 @@ namespace Smile {
 
     void FRaytracingScene::CollectInstances(const FScene& _Scene, const Vec3& _TlasOrigin,
                                             std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& _Out) const {
+        // O InstanceID viaja ate os passes temporais por um canal FLOAT da superficie, como
+        // (id + 1). Acima de kMaxTemporalInstanceId ele deixa de round-tripar, e o desfecho nao e
+        // erro: e o objeto VIZINHO, em silencio. Recusar aqui e o unico ponto em que isso ainda e
+        // um diagnostico.
+        //
+        // O InstanceID do DXR tambem tem 24 bits, entao o mesmo teto vale para ele.
+        if (_Scene.Renderables().size() > kMaxTemporalInstanceId)
+            throw std::runtime_error(
+                "TLAS com mais renderaveis que o InstanceID consegue enderecar (" +
+                std::to_string(_Scene.Renderables().size()) + " > " +
+                std::to_string(kMaxTemporalInstanceId) + ")");
+
         _Out.clear();
         _Out.reserve(_Scene.Renderables().size());
         u32 Idx = 0;

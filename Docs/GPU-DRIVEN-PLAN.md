@@ -1157,6 +1157,57 @@ invalidação global: enquanto o descarte existir, ele protege; sem ele e sem a 
 defeito passa a ser observável. Manter o raster CPU-driven não impede o remap necessário nos
 shaders temporais — são coisas separadas.
 
+### Contrato da tabela por frame (opção C), antes de implementar
+
+A identidade temporal **não** cabe no `InstanceID`: ele tem 24 bits, e o canal float da superfície
+dá os mesmos ~24 bits de inteiro exato. Com 1M de objetos gastando 20, sobrariam ~4 para a
+generation — 15 reusos antes de aliasear, que é falha silenciosa, exatamente o que esta fase existe
+para eliminar. Por isso a identidade vai para uma **tabela por frame**, e o id na superfície volta a
+ser só um índice nela.
+
+**1. Resolver a identidade antiga é metade do caminho.** O fluxo tem de ser inteiro:
+
+```
+id anterior → tabela ANTERIOR → {slot, generation} → localização atual válida → transform atual
+```
+
+Descobrir o slot e usá-lo direto em `InstanceTransforms` continuaria errado, porque aquele buffer é
+indexado pela lista. Ou entra um remap para o índice atual, ou os transforms migram para
+endereçamento por slot com validação de residência. E a tabela antiga identifica **quem existia**,
+não prova que ele continua vivo: objeto removido, residência aposentada ou generation diferente
+rejeitam a correspondência e caem no fallback.
+
+**2. Dois slices UPLOAD não são automaticamente seguros.** O `BeginFrame` espera a fence do uso
+anterior *daquele frame slot* (`CommandQueue.cpp:63`), mas a tabela de F também é lida por F+1: ao
+começar F+2, esperar F não prova que F+1 terminou de lê-la. Sobrescrever o UPLOAD ali é corrida.
+A escolha tem de ser explícita, entre:
+
+- tabelas em DEFAULT, em ping-pong, atualizadas por cópias ordenadas na GPU com staging protegido; ou
+- armazenamento UPLOAD cujo reuso espere o **último** consumidor, com número de slices dimensionado
+  para isso.
+
+Tabela, superfície, contagem e validade pertencem ao **mesmo frame** — inclusive depois de pausa do
+passe, resize e reload.
+
+**3. A migração alcança mais leitores que o `DualMotion`.** O `ReflectionMotion.hlsli:55` compara
+índices de frames diferentes (`previousInstance != receiverInstance`); com a tabela, isso passa a
+comparar as **identidades resolvidas**. O `ReSTIRDISpatial.cs.hlsl:130` também consome superfície e
+transforms. E a superfície anterior é validada contra a **contagem anterior**, não a atual.
+
+Não é preciso compactar a TLAS neste slice: dá para preservar o índice atual com buracos, desde que
+TLAS, `InstanceGeo` e remap compartilhem a mesma convenção.
+
+**4. A faixa de 24 bits — fechado.** O decoder fazia `(uint)(encoded + 0.5f)`, e essa soma não é
+representável em float32 a partir de 2²³: o id 8.388.608 voltava como 8.388.609, o objeto vizinho,
+sem erro nenhum. O `+0.5f` saiu (o valor vem de um `Load`, sem filtragem, de um canal que recebeu
+inteiro exato), a faixa passou a ir até 2²⁴−2, e o `CollectInstances` recusa cena acima disso — é o
+último ponto em que o estouro ainda é diagnóstico e não objeto errado.
+
+**Testes centrais do slice:** `[A,B,C] → [B,C]`, renderável pulado na TLAS, slot reciclado, objeto
+removido sem reuso, e tabela anterior ainda em consumo.
+
+O descarte global permanece até a migração conjunta estar validada.
+
 ### Desenho do remap do HiZ
 
 Remap em **ring por frame**: `HiZTestIndex → GpuHandle {slot, generation}`. Ao consumir o readback
