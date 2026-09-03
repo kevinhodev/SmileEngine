@@ -30,6 +30,13 @@ namespace Smile {
 
         ID3D12Fence*        NativeFence() const { return Fence.Get(); }
         ID3D12CommandQueue* Native()      const { return Queue.Get(); }
+
+        // Par do FCommandQueue::LastSignaledValue(). O SubmitAfter ja devolve o valor de QUEM
+        // submeteu, mas o ticket de aposentadoria precisa do valor mesmo quando esta fila NAO
+        // recebeu trabalho nesta fronteira e o anterior continua em voo — o slot tem de esperar
+        // por ele do mesmo jeito. Sem os dois valores, uma fila ociosa faria o ticket ficar
+        // incompleto ou preso.
+        u64 LastSignaledValue() const { return FenceValue; }
         // Slot em gravacao (Begin ja esperou o fence dele) — p/ o ring do GPU profiler.
         u32                 CurrentSlot() const { return Slot; }
 

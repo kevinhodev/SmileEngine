@@ -26,6 +26,19 @@ namespace Smile {
         void GpuWait(ID3D12Fence* ExternalFence, u64 Value);
         ID3D12Fence* NativeFence() const { return Fence.Get(); }
 
+        // ULTIMO valor SINALIZADO, que nao e o mesmo que o concluido do
+        // NativeFence()->GetCompletedValue(): este e o alvo, aquele e o progresso.
+        //
+        // Existe para o ticket de aposentadoria do FGpuSceneHandle (ver GPU-DRIVEN-PLAN, Fase 1).
+        // Um slot que morreu precisa saber ate onde a GPU tem de chegar antes de ser reusado, e o
+        // caso "esta fila nao recebeu trabalho novo, mas o anterior ainda esta em voo" so e
+        // exprimivel com este valor — EndFrame, Flush e ExecuteAndSync devolvem void, e
+        // SubmitSegmentAndContinue devolve um valor que pode ser ANTERIOR ao signal do EndFrame.
+        //
+        // Toda submissao passa por Signal(), que incrementa antes de sinalizar, entao FenceValue e
+        // sempre o ultimo valor de fato sinalizado nesta fila.
+        u64 LastSignaledValue() const { return FenceValue; }
+
         u32 FrameIndex() const { return CurrentFrame; }
 
         ID3D12CommandQueue*        Native()    const { return CommandQueue.Get(); }

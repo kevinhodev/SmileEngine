@@ -585,3 +585,31 @@ set_tests_properties(Smile.SceneRemovalBenchmark.Reject PROPERTIES
     LABELS "scene;benchmark;negative"
     TIMEOUT 120
 )
+
+# Ciclo de vida do FGpuSceneHandle (Fase 1 do GPU-DRIVEN-PLAN).
+#
+# CPU puro: o allocator recebe NUMEROS do renderer (FGpuFenceSet) e nao conhece D3D12, e e
+# exatamente isso que permite cobrir generation, handle obsoleto, wrap, reload e reuso por fence
+# sem device e sem GPU no CI.
+add_executable(SmileGpuSceneHandleTests
+    GpuSceneHandleTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/GpuSceneHandle.cpp
+)
+target_compile_features(SmileGpuSceneHandleTests PRIVATE cxx_std_20)
+target_include_directories(SmileGpuSceneHandleTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+set_target_properties(SmileGpuSceneHandleTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+add_test(
+    NAME Smile.GpuSceneHandle
+    COMMAND SmileGpuSceneHandleTests
+)
+set_tests_properties(Smile.GpuSceneHandle PROPERTIES
+    LABELS "scene;identity;gpu-driven"
+    TIMEOUT 60
+)

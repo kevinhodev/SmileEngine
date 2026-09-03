@@ -83,9 +83,11 @@ smile_engine_group("Math"
 
 smile_engine_group("Scene"
     Include/Smile/Scene/CookedFormat.h
+    Include/Smile/Scene/GpuSceneHandle.h
     Include/Smile/Scene/Light.h
     Include/Smile/Scene/Scene.h
     Include/Smile/Scene/SceneLoader.h
+    Source/Scene/GpuSceneHandle.cpp
     Source/Scene/Scene.cpp
     Source/Scene/SceneLoader.cpp
 )
