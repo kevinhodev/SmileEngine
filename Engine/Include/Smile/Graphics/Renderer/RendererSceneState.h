@@ -12,7 +12,21 @@ namespace Smile {
 
         // O Id sobrevive a mudancas nas listas; o indice e apenas o cache do frame atual.
         FSceneObjectRef Selection;
-        std::vector<Mat44> PreviousModels;
+        // Model do frame anterior, por SLOT DE RESIDENCIA e nao por posicao na lista.
+        //
+        // Indexado por posicao, remover um objeto deslocava a cauda e o PrevMVP de cada
+        // sobrevivente passava a ser o do ex-vizinho por um frame -- motion vector de outro
+        // objeto, que aparece como smear. Nao era bug vivo porque este vetor era limpo inteiro
+        // no OnSceneStructureChanged; o preco era jogar fora o historico de TODOS a cada
+        // edicao.
+        //
+        // O handle vai junto porque slot sozinho nao basta: um slot reciclado apontaria para o
+        // Model do ocupante anterior, e a generation e o que distingue os dois.
+        struct FPreviousModel {
+            Mat44           Model = Mat44::Identity();
+            FGpuSceneHandle Handle;
+        };
+        std::vector<FPreviousModel> PreviousModels;
 
         // Bounds definidos pelo loader e reutilizados por rebuilds que nao recarregam a cena.
         Vec3 BoundsMin{ 0.0f, 0.0f, 0.0f };

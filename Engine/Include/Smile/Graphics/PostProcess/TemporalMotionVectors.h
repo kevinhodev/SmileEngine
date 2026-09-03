@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Smile/Scene/GpuSceneHandle.h"
+
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
@@ -98,7 +100,23 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> TransformBuffer;
         u8* MappedTransforms = nullptr;
         u32 TransformSRVSlot[kFrames] = { kInvalidSlot, kInvalidSlot };
-        std::vector<Mat44> PreviousModels;
+        // Historico do frame anterior, indexado por SLOT DE RESIDENCIA e nao por posicao na
+        // lista.
+        //
+        // Com indice de lista, remover um objeto deslocava a cauda e cada sobrevivente herdava
+        // o transform anterior do ex-vizinho -- motion vector de outro objeto, que aparece como
+        // smear. Nao era bug vivo porque toda mudanca estrutural derrubava o historico inteiro
+        // (dominio SceneStructure + o clear explicito no OnSceneStructureChanged); o preco era
+        // jogar fora a convergencia de TODOS a cada edicao. Por slot, quem nao se mexeu
+        // mantem o historico.
+        //
+        // O handle vai junto porque slot sozinho nao basta: um slot reciclado apontaria para o
+        // transform do ocupante anterior, e a generation e o que distingue os dois.
+        struct FPreviousModel {
+            Mat44           Model  = Mat44::Identity();
+            FGpuSceneHandle Handle;
+        };
+        std::vector<FPreviousModel> PreviousModels;
         u32 InstanceCount_ = 0;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Surface[kFrames];

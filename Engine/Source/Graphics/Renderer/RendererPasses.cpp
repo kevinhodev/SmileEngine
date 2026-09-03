@@ -1965,8 +1965,10 @@ namespace Smile {
         {
             const std::vector<FRenderable>& RList = SceneState->Scene.Renderables();
             AllItems.reserve(RList.size());
-            const size_t PrevCount = SceneState->PreviousModels.size();
-            SceneState->PreviousModels.resize(RList.size(), Mat44::Identity());
+            // Dimensionado pela capacidade de SLOTS, e nao pelo tamanho da lista: o indice
+            // agora e o slot, que pode passar da contagem de renderaveis quando ha buracos.
+            SceneState->PreviousModels.resize(SceneState->Scene.GpuSlots().Capacity(),
+                                              FRendererSceneState::FPreviousModel{});
             const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
@@ -1977,7 +1979,15 @@ namespace Smile {
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
                 const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
                 const Mat44 Model = R.Transform.Matrix();
-                const Mat44 PrevModel = (si < PrevCount) ? SceneState->PreviousModels[si] : Model;
+                // Sem historico DAQUELE objeto, PrevModel = Model: motion vector zero, que e o
+                // desfecho certo para quem acabou de nascer ou cujo slot foi reciclado --
+                // herdar o Model do ocupante anterior produziria um smear vindo do nada.
+                const u32 PrevSlot = R.GpuHandle.Slot;
+                const bool TemHistorico =
+                    PrevSlot < SceneState->PreviousModels.size() &&
+                    SceneState->PreviousModels[PrevSlot].Handle == R.GpuHandle;
+                const Mat44 PrevModel =
+                    TemHistorico ? SceneState->PreviousModels[PrevSlot].Model : Model;
                 ObjectConstants OC;
                 OC.MVP            = Model * Vw.ViewProjection;
                 OC.ModelMatrix    = Model;
@@ -1990,7 +2000,8 @@ namespace Smile {
                     SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
-                SceneState->PreviousModels[si] = Model;
+                if (PrevSlot < SceneState->PreviousModels.size())
+                    SceneState->PreviousModels[PrevSlot] = { Model, R.GpuHandle };
             }
         }
         // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a

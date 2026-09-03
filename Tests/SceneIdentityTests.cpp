@@ -552,6 +552,54 @@ namespace {
         Check(Scene.ResolveCapturedIdentity(R1.Handle, R1.Id) == -1,
               "o valor gravado do removido nao encontra o novo ocupante");
     }
+
+    // A premissa em que o historico por SLOT se apoia: remover alguem move os INDICES dos
+    // sobreviventes, mas nao os HANDLES deles.
+    //
+    // E o que separa historico correto de historico jogado fora. Indexado por posicao, o
+    // transform anterior de cada sobrevivente vira o do ex-vizinho depois de uma remocao, e a
+    // unica saida e descartar tudo -- que e o que TemporalMotion e o PrevMVP do raster faziam.
+    // Indexado por slot, quem nao se mexeu mantem a convergencia.
+    void TestRemocaoMoveIndicesMasNaoHandles() {
+        std::cout << "  remocao move indices, nao handles\n";
+        Smile::FScene Scene;
+        std::vector<Smile::u64> Ids;
+        std::vector<Smile::FGpuSceneHandle> Handles;
+        for (int i = 0; i < 6; ++i) {
+            const Smile::FRenderable& R = Scene.AddRenderable(Make(("R" + std::to_string(i)).c_str(), i + 1));
+            Ids.push_back(R.Id);
+            Handles.push_back(R.GpuHandle);
+        }
+
+        Check(Scene.RemoveRenderable(Ids[1], kSemGpu), "remocao do meio falhou");
+
+        // Os indices ANDARAM: R2 estava em 2 e agora esta em 1.
+        Check(Scene.IndexOfRenderable(Ids[2]) == 1,
+              "o indice do sobrevivente andou");
+        Check(Scene.IndexOfRenderable(Ids[5]) == 4,
+              "e o do ultimo tambem");
+
+        // Os HANDLES nao: e por isso que um historico por slot sobrevive a remocao.
+        for (size_t i = 0; i < Ids.size(); ++i) {
+            if (i == 1) continue; // o removido
+            const int Pos = Scene.IndexOfRenderable(Ids[i]);
+            Check(Pos >= 0, "o sobrevivente continua na cena");
+            if (Pos < 0) continue;
+            Check(Scene.Renderables()[static_cast<size_t>(Pos)].GpuHandle == Handles[i],
+                  "o handle do sobrevivente nao mudou com a remocao");
+        }
+
+        // E o handle do removido nao pertence mais a ninguem -- um historico guardado naquele
+        // slot nao pode ser aplicado ao proximo ocupante.
+        Check(!Scene.GpuSlots().IsAlive(Handles[1]),
+              "a residencia do removido morreu");
+        Scene.GpuSlots().Collect(kSemGpu);
+        const Smile::FRenderable& Novo = Scene.AddRenderable(Make("novo", 9));
+        Check(Novo.GpuHandle.Slot == Handles[1].Slot,
+              "o novo reciclou o slot");
+        Check(Novo.GpuHandle != Handles[1],
+              "mas com generation diferente: o historico do anterior nao se aplica a ele");
+    }
 }
 
 int main() {
@@ -569,6 +617,7 @@ int main() {
     TestCicloSemCollectCresceOPool();
     TestIdentidadeCapturadaResolveOuFalha();
     TestRemapDeIdentidadeCapturada();
+    TestRemocaoMoveIndicesMasNaoHandles();
 
     if (Failures == 0) {
         std::cout << "  OK\n";
