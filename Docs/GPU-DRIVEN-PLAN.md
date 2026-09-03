@@ -791,9 +791,18 @@ contra assets incompatíveis.
 
 - ~~capturar baseline **visual** conforme `CAPTURE-PROTOCOL.md`~~ — **feita**, 20 capturas (as
   mesmas 5 cenas × 4 slots), preset científico, N=128, TOD 10h. A régua de performance ganhou
-  `--capture` e `--capture-only`, para que a metade visual saia da **mesma passagem**: mesma pose,
-  mesma build, mesmo regime. Duas rodadas separadas comparariam imagens de câmeras que só parecem
+  `--capture` e `--capture-only`, para que a metade visual saia da **mesma passagem, pose e build**
+  que a de performance. Duas rodadas separadas comparariam imagens de câmeras que só parecem
   iguais.
+
+  Os **regimes são distintos e declarados**, e isso é de propósito: o profiling usa `gameplay_rr`,
+  porque é o custo que interessa medir, e a captura usa o preset científico, que desliga o que
+  poluiria comparação de imagem. Os dois constam do JSON.
+
+  A captura roda **antes** do profiling no mesmo slot, e mexe no estado — reset determinístico,
+  N frames de aquecimento e `ElapsedTime` fixo. Medido: a 1M com `--capture` deu 547,0 ms no slot 0
+  contra 539,4 ms sem, ~1,4% acima. Por isso o modo faz parte da **chave da rodada**: comparar um
+  número tirado com `--capture` contra outro sem é comparar dois regimes.
 
   **As referências estão versionadas em `Docs/Baselines/Reference/`** (~23 MiB, PNG + o manifesto
   que o protocolo emite ao lado). Custam espaço e ficam mesmo assim, pela mesma razão dos JSON: o

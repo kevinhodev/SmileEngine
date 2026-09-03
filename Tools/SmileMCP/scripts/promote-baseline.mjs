@@ -10,8 +10,12 @@
 // SHA-256 num manifesto, para que "o arquivo que o plano cita" e "o arquivo que esta aqui" sejam
 // verificavelmente o mesmo.
 //
+// Alem do JSON, copia os PNGs de referencia e os manifestos do protocolo para
+// `Docs/Baselines/Reference/`, com nome canonico <cena>_slot<N>.
+//
 // Uso: node scripts/promote-baseline.mjs <relatorio.json> [--as <nome>] [--note "..."]
 //      --allow-incomplete  aceita relatorio com menos runs que pontos (precisa de --note)
+//      --allow-failed      aceita relatorio com passed:false        (precisa de --note)
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
@@ -48,6 +52,19 @@ const report = JSON.parse(raw);
 if (!report.buildCommit) fail("o relatorio nao tem buildCommit; nao ha o que promover");
 if (report.buildCommit.endsWith("-dirty")) fail(`build '${report.buildCommit}' saiu de arvore suja`);
 
+// A validacao nao olhava report.passed. Um relatorio pode ser aceitavel apesar de failed — o
+// perf-f781288 e, e o porque esta escrito nele —, mas isso tem de ser uma decisao DECLARADA. Sem
+// esta checagem, qualquer relatorio failed cujo summary batesse com runs entrava calado, e a
+// diferenca entre "aceito com justificativa" e "ninguem reparou" desaparecia.
+if (report.passed === false && !process.argv.includes("--allow-failed")) {
+  fail(
+    `o relatorio esta marcado passed:false (${(report.error ?? "sem erro registrado")
+      .split("\n")[0]
+      .slice(0, 120)}). Use --allow-failed --note "<por que e aceitavel>" se for o caso.`,
+  );
+}
+if (report.passed === false && !note) fail("--allow-failed exige --note explicando a aceitacao");
+
 const points = report.summary?.length ?? 0;
 const runs = report.runs?.length ?? 0;
 const captures = report.captures?.length ?? 0;
@@ -80,23 +97,50 @@ const destination = path.join(baselineDirectory, `${name}.json`);
 // Consequencia pratica, e vale para quem for comparar na Fase 1: os PNGs de referencia ficam
 // versionados em `Docs/Baselines/Reference/`, e a comparacao visual tem de ser por TOLERANCIA
 // (delta maximo, fracao de pixels acima de um limiar), nunca por igualdade de hash.
+// O promotor e dono da COPIA e do NOME das referencias. Na primeira versao ele so hasheava o PNG
+// de origem e gravava o basename longo, enquanto a copia para Reference/ era um passo a parte que
+// renomeava para <cena>_slot<N>.png: dois donos para a mesma decisao, e o pacote publicado ficou
+// com 20 nomes que nao existiam em lugar nenhum. Nome e copia saem daqui, juntos, para nao poderem
+// divergir de novo.
+const referenceDirectory = path.join(baselineDirectory, "Reference");
 const imageRows = [...(report.runs ?? []), ...(report.captures ?? [])]
   .map((entry) => ({ scene: entry.scene, slot: entry.slot, png: entry.capture?.pngPath }))
   .filter((entry) => entry.png);
-for (const row of imageRows) {
-  row.sha256 = await readFile(row.png)
-    .then((bytes) => createHash("sha256").update(bytes).digest("hex"))
-    .catch(() => null);
-}
+
 if (imageRows.length > 0) {
+  await mkdir(referenceDirectory, { recursive: true });
+  for (const row of imageRows) {
+    // Cena e slot SAO a identidade da referencia. O nome longo original carrega knobs e hora, que
+    // ja estao no manifesto do proprio protocolo, copiado ao lado.
+    row.file = `${row.scene}_slot${row.slot}.png`;
+    const bytes = await readFile(row.png).catch(() => null);
+    if (!bytes) {
+      row.sha256 = null;
+      continue;
+    }
+    row.sha256 = createHash("sha256").update(bytes).digest("hex");
+    await writeFile(path.join(referenceDirectory, row.file), bytes);
+    // O manifesto que o CAPTURE-PROTOCOL emite ao lado do PNG: e o que declara preset, N,
+    // resolucao e estado. Sem ele a imagem e um pixel sem procedencia.
+    const sidecar = row.png.replace(/\.png$/i, ".json");
+    const sidecarBytes = await readFile(sidecar).catch(() => null);
+    if (sidecarBytes) {
+      await writeFile(path.join(referenceDirectory, row.file.replace(/\.png$/, ".json")),
+                      sidecarBytes);
+    } else {
+      console.warn(`[promote] sem manifesto ao lado de ${path.basename(row.png)}`);
+    }
+  }
   report.capturedImages = imageRows.map((row) => ({
     scene: row.scene,
     slot: row.slot,
-    file: path.basename(row.png),
+    file: `Reference/${row.file}`,
+    sourceFile: path.basename(row.png),
     sha256: row.sha256,
   }));
   const missing = imageRows.filter((row) => !row.sha256).length;
-  if (missing > 0) console.warn(`[promote] ${missing} PNG(s) nao encontrados para hashear`);
+  if (missing > 0) fail(`${missing} PNG(s) de origem nao encontrados; o pacote sairia quebrado`);
+  console.log(`[promote] ${imageRows.length} referencia(s) copiadas para Docs/Baselines/Reference/`);
 }
 
 await mkdir(baselineDirectory, { recursive: true });
@@ -125,6 +169,14 @@ for (const file of files) {
     scenes: [...new Set([...(parsed.summary ?? []), ...(parsed.captures ?? [])].map((s) => s.scene))]
       .join(" "),
     when: (parsed.startedAt ?? "").slice(0, 10),
+    // Relatorios anteriores a 2026-09-03 so tem o carimbo assado na build. Os novos tambem medem
+    // HEAD e `git status` NA HORA da rodada, mais o hash dos assets carregados — evidencia mais
+    // forte, e a coluna existe para nao confundir as duas.
+    provenance: parsed.gitState
+      ? `HEAD ${(parsed.gitState.head ?? "").slice(0, 7)}` +
+        (parsed.gitState.workingTreeClean === false ? " (arvore suja)" : "") +
+        (parsed.sceneFingerprints ? " + assets" : "")
+      : "so carimbo",
     note: file === `${name}.json` ? note : undefined,
   });
 }
@@ -143,17 +195,19 @@ const lines = [
   "",
   "Gerado por `Tools/SmileMCP/scripts/promote-baseline.mjs` — nao editar a tabela a mao.",
   "",
-  "| arquivo | build | pontos | runs | capturas | cenas | data |",
-  "|---|---|--:|--:|--:|---|---|",
+  "| arquivo | build | pontos | runs | capturas | cenas | proveniencia | data |",
+  "|---|---|--:|--:|--:|---|---|---|",
 ];
 for (const row of rows) {
   lines.push(
     `| \`${row.file}\` | \`${row.build}\` | ${row.points} | ${row.runs} | ${row.captures} | ` +
-      `${row.scenes} | ${row.when} |`,
+      `${row.scenes} | ${row.provenance} | ${row.when} |`,
   );
 }
-lines.push("", "## SHA-256", "");
-for (const row of rows) lines.push(`- \`${row.file}\`  \n  \`${row.sha256}\``);
+// Tabela e nao lista com hard-break: o "  \n" do markdown deixa espaco no fim da linha, que o
+// `git diff --check` acusa a cada regravacao do manifesto.
+lines.push("", "## SHA-256", "", "| arquivo | sha256 |", "|---|---|");
+for (const row of rows) lines.push(`| \`${row.file}\` | \`${row.sha256}\` |`);
 
 const notes = rows
   .map((row) => [row.file, row.note || preservedNotes.get(row.file)])

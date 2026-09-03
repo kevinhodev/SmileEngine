@@ -13,6 +13,8 @@
 // smile_run_editor recusa reaproveitar um editor aberto com outra .sscene — entao fechar entre
 // cenas nao e zelo, e o unico caminho.
 
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,9 +93,18 @@ const scenes = sceneFilter
 // vazio (arquivo nao rastreado inclusive), entao a checagem e barata e nao precisa de git aqui.
 // --allow-dirty existe para shakedown da propria regua, e marca o relatorio como nao-gate.
 const allowDirty = process.argv.includes("--allow-dirty");
-// A metade VISUAL da baseline, pelo CAPTURE-PROTOCOL.md. Sai da mesma pose, da mesma build e do
-// mesmo regime da metade de performance porque e a MESMA passagem — separar as duas em rodadas
-// diferentes e comparar imagens de cameras que so parecem iguais.
+// A metade VISUAL da baseline, pelo CAPTURE-PROTOCOL.md. Sai da mesma passagem, da mesma pose e da
+// mesma build que a metade de performance — separar as duas em rodadas diferentes e comparar
+// imagens de cameras que so parecem iguais.
+//
+// Os REGIMES sao distintos de proposito, e isso nao e descuido: o profiling usa o preset de
+// gameplay (gameplay_rr) porque e o custo que interessa medir, e a captura usa o cientifico, que
+// desliga o que polui comparacao de imagem. Ambos ficam declarados no relatorio.
+//
+// A captura acontece ANTES do profiling no mesmo slot, e mexe no estado: faz reset deterministico,
+// aquece N frames e fixa o ElapsedTime. Medido: a 1M com --capture deu 547,0 ms no slot 0 contra
+// 539,4 ms sem, ~1,4% acima. Por isso o modo entra na CHAVE da rodada — comparar um numero tirado
+// com --capture contra outro sem e comparar dois regimes.
 //
 // --capture-only pula o profiling (aquecimento + 60 amostras) e so captura: e a passagem rapida
 // para quando a metade de performance ja esta tirada.
@@ -218,6 +229,49 @@ async function ensureProcessGone(pid, label, graceMilliseconds = 120_000) {
   );
 }
 
+// O sufixo -dirty prova o estado da arvore quando o EXECUTAVEL foi compilado, e nao quando a
+// medicao roda. Entre uma coisa e outra da para modificar uma .sscene ignorada pelo git, trocar um
+// sidecar ou editar um script, e a rodada sai com dirtyBuild:false afirmando uma limpeza que ja
+// nao existe. Entao o estado do repositorio e dos assets EFETIVAMENTE CARREGADOS e medido aqui, na
+// hora, e vai para o relatorio.
+async function readGitState() {
+  const run = (args) =>
+    new Promise((resolve) => {
+      execFile("git", args, { cwd: smileRoot }, (error, stdout) =>
+        resolve(error ? null : stdout.trim()),
+      );
+    });
+  const [head, status] = await Promise.all([
+    run(["rev-parse", "HEAD"]),
+    run(["status", "--porcelain"]),
+  ]);
+  return {
+    head,
+    // null = o git nao respondeu; nao e o mesmo que "limpo", e o relatorio tem de distinguir.
+    workingTreeClean: status === null ? null : status === "",
+    dirtyEntries: status ? status.split("\n").filter(Boolean) : [],
+  };
+}
+
+// Impressao dos arquivos que a cena realmente usa. O .sscene e o .smesh das sinteticas moram em
+// build/ e sao invisiveis para o `git status`; os sidecars sao versionados mas editaveis a mao.
+// Sem isto, "mesma cena" e uma suposicao pelo caminho do arquivo.
+async function fingerprintScene(sceneEntry) {
+  const files = [
+    sceneEntry.scene,
+    sceneEntry.scene.replace(/\.sscene$/, ".smesh"),
+    sceneEntry.sidecar,
+  ];
+  const out = {};
+  for (const relative of files) {
+    const bytes = await readFile(path.join(smileRoot, relative)).catch(() => null);
+    out[relative] = bytes
+      ? { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }
+      : null;
+  }
+  return out;
+}
+
 async function readSidecar(relativePath) {
   const bytes = await readFile(path.join(smileRoot, relativePath), "utf8");
   const parsed = JSON.parse(bytes);
@@ -299,6 +353,7 @@ async function auditLogs(sceneId, pid) {
 
 async function measureScene(sceneEntry) {
   const sidecar = await readSidecar(sceneEntry.sidecar);
+  const fingerprints = await fingerprintScene(sceneEntry);
   // Esperar aqui, e nao depois de fechar, e o que importa: o perigo e a cena ANTERIOR ainda estar
   // segurando VRAM enquanto esta mede. Depois da ultima cena nao ha ninguem para proteger, e
   // derrubar a rodada por um teardown lento perderia 20 medicoes ja feitas -- que foi o que
@@ -334,6 +389,10 @@ async function measureScene(sceneEntry) {
     `${sceneEntry.id}: build mudou no meio da rodada ('${report.buildCommit}' -> '${buildCommit}')`,
   );
   report.dirtyBuild = buildCommit.endsWith("-dirty");
+
+
+  report.sceneFingerprints ??= {};
+  report.sceneFingerprints[sceneEntry.id] = fingerprints;
 
   const sceneRuns = [];
   for (const slot of slots) {
@@ -511,6 +570,19 @@ async function writeReport() {
 }
 
 try {
+  // O -dirty do carimbo e do momento da COMPILACAO; isto e do momento da MEDICAO, e sao coisas
+  // diferentes. Da para compilar limpo e depois mexer numa .sscene ignorada pelo git, num sidecar
+  // ou num script, e a rodada sairia afirmando uma limpeza que ja nao existe. Conferido UMA vez,
+  // antes de abrir editor nenhum: falhar depois de carregar a 1M custa minutos para dizer algo que
+  // ja se sabia.
+  report.gitState = await readGitState();
+  assert(
+    allowDirty || report.gitState.workingTreeClean !== false,
+    `a arvore esta suja AGORA (${report.gitState.dirtyEntries.length} entrada(s), ex.: ` +
+      `${report.gitState.dirtyEntries.slice(0, 3).join(", ")}), embora a build tenha sido ` +
+      `compilada limpa. Commite, ou use --allow-dirty para uma rodada que NAO vale como baseline.`,
+  );
+
   await client.connect(transport);
   for (const sceneEntry of scenes) {
     // measureScene ja publicou cada ponto em report.runs assim que o mediu.
