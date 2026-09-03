@@ -865,6 +865,10 @@ Separar identidade, slot GPU e índice visível sem alterar a imagem nem o méto
 
 ### Trabalho
 
+- **pré-requisito de API**: fazer a fila direta expor o último valor submetido — devolver a fence
+  em toda submissão relevante, ou expor `LastSignaledValue()`. Hoje `EndFrame`, `Flush` e
+  `ExecuteAndSync` devolvem `void`, e sem isso o ticket de aposentadoria não é implementável (ver
+  "Quando o ticket captura as fences"). O `FAsyncComputeQueue` já devolve, no `SubmitAfter`;
 - definir `FGpuSceneHandle {slot,generation}` e allocator com deferred reuse por fence;
 - manter `FRenderable::Id` como identidade de editor;
 - criar remaps explícitos para TLAS, temporal transforms, HiZ e picking;
@@ -986,24 +990,47 @@ Dois valores são necessários e **não suficientes**: o ticket só é seguro se
 gravação, o último valor sinalizado não a cobre, e o slot voltaria a `Free` cedo — o objeto novo
 tomaria o lugar enquanto a GPU ainda lê o velho.
 
-Vale registrar o que o código permite, porque isso fecha o desenho: **nenhuma das duas filas expõe
-`LastSignaled` ou `Completed` publicamente** — `FenceValue` é privado em ambas. O que é público é o
-valor **retornado por uma submissão** (`FCommandQueue::SubmitSegmentAndContinue`,
-`FAsyncComputeQueue::SubmitAfter`) e o `NativeFence()`. Não existe, portanto, caminho de fora para
-ler "último sinalizado" e errar por descuido.
+**Onde a fronteira está hoje, e de onde vem a garantia.** Não vem do dreno, e é importante não
+descrever errado: `Renderer::RemoveRenderable` e `DuplicateRenderable` alteram a `FScene`
+**primeiro** e só depois chamam `OnSceneStructureChanged`, que é onde o `DirectQueue.Flush()` +
+`ComputeQueue.WaitIdle()` acontecem (`RendererScene.cpp:139-148`). A segurança vem do
+`RendererHandle`, que "serializa o acesso externo com `RenderFrame` e os jobs do renderer" por um
+`recursive_mutex` (`Editor/Include/SmileEditor/Viewport/RenderThread.h:13`): mutação externa e
+`RenderFrame` disputam o **mesmo lock**, então a edição acontece **entre frames**, nunca durante a
+gravação. A fronteira, portanto, já é a que interessa — entre o `EndFrame` e o próximo
+`BeginFrame` — e existe independentemente do dreno.
 
-A regra fica: **mutações estruturais são aplicadas numa fronteira de submissão**, e o ticket recebe
-os valores que aquela fronteira sinalizou. Hoje isso é trivialmente satisfeito, porque
-`OnSceneStructureChanged` drena as duas filas antes de mexer na cena — nada em voo, nada em
-gravação. À medida que a Fase 1 remover o dreno, a fronteira passa a ser *depois* da submissão de
-fim de frame e *antes* do próximo `BeginFrame`.
+**A mutação não precisa esperar a GPU terminar.** Esse é o ponto do deferred reuse. Ao remover, o
+handle vira `Retired` **imediatamente** e recebe os **últimos valores realmente submetidos** nas
+duas filas. `Collect` consulta os valores concluídos e libera o slot só depois que ambos passaram.
+O objeto some da cena no mesmo frame; o *slot* é que espera.
 
-Onde não houver fronteira, o ticket usa a **próxima** fence que cobrirá o pendente, e não a última
-sinalizada. A engine já tem esse padrão: `FUploadQueue::PendingFence()` devolve `FenceValue + 1`
-exatamente com esse sentido. A armadilha a evitar é uma fila **ociosa**: se nada mais for submetido
-nela, `Completed` nunca alcança um `Required` de "próxima", e o slot fica preso em `Retired` para
-sempre. Por isso `Required` só pode ser "próxima" para uma fila que de fato tem trabalho gravado e
-não submetido; para uma fila parada, é a última sinalizada, que já passou.
+Escrever isso ao contrário — "o dreno acontece antes da mutação" — convidaria duas implementações
+erradas: capturar do lado errado da fronteira, ou deixar uma janela em que o objeto morreu e o
+handle continua `Live`.
+
+**Falta uma peça na API das filas, e ela é pré-requisito.** O caso "sem trabalho novo nesta fila,
+mas com trabalho anterior ainda em voo" exige o **último valor submetido**, e hoje a fila direta não
+o fornece:
+
+| membro | hoje | serve? |
+|---|---|---|
+| `EndFrame(...)` | `void` | não |
+| `Flush()` | `void` | não |
+| `ExecuteAndSync(...)` | `void` | não |
+| `SubmitSegmentAndContinue()` | devolve `u64` | parcial — pode ser **anterior** ao signal do `EndFrame` |
+| `NativeFence()->GetCompletedValue()` | concluído | não — é outra grandeza |
+
+A mudança concreta, antes de conectar o allocator: **devolver a fence em toda submissão relevante,
+ou expor `LastSignaledValue()`**, e o renderer manter o último valor de cada fila. Sem isso o ramo
+descrito acima não é implementável com a API proposta — e o `FAsyncComputeQueue` já está do lado
+certo, porque `SubmitAfter` devolve o valor sinalizado.
+
+**"Próxima fence" sai do desenho.** Ela só faria sentido para trabalho realmente gravado e com
+submissão garantida, e para as mutações externas de hoje esse caminho não é necessário: com a
+fronteira entre frames, o último submetido já cobre tudo que pode referenciar o slot. Deixá-la no
+contrato só abriria a armadilha da fila **ociosa**, em que `Completed` nunca alcança um `Required`
+de "próxima" e o slot fica preso em `Retired` para sempre.
 
 ### Desenho do remap do HiZ
 
