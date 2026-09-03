@@ -273,7 +273,7 @@ namespace Smile {
         }
     }
 
-    bool FObjectPicker::TryResolve(int& OutIndex) {
+    bool FObjectPicker::TryResolve(FPickIdentity& _OutIdentity) {
         if (State != EState::Copied || ReadyCountdown > 0) return false;
         if (DiscardResult) {
             State = EState::Idle;
@@ -294,7 +294,12 @@ namespace Smile {
         State          = EState::Idle;
         ReadyCountdown = -1;
         DiscardResult  = false;
-        OutIndex       = (Value == 0) ? -1 : static_cast<int>(Value) - 1; 
+        // O valor indexa a tabela de identidades DESTE passe, e nao a lista de renderaveis. Fora
+        // de faixa nao e "sem hit": e um readback que nao corresponde a tabela atual, o que so
+        // acontece se o passe foi regravado no meio -- tratar como vazio e a resposta segura.
+        _OutIdentity = FPickIdentity{};
+        if (Value != 0 && Value <= PickIdentities.size())
+            _OutIdentity = PickIdentities[Value - 1];
         return true;
     }
 

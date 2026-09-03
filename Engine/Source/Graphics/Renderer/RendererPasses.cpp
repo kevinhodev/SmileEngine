@@ -881,12 +881,19 @@ namespace Smile {
 
         if (ObjectPicker.HasPendingRequest()) {
             {
+                // A tabela de identidades e do FRAME: o readback chega depois, e a resposta tem de
+                // vir de quem o objeto ERA aqui, nao de quem ocupa aquela posicao la na frente.
                 std::vector<FObjectPicker::FDrawItem> PickItems;
+                auto& PickIds = ObjectPicker.Identities();
                 PickItems.reserve(VisibleScratch.size());
-                for (const FVisibleItem& V : VisibleScratch)
+                PickIds.clear();
+                PickIds.reserve(VisibleScratch.size());
+                for (const FVisibleItem& V : VisibleScratch) {
+                    PickIds.push_back({ V.R->GpuHandle, V.R->Id });
                     PickItems.push_back({ V.R->Mesh, V.Mat,
                                           ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
-                                          V.SceneIndex + 1 });
+                                          static_cast<u32>(PickIds.size()) });
+                }
                 ObjectPicker.RecordIDPass(CommandList, Backend->SRVHeap,
                                           PickItems.data(), PickItems.size());
 

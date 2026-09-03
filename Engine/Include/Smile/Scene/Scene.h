@@ -167,6 +167,25 @@ namespace Smile {
         FRenderable*       FindRenderable(u64 Id);
         const FRenderable* FindRenderable(u64 Id) const;
         int                IndexOfRenderable(u64 Id) const; // -1 = nao existe
+
+        // Resolve uma identidade CAPTURADA NO PASSADO para a posicao de agora. Devolve -1 quando o
+        // objeto nao existe mais, ou quando a residencia GPU dele ja foi para outro.
+        //
+        // Mora aqui, e nao no renderer, por dois motivos: e CPU pura (logo testavel sem device) e
+        // e a mesma pergunta que todo consumidor com readback atrasado faz — o pick e o primeiro,
+        // o HiZ vem depois.
+        //
+        // O ID e quem carrega o peso aqui: ele diz ONDE o objeto esta agora, e como Id nunca e
+        // reciclado dentro da sessao (ver Clear), um objeto removido simplesmente nao resolve. So
+        // com isso o pick ja para de trocar de objeto quando a lista anda.
+        //
+        // O HANDLE e guarda para o que o Id nao cobre, e vale dizer que HOJE ele e redundante NESTE
+        // caminho -- removê-lo nao quebra nenhum teste de picking, porque o Id sozinho ja recusa o
+        // removido. Ele existe por dois motivos concretos: consumidores SEM Id (o readback do HiZ
+        // endereca por slot e nao tem identidade de editor) e um futuro caminho que aposente
+        // residencia sem remover o renderavel, em que o Id resolveria para um objeto cuja
+        // residencia ja e de outro.
+        int ResolveCapturedIdentity(FGpuSceneHandle Handle, u64 Id) const;
         u64                IdAt(u32 Index) const;           // 0 = fora da lista
 
         // ATENCAO: a referencia e mutavel para o renderer editar CAMPOS (transform, Visible) sem

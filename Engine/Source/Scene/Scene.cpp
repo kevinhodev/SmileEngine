@@ -179,6 +179,12 @@ namespace Smile {
         return Added;
     }
 
+    int FScene::ResolveCapturedIdentity(FGpuSceneHandle _Handle, u64 _Id) const {
+        if (_Id == 0) return -1;
+        if (!GpuSlots_.IsAlive(_Handle)) return -1;
+        return IndexOfRenderable(_Id);
+    }
+
     bool FScene::RemoveRenderable(u64 _Id, const FGpuFenceSet& _Required) {
         const int Index = IndexOfRenderable(_Id);
         if (Index < 0) return false;

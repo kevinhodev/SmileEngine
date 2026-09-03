@@ -418,6 +418,77 @@ namespace {
               "com Collect a cada ciclo, o pool fica em um slot");
         Check(Outra.GpuSlots().RetiredCount() == 0, "e nada fica preso");
     }
+
+    // Identidade capturada no passado resolve para a posicao de AGORA, ou para nada.
+    //
+    // E a pergunta que todo consumidor com readback atrasado faz: o passe de picking grava no
+    // frame N e o resultado chega no N+k. Enquanto o endereco era o INDICE, a unica protecao era
+    // cancelar o pick em voo a cada mudanca estrutural -- descarte global, que funciona e cobra
+    // o preco de jogar fora trabalho valido.
+    void TestIdentidadeCapturadaResolveOuFalha() {
+        std::cout << "  identidade capturada resolve para a posicao atual\n";
+        Smile::FScene Scene;
+        std::vector<Smile::u64> Ids;
+        std::vector<Smile::FGpuSceneHandle> Handles;
+        for (int i = 0; i < 5; ++i) {
+            const Smile::FRenderable& R = Scene.AddRenderable(Make(("R" + std::to_string(i)).c_str(), i + 1));
+            Ids.push_back(R.Id);
+            Handles.push_back(R.GpuHandle);
+        }
+
+        // Sem mudanca: resolve para a mesma posicao.
+        for (int i = 0; i < 5; ++i)
+            Check(Scene.ResolveCapturedIdentity(Handles[i], Ids[i]) == i,
+                  "sem mudanca, resolve para a posicao original");
+
+        // Clique no vazio.
+        Check(Scene.ResolveCapturedIdentity(Smile::FGpuSceneHandle{}, 0) == -1,
+              "Id zero e clique no vazio");
+
+        // Removendo o PRIMEIRO, a cauda anda: o indice capturado de R4 era 4, agora e 3. E o
+        // caso que o endereco por indice errava calado -- selecionaria o vizinho.
+        Check(Scene.RemoveRenderable(Ids[0], kSemGpu), "remocao falhou");
+        Check(Scene.ResolveCapturedIdentity(Handles[4], Ids[4]) == 3,
+              "depois de remover o primeiro, R4 resolve para 3 e nao para 4");
+        Check(Scene.ResolveCapturedIdentity(Handles[1], Ids[1]) == 0,
+              "e R1 para 0");
+
+        // O objeto removido nao resolve para ninguem -- nem para quem ficou no lugar dele.
+        Check(Scene.ResolveCapturedIdentity(Handles[0], Ids[0]) == -1,
+              "o objeto removido nao resolve");
+
+        // E o caso perigoso: o slot dele foi reciclado por um objeto NOVO. A identidade antiga
+        // continua nao resolvendo, porque o handle carrega a generation.
+        Scene.GpuSlots().Collect(kSemGpu);
+        const Smile::FRenderable& Novo = Scene.AddRenderable(Make("novo", 99));
+        Check(Novo.GpuHandle.Slot == Handles[0].Slot,
+              "o objeto novo reciclou o slot do removido");
+        Check(Scene.ResolveCapturedIdentity(Handles[0], Ids[0]) == -1,
+              "a identidade antiga nao ressuscita pelo slot reciclado");
+        Check(Scene.ResolveCapturedIdentity(Novo.GpuHandle, Novo.Id) >= 0,
+              "e o novo resolve normalmente");
+
+        // Handle e Id divergentes: resolve pelo Id, que e a identidade de editor.
+        Check(Scene.ResolveCapturedIdentity(Handles[1], Ids[2]) ==
+                  Scene.IndexOfRenderable(Ids[2]),
+              "handle e Id divergentes resolvem pelo Id");
+
+        // O caso em que a checagem do HANDLE e a unica que pega: residencia aposentada SEM o
+        // renderavel sair da cena. Nenhum caminho de producao faz isso hoje -- por isso removê-la
+        // nao quebra os casos acima --, e e exatamente o estado que um consumidor sem Id (o HiZ,
+        // que endereca por slot) enxerga, e que um futuro caminho de aposentadoria independente
+        // criaria.
+        {
+            const Smile::u64 Alvo = Ids[3];
+            const int PosicaoAntes = Scene.IndexOfRenderable(Alvo);
+            Check(PosicaoAntes >= 0, "o alvo ainda esta na cena");
+            Scene.GpuSlots().Retire(Handles[3], kSemGpu);
+            Check(Scene.IndexOfRenderable(Alvo) == PosicaoAntes,
+                  "o renderavel continua na cena: so a residencia foi aposentada");
+            Check(Scene.ResolveCapturedIdentity(Handles[3], Alvo) == -1,
+                  "com a residencia aposentada, a identidade capturada nao resolve");
+        }
+    }
 }
 
 int main() {
@@ -433,6 +504,7 @@ int main() {
     TestRemocaoAposentaAResidencia();
     TestSemSlotDisponivel();
     TestCicloSemCollectCresceOPool();
+    TestIdentidadeCapturadaResolveOuFalha();
 
     if (Failures == 0) {
         std::cout << "  OK\n";

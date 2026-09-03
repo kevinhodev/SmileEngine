@@ -292,7 +292,9 @@ namespace Smile {
             ObjectPicker.RequestPick(static_cast<u32>(X * RenderScale + 0.5f),
                                      static_cast<u32>(Y * RenderScale + 0.5f));
         }
-        bool TryGetPickResult(int& OutIndex) { return ObjectPicker.TryResolve(OutIndex); }
+        // Valida a identidade gravada no passe e traduz para a posicao ATUAL. A assinatura
+        // continua em indice porque e o que o editor consome; o que mudou e o caminho ate ele.
+        bool TryGetPickResult(int& OutIndex);
         // O indice atende ao draw; o Id mantem a selecao estavel apos alteracoes na cena.
         void SetSelectedObject(int Index);
         int  GetSelectedObject() const;

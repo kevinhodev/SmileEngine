@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Smile/Scene/GpuSceneHandle.h"
+
 #include <d3d12.h>
 #include <cstddef>
 #include "Smile/Core/Types.h"
@@ -27,8 +29,28 @@ namespace Smile {
             const FGpuMesh*           Mesh;
             const FMaterial*          Material;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCBAddress; // slot b2 desse renderavel (mesmo MVP do forward)
-            u32                       ObjectId;        // indice do renderavel + 1 (0 reservado p/ vazio)
+            // Indice na tabela de identidades DESTE passe, + 1 (0 fica reservado para vazio).
+            // NAO e o indice do renderavel na lista: o readback chega frames depois, e ate la a
+            // lista pode ter mudado -- era assim que o pick endereçava, e so nao trocava de
+            // objeto porque toda mudanca estrutural cancelava o pick em voo.
+            u32                       ObjectId;
         };
+
+        // Quem era o objeto quando o passe foi GRAVADO. O resultado do pick e lido frames
+        // depois, entao a resposta tem de vir daqui e nao da lista de agora.
+        //
+        // Os dois campos servem a coisas diferentes: o Handle diz se aquela residencia de GPU
+        // ainda e a mesma (o objeto pode ter morrido no meio, e o slot ja pertencer a outro), e
+        // o Id e a identidade de EDITOR, que resolve para a posicao atual por um mapa O(1) sem
+        // depender de a lista nao ter andado.
+        struct FPickIdentity {
+            FGpuSceneHandle Handle;
+            u64             Id = 0;
+        };
+
+        // Identidades do passe corrente, na ordem em que os FDrawItem foram montados. O
+        // ObjectId de cada item indexa aqui (menos 1).
+        std::vector<FPickIdentity>& Identities() { return PickIdentities; }
 
         void Initialize(ID3D12Device* Device, u32 Width, u32 Height);
         void Resize(ID3D12Device* Device, u32 Width, u32 Height);
@@ -63,9 +85,13 @@ namespace Smile {
         // Avanca o relogio interno (1x por frame, no topo do RenderFrame apos o BeginFrame).
         void Tick();
 
-        // Devolve true (uma unica vez) quando o resultado fica pronto; OutIndex = indice do
-        // renderavel (-1 = vazio / sem hit). False enquanto nao pronto.
-        bool TryResolve(int& OutIndex);
+        // Devolve true (uma unica vez) quando o resultado fica pronto. OutIdentity fica com a
+        // identidade gravada no momento do passe; Id == 0 significa clique no vazio.
+        //
+        // Quem chama TEM de validar o Handle contra o allocator antes de usar o Id: entre o
+        // passe e este readback o objeto pode ter sido removido, e ai a resposta certa e
+        // 'nada', nao 'o objeto que ocupa aquele lugar agora'.
+        bool TryResolve(FPickIdentity& OutIdentity);
 
     private:
         void CreateTargets(ID3D12Device* Device, u32 Width, u32 Height);
@@ -84,6 +110,8 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> AlphaPSO;
 
         EState State          = EState::Idle;
+        std::vector<FPickIdentity> PickIdentities;
+
         u32    PickX          = 0;
         u32    PickY          = 0;
         int    ReadyCountdown = -1; // frames ate o readback ficar seguro (>=0 = aguardando)

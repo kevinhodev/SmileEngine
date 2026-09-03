@@ -136,6 +136,16 @@ namespace Smile {
         return SceneState->Selection.IsLight() ? static_cast<int>(SceneState->Selection.Index) : -1;
     }
 
+    bool Renderer::TryGetPickResult(int& _OutIndex) {
+        FObjectPicker::FPickIdentity Identity;
+        if (!ObjectPicker.TryResolve(Identity)) return false;
+
+        // A logica mora na FScene (ResolveCapturedIdentity), que e CPU pura e por isso testavel
+        // sem device -- e e a mesma pergunta que todo consumidor com readback atrasado faz.
+        _OutIndex = SceneState->Scene.ResolveCapturedIdentity(Identity.Handle, Identity.Id);
+        return true;
+    }
+
     FGpuFenceSet Renderer::CurrentFenceSet() const {
         return FGpuFenceSet{ Backend->DirectQueue.LastSignaledValue(),
                              Backend->ComputeQueue.LastSignaledValue() };
