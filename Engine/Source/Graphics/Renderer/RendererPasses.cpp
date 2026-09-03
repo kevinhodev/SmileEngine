@@ -892,7 +892,7 @@ namespace Smile {
                     PickIds.push_back({ V.R->GpuHandle, V.R->Id });
                     PickItems.push_back({ V.R->Mesh, V.Mat,
                                           ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
-                                          static_cast<u32>(PickIds.size()) });
+                                          EncodeCapturedIdentity(PickIds.size() - 1) });
                 }
                 ObjectPicker.RecordIDPass(CommandList, Backend->SRVHeap,
                                           PickItems.data(), PickItems.size());

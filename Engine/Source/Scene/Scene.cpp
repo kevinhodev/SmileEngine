@@ -181,8 +181,22 @@ namespace Smile {
 
     int FScene::ResolveCapturedIdentity(FGpuSceneHandle _Handle, u64 _Id) const {
         if (_Id == 0) return -1;
-        if (!GpuSlots_.IsAlive(_Handle)) return -1;
-        return IndexOfRenderable(_Id);
+
+        const int Index = IndexOfRenderable(_Id);
+        if (Index < 0) return -1;
+
+        // O handle tem de ser o DAQUELE objeto, e nao um handle vivo qualquer. Conferir so o
+        // IsAlive respondia "existe alguma residencia viva com esse par", que e outra pergunta:
+        // ResolveCapturedIdentity(handleDoA, idDoB) aprovava B por causa de A.
+        //
+        // Comparar com o handle ATUAL do renderavel cobre os dois lados de uma vez: se a residencia
+        // dele mudou desde a captura, o par nao bate; e como o handle atual so e vivo enquanto o
+        // objeto o e, o IsAlive fecha o caso de a residencia ter sido aposentada sem o renderavel
+        // sair da cena.
+        const FRenderable& R = RenderableList[static_cast<size_t>(Index)];
+        if (R.GpuHandle != _Handle) return -1;
+        if (!GpuSlots_.IsAlive(R.GpuHandle)) return -1;
+        return Index;
     }
 
     bool FScene::RemoveRenderable(u64 _Id, const FGpuFenceSet& _Required) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Smile/Scene/GpuSceneHandle.h"
+#include "Smile/Scene/CapturedIdentity.h"
 
 #include <d3d12.h>
 #include <cstddef>
@@ -43,10 +43,7 @@ namespace Smile {
         // ainda e a mesma (o objeto pode ter morrido no meio, e o slot ja pertencer a outro), e
         // o Id e a identidade de EDITOR, que resolve para a posicao atual por um mapa O(1) sem
         // depender de a lista nao ter andado.
-        struct FPickIdentity {
-            FGpuSceneHandle Handle;
-            u64             Id = 0;
-        };
+        using FPickIdentity = FCapturedIdentity;
 
         // Identidades do passe corrente, na ordem em que os FDrawItem foram montados. O
         // ObjectId de cada item indexa aqui (menos 1).

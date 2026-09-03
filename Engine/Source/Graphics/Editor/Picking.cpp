@@ -297,9 +297,7 @@ namespace Smile {
         // O valor indexa a tabela de identidades DESTE passe, e nao a lista de renderaveis. Fora
         // de faixa nao e "sem hit": e um readback que nao corresponde a tabela atual, o que so
         // acontece se o passe foi regravado no meio -- tratar como vazio e a resposta segura.
-        _OutIdentity = FPickIdentity{};
-        if (Value != 0 && Value <= PickIdentities.size())
-            _OutIdentity = PickIdentities[Value - 1];
+        _OutIdentity = DecodeCapturedIdentity(PickIdentities, Value);
         return true;
     }
 

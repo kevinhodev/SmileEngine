@@ -82,6 +82,7 @@ smile_engine_group("Math"
 )
 
 smile_engine_group("Scene"
+    Include/Smile/Scene/CapturedIdentity.h
     Include/Smile/Scene/CookedFormat.h
     Include/Smile/Scene/GpuSceneHandle.h
     Include/Smile/Scene/Light.h

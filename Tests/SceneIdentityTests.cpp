@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Scene/Scene.h"
 
 namespace Smile {
@@ -468,10 +469,11 @@ namespace {
         Check(Scene.ResolveCapturedIdentity(Novo.GpuHandle, Novo.Id) >= 0,
               "e o novo resolve normalmente");
 
-        // Handle e Id divergentes: resolve pelo Id, que e a identidade de editor.
-        Check(Scene.ResolveCapturedIdentity(Handles[1], Ids[2]) ==
-                  Scene.IndexOfRenderable(Ids[2]),
-              "handle e Id divergentes resolvem pelo Id");
+        // Handle e Id de objetos DIFERENTES: recusa. O par tem de ser coerente -- um handle vivo
+        // qualquer nao autoriza um Id qualquer, senao a validacao responderia "existe alguma
+        // residencia viva", que e outra pergunta.
+        Check(Scene.ResolveCapturedIdentity(Handles[1], Ids[2]) == -1,
+              "handle de um objeto com Id de outro nao resolve");
 
         // O caso em que a checagem do HANDLE e a unica que pega: residencia aposentada SEM o
         // renderavel sair da cena. Nenhum caminho de producao faz isso hoje -- por isso removê-la
@@ -489,6 +491,67 @@ namespace {
                   "com a residencia aposentada, a identidade capturada nao resolve");
         }
     }
+
+    // O REMAP em si: codificar, decodificar e resolver.
+    //
+    // O teste anterior chamava ResolveCapturedIdentity direto com handles e Ids da cena, entao
+    // nao passava pelo ID compacto nem pela tabela do passe -- reintroduzir `SceneIndex + 1` no
+    // produtor, ou errar o `Value - 1` no consumidor, nao seria detectado. Aqui a tabela e
+    // montada como o passe monta (so os VISIVEIS, na ordem em que ele os percorre) e o valor
+    // gravado atravessa Encode/Decode de verdade.
+    void TestRemapDeIdentidadeCapturada() {
+        std::cout << "  remap: encode, decode e resolucao\n";
+        Smile::FScene Scene;
+        std::vector<Smile::u64> Ids;
+        for (int i = 0; i < 6; ++i)
+            Ids.push_back(Scene.AddRenderable(Make(("R" + std::to_string(i)).c_str(), i + 1)).Id);
+
+        // O passe desenha um SUBCONJUNTO, e nao na ordem da lista: e o que o culling entrega.
+        // Se o valor gravado fosse o indice da cena, esta tabela ja discordaria dele.
+        const int Visiveis[] = { 4, 1, 5 };
+        std::vector<Smile::FCapturedIdentity> Tabela;
+        std::vector<Smile::u32> Gravado;
+        for (int Indice : Visiveis) {
+            const Smile::FRenderable& R = Scene.Renderables()[static_cast<size_t>(Indice)];
+            Tabela.push_back({ R.GpuHandle, R.Id });
+            Gravado.push_back(Smile::EncodeCapturedIdentity(Tabela.size() - 1));
+        }
+        Check(Gravado[0] == 1 && Gravado[1] == 2 && Gravado[2] == 3, "encode e 1-based");
+
+        // Round-trip: cada valor gravado devolve o objeto que o passe desenhou.
+        for (size_t i = 0; i < Gravado.size(); ++i) {
+            const Smile::FCapturedIdentity Lido =
+                Smile::DecodeCapturedIdentity(Tabela, Gravado[i]);
+            Check(Lido.Id == Ids[static_cast<size_t>(Visiveis[i])],
+                  "o valor gravado devolve o objeto que o passe desenhou");
+            Check(Scene.ResolveCapturedIdentity(Lido.Handle, Lido.Id) == Visiveis[i],
+                  "e resolve para a posicao dele na cena");
+        }
+
+        // Zero e vazio; fora de faixa tambem, e nao o ultimo da tabela.
+        Check(Smile::DecodeCapturedIdentity(Tabela, 0).Id == 0, "0 e clique no vazio");
+        Check(Smile::DecodeCapturedIdentity(Tabela, 4).Id == 0,
+              "valor acima da tabela e vazio, nao a ultima entrada");
+        Check(Smile::DecodeCapturedIdentity(Tabela, 999).Id == 0, "muito acima tambem");
+        Check(Smile::DecodeCapturedIdentity({}, 1).Id == 0, "tabela vazia devolve vazio");
+
+        // Remocao ANTES de resolver: a cauda anda, e o valor gravado tem de continuar apontando
+        // para o objeto certo. Com `SceneIndex + 1` no produtor, este e o caso que erraria.
+        Check(Scene.RemoveRenderable(Ids[0], kSemGpu), "remocao falhou");
+        const Smile::FCapturedIdentity R4 = Smile::DecodeCapturedIdentity(Tabela, Gravado[0]);
+        Check(Scene.ResolveCapturedIdentity(R4.Handle, R4.Id) == 3,
+              "R4 estava em 4, esta em 3, e o valor gravado ainda o encontra");
+
+        // Removido e reciclado: o valor gravado nao pode encontrar o novo ocupante.
+        const Smile::FCapturedIdentity R1 = Smile::DecodeCapturedIdentity(Tabela, Gravado[1]);
+        Check(Scene.RemoveRenderable(R1.Id, kSemGpu), "remocao falhou");
+        Scene.GpuSlots().Collect(kSemGpu);
+        const Smile::FRenderable& Novo = Scene.AddRenderable(Make("novo", 99));
+        Check(Novo.GpuHandle.Slot == R1.Handle.Slot,
+              "o novo reciclou o slot do removido");
+        Check(Scene.ResolveCapturedIdentity(R1.Handle, R1.Id) == -1,
+              "o valor gravado do removido nao encontra o novo ocupante");
+    }
 }
 
 int main() {
@@ -505,6 +568,7 @@ int main() {
     TestSemSlotDisponivel();
     TestCicloSemCollectCresceOPool();
     TestIdentidadeCapturadaResolveOuFalha();
+    TestRemapDeIdentidadeCapturada();
 
     if (Failures == 0) {
         std::cout << "  OK\n";
