@@ -983,6 +983,63 @@ Uma fila ter passado e a outra não mantém o slot `Retired`: só volta a `Free`
 allocator recebe **números** do renderer e não conhece D3D12 — fica CPU puro e testável, que é o
 que permite cobrir geração, handle obsoleto, wrap e reuso sem device.
 
+### Ciclo de vida do handle: inválido, generation inicial, wrap e reset
+
+Sem estas quatro políticas escritas, "testar wrap policy, reload e troca de cena" não é testável —
+não há contra o quê comparar.
+
+**Representação inválida.** `kInvalidSlot = 0xFFFFFFFF`, e `FGpuSceneHandle{}` default-construído
+tem `Slot = kInvalidSlot` e `Generation = 0`. Duas guardas independentes, e não uma: um struct
+zerado é a entrada acidental mais comum — `memset`, `resize`, campo esquecido — e com `Slot`
+defaultando a `0` ele identificaria o primeiro ocupante do slot 0. Qualquer uma das duas bastaria;
+juntas custam nada e fecham o caso zerado por dois caminhos.
+
+**Generation inicial.** `Generation = 0` é **reservada** para "nunca alocado / inválido". Um registro
+de slot novo nasce em 0, e a primeira alocação leva a 1 — o primeiro ocupante de qualquer slot usa
+`Generation = 1`. Assim `IsAlive({slot, 0})` é falso para todo slot, em qualquer estado, sem caso
+especial.
+
+**Overflow.** Generation é `u32` e cresce estritamente. Se ela desse a volta, um handle antigo o
+bastante voltaria a casar com o ocupante atual — a troca silenciosa de identidade que o handle
+existe para impedir, e a pior possível, porque `IsAlive` a aprovaria. Regra: **wrap aposenta o slot
+permanentemente**; ele nunca mais volta a `Free`.
+
+Vale o número, porque decide se isso é uma decisão dura ou um não-evento: são 2³² reusos **do mesmo
+slot**. A 60 FPS, com aquele slot sendo reciclado a cada frame, dá ~2,3 anos de churn contínuo. O
+custo prático é zero, então não há razão para inventar reciclagem de generation. O que **não** pode
+é ser silencioso: o allocator conta os slots aposentados por overflow e expõe o contador, senão a
+capacidade encolheria sem ninguém saber por quê.
+
+**Reset e reload.** O allocator **persiste** através de reload e troca de cena; ele não é recriado.
+Essa é a política inteira, e ela já entrega a propriedade desejada: como a generation de cada slot
+cresce monotonicamente e nunca é reposta, um handle da cena anterior não pode ressuscitar — o slot
+dele só volta a ser alocado com generation **maior**.
+
+`Clear`/troca de cena **aposenta todo slot `Live` pelo caminho normal**, com ticket de fence; não há
+atalho que devolva slots direto a `Free`, porque isso seria reuso sem incremento de generation.
+
+Duas coisas ficam explicitamente proibidas, e é o que o teste 6 protege:
+
+- **recriar o allocator** numa troca de cena. Uma instância nova nasce com todas as generations em
+  0, e aí um handle antigo volta a casar com o mesmo par `{slot, generation}`. Se algum dia for
+  mesmo necessário destruir e recriar, todos os remaps têm de ser descartados antes — eles são os
+  únicos que guardam handles;
+- **incremento em massa** das generations como forma de invalidar. Só seria correto depois de drenar
+  as filas e descartar todos os remaps, e nesse ponto não acrescenta nada sobre a regra monotônica
+  por slot, que já é suficiente. Fica de fora por não pagar a complexidade.
+
+### Testes indispensáveis do allocator
+
+Todos CPU puros, sem device, no espírito do `SceneIdentityTests`:
+
+1. `FGpuSceneHandle{}` nunca fica vivo — `IsAlive` falso em qualquer estado do pool;
+2. o primeiro handle do slot 0 não coincide com o inválido;
+3. reuso incrementa a generation;
+4. o handle anterior continua inválido depois do reuso;
+5. wrap não transforma um handle muito antigo em válido (o slot é aposentado, e o contador sobe);
+6. `Clear`/troca de cena seguida de nova alocação não ressuscita handle da cena anterior;
+7. uma fila ter passado e a outra não mantém o slot `Retired` — `Collect` parcial não libera.
+
 ### Quando o ticket captura as fences
 
 Dois valores são necessários e **não suficientes**: o ticket só é seguro se for capturado depois de
@@ -1003,7 +1060,8 @@ gravação. A fronteira, portanto, já é a que interessa — entre o `EndFrame`
 **A mutação não precisa esperar a GPU terminar.** Esse é o ponto do deferred reuse. Ao remover, o
 handle vira `Retired` **imediatamente** e recebe os **últimos valores realmente submetidos** nas
 duas filas. `Collect` consulta os valores concluídos e libera o slot só depois que ambos passaram.
-O objeto some da cena no mesmo frame; o *slot* é que espera.
+O objeto some **imediatamente da cena CPU** e não entra no próximo frame submetido; frames já em
+voo ainda podem mostrá-lo. O *slot* é que espera.
 
 Escrever isso ao contrário — "o dreno acontece antes da mutação" — convidaria duas implementações
 erradas: capturar do lado errado da fronteira, ou deixar uma janela em que o objeto morreu e o
