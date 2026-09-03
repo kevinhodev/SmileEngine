@@ -711,20 +711,34 @@ contra assets incompatíveis.
   o que estava compilado. `--allow-dirty` existe para shakedown da própria régua e marca o
   relatório com `dirtyBuild: true`; relatório assim não vale como baseline.
 
-  **BASELINE DE REGISTRO** — `gpu-driven-baseline-OF-RECORD-f781288.json`, em
-  `build/bin/Release/Captures/Benchmarks/`. Build `f781288`, árvore limpa. RTX 3060 Ti, viewport
-  1298×775 (saída = render), preset `gameplay_rr`, TOD 10h, 60 amostras de frames distintos por
-  ponto, 20 pontos. Pose de cada slot conferida contra o sidecar; auditoria de log limpa nas cinco
-  cenas.
+  **BASELINE DE REGISTRO** — versionada em `Docs/Baselines/`, com SHA-256 no `MANIFEST.md` de
+  lá. Os relatórios saem em `build/bin/Release/Captures/Benchmarks/`, que o git ignora, e são
+  promovidos por `Tools/SmileMCP/scripts/promote-baseline.mjs`: uma baseline que não sobrevive a
+  um clone não é baseline, é lembrança.
 
-  O arquivo original saiu com `passed: false`, e o motivo está registrado dentro dele em
-  `acceptedAsBaseline`: a asserção que disparou é de **teardown**, depois da última medição — o
-  editor da 1M não morreu em 180 s após `close_editor`. Nenhum ponto de medição é afetado, porque
-  nada foi medido depois dela. A asserção mudou de lugar em `a9db333` (passou a ser cobrada antes
-  do lançamento da cena seguinte, que é onde a contaminação aconteceria) e o defeito do
-  `smile_close_editor` está anotado à parte — ele **afirma** que o editor parou baseado numa
-  chamada de status com 500 ms de timeout, e numa cena a ~3 FPS esse timeout estoura sem o editor
-  ter ido a lugar nenhum.
+  | arquivo | build | o que tem |
+  |---|---|---|
+  | `perf-f781288-4scenes.json` | `f781288` | perf das 4 primeiras cenas, 16 pontos com run completo |
+  | `perf-capture-c452b1c-1M.json` | `c452b1c` | `synthetic_1M` completa: 4 pontos + GPU por passe + captura |
+  | `capture-c452b1c-4scenes.json` | `c452b1c` | as 16 capturas visuais das 4 primeiras cenas |
+
+  RTX 3060 Ti, viewport 1298×775 (saída = render), preset `gameplay_rr`, TOD 10h, 60 amostras de
+  frames distintos por ponto. Pose de cada slot conferida contra o sidecar; auditoria de log limpa
+  nas cinco cenas. **As duas builds comparam entre si**: `git diff f781288..c452b1c -- Engine/
+  Editor/ Shaders/` é vazio — só mudaram script de benchmark e documentação.
+
+  **Por que a 1M está num arquivo separado.** No relatório de `f781288` os quatro pontos dela
+  aparecem no `summary` mas não nos `runs`: a publicação do detalhe acontecia no retorno da
+  função, e uma asserção de **teardown** disparou antes dele — o editor da 1M não morreu em 180 s
+  após `close_editor`. As medições estavam feitas; o que se perdeu foi o registro dos tempos de
+  GPU por passe, que são gate desta fase. Corrigido em `c452b1c` (cada ponto é publicado assim
+  que é medido, e o caminho verde confere `summary == runs`), e a 1M foi recapturada.
+
+  Dois defeitos ficaram anotados à parte: a asserção de teardown mudou de lugar em `a9db333`
+  (passou a ser cobrada antes do lançamento da cena seguinte, que é onde a contaminação
+  aconteceria), e o `smile_close_editor` **afirma** que o editor parou baseado numa chamada de
+  status com 500 ms de timeout — numa cena a ~3 FPS esse timeout estoura sem o editor ter ido a
+  lugar nenhum.
 
   Custo de CPU por estágio, mediana em ms:
 
@@ -775,8 +789,30 @@ contra assets incompatíveis.
     sintéticas 1.126 (poucos materiais por construção). Com `kCapacity` em 16.384, a cena mais
     densa usa 44% — folga medida para o bindless da Fase 3, que consome do mesmo orçamento.
 
-- capturar baseline **visual** conforme `CAPTURE-PROTOCOL.md` (o protocolo cobre só a metade
-  visual; a de performance é a régua acima).
+- ~~capturar baseline **visual** conforme `CAPTURE-PROTOCOL.md`~~ — **feita**, 20 capturas (as
+  mesmas 5 cenas × 4 slots), preset científico, N=128, TOD 10h. A régua de performance ganhou
+  `--capture` e `--capture-only`, para que a metade visual saia da **mesma passagem**: mesma pose,
+  mesma build, mesmo regime. Duas rodadas separadas comparariam imagens de câmeras que só parecem
+  iguais.
+
+  **As referências estão versionadas em `Docs/Baselines/Reference/`** (~23 MiB, PNG + o manifesto
+  que o protocolo emite ao lado). Custam espaço e ficam mesmo assim, pela mesma razão dos JSON: o
+  que não sobrevive a um clone não é referência.
+
+  **Achado que muda como comparar: a captura NÃO reproduz byte a byte.** Recapturando a Bistro do
+  mesmo build, mesmo bookmark e mesmo N, os quatro slots deram hash diferente. A diferença é
+  pequena — **11,5% dos subpixels, delta médio 1,08 e máximo 20** em 255 — ou seja ruído residual
+  de RT/denoiser, não outra imagem. Mas isso derruba duas coisas:
+
+  - guardar só o hash e regenerar a imagem quando precisar **não funciona** (foi a primeira ideia,
+    e foi por isso que os PNGs acabaram versionados);
+  - a comparação visual da Fase 1 tem de ser por **tolerância** — delta máximo e fração de pixels
+    acima de um limiar —, nunca por igualdade. Um gate de igualdade exata reprovaria uma mudança
+    que não mudou nada.
+
+  Os limiares ainda não estão calibrados: 1,08 de média com máximo 20 é o ruído de **duas capturas
+  da mesma build**, então é o piso do que qualquer limiar precisa tolerar. Calibrar em cima de mais
+  de uma repetição por cena é trabalho da Fase 1, quando houver um "depois" para comparar.
 
 ### Arquivos prováveis
 
