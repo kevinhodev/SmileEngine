@@ -37,7 +37,15 @@ function run(args, baselineDirectory, extraEnv = {}) {
         env: { ...process.env, SMILE_BASELINE_DIR: baselineDirectory, ...extraEnv },
       },
       (error, stdout, stderr) =>
-        resolve({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr) }),
+        resolve({
+          code: error?.code ?? 0,
+          stdout: String(stdout),
+          stderr: String(stderr),
+          // fail() do promotor escreve em STDERR e os console.log em stdout. Casar mensagem so
+          // contra stdout tornava as checagens de diagnostico silenciosamente vazias — inclusive a
+          // negada de ROLLBACK FALHOU, que nunca poderia casar.
+          saida: String(stdout) + String(stderr),
+        }),
     );
   });
 }
@@ -152,7 +160,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
 
   for (const nome of ["../vitima", "..\\vitima", "sub/dir", "..", ".", "", "con"]) {
     const result = await run([file, "--as", nome], baselines);
-    check(result.code !== 0, `--as '${nome}' tem de ser recusado`, result.stdout.trim());
+    check(result.code !== 0, `--as '${nome}' tem de ser recusado`, result.saida.trim());
   }
   check(
     (await readFile(fora, "utf8")) === "NAO PODE SER TOCADO",
@@ -203,7 +211,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
     };
     const file = await writeReport(root, report, `escape_${Buffer.from(scene).toString("hex")}.json`);
     const result = await run([file, "--as", "fase0"], baselines);
-    check(result.code !== 0, `scene ${JSON.stringify(scene)} tem de ser recusado`, result.stdout.trim());
+    check(result.code !== 0, `scene ${JSON.stringify(scene)} tem de ser recusado`, result.saida.trim());
   }
   for (const [alvo, conteudo] of vitimas) {
     check(
@@ -234,7 +242,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
   );
   const segunda = await run([file2, "--as", "fase0"], baselines);
   check(segunda.code !== 0, "republicar no mesmo namespace sem --replace tem de ser recusado",
-        segunda.stdout.trim());
+        segunda.saida.trim());
   check(sha(await readFile(png)) === hashOriginal,
         "a referencia da baseline anterior continua intacta apos a recusa");
 
@@ -285,7 +293,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
   check(
     segunda.code !== 0,
     "republicar baseline SEM IMAGENS sem --replace tem de ser recusado",
-    segunda.stdout.trim(),
+    segunda.saida.trim(),
   );
   check(
     sha(await readFile(path.join(baselines, "soperf.json"))) === hashOriginal,
@@ -301,7 +309,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
   check(
     colisao.code !== 0,
     "publicar sobre um <name>.json existente, mesmo sem refs, tem de ser recusado",
-    colisao.stdout.trim(),
+    colisao.saida.trim(),
   );
 });
 
@@ -323,19 +331,19 @@ await withSandbox(async ({ root, baselines, captures }) => {
   delete semPassed.passed;
   const a = await writeReport(root, semPassed, "legado_sem_passed.json");
   const semFlag = await run([a, "--as", "fase0", "--allow-legacy-provenance", "--note", "x"], baselines);
-  check(semFlag.code !== 0, "legado com passed AUSENTE e recusado sem --allow-failed", semFlag.stdout.trim());
+  check(semFlag.code !== 0, "legado com passed AUSENTE e recusado sem --allow-failed", semFlag.saida.trim());
 
   const semNota = await run(
     [a, "--as", "fase0", "--allow-legacy-provenance", "--allow-failed"],
     baselines,
   );
-  check(semNota.code !== 0, "--allow-failed com passed ausente ainda exige --note", semNota.stdout.trim());
+  check(semNota.code !== 0, "--allow-failed com passed ausente ainda exige --note", semNota.saida.trim());
 
   const completo = await run(
     [a, "--as", "fase0", "--allow-legacy-provenance", "--allow-failed", "--note", "aceito de proposito"],
     baselines,
   );
-  check(completo.code === 0, "com as duas flags e nota, publica", completo.stdout.trim());
+  check(completo.code === 0, "com as duas flags e nota, publica", completo.saida.trim());
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -389,11 +397,11 @@ await withSandbox(async ({ root, baselines, captures }) => {
     const result = await run([file2, "--as", "fase0", "--replace"], baselines, {
       SMILE_PROMOTE_FAILPOINT: ponto,
     });
-    check(result.code !== 0, `failpoint '${ponto}' derruba a publicacao`, result.stdout.trim());
+    check(result.code !== 0, `failpoint '${ponto}' derruba a publicacao`, result.saida.trim());
     check(
-      !/ROLLBACK FALHOU/.test(result.stdout),
+      !/ROLLBACK FALHOU/.test(result.saida),
       `failpoint '${ponto}': o rollback nao pode falhar`,
-      result.stdout.trim(),
+      result.saida.trim(),
     );
 
     for (const [alvo, hashOriginal] of antes) {
@@ -426,11 +434,145 @@ await withSandbox(async ({ root, baselines, captures }) => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// 3b. Erro de filesystem nao pode virar 'nao existe'.
+//
+// LACUNA CONHECIDA: este teste cobre o PREFLIGHT (a consulta que decide se a baseline ja existe).
+// A mesma armadilha existe dentro de trocar(), no stat do destino, e nao e alcancavel de fora: o
+// preflight barra a mesma condicao antes de a troca comecar. As duas chamam o mesmo helper
+// existe(), que so trata ENOENT como ausencia — mas isso e argumento de leitura, nao de teste, e
+// esta escrito aqui para ninguem supor que aquele ponto esta coberto.
+//
+// stat(...).catch(() => false) transformava permissao negada, handle em uso ou disco fora em
+// 'nao existe', e dai a imutabilidade era ignorada. Aqui o diretorio de baselines vira um ARQUIVO
+// com o nome de Reference/: o readdir dele falha com ENOTDIR, que nao e ENOENT.
+await withSandbox(async ({ root, baselines, captures }) => {
+  const file = await writeReport(root, await makeReport(captures));
+  // Reference existe como ARQUIVO: listar dispara ENOTDIR.
+  await writeFile(path.join(baselines, "Reference"), "sou um arquivo", "utf8");
+  const result = await run([file, "--as", "fase0"], baselines);
+  // Conferir so o exit != 0 nao prova nada: a versao com `catch(() => [])` tambem falha, so que
+  // depois, no mkdir que esbarra no arquivo. E preciso fixar o MECANISMO pelo diagnostico — foi
+  // assim que esta checagem passou verde contra a implementacao quebrada na primeira tentativa.
+  check(result.code !== 0, "erro de filesystem tem de abortar", result.saida.trim());
+  check(
+    /nao consegui (listar|consultar)/.test(result.saida),
+    "a recusa tem de ser POR NAO CONSEGUIR CONSULTAR, e nao por tropecar mais adiante",
+    result.saida.trim(),
+  );
+  check(
+    (await readFile(path.join(baselines, "Reference"), "utf8")) === "sou um arquivo",
+    "nada foi escrito por cima do que nao pode ser consultado",
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3c. Nomes que o Windows considera equivalentes.
+await withSandbox(async ({ root, baselines, captures }) => {
+  const file = await writeReport(root, await makeReport(captures));
+
+  // Ponto final: o Windows e o git normalizam, e este diretorio e versionado.
+  for (const nome of ["fase0.", "fase0 ", "fase0.."]) {
+    const result = await run([file, "--as", nome], baselines);
+    check(result.code !== 0, `--as ${JSON.stringify(nome)} tem de ser recusado`, result.saida.trim());
+  }
+
+  const primeira = await run([file, "--as", "fase0"], baselines);
+  check(primeira.code === 0, "publicacao de referencia", primeira.stderr.trim());
+  const hashOriginal = sha(await readFile(path.join(baselines, "fase0.json")));
+
+  // Mesma baseline com OUTRA caixa: no Windows e o mesmo caminho.
+  const captures2 = path.join(root, "Captures2");
+  await mkdir(captures2, { recursive: true });
+  const file2 = await writeReport(
+    root,
+    await makeReport(captures2, { pngBytes: outroPngBytes, overrides: { buildCommit: "def5678" } }),
+    "relatorio2.json",
+  );
+  const outraCaixa = await run([file2, "--as", "FASE0"], baselines);
+  check(
+    outraCaixa.code !== 0,
+    "--as FASE0 sobre uma fase0 existente tem de ser recusado",
+    outraCaixa.saida.trim(),
+  );
+  check(
+    sha(await readFile(path.join(baselines, "fase0.json"))) === hashOriginal,
+    "a baseline original sobreviveu",
+  );
+  // E nem com --replace, porque isso deixaria dois nomes para um diretorio.
+  const comReplace = await run([file2, "--as", "FASE0", "--replace"], baselines);
+  check(comReplace.code !== 0, "--replace sob outra caixa tambem e recusado", comReplace.saida.trim());
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3d. Manifesto tem de ser DO ponto publicado.
+//
+// O promotor conferia que o JSON existe, e nao que ele e daquela cena e daquele slot: uma captura
+// da Emerald/slot 1 podia ser publicada como Bistro/slot 0 com hashes todos coerentes.
+await withSandbox(async ({ root, baselines, captures }) => {
+  for (const [rotulo, mutacao] of [
+    ["slot trocado", (m) => ({ ...m, bookmarkSlot: 3 })],
+    ["cena trocada", (m) => ({ ...m, scene: "OutraCena" })],
+  ]) {
+    const report = await makeReport(captures, { scenes: ["cena_a"], slots: [0] });
+    const manifesto = report.captures[0].capture.pngPath.replace(/\.png$/, ".json");
+    await writeFile(
+      manifesto,
+      JSON.stringify(mutacao(JSON.parse(await readFile(manifesto, "utf8"))), null, 2),
+      "utf8",
+    );
+    const file = await writeReport(root, report, `${rotulo.replace(/\W+/g, "_")}.json`);
+    const result = await run([file, "--as", "fase0"], baselines);
+    check(result.code !== 0, `${rotulo} tem de ser recusado`, result.saida.trim());
+    check(!existsSync(path.join(baselines, "Reference", "fase0")), `${rotulo}: nada publicado`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3e. Falha DEPOIS do commit e limpeza, e nao rollback.
+//
+// A remocao dos backups acontecia dentro da transacao: um rm que falhasse caia no catch e o
+// script dizia 'nada foi publicado' com o pacote novo ja no ar — a mensagem mais enganosa
+// possivel, porque manda procurar um problema que nao existe e ignorar o que existe.
+await withSandbox(async ({ root, baselines, captures }) => {
+  const file = await writeReport(root, await makeReport(captures));
+  check((await run([file, "--as", "fase0"], baselines)).code === 0, "publicacao de referencia");
+
+  const captures2 = path.join(root, "Captures2");
+  await mkdir(captures2, { recursive: true });
+  const file2 = await writeReport(
+    root,
+    await makeReport(captures2, { pngBytes: outroPngBytes, overrides: { buildCommit: "def5678" } }),
+    "relatorio2.json",
+  );
+  const result = await run([file2, "--as", "fase0", "--replace"], baselines, {
+    SMILE_PROMOTE_FAILPOINT: "apos-commit",
+  });
+
+  check(result.code === 2, "falha pos-commit sai com codigo proprio (2), nao 1", `exit=${result.code}`);
+  check(
+    /publicado, mas a limpeza/.test(result.saida) && !/nada foi publicado/.test(result.saida),
+    "a mensagem diz que PUBLICOU e que a limpeza falhou",
+    result.saida.trim(),
+  );
+  check(
+    /retiring-/.test(result.saida),
+    "a mensagem nomeia onde ficaram os restos",
+    result.saida.trim(),
+  );
+  // E o pacote novo TEM de estar ativo, porque o commit ja tinha acontecido.
+  check(
+    sha(await readFile(path.join(baselines, "Reference", "fase0", "cena_a_slot0.png"))) ===
+      sha(outroPngBytes),
+    "o pacote novo esta publicado, como a mensagem afirma",
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
 // 4. Par PNG+manifesto e obrigatorio.
 await withSandbox(async ({ root, baselines, captures }) => {
   const file = await writeReport(root, await makeReport(captures, { omitManifestFor: "cena_a_1" }));
   const result = await run([file, "--as", "fase0"], baselines);
-  check(result.code !== 0, "manifesto ausente derruba a publicacao", result.stdout.trim());
+  check(result.code !== 0, "manifesto ausente derruba a publicacao", result.saida.trim());
   check(
     !existsSync(path.join(baselines, "Reference", "fase0")),
     "nada foi publicado quando o par estava incompleto",
@@ -442,7 +584,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
 await withSandbox(async ({ root, baselines, captures }) => {
   const file = await writeReport(root, await makeReport(captures));
   const result = await run([file, "--as", "fase0"], baselines);
-  check(result.code === 0, "publicacao", result.stderr.trim());
+  check(result.code === 0, "publicacao", result.saida.trim());
   const dir = path.join(baselines, "Reference", "fase0");
   const manifesto = JSON.parse(await readFile(path.join(dir, "cena_a_slot0.json"), "utf8"));
   check(manifesto.image === "cena_a_slot0.png", "image aponta para o nome publicado",
@@ -478,7 +620,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
     }
     const file = await writeReport(root, report, `${nome.replace(/\W+/g, "_")}.json`);
     const result = await run([file, "--as", "fase0"], baselines);
-    check(result.code !== 0, `'${nome}' tem de ser recusado`, result.stdout.trim());
+    check(result.code !== 0, `'${nome}' tem de ser recusado`, result.saida.trim());
   }
 
   const incompletoParcial = await makeReport(captures, {
@@ -491,7 +633,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
   const file = await writeReport(root, incompletoParcial, "parcial.json");
   const result = await run([file, "--as", "fase0"], baselines);
   check(result.code !== 0, "'fingerprint com 1 de 3 arquivos' tem de ser recusado",
-        result.stdout.trim());
+        result.saida.trim());
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -499,7 +641,7 @@ await withSandbox(async ({ root, baselines, captures }) => {
 await withSandbox(async ({ root, baselines, captures }) => {
   const file = await writeReport(root, await makeReport(captures));
   const result = await run([file, "--as", "fase0"], baselines);
-  check(result.code === 0, "caminho feliz publica", result.stderr.trim());
+  check(result.code === 0, "caminho feliz publica", result.saida.trim());
 
   const publicado = JSON.parse(
     await readFile(path.join(baselines, "fase0.json"), "utf8"),

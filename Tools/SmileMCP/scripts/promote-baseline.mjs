@@ -37,6 +37,32 @@ function fail(message) {
   process.exit(1);
 }
 
+// SO ENOENT significa ausencia. `stat(...).catch(() => false)` transformava qualquer erro de
+// filesystem — permissao negada, disco fora, handle em uso — em "nao existe", e dai o publicador
+// concluia que nao havia nada para preservar: a imutabilidade era ignorada e o rename do Windows
+// substituia o arquivo sem backup. Um erro de consulta tem de abortar ANTES da primeira mutacao,
+// e nao virar uma resposta.
+async function existe(alvo, oQueE) {
+  try {
+    await stat(alvo);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    fail(`nao consegui consultar ${oQueE} ('${alvo}'): ${error.code ?? error.message}`);
+  }
+}
+
+// Mesmo motivo: um readdir que falha virava lista vazia, e o MANIFEST seria regravado APAGANDO as
+// baselines que ele nao conseguiu enxergar.
+async function listar(diretorio, oQueE) {
+  try {
+    return await readdir(diretorio);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    fail(`nao consegui listar ${oQueE} ('${diretorio}'): ${error.code ?? error.message}`);
+  }
+}
+
 function argumentValue(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
@@ -207,6 +233,12 @@ function exigirSegmentoSeguro(valor, oQueE) {
     );
   }
   if (RESERVADO_WINDOWS.test(valor)) fail(`${oQueE} '${valor}' e um nome reservado pelo Windows`);
+  // Ponto ou espaco no fim passavam pela regex. As APIs Win32 e varias ferramentas (git incluido)
+  // NORMALIZAM esses nomes, entao 'fase0.' e 'fase0' viram o mesmo caminho conforme quem escreve —
+  // e este diretorio e versionado, entao um clone no Windows nem consegue materializar o arquivo.
+  if (/[. ]$/.test(valor)) {
+    fail(`${oQueE} '${valor}' termina em ponto ou espaco, que o Windows e o git normalizam`);
+  }
 }
 exigirSegmentoSeguro(name, "nome de baseline");
 
@@ -266,6 +298,27 @@ for (const row of imageRows) {
   } catch {
     fail(`manifesto ilegivel: ${sourceManifest}`);
   }
+  // Cruzamento SEMANTICO: o manifesto declara de que cena e de que slot ele e, e ate aqui isso
+  // nunca era conferido — so a existencia do arquivo. Uma captura da Emerald/slot 1 podia ser
+  // publicada como Bistro/slot 0 com o pacote inteiro coerente e os hashes todos batendo, porque
+  // nada ligava o CONTEUDO ao ponto publicado. O nome esperado sai do report.scenes.
+  const declarada = (report.scenes ?? []).find((entry) => entry.id === row.scene);
+  if (declarada?.scene) {
+    const esperada = path.basename(declarada.scene, ".sscene");
+    if (manifest.scene !== esperada) {
+      fail(
+        `${row.file}: o manifesto e da cena '${manifest.scene}', esperada '${esperada}' ` +
+          `(${path.basename(row.png)})`,
+      );
+    }
+  }
+  if (manifest.bookmarkSlot !== row.slot) {
+    fail(
+      `${row.file}: o manifesto e do slot ${manifest.bookmarkSlot}, esperado ${row.slot} ` +
+        `(${path.basename(row.png)})`,
+    );
+  }
+
   // O campo `image` aponta para o nome LONGO de origem, que nao existe aqui dentro. Copiar cru
   // deixava as referencias internas quebradas mesmo com os PNGs corretos.
   manifest.sourceImage = manifest.image;
@@ -299,14 +352,36 @@ const digest = createHash("sha256").update(minified, "utf8").digest("hex");
 // imagens — uma baseline so de performance — pulava o bloco de referencias e sobrescrevia o
 // <name>.json calado; e o mesmo acontecia quando o JSON existia mas o diretorio nao.
 await mkdir(baselineDirectory, { recursive: true });
-const jsonPublicado = await stat(destination).then(() => true).catch(() => false);
-const refsPublicadas = await stat(referenceDirectory).then(() => true).catch(() => false);
-if ((jsonPublicado || refsPublicadas) && !process.argv.includes("--replace")) {
+
+// Identidade case-INSENSITIVE. O filesystem do Windows nao distingue 'fase0' de 'FASE0' (medido:
+// existsSync do segundo acha o primeiro), entao publicar 'FASE0' por cima de 'fase0' escreveria no
+// mesmo lugar passando pela checagem de existencia — e o Map que monta o manifesto trataria os
+// dois como arquivos diferentes, produzindo uma tabela que descreve algo que nao esta em disco.
+const mesmoNome = (a, b) =>
+  process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+const jaNaRaiz = (await listar(baselineDirectory, "o diretorio de baselines")).filter((entry) =>
+  mesmoNome(entry, `${name}.json`),
+);
+const jaEmRefs = (
+  await listar(path.join(baselineDirectory, "Reference"), "o diretorio de referencias")
+).filter((entry) => mesmoNome(entry, name));
+
+if ((jaNaRaiz.length > 0 || jaEmRefs.length > 0) && !process.argv.includes("--replace")) {
   fail(
     `a baseline '${name}' ja esta publicada` +
-      (jsonPublicado ? ` (${name}.json)` : "") +
-      (refsPublicadas ? ` (Reference/${name}/)` : "") +
+      (jaNaRaiz.length ? ` (${jaNaRaiz.join(", ")})` : "") +
+      (jaEmRefs.length ? ` (Reference/${jaEmRefs.join(", ")}/)` : "") +
       `. Use outro --as, ou --replace para substitui-la de proposito.`,
+  );
+}
+// Com --replace, publicar sob outra caixa deixaria o antigo no lugar e o novo apontando para ele:
+// dois nomes, um diretorio. Exigir a caixa exata evita o pacote partido.
+const divergentes = [...jaNaRaiz.filter((e) => e !== `${name}.json`), ...jaEmRefs.filter((e) => e !== name)];
+if (divergentes.length > 0) {
+  fail(
+    `ja existe '${divergentes.join(", ")}', que no Windows e o MESMO caminho de '${name}'. ` +
+      `Republique com a grafia existente, ou renomeie a baseline antiga primeiro.`,
   );
 }
 
@@ -315,7 +390,7 @@ if ((jsonPublicado || refsPublicadas) && !process.argv.includes("--replace")) {
 // o nosso substituindo/entrando. Calcular aqui permite que ele entre na MESMA transacao — gravado
 // depois, uma falha na escrita dele deixaria referencias novas descritas por um manifesto velho.
 const publicados = new Map();
-for (const file of (await readdir(baselineDirectory).catch(() => []))
+for (const file of (await listar(baselineDirectory, "o diretorio de baselines"))
   .filter((entry) => entry.endsWith(".json"))
   .sort()) {
   publicados.set(file, await readFile(path.join(baselineDirectory, file), "utf8"));
@@ -405,6 +480,8 @@ const staging = path.join(baselineDirectory, `.staging-${name}-${process.pid}`);
 const stagingRefs = path.join(staging, "refs");
 const retiredSuffix = `.retiring-${process.pid}`;
 const desfazer = [];
+let publicado = false;
+const backupsNaoRemovidos = [];
 
 try {
   await rm(staging, { recursive: true, force: true });
@@ -429,7 +506,9 @@ try {
   // Troca. rename de diretorio nao sobrescreve destino existente no Windows, entao o antigo sai do
   // caminho primeiro e so e apagado quando o novo ja esta no lugar.
   const trocar = async (origem, destino) => {
-    const existia = await stat(destino).then(() => true).catch(() => false);
+    // Aqui o engano custa caro: concluir "nao existia" por causa de um erro de consulta faz o
+    // rename do Windows substituir o destino SEM backup, e o rollback nao teria o que restaurar.
+    const existia = await existe(destino, "o destino da troca");
     if (existia) {
       await rename(destino, `${destino}${retiredSuffix}`);
       desfazer.push(async () => rename(`${destino}${retiredSuffix}`, destino));
@@ -451,16 +530,35 @@ try {
   const manifestoExistia = await trocar(path.join(staging, "MANIFEST.md"), manifestPath);
   talvezFalhar("apos-trocar-manifesto");
 
-  // Commit: so agora o antigo pode sumir.
+  // COMMIT. Daqui em diante o pacote novo esta ativo e nao ha mais volta.
   desfazer.length = 0;
+  publicado = true;
+
+  // A limpeza dos backups acontece DEPOIS do commit, e por isso fica fora da transacao. Antes ela
+  // era feita aqui dentro: um rm que falhasse caia no catch e o script dizia "nada foi publicado",
+  // com o pacote novo ja no ar — a mensagem mais enganosa possivel, porque manda o operador
+  // procurar um problema que nao existe e ignorar o que existe.
+  talvezFalhar("apos-commit");
   for (const [alvo, existia] of [
     [referenceDirectory, refsExistiam],
     [destination, jsonExistia],
     [manifestPath, manifestoExistia],
   ]) {
-    if (existia) await rm(`${alvo}${retiredSuffix}`, { recursive: true, force: true });
+    if (!existia) continue;
+    const backup = `${alvo}${retiredSuffix}`;
+    await rm(backup, { recursive: true, force: true }).catch((error) =>
+      backupsNaoRemovidos.push(`${backup} (${error.code ?? error.message})`),
+    );
   }
 } catch (error) {
+  if (publicado) {
+    // Falha DEPOIS do commit nao e rollback. O pacote esta publicado; o que sobrou e limpeza.
+    console.error(
+      `[promote] publicado, mas a limpeza dos backups falhou: ${error.message}\n` +
+        `[promote] remova a mao o que sobrou de '*${retiredSuffix}' em ${baselineDirectory}`,
+    );
+    process.exit(2);
+  }
   // Desfaz na ordem inversa. Falha ao restaurar NAO e engolida: sem isto, o antigo podia ficar so
   // sob o nome de recuperacao e ninguem saberia onde procurar.
   const naoRestaurados = [];
