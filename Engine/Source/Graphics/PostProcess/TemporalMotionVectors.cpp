@@ -191,8 +191,8 @@ namespace Smile {
         auto* Dst = reinterpret_cast<FTemporalInstanceTransformGPU*>(MappedTransforms) +
                     static_cast<size_t>(FrameSlot) * InstanceCount_;
         // O que deixou de ser posicional aqui e o HISTORICO de CPU. O DESTINO continua indexado
-        // pelo InstanceID da TLAS, que hoje e o indice na lista: o PathTracingCommon grava
-        // CommittedInstanceID() + 1 na superficie, e o DualMotion le esse id da superficie
+        // pelo InstanceID da TLAS, que hoje e o indice na lista: o TemporalSurface.cs.hlsl
+        // (linhas 52-53) grava CommittedInstanceID() + 1 na superficie, e o DualMotion le esse da
         // ANTERIOR para indexar InstanceTransforms do frame ATUAL.
         //
         // PENDENCIA, e ela nao e resolvida por este slice: com [A, B, C], remover A faz o id 1

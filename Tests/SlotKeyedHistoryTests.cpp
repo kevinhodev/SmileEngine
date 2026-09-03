@@ -151,16 +151,40 @@ int main() {
               "e o historico acima do novo pedido sobrevive");
     }
 
-    // 7. Handle invalido (default) nunca casa com nada.
+    // 7. Handle invalido nunca casa com nada -- nem o default, nem o ZERADO.
+    //
+    // Os dois casos sao diferentes e o teste anterior so cobria o primeiro: o default tem
+    // Slot = kInvalidSlot, que ja cai fora da capacidade, entao ele nao exercitava a generation.
+    // O zerado ({0,0}, o que um memset produz) tem slot VALIDO, e por ele a checagem de generation
+    // e a unica coisa entre um handle sem dono e o historico de quem ocupa aquele slot.
     {
         TSlotKeyedHistory<Mat44> H;
         H.EnsureCapacity(4);
         const Mat44 Atual = Marca(6, 6);
+
         Check(Igual(H.PreviousOr(FGpuSceneHandle{}, Atual), Atual),
-              "handle invalido devolve o fallback");
-        H.Store(FGpuSceneHandle{}, Marca(5, 5)); // slot invalido esta fora da capacidade
+              "handle default devolve o fallback");
+        H.Store(FGpuSceneHandle{}, Marca(5, 5));
         Check(Igual(H.PreviousOr(FGpuSceneHandle{}, Atual), Atual),
               "e guardar por ele nao cria historico");
+
+        // Agora o zerado, com um ocupante VALIDO no mesmo slot.
+        const FGpuSceneHandle Vivo{ 0, 1 };
+        FGpuSceneHandle Zerado{};
+        Zerado.Slot = 0;
+        Zerado.Generation = 0;
+
+        H.Store(Vivo, Marca(7, 1));
+        Check(Igual(H.PreviousOr(Vivo, Atual), Marca(7, 1)), "o ocupante valido guardou");
+
+        Check(Igual(H.PreviousOr(Zerado, Atual), Atual),
+              "o handle zerado nao le o historico do ocupante do slot 0");
+
+        H.Store(Zerado, Marca(123, 123));
+        Check(Igual(H.PreviousOr(Zerado, Atual), Atual),
+              "guardar pelo zerado nao cria historico");
+        Check(Igual(H.PreviousOr(Vivo, Atual), Marca(7, 1)),
+              "e, sobretudo, nao APAGA o historico valido que estava la");
     }
 
     if (Failures > 0) {

@@ -39,14 +39,19 @@ namespace Smile {
         // fora da capacidade guardada, e slot reciclado (handle diferente). Devolver o valor do
         // ocupante anterior no ultimo caso seria inventar um passado que nunca existiu.
         const T& PreviousOr(FGpuSceneHandle Handle, const T& Fallback) const {
-            if (Handle.Slot >= Entries.size()) return Fallback;
+            // Generation 0 e reservada para "nunca alocado". Conferir so o slot deixava um handle
+            // zerado com slot valido -- {0,0} -- casar com uma entrada guardada por outro {0,0},
+            // e o contrato diz que ele nao identifica ninguem.
+            if (Handle.Generation == 0 || Handle.Slot >= Entries.size()) return Fallback;
             const FEntry& E = Entries[Handle.Slot];
             if (E.Handle != Handle) return Fallback;
             return E.Value;
         }
 
         void Store(FGpuSceneHandle Handle, const T& Value) {
-            if (Handle.Slot >= Entries.size()) return;
+            // Mesma razao do PreviousOr, e aqui o estrago e maior: guardar por {0,0} SOBRESCREVIA
+            // a entrada valida daquele slot, apagando o historico de quem esta vivo nele.
+            if (Handle.Generation == 0 || Handle.Slot >= Entries.size()) return;
             Entries[Handle.Slot] = FEntry{ Value, Handle };
         }
 

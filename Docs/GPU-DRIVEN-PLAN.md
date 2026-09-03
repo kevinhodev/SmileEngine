@@ -1144,7 +1144,8 @@ de "próxima" e o slot fica preso em `Retired` para sempre.
 
 Os históricos de CPU (`PrevMVP` do raster e transforms do motion vector de RT) já são endereçados
 por slot de residência. O que **não** ficou resolvido é a interpretação do id na GPU: o
-`PathTracingCommon.hlsli` grava `CommittedInstanceID() + 1` na superfície, e o `DualMotion.cs.hlsl`
+`Shaders/Temporal/TemporalSurface.cs.hlsl` (linhas 52-53) grava `CommittedInstanceID() + 1` em
+`CurrentSurface`, e o `DualMotion.cs.hlsl`
 lê esse id da superfície **anterior** para indexar `InstanceTransforms` do frame **atual**.
 
 Com `[A, B, C]`, remover A faz o id 1 gravado para B no frame passado passar a identificar C. O

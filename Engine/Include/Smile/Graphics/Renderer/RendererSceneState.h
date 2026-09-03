@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Graphics/Scene/Camera.h"
+#include "Smile/Scene/SlotKeyedHistory.h"
 #include "Smile/Scene/Scene.h"
 #include <vector>
 
