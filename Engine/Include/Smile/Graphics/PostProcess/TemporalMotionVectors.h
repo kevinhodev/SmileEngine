@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Scene/SlotKeyedHistory.h"
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include <d3d12.h>
@@ -57,6 +59,20 @@ namespace Smile {
                            const FScene& Scene, u32 TlasSlot, u32 InstanceGeoSlot);
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                             u32 Width, u32 Height, u32 DepthSlot, u32 VelocitySlot);
+
+        // Sobe a tabela de identidades do frame para a copia em DEFAULT.
+        //
+        // Separado do UpdatePerFrame porque precisa de COMMAND LIST: o UpdatePerFrame so
+        // escreve em memoria mapeada, e esta copia tem de ficar ordenada na fila direta,
+        // antes de qualquer consumidor.
+        void RecordIdentityUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+
+        // Slot de SRV da tabela do frame pedido. O consumidor do frame ATUAL le a tabela
+        // ANTERIOR para resolver ids gravados la -- e por isso que sao duas, e por isso que
+        // elas nao podem viver num UPLOAD de dois slices (ver o contrato no plano).
+        u32 IdentitySRV(u32 FrameSlot) const {
+            return IdentitySRVSlot[FrameSlot % kFrames];
+        }
 
         void UpdatePerFrame(u32 FrameSlot, const FScene& Scene,
                             const Mat44& InvViewProj, const Mat44& ViewProj,
@@ -113,6 +129,21 @@ namespace Smile {
         // O handle vai junto porque slot sozinho nao basta: um slot reciclado apontaria para o
         // transform do ocupante anterior, e a generation e o que distingue os dois.
         TSlotKeyedHistory<Mat44> PreviousModels;
+
+        // Tabela de identidades: id de instancia -> {slot, generation}.
+        //
+        // DEFAULT em ping-pong, e nao UPLOAD com dois slices. A tabela de F e lida por F+1, e o
+        // BeginFrame de F+2 so espera a fence de F -- entao sobrescrever o UPLOAD ali seria
+        // corrida com leituras de F+1 ainda em voo. Com DEFAULT, a CPU nunca toca a memoria que
+        // os shaders consultam: ela escreve no staging e a GPU copia, ordenada na fila direta.
+        ComPtr<ID3D12Resource> IdentityTable[kFrames];
+        GpuResources::FUploadBuffer IdentityStaging;
+        u32                    IdentitySRVSlot[kFrames] = { kInvalidSlot, kInvalidSlot };
+        // Estado de cada tabela, para a transicao da copia ser correta na primeira vez e nas
+        // seguintes sem precisar de barreira desnecessaria.
+        D3D12_RESOURCE_STATES  IdentityState[kFrames] = {
+            D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_DEST
+        };
         u32 InstanceCount_ = 0;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Surface[kFrames];

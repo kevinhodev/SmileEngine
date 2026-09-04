@@ -64,6 +64,15 @@ namespace Smile {
         }
         TransformBuffer.Reset();
         MappedTransforms = nullptr;
+        for (u32 f = 0; f < kFrames; ++f) {
+            if (IdentitySRVSlot[f] != kInvalidSlot) {
+                SRVHeap.Free(IdentitySRVSlot[f], 1);
+                IdentitySRVSlot[f] = kInvalidSlot;
+            }
+            IdentityTable[f].Reset();
+            IdentityState[f] = D3D12_RESOURCE_STATE_COPY_DEST;
+        }
+        IdentityStaging = GpuResources::FUploadBuffer{};
         PreviousModels.Invalidate();
         InstanceCount_ = 0;
         TlasSRVSlot = InstanceGeoSRVSlot = kInvalidSlot;
@@ -92,6 +101,33 @@ namespace Smile {
         TransformBuffer = CreateUploadBuffer(Device,
             static_cast<UINT64>(kFrames) * Capacity * sizeof(FTemporalInstanceTransformGPU),
             &MappedTransforms);
+
+        // Tabela de identidades: uma por frame em voo, em DEFAULT, mais um staging UPLOAD com
+        // um slice por frame. O custo e 8 B por instancia em cada uma -- na capacidade de 1M,
+        // 8 MiB por tabela DEFAULT (16 MiB no total) e mais 16 MiB de staging.
+        {
+            const u64 TableBytes =
+                static_cast<u64>(Capacity) * sizeof(FGpuIdentityEntry);
+            for (u32 f = 0; f < kFrames; ++f) {
+                IdentityTable[f] = GpuResources::CreateBuffer(Device, TableBytes,
+                                                D3D12_RESOURCE_FLAG_NONE,
+                                                D3D12_RESOURCE_STATE_COPY_DEST,
+                                                EVramCategory::RenderTargets,
+                                                "TemporalIdentityTable");
+                IdentityState[f] = D3D12_RESOURCE_STATE_COPY_DEST;
+
+                IdentitySRVSlot[f] = SRVHeap.Allocate(1);
+                D3D12_SHADER_RESOURCE_VIEW_DESC S{};
+                S.Format                     = DXGI_FORMAT_UNKNOWN;
+                S.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                S.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+                S.Buffer.FirstElement        = 0;
+                S.Buffer.NumElements         = Capacity;
+                S.Buffer.StructureByteStride = sizeof(FGpuIdentityEntry);
+                SRVHeap.CreateSRV(Device, IdentityTable[f].Get(), S, IdentitySRVSlot[f]);
+            }
+            IdentityStaging = GpuResources::CreateUploadBuffer(Device, TableBytes, kFrames);
+        }
 
         for (u32 f = 0; f < kFrames; ++f) {
             TransformSRVSlot[f] = SRVHeap.Allocate(1);
@@ -217,6 +253,24 @@ namespace Smile {
             Dst[i].PreviousToCurrent = Previous.Inverse() * Current;
             PreviousModels.Store(R.GpuHandle, Current);
         }
+
+        // Tabela de identidades DESTE frame, no staging. A CPU escreve aqui e nunca na memoria
+        // que os shaders consultam -- a copia para DEFAULT e ordenada na GPU (ver
+        // RecordIdentityUpload).
+        //
+        // O indice e o mesmo InstanceID que a TLAS carrega, que hoje e a posicao na lista; o
+        // conteudo e a residencia daquele objeto. E essa indirecao que deixa um id gravado no
+        // frame passado ser resolvido pela tabela DAQUELE frame, em vez de reinterpretado pela
+        // lista de agora.
+        if (IdentityStaging) {
+            auto* Table = reinterpret_cast<FGpuIdentityEntry*>(
+                IdentityStaging.Slice(FrameSlot % kFrames));
+            for (u32 i = 0; i < InstanceCount_; ++i) Table[i] = FGpuIdentityEntry{};
+            for (u32 i = 0; i < Count; ++i) {
+                const FGpuSceneHandle H = Scene.Renderables()[i].GpuHandle;
+                Table[i] = FGpuIdentityEntry{ H.Slot, H.Generation };
+            }
+        }
         for (u32 i = Count; i < InstanceCount_; ++i) {
             Dst[i].CurrentToPrevious = Mat44::Identity();
             Dst[i].PreviousToCurrent = Mat44::Identity();
@@ -238,6 +292,43 @@ namespace Smile {
     D3D12_GPU_VIRTUAL_ADDRESS FTemporalMotionVectors::CBAddr() const {
         return CB->GetGPUVirtualAddress() +
                static_cast<UINT64>(FrameSlot) * sizeof(FTemporalMotionConstants);
+    }
+
+    void FTemporalMotionVectors::RecordIdentityUpload(ID3D12GraphicsCommandList* _CommandList,
+                                                      u32 _FrameSlot) {
+        if (!SceneReady || !IdentityStaging) return;
+        const u32 f = _FrameSlot % kFrames;
+
+        // Volta para COPY_DEST antes de escrever. A tabela pode estar em SRV desde o frame em
+        // que foi consumida; a barreira aqui e o que ordena a sobrescrita DEPOIS das leituras
+        // ja submetidas nesta fila.
+        //
+        // ATENCAO: isto so cobre a FILA DIRETA. Se um consumidor em outra fila passar a ler a
+        // tabela, ele precisa de dependencia explicita -- a ordenacao daqui nao o alcanca.
+        if (IdentityState[f] != D3D12_RESOURCE_STATE_COPY_DEST) {
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = IdentityTable[f].Get();
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = IdentityState[f];
+            B.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+            _CommandList->ResourceBarrier(1, &B);
+            IdentityState[f] = D3D12_RESOURCE_STATE_COPY_DEST;
+        }
+
+        _CommandList->CopyBufferRegion(
+            IdentityTable[f].Get(), 0, IdentityStaging.Get(),
+            static_cast<u64>(f) * IdentityStaging.SliceBytes,
+            static_cast<u64>(InstanceCount_) * sizeof(FGpuIdentityEntry));
+
+        D3D12_RESOURCE_BARRIER B{};
+        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        B.Transition.pResource   = IdentityTable[f].Get();
+        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        B.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        _CommandList->ResourceBarrier(1, &B);
+        IdentityState[f] = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
 
     void FTemporalMotionVectors::Transition(ID3D12GraphicsCommandList* CL,

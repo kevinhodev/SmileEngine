@@ -1686,6 +1686,9 @@ namespace Smile {
             Batch.TransitionTracked(Targets.VelocityBuffer.Get(), Targets.VelocityState,
                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             Batch.Flush(CommandList);
+            // A tabela de identidades sobe ANTES do passe que a consome, na mesma fila: e o
+            // que ordena a sobrescrita da tabela de F por F+2 depois das leituras de F+1.
+            TemporalMotion.RecordIdentityUpload(CommandList, FrameSlot);
             TemporalMotion.Record(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
             Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);

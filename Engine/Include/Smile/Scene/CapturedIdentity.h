@@ -15,6 +15,7 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Scene/GpuSceneHandle.h"
 
+#include <cstddef>
 #include <vector>
 
 namespace Smile {
@@ -65,6 +66,10 @@ namespace Smile {
         u32 Generation = 0;
     };
     static_assert(sizeof(FGpuIdentityEntry) == 8, "layout compartilhado com o HLSL");
+    // Tamanho nao pega INVERSAO: com os dois campos u32, trocar a ordem mantem os 8 bytes e
+    // troca os dados em silencio. Os offsets pegam.
+    static_assert(offsetof(FGpuIdentityEntry, Slot) == 0, "Slot vem primeiro no HLSL");
+    static_assert(offsetof(FGpuIdentityEntry, Generation) == 4, "Generation vem depois");
 
     // Inverso do Encode. Devolve identidade ZERADA (Id == 0) para o vazio e para qualquer valor
     // fora da tabela.
