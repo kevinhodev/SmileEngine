@@ -109,9 +109,18 @@ namespace Smile {
         ID3D12Device5* Dev5 = _Device.Device5();
         if (!Dev5) return 0;
 
-        // So o que ainda nao existe. Um par ja construido chega aqui quando outro par da mesma
-        // edicao mudou, e reconstrui-lo seria desperdicio puro.
+        // So o que ainda nao existe, e UMA VEZ por par.
+        //
+        // A deduplicacao aqui nao e otimizacao, e correcao: `_Required` chega com uma entrada por
+        // RENDERAVEL, e a lista inteira e montada antes de o primeiro resultado ser publicado no
+        // BlasByMesh — entao sem o conjunto abaixo, N instancias da mesma folhagem passariam
+        // todas pelo filtro e construiriam N OMM arrays e N BLAS identicos. O custo escalaria por
+        // instancia em vez de por par unico, que e o oposto do que a dedup do bake ja garante.
+        //
+        // Fica DENTRO do EnsureBlasFor, e nao a cargo de quem chama: e uma propriedade do que
+        // significa "garantir que exista", e um chamador futuro nao deveria precisar saber disso.
         std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Missing;
+        std::unordered_set<const void*> SeenPair;
         for (const auto& [Mesh, Omm] : _Required) {
             if (!Mesh || !Mesh->IsValid()) continue;
             const auto MeshIt = BlasByMesh.find(Mesh);
@@ -119,6 +128,12 @@ namespace Smile {
                 const auto It = MeshIt->second.find(Omm);
                 if (It != MeshIt->second.end() && It->second != 0) continue;
             }
+            // Hash do PAR: malha e micro-map juntos. O micro-map sozinho nao serve (nulo, para o
+            // caso opaco, repetiria entre malhas diferentes) e a malha sozinha tampouco.
+            const void* PairId = reinterpret_cast<const void*>(
+                reinterpret_cast<uintptr_t>(Mesh) ^
+                (reinterpret_cast<uintptr_t>(Omm) * 0x9E3779B97F4A7C15ull));
+            if (!SeenPair.insert(PairId).second) continue;
             Missing.push_back({ Mesh, Omm });
         }
         if (Missing.empty()) return 0;

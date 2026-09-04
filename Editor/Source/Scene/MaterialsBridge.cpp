@@ -775,7 +775,11 @@ namespace SmileEditor {
         // Toggle e edicao DISCRETA: nao ha arraste, entao o commit e imediato. Ligar pede um bake
         // do zero; desligar pede o BLAS opaco daquela malha, que pode nunca ter sido construido.
         // As duas transicoes sao do RebakeStaleOpacityMicromaps.
-        TouchSelectedRT(EChangeDomain::MaterialMode);
+        //
+        // TouchSelected e nao TouchSelectedRT, pelo mesmo motivo do SetAlphaCutoff: quem levanta
+        // as flags de TLAS e invalida historico e o proprio rebake, DEPOIS de o micro-map novo
+        // existir. Levantar antes seria pedir a TLAS com o estado inconsistente.
+        TouchSelected(EChangeDomain::MaterialMode);
         CommitOmmInputs();
     }
 
@@ -789,13 +793,18 @@ namespace SmileEditor {
         if (std::abs(M->Constants.AlphaCutoff - float(_V)) <= 1.0e-6f) return;
         M->Constants.AlphaCutoff = float(_V);
         M->UpdateConstants();
-        // O cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli) sai da linha do material e
-        // sobe por tick — o raster e o recorte por raio acompanham o slider.
+        // TouchSelected, e NAO TouchSelectedRT. A diferenca importa e nao e de estilo.
         //
-        // O que NAO sobe por tick e o micro-map: ele tambem e derivado do cutoff, e rebakeá-lo a
-        // cada movimento do mouse congelaria o editor numa folhagem. O commit vem do
-        // commitOmmInputs, chamado quando o controle e solto.
-        TouchSelectedRT(EChangeDomain::MaterialMode);
+        // O TouchSelectedRT levanta TlasFlagsDirty, e a TLAS e reconstruida no frame seguinte —
+        // com o cutoff novo ja no material e o micro-map ainda o antigo. O CollectInstances
+        // compara a chave de entradas do bake e ABORTA. Ou seja: por tick de arraste, a render
+        // thread caia antes de o slider ser solto.
+        //
+        // Por tick sobe so a LINHA do material (o TouchSelected marca isso desde o conserto do
+        // subsurface): o raster e o alpha-test dos raios acompanham o slider. Rebake, flags de
+        // TLAS e invalidacao de historico saem JUNTOS no commit — o RebakeStaleOpacityMicromaps
+        // chama o NotifyMaterialRTStateChanged por ultimo, depois de o micro-map novo existir.
+        TouchSelected(EChangeDomain::MaterialMode);
     }
 
     bool MaterialsBridge::BlendFlag() const {

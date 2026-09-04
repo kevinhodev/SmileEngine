@@ -1,3 +1,4 @@
+#include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Material.h"
@@ -136,13 +137,21 @@ int main(int argc, char** argv) {
             return 5;
         }
 
-        // O MESMO bake, a partir das entradas COMPACTAS que o runtime retem para rebake: UVs
-        // extraidas do Vertex e os indices, sem posicao nem normal.
+        // O MESMO bake, a partir da entrada COMPACTA que o rebake em runtime monta: UVs extraidas
+        // do Vertex e os indices, sem posicao nem normal.
         //
-        // Isto e o que autoriza reter 8 B por vertice em vez dos 32 B do Vertex inteiro. Se o
-        // baker passasse a ler qualquer outra coisa da malha — posicao, normal, o payload de
-        // RT — os dois resultados divergiriam aqui, e nao meses depois como recorte errado de
-        // folhagem numa cena que ninguem esta olhando.
+        // Isto e o que autoriza o rebake ler do .smesh apenas UV + indice. Se o baker passasse a
+        // ler qualquer outra coisa da malha — posicao, normal, o payload de RT — os dois
+        // resultados divergiriam aqui, e nao meses depois como recorte errado de folhagem numa
+        // cena que ninguem esta olhando.
+        //
+        // Nos primeiros kEquivalencePairs pares, e nao em todos: a propriedade sob teste e do
+        // ENCANAMENTO da entrada, nao do conteudo da malha — um par ja a exerceria, e a amostra
+        // cobre layouts de UV diferentes. Bakear os 122 duas vezes dobrava o custo do teste e
+        // estourava o timeout em Debug, que e um jeito ruim de um gate morrer.
+        constexpr u32 kEquivalencePairs = 8;
+        if (BakeCount >= kEquivalencePairs) { ++BakeCount; continue; }
+
         std::vector<f32> UVs(Mesh.Vertices.size() * 2);
         for (size_t V = 0; V < Mesh.Vertices.size(); ++V) {
             UVs[V * 2 + 0] = Mesh.Vertices[V].TexCoord[0];
@@ -180,7 +189,73 @@ int main(int argc, char** argv) {
         ++BakeCount;
     }
 
-    std::printf("[OMM TEST] %u pares mesh/material masked validados; "
-                "entrada compacta identica a malha completa em todos\n", BakeCount);
+    // O LEITOR SOB DEMANDA do .smesh, contra o que o loader produziu.
+    //
+    // E o codigo mais arriscado do rebake: ele reabre o arquivo cozido e navega o layout
+    // [header][entries][blob] a mao, com offsets relativos ao inicio do blob. Um erro de um
+    // sizeof aqui nao daria crash — daria UVs de outra malha, e um micro-map plausivel e errado.
+    //
+    // O oraculo e o proprio FMesh que o SceneLoader montou: se os dois divergirem em um float, o
+    // rebake estaria bakeando geometria que nao e a da malha.
+    {
+        FOmmBakeInputStore Store;
+        const std::wstring MeshFile =
+            (std::filesystem::path(Imported->BasePath) += L".smesh").wstring();
+        // A malha e so a CHAVE do store; nada nela e lido, entao um objeto vazio serve e o teste
+        // segue sem device.
+        std::vector<FGpuMesh> Chaves(Imported->Meshes.size());
+        u32 Conferidas = 0, Falhas = 0;
+        for (u32 I = 0; I < Imported->Meshes.size(); ++I) {
+            const FMesh& Esperado = Imported->Meshes[I];
+            if (Esperado.Vertices.empty() || Esperado.Indices.empty()) continue;
+            Store.RetainMeshSource(&Chaves[I], MeshFile, I);
+
+            FOmmBakeInputStore::FLoadedGeometry Lido;
+            if (!Store.LoadGeometry(&Chaves[I], Lido)) {
+                std::fprintf(stderr, "LoadGeometry falhou para a malha %u\n", I);
+                ++Falhas;
+                continue;
+            }
+            if (Lido.Indices != Esperado.Indices) {
+                std::fprintf(stderr, "malha %u: indices lidos divergem do loader\n", I);
+                ++Falhas;
+                continue;
+            }
+            if (Lido.TexCoords.size() != Esperado.Vertices.size() * 2) {
+                std::fprintf(stderr, "malha %u: contagem de UV divergente\n", I);
+                ++Falhas;
+                continue;
+            }
+            bool UVOk = true;
+            for (size_t V = 0; V < Esperado.Vertices.size() && UVOk; ++V) {
+                UVOk = Lido.TexCoords[V * 2 + 0] == Esperado.Vertices[V].TexCoord[0] &&
+                       Lido.TexCoords[V * 2 + 1] == Esperado.Vertices[V].TexCoord[1];
+            }
+            if (!UVOk) {
+                std::fprintf(stderr, "malha %u: UV lida diverge do loader\n", I);
+                ++Falhas;
+                continue;
+            }
+            ++Conferidas;
+        }
+        // Uma malha desconhecida nao pode devolver geometria: o rebake tem de RECUSAR, e nao
+        // seguir com o micro-map antigo.
+        {
+            FGpuMesh Desconhecida;
+            FOmmBakeInputStore::FLoadedGeometry Lixo;
+            if (Store.LoadGeometry(&Desconhecida, Lixo)) {
+                std::fprintf(stderr, "malha sem procedencia devolveu geometria\n");
+                ++Falhas;
+            }
+        }
+        if (Falhas > 0) {
+            std::fprintf(stderr, "[OMM TEST] %u falha(s) no leitor sob demanda\n", Falhas);
+            return 8;
+        }
+        std::printf("[OMM TEST] leitor sob demanda: %u malhas identicas ao loader\n", Conferidas);
+    }
+
+    std::printf("[OMM TEST] %u pares mesh/material masked validados; entrada compacta identica a "
+                "malha completa nos primeiros 8\n", BakeCount);
     return BakeCount ? 0 : 6;
 }

@@ -353,6 +353,20 @@ namespace Smile {
         const auto MeshCreationBase = GpuResources::CreationStats();
         std::vector<FGpuMesh*> meshPtrs = SceneState->Scene.AddMeshesBatch(
             Backend->Device.Native(), Backend->UploadQueue, Imported.Meshes);
+
+        // Procedencia de TODAS as malhas, e nao so das mascaradas.
+        //
+        // O rebake de micro-map precisa disto, e restringir as mascaradas era um bug: um material
+        // OPACO no import que ganhe Alpha Test depois nao teria com que bakear, e a cena ficaria
+        // alpha-tested sem micro-map — que e exatamente o estado em que o CollectInstances aborta.
+        // Como o que se guarda e o par (arquivo, indice) e nao a geometria, reter todas custa
+        // dezenas de bytes por malha.
+        {
+            const std::wstring MeshFile = (fs::path(Imported.BasePath) += L".smesh").wstring();
+            for (u32 i = 0; i < mh.MeshCount && i < meshPtrs.size(); ++i)
+                OmmBakeInputs.RetainMeshSource(meshPtrs[i], MeshFile, i);
+        }
+
         for (u32 i = 0; i < sh.RenderableCount; ++i) {
             const SSceneRenderable& r = rnds[i];
             if (r.MeshIndex >= mh.MeshCount) continue;
@@ -367,11 +381,6 @@ namespace Smile {
                 if (It == ommJobByMeshMaterial.end() || It->second >= ommResults.size())
                     throw std::runtime_error("Job OMM ausente para renderable alpha-tested");
                 out.OpacityMicromap = ommResults[It->second];
-                // Retem as entradas de bake DESTA malha. Aqui, e nao no laco de jobs, porque e
-                // este ponto que conhece a FGpuMesh — o job so tinha o FMesh de CPU, que morre
-                // com o import. Idempotente: varios renderaveis e varios materiais compartilham
-                // a mesma malha e o store deduplica.
-                OmmBakeInputs.RetainMesh(out.Mesh, Imported.Meshes[r.MeshIndex]);
                 // Carimba as ENTRADAS do bake na forma que o runtime reconhece. Aqui, e nao no
                 // baker: e este ponto que conhece a malha de GPU e o material, e o baker so viu o
                 // FMesh de CPU e os pixels. O carimbo e idempotente — o mesmo micro-map e

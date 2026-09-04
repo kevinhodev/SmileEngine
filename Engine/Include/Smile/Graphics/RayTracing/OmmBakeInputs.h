@@ -1,27 +1,28 @@
 #pragma once
 
-// As entradas de bake de micro-map que a cena RETEM para poder rebakear em runtime.
+// De onde saem as entradas de bake de micro-map quando e preciso REBAKEAR em runtime.
 //
 // Por que existe: o gate da Fase 2 exige que, mudada qualquer entrada do bake, o
-// FOpacityMicromapData seja substituido e os BLAS afetados reconstruidos. Antes disso o runtime
-// nao guardava nada do que o bake consome — o FGpuMesh so tem os buffers de GPU e o
-// FTextureCPUData e local do import —, entao a unica saida honesta era RECUSAR as edicoes que
-// invalidavam o micro-map. Este store e o que troca a recusa por reconstrucao.
+// FOpacityMicromapData seja substituido e os BLAS afetados reconstruidos. O runtime nao guarda
+// nada do que o bake consome — o FGpuMesh so tem os buffers de GPU e o FTextureCPUData e local do
+// import —, e sem uma resposta para "de onde tiro isso de novo" a unica saida era RECUSAR as
+// edicoes que invalidavam o micro-map.
 //
-// O que ele guarda, e por que e pouco:
+// O que ele guarda e PROCEDENCIA, nao dado:
 //
-//   GEOMETRIA — apenas UVs e indices. O baker nao le posicao nem normal (ver FOmmGeometry), e o
-//   teste do OMM prova, na Bistro inteira, que o bake a partir desta entrada compacta e identico
-//   byte a byte ao bake a partir da malha completa. Sao 8 B por vertice e 4 B por indice, contra
-//   os 32 B do Vertex, e SO para malhas que participam de algum par mascarado.
+//   MALHA — o arquivo .smesh e o indice da entrada. A geometria de bake (UVs + indices) e lida
+//   sob demanda. A primeira versao disto retinha os proprios UVs e indices, e isso tinha dois
+//   defeitos: pagava memoria residente por uma operacao manual e rara, e so podia reter as malhas
+//   que ja eram MASCARADAS no import — entao ligar Alpha Test num material opaco depois nao tinha
+//   com que bakear. Guardando procedencia, cabe reter TODAS as malhas por ~40 B cada, e a
+//   transicao opaco -> masked passa a funcionar.
 //
-//   TEXTURA — apenas o CAMINHO, e nao os pixels. A textura de alpha e relida do disco no rebake,
-//   que e uma operacao manual e rara; guardar o BC7 de folhagem residente custaria dezenas de MB
-//   para um caminho que roda quando o usuario mexe num slider.
+//   TEXTURA — o caminho do arquivo, com as flags de decodificacao do load original. Mesma razao:
+//   guardar o BC7 de folhagem residente custaria dezenas de MB por um caminho que roda quando
+//   alguem mexe num slider.
 //
-// Nao e cache de conveniencia: sem uma entrada aqui, o rebake FALHA e diz qual peca faltou. Um
-// rebake silenciosamente pulado devolveria exatamente o micro-map obsoleto que a fase existe para
-// impedir.
+// Nao e cache de conveniencia: sem procedencia, o rebake FALHA e diz qual peca faltou. Um rebake
+// silenciosamente pulado devolveria exatamente o micro-map obsoleto que a fase existe para impedir.
 
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
@@ -31,15 +32,14 @@
 #include <vector>
 
 namespace Smile {
-    struct FMesh;
     class FGpuMesh;
     class FTexture;
 
     class FOmmBakeInputStore {
     public:
-        // Retem UV + indices de uma malha. Idempotente: chamar de novo para a mesma malha nao
-        // duplica nada, que e o caso comum — varios pares (malha, material) compartilham a malha.
-        void RetainMesh(const FGpuMesh* Mesh, const FMesh& Source);
+        // De qual arquivo cozido, e qual entrada dentro dele, a geometria desta malha veio.
+        // Idempotente por malha.
+        void RetainMeshSource(const FGpuMesh* Mesh, std::wstring MeshFilePath, u32 MeshIndex);
 
         // De onde a textura veio, ja resolvido em caminho absoluto, com as flags de decodificacao
         // que o load original usou. Sem elas o rebake decodificaria o mesmo arquivo de outro jeito.
@@ -48,9 +48,28 @@ namespace Smile {
 
         void Clear();
 
-        // Geometria retida, apontando para dentro do store. Invalida (Valid() falso) quando a
-        // malha nao foi retida.
-        FOmmGeometry GeometryOf(const FGpuMesh* Mesh) const;
+        // Geometria de bake carregada sob demanda. Os vetores sao do CHAMADOR: a view aponta para
+        // dentro deles, e nada disso fica residente depois.
+        struct FLoadedGeometry {
+            std::vector<f32> TexCoords; // compactadas, 2 floats por vertice
+            std::vector<u32> Indices;
+
+            FOmmGeometry View() const {
+                FOmmGeometry G;
+                if (TexCoords.empty() || Indices.empty()) return G;
+                G.TexCoords      = TexCoords.data();
+                G.TexCoordStride = sizeof(f32) * 2;
+                G.VertexCount    = static_cast<u32>(TexCoords.size() / 2);
+                G.Indices        = Indices.data();
+                G.IndexCount     = static_cast<u32>(Indices.size());
+                return G;
+            }
+        };
+
+        // Le do .smesh as UVs e os indices desta malha. Falso quando a malha nao tem procedencia
+        // (criada em runtime) ou o arquivo nao bate com o que foi registrado — e nesse caso quem
+        // chamou tem de recusar o rebake, nunca seguir com o micro-map antigo.
+        bool LoadGeometry(const FGpuMesh* Mesh, FLoadedGeometry& Out) const;
 
         struct FTextureSource {
             std::wstring Path;
@@ -61,20 +80,20 @@ namespace Smile {
         // por exemplo, e gerado e nao veio de arquivo nenhum.
         const FTextureSource* TextureSourceOf(const FTexture* Texture) const;
 
-        u32 MeshCount()     const { return static_cast<u32>(Meshes_.size()); }
-        u32 TextureCount()  const { return static_cast<u32>(Textures_.size()); }
-        // Memoria que a cena passa a segurar por causa disto. Publicada porque e um custo novo e
-        // permanente: sem numero, "retivemos so o necessario" e afirmacao sem verificacao.
-        u64 RetainedBytes() const { return RetainedBytes_; }
+        u32 MeshCount()    const { return static_cast<u32>(Meshes_.size()); }
+        u32 TextureCount() const { return static_cast<u32>(Textures_.size()); }
+        // Memoria que a cena segura por causa disto. Publicada porque e um custo novo; guardando
+        // procedencia em vez de dado, ela e da ordem de dezenas de bytes por malha, e o numero
+        // existe justamente para que isso continue verdadeiro.
+        u64 RetainedBytes() const;
 
     private:
-        struct FRetainedMesh {
-            std::vector<f32> TexCoords; // compactadas: 2 floats por vertice
-            std::vector<u32> Indices;
+        struct FMeshSource {
+            std::wstring FilePath;
+            u32          MeshIndex = 0;
         };
 
-        std::unordered_map<const FGpuMesh*, FRetainedMesh>  Meshes_;
+        std::unordered_map<const FGpuMesh*, FMeshSource>    Meshes_;
         std::unordered_map<const FTexture*, FTextureSource> Textures_;
-        u64 RetainedBytes_ = 0;
     };
 }

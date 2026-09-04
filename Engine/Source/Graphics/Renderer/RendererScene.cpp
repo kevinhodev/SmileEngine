@@ -200,10 +200,16 @@ namespace Smile {
         const FGpuMesh* _Mesh, const FMaterial* _Material) {
         if (!_Mesh || !_Material) return nullptr;
 
-        const FOmmGeometry Geometry = OmmBakeInputs.GeometryOf(_Mesh);
+        // Geometria lida do .smesh sob demanda; nada disto fica residente.
+        FOmmBakeInputStore::FLoadedGeometry Loaded;
+        if (!OmmBakeInputs.LoadGeometry(_Mesh, Loaded)) {
+            LogError("[OMM] Rebake impossivel: nao consegui carregar a geometria de bake desta "
+                     "malha (sem procedencia, ou arquivo cozido divergente)");
+            return nullptr;
+        }
+        const FOmmGeometry Geometry = Loaded.View();
         if (!Geometry.Valid()) {
-            LogError("[OMM] Rebake impossivel: as entradas de bake desta malha nao foram retidas "
-                     "(malha criada em runtime, ou cena carregada antes da retencao existir)");
+            LogError("[OMM] Rebake impossivel: a geometria carregada veio vazia");
             return nullptr;
         }
 
@@ -826,7 +832,16 @@ namespace Smile {
         if (!Tex.IsValid()) return nullptr;
 
         ImportedTextures.push_back(std::make_unique<FTexture>(std::move(Tex)));
-        return ImportedTextures.back().get();
+        FTexture* Out = ImportedTextures.back().get();
+        // Procedencia, para o rebake de micro-map poder reler esta textura.
+        //
+        // Sem isto, trocar a BaseColor de um material alpha-tested — que e o caso que motivou a
+        // reconstrucao — criava uma textura sem procedencia, o rebake devolvia nulo por
+        // "procedencia desconhecida", o micro-map antigo continuava e o CollectInstances abortava
+        // por chave desatualizada. As flags sao as MESMAS com que a textura acabou de ser
+        // decodificada logo acima; qualquer outra coisa aqui faria o rebake ler um alpha diferente.
+        OmmBakeInputs.RetainTexturePath(Out, _Path, _IsNormalMap, _sRGB);
+        return Out;
     }
 
     FMaterialPreview::ESubmitResult Renderer::SubmitMaterialPreview(

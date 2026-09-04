@@ -198,19 +198,39 @@ Por um tempo as quatro edições que invalidam o micro-map foram **recusadas**, 
 guardava com que rebakear. O proprietário optou por reconstruir, e é o que existe agora — as quatro
 voltaram a ser edições de verdade.
 
-**O que a cena retém, e por que é pouco.** O baker lê exatamente duas coisas: as UVs e os índices.
-Posição e normal nunca entram — o micro-map é definido no espaço de textura do triângulo. Isso está
-provado, não suposto: o teste do OMM bakeia os 122 pares mascarados da Bistro pelos dois caminhos e
-exige resultado **byte a byte idêntico**. São 8 B por vértice e 4 B por índice, só para malhas
-mascaradas, dedupados por malha. A textura de alpha **não** é retida: é relida do disco no rebake,
-porque guardar o BC7 de folhagem residente custaria dezenas de MB por um caminho que roda quando
-alguém mexe num slider.
+**O que a cena retém: procedência, não dado.** Por malha, o par `{arquivo .smesh, índice}`; por
+textura, o caminho mais as flags de decodificação do load original. Dezenas de bytes cada.
+
+A primeira versão retinha os próprios UVs e índices, e tinha dois defeitos que a revisão pegou:
+pagava memória residente por uma operação manual e rara, e — pior — só podia reter as malhas que já
+eram **mascaradas no import**, então ligar Alpha Test num material opaco depois não tinha com que
+bakear. Guardando procedência, cabe reter **todas** as malhas, e essa transição passa a funcionar
+por construção em vez de por remendo.
+
+O baker lê exatamente duas coisas: as UVs e os índices. Posição e normal nunca entram — o micro-map
+é definido no espaço de textura do triângulo. Isso está provado, não suposto: o teste bakeia os
+primeiros 8 pares mascarados da Bistro pelos dois caminhos e exige resultado **byte a byte
+idêntico** (8, e não os 122, porque a propriedade sob teste é do encanamento da entrada, não do
+conteúdo da malha — bakear todos duas vezes estourava o timeout do Debug).
+
+O leitor sob demanda navega o layout `[header][entries][blob]` do `.smesh` à mão, e é o código mais
+arriscado do rebake: um `sizeof` errado ali não daria crash, daria UVs de outra malha. Por isso ele
+tem oráculo próprio — o teste lê **as 1591 malhas** da Bistro pelo leitor e exige igualdade com o
+que o `SceneLoader` produziu. Deslocar a base do blob em 4 bytes derruba o teste.
 
 **Quando dispara.** No **commit** da edição, nunca por tick. Arrastar o corte de alpha numa
 folhagem dispararia um rebake por movimento do mouse; o `SliderRow` ganhou um sinal `committed`
-(controle solto, ou passo discreto de teclado/roda) e é ele que publica. O valor em si continua
-acompanhando o arraste — o raster e o recorte por raio mostram o cutoff novo imediatamente; o que
-espera é o micro-map.
+(controle solto, ou passo discreto de teclado/roda) e é ele que publica.
+
+E o tick tem de tocar **só a linha do material**. A primeira versão usava `TouchSelectedRT` por
+tick, o que levanta `TlasFlagsDirty`: a TLAS era reconstruída no frame seguinte com o cutoff novo e
+o micro-map ainda antigo, e o `CollectInstances` abortava — a render thread caía **antes** de o
+slider ser solto. Rebake, flags de TLAS e invalidação de histórico saem juntos no commit, nessa
+ordem, porque o rebake chama o `NotifyMaterialRTStateChanged` por último, depois de o micro-map
+novo existir.
+
+O valor continua acompanhando o arraste: o raster e o alpha-test dos raios leem a linha, que sobe
+por tick. O que espera é o micro-map.
 
 **Os BLAS afetados.** `EnsureBlasFor` reconstrói apenas os pares `{malha, micro-map}` que passam a
 ser exigidos, cada um num recurso próprio, e o `BlasByMesh` passa a apontar para lá. O espaço
@@ -222,6 +242,12 @@ do que o desperdício justifica.
 Uma travessia cobre as três transições que uma edição produz: micro-map rebakeado, alpha test
 ligado (bake do zero) e alpha test desligado (passa a exigir o BLAS opaco daquela malha, que pode
 nunca ter sido construído — e sem ele o `CollectInstances` derrubava a render thread).
+
+A deduplicação por par vive **dentro** do `EnsureBlasFor`, e é correção e não otimização: a lista
+chega com uma entrada por *renderável*, e ela é montada inteira antes de o primeiro resultado ser
+publicado no mapa — então sem o conjunto, N instâncias da mesma folhagem construiriam N OMM arrays
+e N BLAS idênticos. O custo escalaria por instância, exatamente o oposto do que a dedup do bake já
+garante.
 
 **O que ainda não é reconstruível**, e falha alto dizendo qual peça faltou: malha criada em runtime
 (sem entradas retidas) e material cujo BaseColor foi gerado em vez de vir de arquivo — o proxy do
