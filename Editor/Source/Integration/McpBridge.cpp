@@ -269,6 +269,22 @@ namespace SmileEditor {
                     { QStringLiteral("retired"),   static_cast<double>(_Cpu.GpuSlotsRetired) },
                     { QStringLiteral("exhausted"), static_cast<double>(_Cpu.GpuSlotsExhausted) },
                 } },
+                // Tabela canonica de materiais (Fase 2). ADITIVO: o cliente MCP nao exige este
+                // bloco, entao o kProtocolVersion NAO sobe — a regra da v4 e que a versao sobe
+                // quando o cliente passa a EXIGIR um campo, e nao quando o editor passa a
+                // publicar um. Um cliente antigo ignora; um novo le sem handshake novo.
+                //
+                // `rowsDirty` e o numero do gate: zero em todo frame sem edicao de material. Uma
+                // automacao que o veja diferente de zero em regime constante achou um caminho
+                // sujando a tabela por frame.
+                { QStringLiteral("materialTable"), QJsonObject{
+                    { QStringLiteral("rows"),            static_cast<double>(_Cpu.MaterialTableRows) },
+                    { QStringLiteral("residentBytes"),   static_cast<double>(_Cpu.MaterialTableBytes) },
+                    { QStringLiteral("rowsDirty"),       static_cast<double>(_Cpu.MaterialRowsDirty) },
+                    { QStringLiteral("copyRegions"),     static_cast<double>(_Cpu.MaterialCopyRegions) },
+                    { QStringLiteral("rowsUploadedTotal"),
+                      static_cast<double>(_Cpu.MaterialRowsUploadedTotal) },
+                } },
                 { QStringLiteral("passes"), Passes },
             };
         }

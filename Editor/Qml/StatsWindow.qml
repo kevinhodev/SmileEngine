@@ -718,6 +718,7 @@ Rectangle {
                                     { label: "Binds de material", value: root.statsModel.materialBinds },
                                     { label: "SRV heap", value: root.statsModel.srvHeapText },
                                     { label: "Slots de cena", value: root.statsModel.gpuSlotsText },
+                                    { label: "Tabela de materiais", value: root.statsModel.materialTableText },
                                     { label: "ObjectConstants/frame", value: root.statsModel.objectConstantsText },
                                     { label: "RAM compartilhada", value: root.statsModel.vramNonLocalText }
                                  ]

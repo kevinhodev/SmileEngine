@@ -136,6 +136,14 @@ namespace SmileEditor {
         quint32 GpuSlotsRetired   = 0;
         quint32 GpuSlotsExhausted = 0;
 
+        // Tabela canonica de materiais (Fase 2). Ver o comentario em FCpuFrameStats: o numero do
+        // gate e o sujo por frame, que tem de ser zero fora de uma edicao de material.
+        quint64 MaterialTableBytes        = 0;
+        quint32 MaterialTableRows         = 0;
+        quint32 MaterialRowsDirty         = 0;
+        quint32 MaterialCopyRegions       = 0;
+        quint64 MaterialRowsUploadedTotal = 0;
+
         QVector<FCpuSubmitPassSnapshot> Passes;
     };
 

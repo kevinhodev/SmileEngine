@@ -213,6 +213,7 @@ namespace SmileEditor {
     QString      StatsBridge::GetObjectConstantsText() const { return Snapshot.ObjectConstantsText; }
     QString      StatsBridge::GetSrvHeapText() const { return Snapshot.SrvHeapText; }
     QString      StatsBridge::GetGpuSlotsText() const { return Snapshot.GpuSlotsText; }
+    QString      StatsBridge::GetMaterialTableText() const { return Snapshot.MaterialTableText; }
     double       StatsBridge::GetSrvHeapFrac() const { return Snapshot.SrvHeapFrac; }
 
     // Estatísticas de caster pertencem à última atualização da cascata; cascatas congeladas
@@ -530,6 +531,19 @@ namespace SmileEditor {
                     .arg(Cpu.GpuSlotsRetired)
                     .arg(Cpu.GpuSlotsExhausted
                              ? QStringLiteral(", esgotados %1").arg(Cpu.GpuSlotsExhausted)
+                             : QString());
+
+            // Tabela canonica de materiais. As linhas e os bytes residentes primeiro, porque sao
+            // o que a cena custa; o sujo aparece SO quando existe, e e essa a informacao — num
+            // frame sem edicao ele tem de ser zero, e uma coluna de zeros permanente esconderia
+            // justamente o frame em que deixou de ser.
+            Next.MaterialTableText =
+                QStringLiteral("%1 linhas / %2 KB%3")
+                    .arg(Cpu.MaterialTableRows)
+                    .arg(QString::number(Cpu.MaterialTableBytes / 1024.0, 'f', 1))
+                    .arg(Cpu.MaterialRowsDirty
+                             ? QStringLiteral("  (sujas %1 em %2 copias)")
+                                   .arg(Cpu.MaterialRowsDirty).arg(Cpu.MaterialCopyRegions)
                              : QString());
         }
 

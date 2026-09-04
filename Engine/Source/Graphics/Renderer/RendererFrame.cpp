@@ -1003,6 +1003,14 @@ namespace Smile {
         CpuStatsBuilding.GpuSlotsLive      = Slots.LiveCount();
         CpuStatsBuilding.GpuSlotsRetired   = Slots.RetiredCount();
         CpuStatsBuilding.GpuSlotsExhausted = Slots.ExhaustedCount();
+
+        // As duas grandezas do gate da Fase 2: quanto a tabela ocupa e quanto dela foi reescrito
+        // NESTE frame. O segundo tem de ser zero fora de uma edicao de material.
+        CpuStatsBuilding.MaterialTableBytes        = MaterialTable.PersistentBytes();
+        CpuStatsBuilding.MaterialTableRows         = MaterialTable.RowCount();
+        CpuStatsBuilding.MaterialRowsDirty         = MaterialTable.LastDirtyRows();
+        CpuStatsBuilding.MaterialCopyRegions       = MaterialTable.LastCopyRegions();
+        CpuStatsBuilding.MaterialRowsUploadedTotal = MaterialTable.TotalRowsUploaded();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.
         CpuStatsBuilding.SourceFrameIndex = FrameState->FrameIndex;

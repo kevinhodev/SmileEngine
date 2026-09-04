@@ -312,6 +312,11 @@ namespace SmileEditor {
         Out.GpuSlotsLive      = S.GpuSlotsLive;
         Out.GpuSlotsRetired   = S.GpuSlotsRetired;
         Out.GpuSlotsExhausted = S.GpuSlotsExhausted;
+        Out.MaterialTableBytes        = S.MaterialTableBytes;
+        Out.MaterialTableRows         = S.MaterialTableRows;
+        Out.MaterialRowsDirty         = S.MaterialRowsDirty;
+        Out.MaterialCopyRegions       = S.MaterialCopyRegions;
+        Out.MaterialRowsUploadedTotal = S.MaterialRowsUploadedTotal;
         // TODOS os passes, inclusive os zerados: uma serie temporal com conjunto de chaves
         // variavel obrigaria o agente a tratar ausencia como zero, e ausencia tambem poderia
         // significar "passe removido". Zero explicito nao tem essa ambiguidade.

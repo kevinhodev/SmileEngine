@@ -133,6 +133,23 @@ namespace Smile {
         u32 GpuSlotsRetired   = 0;
         u32 GpuSlotsExhausted = 0;
 
+        // Tabelas canonicas residentes (Fase 2). Duas grandezas com perguntas diferentes:
+        //
+        //  - PERSISTENTE responde "quanto a cena custa em tabela"; e o eixo que a Fase 4 vai
+        //    multiplicar quando instancias e meshes tambem virarem tabela.
+        //  - SUJO POR FRAME responde "o caminho estavel esta reescrevendo tabela?". Tem de ser
+        //    ZERO num frame sem edicao, e esse zero e o gate da fase. O modo de falha e um
+        //    caminho que suje a tabela por frame — o que devolveria, disfarcado de upload
+        //    incremental, o custo por frame que a fase existe para remover.
+        //
+        // O acumulado existe porque o instantaneo e quase sempre zero: um vazamento de um punhado
+        // de linhas por frame nao aparece no instantaneo e aparece na soma.
+        u64 MaterialTableBytes       = 0; // residente (capacidade x 64 B)
+        u32 MaterialTableRows        = 0; // linhas em uso (1 default + materiais da cena)
+        u32 MaterialRowsDirty        = 0; // linhas subidas NESTE frame
+        u32 MaterialCopyRegions      = 0; // CopyBufferRegion emitidos neste frame
+        u64 MaterialRowsUploadedTotal = 0; // desde o ultimo setup da tabela
+
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
         // e GPU de frames diferentes sem perceber.

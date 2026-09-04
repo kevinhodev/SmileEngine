@@ -48,6 +48,10 @@ namespace SmileEditor {
         // Pool de residencia GPU. Aposentados presos e capacidade acima dos vivos sao o
         // sintoma de um Collect que parou de rodar -- que nao quebra nada, so cresce.
         Q_PROPERTY(QString gpuSlotsText READ GetGpuSlotsText NOTIFY Updated)
+        // Tabela canonica de materiais (Fase 2). O sujo por frame tem de ser zero fora de uma
+        // edicao: um caminho que suje a tabela por frame devolveria, disfarcado de upload
+        // incremental, o custo por frame que a fase existe para remover.
+        Q_PROPERTY(QString materialTableText READ GetMaterialTableText NOTIFY Updated)
 
     public:
         explicit StatsBridge(QObject* Parent = nullptr);
@@ -79,6 +83,7 @@ namespace SmileEditor {
         QString      GetObjectConstantsText() const;
         QString      GetSrvHeapText() const;
         QString      GetGpuSlotsText() const;
+        QString      GetMaterialTableText() const;
         double       GetSrvHeapFrac() const;
 
     signals:
@@ -116,6 +121,7 @@ namespace SmileEditor {
             QString      ObjectConstantsText = QStringLiteral("—");
             QString      SrvHeapText  = QStringLiteral("—");
             QString      GpuSlotsText = QStringLiteral("—");
+            QString      MaterialTableText = QStringLiteral("—");
             double       SrvHeapFrac = 0.0;
         } Snapshot;
 
