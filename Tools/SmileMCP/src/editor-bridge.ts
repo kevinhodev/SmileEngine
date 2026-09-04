@@ -10,7 +10,10 @@ import path from "node:path";
 // protocolo — mantendo-o, a rejeicao e "versao incompativel" e nao "editor nao encontrado".
 // 4: o bloco cpu.gpuSlots. A agregacao passa a exigi-lo, entao um editor antigo tem de ser
 // recusado em vez de produzir "undefined" no lugar do numero.
-const PROTOCOL_VERSION = 4;
+// 5: os blocos cpu.materialTable e cpu.meshTable (tabelas canonicas da Fase 2). Mesma regra: eles
+// entraram no RESUMO, que e o que a regua le com o includeSamples default (false). Enquanto
+// estavam so na amostra crua, existiam no editor e nao chegavam a quem mede.
+const PROTOCOL_VERSION = 5;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -118,6 +121,19 @@ export interface CpuProfileStats {
   // Pool de residencia GPU. Retired parado com capacity acima de live e o sintoma de um Collect
   // que deixou de rodar -- crescimento que nao quebra nada e so aparece como memoria a mais.
   gpuSlots: { capacity: number; live: number; retired: number; exhausted: number };
+  // Tabelas canonicas da cena (Fase 2 do GPU-DRIVEN-PLAN). rowsDirty e o numero do gate: zero em
+  // todo frame sem edicao de material. residentBytes e VRAM; stagingBytes e memoria do host (os
+  // slices de upload, um por frame em voo, persistentes).
+  materialTable: {
+    rows: number;
+    residentBytes: number;
+    stagingBytes: number;
+    rowsDirty: number;
+    copyRegions: number;
+    rowsUploadedTotal: number;
+  };
+  // Sem rowsDirty: geometria nao e editavel em runtime, entao as linhas so mudam num Setup.
+  meshTable: { rows: number; residentBytes: number; stagingBytes: number };
   passes: CpuSubmitPass[];
 }
 
@@ -544,6 +560,35 @@ export class SmileEditorBridge {
         `Snapshot de perfil com cpu.gpuSlots incoerente: live+retired+exhausted = ${ocupados} ` +
           `acima de capacity ${capacity}.`,
       );
+    }
+    // materialTable/meshTable sao OBRIGATORIOS no protocolo 5, pela mesma razao que gpuSlots foi
+    // no 4: a agregacao passa a exigi-los. Sem validar na borda, um editor anterior a Fase 2
+    // atravessaria o cast e o resumo publicaria "null" onde deveria estar o numero do gate --
+    // um relatorio que parece completo e nao e.
+    const tabelas: Array<[string, readonly string[]]> = [
+      ["materialTable",
+       ["rows", "residentBytes", "stagingBytes", "rowsDirty", "copyRegions", "rowsUploadedTotal"]],
+      ["meshTable", ["rows", "residentBytes", "stagingBytes"]],
+    ];
+    for (const [nome, campos] of tabelas) {
+      const bloco = (cpu as unknown as Record<string, unknown>)[nome] as
+        | Record<string, unknown>
+        | undefined;
+      if (!bloco || typeof bloco !== "object") {
+        throw new Error(`Snapshot de perfil sem o bloco cpu.${nome} (protocolo 5).`);
+      }
+      for (const campo of campos) {
+        // Mesmo contrato do gpuSlots: u32, e "finito" nao e o contrato. Bytes cabem em u32 aqui
+        // porque as tabelas sao de dezenas de KB; se um dia passarem de 4 GB, este limite e o
+        // lugar certo para falhar em vez de truncar em silencio.
+        const valor = bloco[campo];
+        if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
+          throw new Error(
+            `Snapshot de perfil com cpu.${nome}.${campo} invalido ` +
+              `(esperado inteiro em [0, 4294967295], veio ${typeof valor} ${String(valor)}).`,
+          );
+        }
+      }
     }
     if (typeof snapshot.directGpuSourceFrameIndex !== "number") {
       throw new Error("Snapshot de perfil sem identidade da fila direct.");

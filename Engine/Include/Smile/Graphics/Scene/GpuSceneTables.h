@@ -175,6 +175,21 @@ namespace Smile {
         return DiffTableRows<FGpuMaterialRecord>(Fresh, Shadow, OutChanged);
     }
 
+    // === Footprint de uma tabela ================================================================
+    //
+    // Duas grandezas, porque nao saem do mesmo orcamento: o buffer DEFAULT ocupa VRAM, e os slices
+    // de staging ocupam memoria do HOST. Os slices sao PERSISTENTES — criados junto com a tabela e
+    // mapeados o tempo todo, nao alocados por upload —, e foi exatamente por esquece-los que o
+    // primeiro `residentBytes` publicado valia um TERCO do que a tabela custava.
+    //
+    // Funcao pura e livre para poder ser testada sem device: o `Create` que aloca de verdade exige
+    // ID3D12Device, e uma conta que so existe la dentro nao tem como ser conferida.
+    struct FGpuTableFootprint {
+        u64 Resident = 0; // VRAM
+        u64 Staging  = 0; // host
+        u64 Total() const { return Resident + Staging; }
+    };
+
     // === Armazenamento comum ====================================================================
     //
     // Buffer em DEFAULT heap + staging por frame em voo + o descritor. Sem tipo de linha: as duas
@@ -208,7 +223,19 @@ namespace Smile {
         u32  Srv()      const { return SrvSlot_; }
         u32  Capacity() const { return Capacity_; }
         u32  RowBytes() const { return RowBytes_; }
-        u64  PersistentBytes() const { return static_cast<u64>(Capacity_) * RowBytes_; }
+
+        FGpuTableFootprint Footprint() const { return FootprintFor(Capacity_, RowBytes_); }
+        u64 ResidentBytes()   const { return Footprint().Resident; }
+        u64 StagingBytes()    const { return Footprint().Staging; }
+        // O numero que o gate da fase pede por tabela. Os dois separados continuam expostos
+        // porque VRAM e memoria do host nao saem do mesmo orcamento.
+        u64 PersistentBytes() const { return Footprint().Total(); }
+
+        // A conta, isolada do recurso. Ver FGpuTableFootprint.
+        static constexpr FGpuTableFootprint FootprintFor(u32 Capacity, u32 RowBytes) {
+            const u64 Resident = static_cast<u64>(Capacity) * RowBytes;
+            return { Resident, Resident * kFrameSlots };
+        }
 
     private:
         Microsoft::WRL::ComPtr<ID3D12Resource> Buffer_;
@@ -254,6 +281,8 @@ namespace Smile {
         u32 RowOf(const FMaterial* Material) const;
 
         u64 PersistentBytes()    const { return Storage_.PersistentBytes(); }
+        u64 ResidentBytes()      const { return Storage_.ResidentBytes(); }
+        u64 StagingBytes()       const { return Storage_.StagingBytes(); }
         u32 LastDirtyRows()      const { return LastDirtyRows_; }
         u32 LastCopyRegions()    const { return LastCopyRegions_; }
         u64 TotalRowsUploaded()  const { return TotalRowsUploaded_; }
@@ -316,6 +345,8 @@ namespace Smile {
         u32 GeometrySlotOf(const FGpuMesh* Mesh) const;
 
         u64 PersistentBytes()   const { return Storage_.PersistentBytes(); }
+        u64 ResidentBytes()     const { return Storage_.ResidentBytes(); }
+        u64 StagingBytes()      const { return Storage_.StagingBytes(); }
         u32 LastDirtyRows()     const { return LastDirtyRows_; }
         u32 DescriptorCount()   const { return DescriptorCount_; }
 

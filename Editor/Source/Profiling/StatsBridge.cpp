@@ -540,12 +540,15 @@ namespace SmileEditor {
             //
             // A de MALHAS nao tem contador de sujas: geometria nao e editavel em runtime, entao
             // as linhas dela so mudam num Setup.
+            // Os bytes somam VRAM + staging: os slices de upload sao persistentes (criados no
+            // Create e mapeados o tempo todo), entao mostrar so o DEFAULT publicava um terco do
+            // que a tabela custa.
             Next.MaterialTableText =
                 QStringLiteral("mat %1 / %2 KB, malha %3 / %4 KB%5")
                     .arg(Cpu.MaterialTableRows)
-                    .arg(QString::number(Cpu.MaterialTableBytes / 1024.0, 'f', 1))
+                    .arg(QString::number((Cpu.MaterialTableBytes + Cpu.MaterialStagingBytes) / 1024.0, 'f', 1))
                     .arg(Cpu.MeshTableRows)
-                    .arg(QString::number(Cpu.MeshTableBytes / 1024.0, 'f', 1))
+                    .arg(QString::number((Cpu.MeshTableBytes + Cpu.MeshStagingBytes) / 1024.0, 'f', 1))
                     .arg(Cpu.MaterialRowsDirty
                              ? QStringLiteral("  (sujas %1 em %2 copias)")
                                    .arg(Cpu.MaterialRowsDirty).arg(Cpu.MaterialCopyRegions)

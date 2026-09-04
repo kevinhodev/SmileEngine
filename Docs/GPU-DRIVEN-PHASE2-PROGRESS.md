@@ -2,8 +2,15 @@
 
 Data: 2026-09-04
 
-Estado: **em andamento**. As tabelas de materiais e de meshes estao entregues; a de instancias e a
-comparacao visual nao.
+Estado: **em andamento, não promovível.** As tabelas de materiais e de meshes estão entregues e
+validadas em runtime; os quatro findings da revisão estão corrigidos. Faltam **duas decisões do
+proprietário**, e são elas que seguram o encerramento da fase:
+
+1. **`FGpuSceneInstance`** — desenhada e orçada, não implementada. Ver a seção do layout.
+2. **OMM** — o gate pede substituir/versionar o micro-map **e reconstruir os BLAS afetados**.
+   Versionar está feito; reconstruir não. Ou se implementa o rebake em runtime (o que exige reter
+   dados de CPU que o runtime hoje descarta), ou o gate muda formalmente para aceitar a política de
+   recusa. Não dá para declarar fechado do jeito que está.
 
 Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 
@@ -15,7 +22,71 @@ Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 | `b9055da` | tabela residente na GPU, `FRTInstanceGeo` de 100 B → 20 B, espelho HLSL, fim do dreno |
 | `4745a70` | OMM versionado pelas quatro entradas do bake |
 | `9186d93` | telemetria de bytes persistentes e bytes sujos por frame |
-| (este) | `FGpuMeshRecord` + `FGpuMeshTable`, dona dos descritores de geometria |
+| `b65063c` | `FGpuMeshRecord` + `FGpuMeshTable`, dona dos descritores de geometria |
+| `ab5f466` | layout e orçamento da tabela de instâncias |
+| (este) | os quatro findings da revisão de runtime |
+
+## Findings da revisão (2026-09-04)
+
+Validação em runtime na RTX 3060 Ti — sintética de 1M, comparação visual oficial 8/8, Bistro sem
+cliff — achou quatro defeitos. Os quatro estão corrigidos; dois deles **não são regressões da
+Fase 2**, e vale registrar a diferença porque ela muda o conserto.
+
+### P1 — descritor de textura reescrito com trabalho em voo
+
+`FTextureSRVHeap::CreateSRV` escreve no heap **shader-visible**, não só no staging. Trocar a
+textura de um material reescrevia o slot no lugar, sem fence: uma command list já submetida que
+referencie aquele slot ainda vai lê-lo, e isso é modificar descritor em uso.
+
+**Não foi a Fase 2 que abriu isso.** O dreno anterior morava no `NotifyMaterialRTStateChanged`,
+consumido no *topo do frame seguinte* — depois da escrita. Ele protegia o snapshot `InstanceGeo`,
+que é outro recurso; este slot nunca esteve coberto. Por isso o conserto não é "preservar o dreno
+para trocas de textura": um dreno no mesmo lugar de antes continuaria chegando tarde. O dreno agora
+está **antes** da escrita, dentro de `Renderer::UpdateMaterialTextureSlot`, que é o funil.
+
+O conserto estrutural — versionar/aposentar slot de descritor pelas duas fences, como o
+`FGpuSceneSlots` já faz para residência de cena — fica para a Fase 3, que é quando o raster vira
+bindless e passa a rotacionar descritor de material de verdade.
+
+### P1 — subsurface não sujava a linha
+
+`SetSubsurfaceColor`/`SetSubsurfaceIntensity` usavam o canal só-raster, e `SubsurfaceColor` é campo
+da linha canônica, lido pelo path tracer como `TransColor`. Também é anterior à Fase 2 (o
+`FillInstanceGeo` já lia o campo e o canal já era o errado); o que mudou é que antes qualquer outra
+edição do mesmo material corrigia por acidente, ao reescrever a cena inteira.
+
+Corrigido nos dois setters. E, porque a auditoria dos onze setters mostrou que o erro é de *canal*
+e não de campo, `TouchSelected` passou a marcar a linha sempre: hoje isso custa zero quando o campo
+não está na linha (a tabela suja por conteúdo — uma edição de normal strength resulta em zero linha
+suja e zero cópia), e antes da Fase 2 teria custado um dreno por tick. O `TouchSelectedRT` continua
+seletivo para o que de fato invalida histórico e flags de TLAS.
+
+### P2 — a telemetria não chegava a quem mede
+
+Os blocos existiam na amostra crua e não no `summarizeProfile`, que é o que a régua lê com o
+`includeSamples` default. O cliente TypeScript agora tipa, **exige** e resume os dois blocos, e o
+protocolo subiu para **5** — pela mesma regra da v4: a versão sobe quando o cliente passa a exigir
+o campo, não quando o editor passa a publicá-lo. A validação de borda ganhou casos negativos para
+cada campo dos dois blocos.
+
+### P2 — `residentBytes` valia um terço
+
+Contava só o buffer DEFAULT. Cada tabela mantém também dois slices de staging **persistentes** —
+criados no `Create` e mapeados o tempo todo, não alocados por upload. Agora são duas grandezas
+separadas (`residentBytes` = VRAM, `stagingBytes` = host), porque não saem do mesmo orçamento, e o
+painel mostra a soma. A conta virou função pura `FGpuTableStorage::FootprintFor`, testável sem
+device — sem isso o campo não tinha guarda nenhuma, que foi como ele nasceu errado.
+
+### Cobertura dos consertos
+
+Dois têm teste; dois não, e é honesto dizer qual é qual:
+
+| conserto | prova |
+|---|---|
+| footprint | `TestarFootprint`; zerar o staging na conta deixa 3 asserções vermelhas |
+| MCP | `Smile.EditorBridgeValidation`; tirar `meshTable` da validação deixa 5 casos vermelhos |
+| dreno do descritor | **sem teste automatizado** — é hazard de lifetime de GPU. Quem prova é a debug layer do D3D12 numa sessão Debug do editor trocando textura de material |
+| subsurface | **sem teste automatizado** — é fiação de bridge Qt. Observável pela régua: editar subsurface tem de levar `cpu.materialTable.rowsDirty` de 0 para 1 num frame, e voltar a 0 |
 
 ### A linha canônica
 
@@ -99,9 +170,9 @@ todo hit de RT.
 | o caminho estável não chama `Flush`/`WaitIdle` por edição de material | **feito**: `NotifyMaterialRTStateChanged` perdeu os dois |
 | OMM invalidado quando suas ENTRADAS mudam | **parcial** — ver abaixo |
 | layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e instância; falta a de instâncias da Fase 4 |
-| cena grande reporta bytes persistentes por tabela e sujos por frame | **feito** (painel + MCP); falta a medida numa cena grande |
+| cena grande reporta bytes persistentes por tabela e sujos por frame | **feito e medido** na sintética de 1M: `rowsDirty=0` e `copyRegions=0` em regime estável; `residentBytes` corrigido para incluir o staging |
 | formato-base novo e deliberado | **decidido não bumpar** — ver a nota de estado da Fase 2 no plano |
-| raster CPU e RT mantêm paridade visual | **não medido** — exige GPU |
+| raster CPU e RT mantêm paridade visual | **feito**: `scientific`, N=128, Bistro+Emerald, 8/8 capturas; MAE máximo 0,900, abaixo do piso de ruído de 1,08 já documentado na Fase 1 |
 
 ## OMM: o que foi fechado e o que não foi
 

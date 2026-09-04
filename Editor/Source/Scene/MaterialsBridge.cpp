@@ -492,6 +492,19 @@ namespace SmileEditor {
 
     void MaterialsBridge::TouchSelected(EChangeDomain _Domain) {
         MarkDirty();
+        // Toda edicao de constante marca a LINHA da tabela canonica, mesmo as que nao pedem
+        // TouchSelectedRT.
+        //
+        // Por que isto e barato agora e nao era antes: ate a Fase 2, "sujar o material para o RT"
+        // significava drenar as duas filas e reescrever o snapshot da cena inteira, entao ser
+        // seletivo era obrigatorio. Hoje significa recalcular as linhas e subir as que DIFEREM —
+        // uma edicao de normal strength, que a linha nem carrega, resulta em zero linha suja e
+        // zero copia. O custo de errar o canal, por outro lado, e permanente: o subsurface passou
+        // meses sendo lido pelo path tracer e escrito so no raster, porque estava no canal errado.
+        //
+        // Nao substitui o TouchSelectedRT: aquele tambem levanta TlasFlagsDirty e invalida os
+        // historicos, e isso continua seletivo — um slider de parallax nao pode resetar o GI.
+        if (Renderer) Renderer->Settings().MarkMaterialRowsDirty();
         // Edicao de slider/cor tambem e continua: frames anteriores do MESMO material ainda
         // sao uteis enquanto o ring alcanca o valor mais novo. FMaterialPreview fotografa o CB
         // por slot, portanto nao ha disputa com UpdateConstants() durante o voo.
@@ -833,7 +846,11 @@ namespace SmileEditor {
         auto& S = M->Constants.SubsurfaceColor;
         S.X = float(_V.redF()); S.Y = float(_V.greenF()); S.Z = float(_V.blueF());
         M->UpdateConstants();
-        TouchSelected(EChangeDomain::MaterialMode);
+        // RT: o subsurface e campo da linha canonica e o path tracer o le como TransColor
+        // (PT_LoadHitMaterial). Estava no canal so-raster, entao a transmissao da folhagem mudava
+        // na tela e continuava a antiga na iluminacao indireta — indefinidamente, ate outra
+        // edicao qualquer do mesmo material sujar a linha por acidente.
+        TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
     qreal MaterialsBridge::SubsurfaceIntensity() const {
@@ -845,7 +862,7 @@ namespace SmileEditor {
         auto M = SelMat(); if (!M) return;
         M->Constants.SubsurfaceColor.W = float(_V);
         M->UpdateConstants();
-        TouchSelected(EChangeDomain::MaterialMode);
+        TouchSelectedRT(EChangeDomain::MaterialMode); // ver SetSubsurfaceColor
     }
 
     QVariantList MaterialsBridge::TextureSlots() const {

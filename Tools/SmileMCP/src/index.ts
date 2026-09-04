@@ -163,6 +163,24 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           retired: summarize(cpuStats.map((c) => c.gpuSlots.retired)),
           exhausted: cpuStats.at(-1)?.gpuSlots.exhausted ?? null,
         },
+        // Tabelas canonicas da Fase 2. rowsDirty vai RESUMIDO (e distribuicao: o gate e que a
+        // mediana e o maximo sejam zero em regime estavel); linhas e bytes vao como ULTIMO valor,
+        // porque so mudam num Setup e a mediana de uma serie constante nao acrescenta nada.
+        // rowsUploadedTotal e monotonico: o ultimo valor E a soma, e ele e quem denuncia um
+        // vazamento de poucas linhas por frame que o instantaneo nao mostra.
+        materialTable: {
+          rows: cpuStats.at(-1)?.materialTable.rows ?? null,
+          residentBytes: cpuStats.at(-1)?.materialTable.residentBytes ?? null,
+          stagingBytes: cpuStats.at(-1)?.materialTable.stagingBytes ?? null,
+          rowsDirty: summarize(cpuStats.map((c) => c.materialTable.rowsDirty)),
+          copyRegions: summarize(cpuStats.map((c) => c.materialTable.copyRegions)),
+          rowsUploadedTotal: cpuStats.at(-1)?.materialTable.rowsUploadedTotal ?? null,
+        },
+        meshTable: {
+          rows: cpuStats.at(-1)?.meshTable.rows ?? null,
+          residentBytes: cpuStats.at(-1)?.meshTable.residentBytes ?? null,
+          stagingBytes: cpuStats.at(-1)?.meshTable.stagingBytes ?? null,
+        },
         passes: [...passKeys].map((key) => {
           const rows = cpuStats
             .map((cpu) => cpu.passes.find((pass) => pass.key === key))

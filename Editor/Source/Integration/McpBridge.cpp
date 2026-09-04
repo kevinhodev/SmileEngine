@@ -31,7 +31,10 @@ namespace SmileEditor {
         // 4: o bloco cpu.gpuSlots (pool de residencia GPU). Sobe porque o cliente passa a exigir
         // o campo na agregacao; um editor antigo devolveria um snapshot sem ele e o MCP so
         // reportaria "undefined" no lugar de recusar.
-        constexpr int kProtocolVersion = 4;
+        // 5: cpu.materialTable e cpu.meshTable (tabelas canonicas da Fase 2). Entraram no RESUMO
+        // do cliente, que e o que a regua le por padrao — e a regra de bump e essa: a versao sobe
+        // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
+        constexpr int kProtocolVersion = 5;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -277,9 +280,14 @@ namespace SmileEditor {
                 // `rowsDirty` e o numero do gate: zero em todo frame sem edicao de material. Uma
                 // automacao que o veja diferente de zero em regime constante achou um caminho
                 // sujando a tabela por frame.
+                // `residentBytes` e VRAM (o buffer DEFAULT); `stagingBytes` e memoria do HOST (os
+                // slices de upload, um por frame em voo). Os dois separados porque nao saem do
+                // mesmo orcamento — e publicar so o primeiro reportava um terco do footprint da
+                // tabela, que foi como este campo nasceu.
                 { QStringLiteral("materialTable"), QJsonObject{
                     { QStringLiteral("rows"),            static_cast<double>(_Cpu.MaterialTableRows) },
                     { QStringLiteral("residentBytes"),   static_cast<double>(_Cpu.MaterialTableBytes) },
+                    { QStringLiteral("stagingBytes"),    static_cast<double>(_Cpu.MaterialStagingBytes) },
                     { QStringLiteral("rowsDirty"),       static_cast<double>(_Cpu.MaterialRowsDirty) },
                     { QStringLiteral("copyRegions"),     static_cast<double>(_Cpu.MaterialCopyRegions) },
                     { QStringLiteral("rowsUploadedTotal"),
@@ -290,6 +298,7 @@ namespace SmileEditor {
                 { QStringLiteral("meshTable"), QJsonObject{
                     { QStringLiteral("rows"),          static_cast<double>(_Cpu.MeshTableRows) },
                     { QStringLiteral("residentBytes"), static_cast<double>(_Cpu.MeshTableBytes) },
+                    { QStringLiteral("stagingBytes"),  static_cast<double>(_Cpu.MeshStagingBytes) },
                 } },
                 { QStringLiteral("passes"), Passes },
             };

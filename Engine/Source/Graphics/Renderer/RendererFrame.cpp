@@ -1007,12 +1007,14 @@ namespace Smile {
 
         // As duas grandezas do gate da Fase 2: quanto a tabela ocupa e quanto dela foi reescrito
         // NESTE frame. O segundo tem de ser zero fora de uma edicao de material.
-        CpuStatsBuilding.MaterialTableBytes        = MaterialTable.PersistentBytes();
+        CpuStatsBuilding.MaterialTableBytes        = MaterialTable.ResidentBytes();
+        CpuStatsBuilding.MaterialStagingBytes      = MaterialTable.StagingBytes();
         CpuStatsBuilding.MaterialTableRows         = MaterialTable.RowCount();
         CpuStatsBuilding.MaterialRowsDirty         = MaterialTable.LastDirtyRows();
         CpuStatsBuilding.MaterialCopyRegions       = MaterialTable.LastCopyRegions();
         CpuStatsBuilding.MaterialRowsUploadedTotal = MaterialTable.TotalRowsUploaded();
-        CpuStatsBuilding.MeshTableBytes            = MeshTable.PersistentBytes();
+        CpuStatsBuilding.MeshTableBytes            = MeshTable.ResidentBytes();
+        CpuStatsBuilding.MeshStagingBytes          = MeshTable.StagingBytes();
         CpuStatsBuilding.MeshTableRows             = MeshTable.RowCount();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.

@@ -1172,6 +1172,17 @@ namespace Smile {
         R.SceneState->MaterialRTStateDirty = true;
     }
 
+    // Marca a LINHA e mais nada: sem flags de TLAS, sem invalidar historico.
+    //
+    // Direto na tabela, e nao por uma flag no SceneState como os vizinhos daqui: aqueles existem
+    // para COALESCER trabalho caro ate o topo do frame, e este nao tem trabalho nenhum a coalescer
+    // — a tabela ja coalesce sozinha, porque o RecordUpload roda uma vez por frame e o conjunto
+    // sujo sai da COMPARACAO das linhas, nao da contagem de avisos. Mil ticks de slider entre dois
+    // frames produzem exatamente as mesmas linhas que um tick.
+    void FRenderSettings::MarkMaterialRowsDirty() {
+        R.MaterialTable.MarkDirty();
+    }
+
     void FRenderSettings::MarkIndirectLightingDirty() {
         R.SceneState->IndirectLightingDirty = true;
     }

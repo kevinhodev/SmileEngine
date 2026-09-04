@@ -501,6 +501,11 @@ namespace Smile {
         // setter a cada tick, e cada notificacao imediata custa um Flush da fila + reset de
         // todos os historicos.
         void MarkMaterialRTStateDirty();
+        // So a linha da tabela canonica de materiais. Chamada por TODA edicao de constante de
+        // material, inclusive as que nao mexem no estado de RT: o custo de uma linha que nao mudou
+        // e zero (a tabela suja por conteudo), e o custo de esquecer o canal e um campo lido pelo
+        // path tracer que para de ser atualizado — ver MaterialsBridge::TouchSelected.
+        void MarkMaterialRowsDirty();
         void MarkIndirectLightingDirty();
         // Conteudo da cena mudou sem a lista mudar de tamanho: visibilidade de objeto, edicao de
         // luz puntual. NAO derruba o atlas do DDGI — quem chama isto tambem chama

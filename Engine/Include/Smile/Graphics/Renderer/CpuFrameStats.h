@@ -144,7 +144,8 @@ namespace Smile {
         //
         // O acumulado existe porque o instantaneo e quase sempre zero: um vazamento de um punhado
         // de linhas por frame nao aparece no instantaneo e aparece na soma.
-        u64 MaterialTableBytes       = 0; // residente (capacidade x 64 B)
+        u64 MaterialTableBytes       = 0; // VRAM: capacidade x 64 B
+        u64 MaterialStagingBytes     = 0; // host: os slices de staging, um por frame em voo
         u32 MaterialTableRows        = 0; // linhas em uso (1 default + materiais da cena)
         u32 MaterialRowsDirty        = 0; // linhas subidas NESTE frame
         u32 MaterialCopyRegions      = 0; // CopyBufferRegion emitidos neste frame
@@ -153,8 +154,9 @@ namespace Smile {
         // Tabela canonica de meshes. Sem contador de sujas por frame: geometria nao e editavel em
         // runtime, entao as linhas dela so mudam num Setup — e o dia em que passarem a mudar por
         // frame e o dia em que este par de numeros precisa crescer.
-        u64 MeshTableBytes = 0;
-        u32 MeshTableRows  = 0;
+        u64 MeshTableBytes    = 0;
+        u64 MeshStagingBytes  = 0;
+        u32 MeshTableRows     = 0;
 
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU

@@ -143,7 +143,9 @@ namespace SmileEditor {
         quint32 MaterialRowsDirty         = 0;
         quint32 MaterialCopyRegions       = 0;
         quint64 MaterialRowsUploadedTotal = 0;
+        quint64 MaterialStagingBytes      = 0;
         quint64 MeshTableBytes            = 0;
+        quint64 MeshStagingBytes          = 0;
         quint32 MeshTableRows             = 0;
 
         QVector<FCpuSubmitPassSnapshot> Passes;

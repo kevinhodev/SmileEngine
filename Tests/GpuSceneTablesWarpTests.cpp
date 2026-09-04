@@ -195,12 +195,32 @@ namespace {
         Check(Changed.size() == 2 && Changed[0] == 4u && Changed[1] == 5u,
               "e sao exatamente as duas novas");
     }
+
+    // ---- footprint: o staging tambem e persistente -------------------------------------------
+    // O primeiro `residentBytes` publicado contava so o buffer DEFAULT e valia um TERCO do que a
+    // tabela custa — os slices de upload sao criados junto com ela e ficam mapeados o tempo todo.
+    void TestarFootprint() {
+        constexpr u32 kCap = 49, kRow = 64;
+        const auto F = FGpuTableStorage::FootprintFor(kCap, kRow);
+        Check(F.Resident == static_cast<u64>(kCap) * kRow, "residente = capacidade x stride");
+        Check(F.Staging == F.Resident * FGpuTableStorage::kFrameSlots,
+              "staging = um slice por frame em voo");
+        // A relacao que a regressao quebra: o total NAO pode ser igual ao residente.
+        Check(F.Total() > F.Resident,
+              "o total tem de incluir o staging, e nao so a VRAM");
+        Check(F.Total() == F.Resident * (1u + FGpuTableStorage::kFrameSlots),
+              "com dois frames em voo, o total e 3x o residente");
+        // Tabela vazia nao inventa bytes.
+        const auto Z = FGpuTableStorage::FootprintFor(0, kRow);
+        Check(Z.Resident == 0 && Z.Staging == 0 && Z.Total() == 0, "capacidade zero custa zero");
+    }
 }
 
 int main() try {
     std::cout << "Smile.GpuSceneTablesWarp\n";
 
     TestarDiff();
+    TestarFootprint();
 
     // ---- dados: quatro instancias apontando para tres linhas de material ---------------------
     // A terceira e a quarta compartilham a linha 2 de proposito: e a situacao que a fase existe
