@@ -144,14 +144,58 @@ ainda não agrega esse bloco.
 porque o instantâneo é quase sempre zero — um vazamento de um punhado de linhas por frame não
 aparece no instantâneo e aparece na soma.
 
+## Tabela de instâncias: layout escolhido e orçamento
+
+Primeiro item do trabalho da fase — "escolher layouts paginados/SoA por consumidor e orçar bytes
+por instância residente". O layout está escolhido e orçado aqui; a implementação depende de uma
+decisão registrada logo abaixo.
+
+**O que existe hoje.** A mesma instância é subida em **quatro formas diferentes**, e nenhuma delas
+é residente — todas são reescritas por frame ou por evento:
+
+| produtor | struct | bytes/instância | quando |
+|---|---|---:|---|
+| raster | `ObjectConstants` (4 × `Mat44`) | 256 (×2 frames) | por renderável VISÍVEL, todo frame |
+| temporal | `FTemporalInstanceTransformGPU` | 128 (×2 frames) | por instância da TLAS, todo frame |
+| RT | `D3D12_RAYTRACING_INSTANCE_DESC` | 64 (×2 slots) | rebuild da TLAS, todo frame com a câmera se movendo |
+| HiZ | `FBoundsEntry` (center4 + extent4) | 32 | por objeto testado |
+| RT | `FGpuInstanceGeo` | 20 | só em mudança estrutural |
+
+São 480 B por instância reescritos por frame, contra 20 B que só mudam quando a cena muda de
+estrutura. Esse é o número que a tabela de instâncias existe para atacar: uma instância parada não
+deveria custar upload nenhum.
+
+**Colunas propostas** (SoA, por padrão de acesso, seguindo §5.2 do plano):
+
+| coluna | conteúdo | bytes | quem lê |
+|---|---|---:|---|
+| `InstanceMeta` | `MeshId`, `MaterialId`, `CellId`, `Flags`, `Generation` | 20 | culling, raster, RT |
+| `InstanceBounds` | centro + extensão em espaço de MUNDO | 32 | culling (frustum, HZB), sombras, chuva |
+| `Transform` | `Mat44` de mundo | 64 | raster, TLAS, temporal |
+| `PrevTransform` | `Mat44` do frame anterior | 64 | apenas temporal e motion vectors |
+| | **residente por instância** | **180** | |
+
+Separar é o ponto: a thread de culling toca 52 B (meta + bounds) e não carrega duas matrizes para
+testar uma esfera. `PrevTransform` fica em coluna própria porque só o temporal a lê, e porque ela é
+a única que muda quando um objeto **estático** não se move — nesse caso não muda nada, que é
+exatamente o dirty-row que interessa.
+
+Na Emerald (2.479 renderáveis) isso dá **436 KB residentes**, contra os ~1,2 MB/frame que as quatro
+formas atuais reescrevem.
+
+**Por que não foi implementada nesta fase.** As colunas `Transform` e `Bounds` são as mesmas que o
+`FTemporalMotionVectors` e o `FHiZOcclusion` já mantêm, cada um com o seu buffer e a sua indexação.
+Criar a tabela sem migrar os dois produz uma **terceira** cópia dos mesmos dados — o oposto do que
+a fase existe para fazer. Migrar os dois é mais do que a Fase 2 pede, e o consumidor que justifica
+a tabela (culling na GPU) só nasce na Fase 6.
+
+Decisão pendente do proprietário, com o mesmo peso da que resolveu o formato: implementar agora
+absorvendo os dois sistemas, ou deixar a tabela nascer na Fase 4 já com o consumidor.
+
 ## Falta na fase
 
-- `FGpuSceneInstance`: colunas SoA (meta, bounds, transform, prev-transform). É o item que sobra do
-  trabalho da fase, e ele esbarra em sistemas que já mantêm colunas próprias por frame — o
-  `FTemporalMotionVectors` sobe transforms e o `FHiZOcclusion` sobe bounds. Fazer a tabela sem
-  migrar os dois cria uma terceira cópia dos mesmos dados; migrá-los é mais que a Fase 2 pede, e o
-  consumidor que justifica a tabela (culling na GPU) só existe na Fase 6. **Decisão pendente do
-  proprietário**, com o mesmo peso da que resolveu o formato;
+- `FGpuSceneInstance`: layout e orçamento **feitos** (seção acima); a implementação aguarda
+  decisão do proprietário;
 - medir bytes persistentes e sujos numa cena grande de verdade;
 - comparação visual CPU/RT no mesmo regime da Fase 1 (preset scientific, `N=128`, 4 cenas × 2
   câmeras). **Exige GPU e aval do proprietário.**
