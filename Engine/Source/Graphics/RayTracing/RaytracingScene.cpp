@@ -119,8 +119,23 @@ namespace Smile {
         //
         // Fica DENTRO do EnsureBlasFor, e nao a cargo de quem chama: e uma propriedade do que
         // significa "garantir que exista", e um chamador futuro nao deveria precisar saber disso.
+        // A chave do conjunto e o PAR, com igualdade estrutural. A primeira versao misturava os
+        // dois ponteiros num inteiro e o usava como identidade: uma colisao viraria igualdade e
+        // descartaria um BLAS necessario — e fabricar um ponteiro a partir de um inteiro
+        // arbitrario e implementation-defined por cima. Hash pode colidir; identidade nao pode.
+        struct FPair {
+            const FGpuMesh* Mesh;
+            const FOpacityMicromapData* Omm;
+            bool operator==(const FPair& O) const { return Mesh == O.Mesh && Omm == O.Omm; }
+        };
+        struct FPairHash {
+            size_t operator()(const FPair& P) const {
+                return std::hash<const void*>{}(P.Mesh) ^
+                       (std::hash<const void*>{}(P.Omm) << 1);
+            }
+        };
         std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Missing;
-        std::unordered_set<const void*> SeenPair;
+        std::unordered_set<FPair, FPairHash> SeenPair;
         for (const auto& [Mesh, Omm] : _Required) {
             if (!Mesh || !Mesh->IsValid()) continue;
             const auto MeshIt = BlasByMesh.find(Mesh);
@@ -128,12 +143,7 @@ namespace Smile {
                 const auto It = MeshIt->second.find(Omm);
                 if (It != MeshIt->second.end() && It->second != 0) continue;
             }
-            // Hash do PAR: malha e micro-map juntos. O micro-map sozinho nao serve (nulo, para o
-            // caso opaco, repetiria entre malhas diferentes) e a malha sozinha tampouco.
-            const void* PairId = reinterpret_cast<const void*>(
-                reinterpret_cast<uintptr_t>(Mesh) ^
-                (reinterpret_cast<uintptr_t>(Omm) * 0x9E3779B97F4A7C15ull));
-            if (!SeenPair.insert(PairId).second) continue;
+            if (!SeenPair.insert(FPair{ Mesh, Omm }).second) continue;
             Missing.push_back({ Mesh, Omm });
         }
         if (Missing.empty()) return 0;

@@ -26,6 +26,7 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
+#include "Smile/Graphics/Resources/Texture.h"
 
 #include <string>
 #include <unordered_map>
@@ -35,11 +36,40 @@ namespace Smile {
     class FGpuMesh;
     class FTexture;
 
+    // IDENTIDADE do arquivo de onde uma entrada de bake veio: tamanho e hora de escrita.
+    //
+    // Caminho sozinho NAO e procedencia. Um recook mantem magic e versao, e pode trocar as UVs,
+    // os indices ou a ORDEM das malhas — e o rebake aceitaria em silencio, produzindo um
+    // micro-map que descreve geometria diferente da que esta nos buffers de GPU. A textura tem o
+    // mesmo TOCTOU: reler o caminho nao garante reler os bytes que foram enviados a GPU.
+    //
+    // O que ele prova, exatamente: a geometria residente foi carregada DAQUELE arquivo e nao muda
+    // depois; logo, arquivo inalterado implica geometria inalterada. Nao prova mais que isso — uma
+    // edicao in-place que preserve tamanho E hora passaria —, e essa nao e a ameaca: o caso real e
+    // recozinhar com o editor aberto, que reescreve o arquivo.
+    //
+    // Fingerprint de ARQUIVO e nao de conteudo por causa do custo: hashear a geometria e as
+    // texturas de BaseColor da cena somaria centenas de MB de leitura ao load, todo load, para
+    // proteger uma operacao manual e rara.
+    struct FOmmFileStamp {
+        u64 SizeBytes = 0;
+        i64 WriteTime = 0; // rep() do file_time_type; so a igualdade importa
+        bool Valid() const { return SizeBytes != 0; }
+        friend bool operator==(const FOmmFileStamp& A, const FOmmFileStamp& B) {
+            return A.SizeBytes == B.SizeBytes && A.WriteTime == B.WriteTime;
+        }
+        friend bool operator!=(const FOmmFileStamp& A, const FOmmFileStamp& B) { return !(A == B); }
+        // Zerado quando o arquivo nao existe ou nao pode ser consultado.
+        static FOmmFileStamp Of(const std::wstring& Path);
+    };
+
     class FOmmBakeInputStore {
     public:
-        // De qual arquivo cozido, e qual entrada dentro dele, a geometria desta malha veio.
-        // Idempotente por malha.
-        void RetainMeshSource(const FGpuMesh* Mesh, std::wstring MeshFilePath, u32 MeshIndex);
+        // De qual arquivo cozido, e qual entrada dentro dele, a geometria desta malha veio. O
+        // carimbo do arquivo e tirado AQUI, no import, que e quando ele descreve os bytes que
+        // foram para a GPU. Idempotente por malha.
+        void RetainMeshSource(const FGpuMesh* Mesh, const std::wstring& MeshFilePath, u32 MeshIndex,
+                              const FOmmFileStamp& Stamp);
 
         // De onde a textura veio, ja resolvido em caminho absoluto, com as flags de decodificacao
         // que o load original usou. Sem elas o rebake decodificaria o mesmo arquivo de outro jeito.
@@ -71,29 +101,41 @@ namespace Smile {
         // chamou tem de recusar o rebake, nunca seguir com o micro-map antigo.
         bool LoadGeometry(const FGpuMesh* Mesh, FLoadedGeometry& Out) const;
 
-        struct FTextureSource {
-            std::wstring Path;
-            bool IsNormalMap = false;
-            bool sRGB        = false;
-        };
-        // nullptr quando a textura nao tem procedencia conhecida — o albedo do proxy do terreno,
-        // por exemplo, e gerado e nao veio de arquivo nenhum.
-        const FTextureSource* TextureSourceOf(const FTexture* Texture) const;
+        // A textura de alpha relida do disco, com o carimbo conferido. Falso quando a textura nao
+        // tem procedencia (gerada em runtime), quando o arquivo mudou desde o load, ou quando a
+        // releitura falha. O chamador RECUSA o rebake nesses casos — nunca segue com o antigo.
+        //
+        // Mora aqui, e nao no chamador, para a conferencia do carimbo nao poder ser esquecida por
+        // quem so queria os pixels.
+        bool LoadAlphaTexture(const FTexture* Texture, FTextureCPUData& Out) const;
+
+        // Se a textura tem procedencia registrada. Distingue "gerada em runtime" de "arquivo
+        // mudou", que dao mensagens diferentes.
+        bool HasTextureSource(const FTexture* Texture) const;
 
         u32 MeshCount()    const { return static_cast<u32>(Meshes_.size()); }
         u32 TextureCount() const { return static_cast<u32>(Textures_.size()); }
-        // Memoria que a cena segura por causa disto. Publicada porque e um custo novo; guardando
-        // procedencia em vez de dado, ela e da ordem de dezenas de bytes por malha, e o numero
-        // existe justamente para que isso continue verdadeiro.
-        u64 RetainedBytes() const;
+        // Memoria que a cena segura por causa disto. CACHEADA, e nao recontada: isto e lido em
+        // TODO frame pela telemetria, e uma travessia dos dois mapas por frame seria custo de
+        // regime permanente para exibir um contador — exatamente o tipo de coisa que a Fase 2
+        // existe para tirar do caminho quente.
+        u64 RetainedBytes() const { return RetainedBytes_; }
 
     private:
         struct FMeshSource {
-            std::wstring FilePath;
-            u32          MeshIndex = 0;
+            std::wstring  FilePath;
+            u32           MeshIndex = 0;
+            FOmmFileStamp Stamp;
+        };
+        struct FTextureSource {
+            std::wstring  Path;
+            bool          IsNormalMap = false;
+            bool          sRGB        = false;
+            FOmmFileStamp Stamp;
         };
 
         std::unordered_map<const FGpuMesh*, FMeshSource>    Meshes_;
         std::unordered_map<const FTexture*, FTextureSource> Textures_;
+        u64 RetainedBytes_ = 0;
     };
 }

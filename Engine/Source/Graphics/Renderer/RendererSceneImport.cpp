@@ -363,8 +363,11 @@ namespace Smile {
         // dezenas de bytes por malha.
         {
             const std::wstring MeshFile = (fs::path(Imported.BasePath) += L".smesh").wstring();
+            // UM carimbo para o arquivo inteiro, tirado agora: e este arquivo, nesta versao, que
+            // acabou de virar os buffers de GPU. Ver FOmmFileStamp.
+            const FOmmFileStamp Stamp = FOmmFileStamp::Of(MeshFile);
             for (u32 i = 0; i < mh.MeshCount && i < meshPtrs.size(); ++i)
-                OmmBakeInputs.RetainMeshSource(meshPtrs[i], MeshFile, i);
+                OmmBakeInputs.RetainMeshSource(meshPtrs[i], MeshFile, i, Stamp);
         }
 
         for (u32 i = 0; i < sh.RenderableCount; ++i) {

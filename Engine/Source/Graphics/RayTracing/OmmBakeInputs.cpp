@@ -5,39 +5,75 @@
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Core/Logger.h"
 
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 
 namespace Smile {
-    void FOmmBakeInputStore::RetainMeshSource(const FGpuMesh* _Mesh, std::wstring _MeshFilePath,
-                                              u32 _MeshIndex) {
+    FOmmFileStamp FOmmFileStamp::Of(const std::wstring& _Path) {
+        FOmmFileStamp S;
+        std::error_code Ec;
+        const std::filesystem::path P(_Path);
+        const auto Size = std::filesystem::file_size(P, Ec);
+        if (Ec) return S;
+        const auto Time = std::filesystem::last_write_time(P, Ec);
+        if (Ec) return S;
+        S.SizeBytes = static_cast<u64>(Size);
+        S.WriteTime = static_cast<i64>(Time.time_since_epoch().count());
+        return S;
+    }
+
+    void FOmmBakeInputStore::RetainMeshSource(const FGpuMesh* _Mesh,
+                                              const std::wstring& _MeshFilePath, u32 _MeshIndex,
+                                              const FOmmFileStamp& _Stamp) {
         if (!_Mesh || _MeshFilePath.empty()) return;
-        Meshes_.insert_or_assign(_Mesh, FMeshSource{ std::move(_MeshFilePath), _MeshIndex });
+        const auto [It, Inserted] = Meshes_.insert_or_assign(
+            _Mesh, FMeshSource{ _MeshFilePath, _MeshIndex, _Stamp });
+        if (Inserted)
+            RetainedBytes_ += sizeof(FMeshSource) + _MeshFilePath.size() * sizeof(wchar_t);
     }
 
     void FOmmBakeInputStore::RetainTexturePath(const FTexture* _Texture, std::wstring _Path,
                                                bool _IsNormalMap, bool _sRGB) {
         if (!_Texture || _Path.empty()) return;
-        Textures_.insert_or_assign(_Texture, FTextureSource{ std::move(_Path), _IsNormalMap, _sRGB });
+        const u64 Bytes = sizeof(FTextureSource) + _Path.size() * sizeof(wchar_t);
+        // O carimbo sai daqui, e nao do chamador: e o unico ponto que ve o caminho no momento em
+        // que a textura residente acabou de ser criada a partir dele.
+        const FOmmFileStamp Stamp = FOmmFileStamp::Of(_Path);
+        const auto [It, Inserted] = Textures_.insert_or_assign(
+            _Texture, FTextureSource{ std::move(_Path), _IsNormalMap, _sRGB, Stamp });
+        if (Inserted) RetainedBytes_ += Bytes;
     }
 
     void FOmmBakeInputStore::Clear() {
         Meshes_.clear();
         Textures_.clear();
+        RetainedBytes_ = 0;
     }
 
-    u64 FOmmBakeInputStore::RetainedBytes() const {
-        u64 Bytes = 0;
-        for (const auto& [Mesh, Source] : Meshes_)
-            Bytes += sizeof(FMeshSource) + Source.FilePath.size() * sizeof(wchar_t);
-        for (const auto& [Texture, Source] : Textures_)
-            Bytes += sizeof(FTextureSource) + Source.Path.size() * sizeof(wchar_t);
-        return Bytes;
+    bool FOmmBakeInputStore::HasTextureSource(const FTexture* _Texture) const {
+        return _Texture && Textures_.contains(_Texture);
     }
 
-    const FOmmBakeInputStore::FTextureSource* FOmmBakeInputStore::TextureSourceOf(
-        const FTexture* _Texture) const {
+    bool FOmmBakeInputStore::LoadAlphaTexture(const FTexture* _Texture,
+                                              FTextureCPUData& _Out) const {
         const auto It = _Texture ? Textures_.find(_Texture) : Textures_.end();
-        return It == Textures_.end() ? nullptr : &It->second;
+        if (It == Textures_.end()) return false;
+        const FTextureSource& Source = It->second;
+
+        if (FOmmFileStamp::Of(Source.Path) != Source.Stamp) {
+            LogError("[OMM] Rebake: a textura de alpha mudou no disco desde o load; os pixels "
+                     "relidos nao sao os que estao na GPU. Recarregue a cena");
+            return false;
+        }
+        try {
+            _Out = FTexture::LoadCPUAuto(Source.Path, Source.IsNormalMap, Source.sRGB);
+        } catch (const std::exception& Error) {
+            LogError(std::string("[OMM] Rebake: falha ao reler a textura de alpha: ") +
+                     Error.what());
+            return false;
+        }
+        return _Out.Valid();
     }
 
     bool FOmmBakeInputStore::LoadGeometry(const FGpuMesh* _Mesh, FLoadedGeometry& _Out) const {
@@ -47,6 +83,15 @@ namespace Smile {
         const auto It = _Mesh ? Meshes_.find(_Mesh) : Meshes_.end();
         if (It == Meshes_.end()) return false;
         const FMeshSource& Source = It->second;
+
+        // O CARIMBO antes de qualquer leitura. Magic e versao nao bastam: um recook normal
+        // preserva os dois e pode trocar UVs, indices ou a ordem das malhas — e ai o micro-map
+        // novo descreveria geometria que nao esta nos buffers de GPU, sem nenhum sinal.
+        if (FOmmFileStamp::Of(Source.FilePath) != Source.Stamp) {
+            LogError("[OMM] Rebake: o .smesh mudou no disco desde o load (recook?); a geometria "
+                     "lida nao seria a que esta na GPU. Recarregue a cena");
+            return false;
+        }
 
         std::ifstream File(Source.FilePath, std::ios::binary);
         if (!File) {

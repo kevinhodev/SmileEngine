@@ -804,6 +804,17 @@ namespace SmileEditor {
         // subsurface): o raster e o alpha-test dos raios acompanham o slider. Rebake, flags de
         // TLAS e invalidacao de historico saem JUNTOS no commit — o RebakeStaleOpacityMicromaps
         // chama o NotifyMaterialRTStateChanged por ultimo, depois de o micro-map novo existir.
+        //
+        // PREVIEW INCONSISTENTE DURANTE O ARRASTE, aceito de propósito. Enquanto o micro-map nao
+        // e refeito, o hardware classifica os microtriangulos pelo cutoff ANTIGO e so os que
+        // sobram como UNKNOWN chegam ao RTAlphaTest, que ja usa o NOVO. Ou seja: no RT o recorte
+        // muda em parte, e so fica coerente ao soltar.
+        //
+        // As alternativas custam mais do que o artefato: manter o RT no valor antigo exigiria a
+        // linha carregar um cutoff diferente do FMaterial — quebrando "a linha e funcao pura do
+        // material", que e o que torna a tabela testavel — e segurar o raster junto tiraria o
+        // feedback ao vivo, que e a razao de existir um slider. O artefato e transitorio, cabe
+        // dentro de um arraste e nao sobrevive ao commit.
         TouchSelected(EChangeDomain::MaterialMode);
     }
 

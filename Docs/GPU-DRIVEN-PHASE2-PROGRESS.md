@@ -232,6 +232,15 @@ novo existir.
 O valor continua acompanhando o arraste: o raster e o alpha-test dos raios leem a linha, que sobe
 por tick. O que espera é o micro-map.
 
+**Isso torna o RT transitoriamente inconsistente durante o arraste, e isso é aceito.** Enquanto o
+micro-map não é refeito, o hardware classifica os microtriângulos pelo cutoff antigo e só os que
+sobram como UNKNOWN chegam ao `RTAlphaTest`, que já usa o novo — então o recorte muda *em parte* no
+RT. As duas alternativas custam mais que o artefato: manter o RT no valor antigo exigiria a linha
+carregar um cutoff diferente do `FMaterial`, quebrando "a linha é função pura do material" — que é
+o que torna a tabela testável e o `DiffMaterialRows` significativo; e segurar o raster junto
+tiraria o feedback ao vivo, que é a razão de existir um slider. O artefato cabe dentro de um
+arraste e não sobrevive ao commit.
+
 **Os BLAS afetados.** `EnsureBlasFor` reconstrói apenas os pares `{malha, micro-map}` que passam a
 ser exigidos, cada um num recurso próprio, e o `BlasByMesh` passa a apontar para lá. O espaço
 antigo fica órfão dentro do `BlasPool` — e isso **não custa memória**: o pool já estava alocado no
@@ -249,8 +258,29 @@ publicado no mapa — então sem o conjunto, N instâncias da mesma folhagem con
 e N BLAS idênticos. O custo escalaria por instância, exatamente o oposto do que a dedup do bake já
 garante.
 
+**Procedência é do arquivo, não do caminho.** Caminho sozinho não identifica bytes: um recook
+preserva magic e versão e pode trocar UVs, índices ou a ordem das malhas, e o rebake aceitaria em
+silêncio — produzindo um micro-map que descreve geometria diferente da que está nos buffers de GPU.
+A textura tem o mesmo TOCTOU. Cada origem carrega um carimbo `{tamanho, hora de escrita}` tirado no
+import, conferido antes de qualquer releitura.
+
+O que o carimbo prova, exatamente: a geometria residente foi carregada daquele arquivo e não muda
+depois, logo arquivo inalterado implica geometria inalterada. Não prova mais que isso — uma edição
+in-place que preserve tamanho **e** hora passaria — e essa não é a ameaça: o caso real é recozinhar
+com o editor aberto, que reescreve o arquivo. Carimbo de arquivo e não hash de conteúdo por custo:
+hashear geometria e texturas de BaseColor somaria centenas de MB de leitura a **todo** load para
+proteger uma operação manual e rara.
+
+**Quando o rebake não pode acontecer, a edição é DESFEITA**, não ignorada. Seguir com o micro-map
+antigo deixaria material e micro-map descrevendo coisas diferentes — o estado híbrido que o
+`CollectInstances` aborta no rebuild seguinte. Com micro-map existente, alpha/cutoff voltam ao que
+ele descreve; sem micro-map (o alpha test acabou de ser ligado), o alpha test é desligado de novo,
+porque sem OMM não há BLAS que sirva um material masked. Os dois casos avisam no log. A textura não
+é revertida — o descritor dela já foi reescrito no heap —, e por isso ali a saída é desligar o
+alpha test: visível e reversível pelo usuário, em vez de silenciosamente errado.
+
 **O que ainda não é reconstruível**, e falha alto dizendo qual peça faltou: malha criada em runtime
-(sem entradas retidas) e material cujo BaseColor foi gerado em vez de vir de arquivo — o proxy do
+(sem procedência) e material cujo BaseColor foi gerado em vez de vir de arquivo — o proxy do
 terreno é o caso real. Nenhum dos dois é alpha-tested hoje.
 
 ## Telemetria

@@ -160,7 +160,15 @@ namespace Smile {
             auto It = Rebaked.find(Key);
             if (It == Rebaked.end()) {
                 auto Novo = BakeOpacityMicromapFor(R.Mesh, R.Material);
-                if (!Novo) continue; // o bake ja logou a peca que faltou; o antigo segue valendo
+                if (!Novo) {
+                    // DESFAZ A EDICAO. Seguir com o micro-map antigo deixaria material e
+                    // micro-map descrevendo coisas diferentes — o estado hibrido que o
+                    // CollectInstances aborta no proximo rebuild da TLAS. Como o bake nao pode
+                    // acompanhar, o unico estado consistente e voltar as entradas para as que o
+                    // micro-map existente descreve.
+                    RevertOmmInputs(*R.Material, R.OpacityMicromap.get());
+                    continue;
+                }
                 It = Rebaked.emplace(Key, std::move(Novo)).first;
             }
             if (R.OpacityMicromap && R.OpacityMicromap != It->second)
@@ -194,6 +202,33 @@ namespace Smile {
         return static_cast<u32>(Rebaked.size());
     }
 
+    // Volta as ENTRADAS do bake para as que o micro-map existente descreve, quando o rebake nao
+    // pode acontecer. Sem micro-map (o alpha test acabou de ser ligado), o estado consistente e
+    // desliga-lo de novo: sem OMM, um material alpha-tested nao tem BLAS que o sirva.
+    //
+    // A textura NAO e revertida: o descritor dela ja foi reescrito no heap pelo ApplySlotTexture,
+    // e desfazer isso exigiria reescreve-lo de novo, com o dreno que o acompanha, dentro do laco
+    // de reconciliacao. O que se faz e desligar o alpha test — o material perde o recorte, o que
+    // e VISIVEL e reversivel pelo usuario, em vez de silenciosamente errado.
+    void Renderer::RevertOmmInputs(FMaterial& _Material, const FOpacityMicromapData* _Existing) {
+        if (_Existing && _Existing->BakedInputs.AlphaTest != 0 &&
+            _Existing->BakedInputs.AlphaTexture == _Material.Albedo) {
+            _Material.Constants.AlphaTest         = _Existing->BakedInputs.AlphaTest;
+            _Material.Constants.AlphaCutoff       = _Existing->BakedInputs.AlphaCutoff;
+            _Material.Constants.BaseColorFactor.W = _Existing->BakedInputs.BaseAlpha;
+            LogWarning("[OMM] Rebake indisponivel: alpha/cutoff do material '" + _Material.Name +
+                       "' revertidos para o que o micro-map atual descreve");
+        } else {
+            _Material.Constants.AlphaTest = 0;
+            LogWarning("[OMM] Rebake indisponivel: alpha test desligado em '" + _Material.Name +
+                       "' — sem micro-map valido nao ha BLAS que sirva este material");
+        }
+        _Material.UpdateConstants();
+        // A linha canonica tem de acompanhar a reversao, senao o RT continuaria lendo o valor
+        // recusado.
+        MaterialTable.MarkDirty();
+    }
+
     // O bake de UM par, a partir das entradas retidas. Devolve nulo (e diz por que) quando falta
     // alguma peca — nunca devolve um micro-map de procedencia parcial.
     std::shared_ptr<FOpacityMicromapData> Renderer::BakeOpacityMicromapFor(
@@ -213,28 +248,18 @@ namespace Smile {
             return nullptr;
         }
 
-        // A textura de alpha e RELIDA do disco. Guardar os pixels residentes custaria dezenas de
-        // MB de BC7 de folhagem por um caminho que roda quando alguem mexe num slider.
+        // A textura de alpha e RELIDA do disco, com o carimbo do arquivo conferido dentro do
+        // store. Guardar os pixels residentes custaria dezenas de MB de BC7 de folhagem por um
+        // caminho que roda quando alguem mexe num slider.
         FTextureCPUData Alpha;
         const FTextureCPUData* AlphaPtr = nullptr;
         if (_Material->Albedo) {
-            const auto* Source = OmmBakeInputs.TextureSourceOf(_Material->Albedo);
-            if (!Source) {
+            if (!OmmBakeInputs.HasTextureSource(_Material->Albedo)) {
                 LogError("[OMM] Rebake impossivel: a textura de BaseColor deste material nao tem "
                          "procedencia conhecida (gerada em runtime?)");
                 return nullptr;
             }
-            try {
-                Alpha = FTexture::LoadCPUAuto(Source->Path, Source->IsNormalMap, Source->sRGB);
-            } catch (const std::exception& Error) {
-                LogError(std::string("[OMM] Rebake impossivel: falha ao reler a textura de alpha: ") +
-                         Error.what());
-                return nullptr;
-            }
-            if (!Alpha.Valid()) {
-                LogError("[OMM] Rebake impossivel: a textura de alpha relida veio invalida");
-                return nullptr;
-            }
+            if (!OmmBakeInputs.LoadAlphaTexture(_Material->Albedo, Alpha)) return nullptr;
             AlphaPtr = &Alpha;
         }
 

@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
         for (u32 I = 0; I < Imported->Meshes.size(); ++I) {
             const FMesh& Esperado = Imported->Meshes[I];
             if (Esperado.Vertices.empty() || Esperado.Indices.empty()) continue;
-            Store.RetainMeshSource(&Chaves[I], MeshFile, I);
+            Store.RetainMeshSource(&Chaves[I], MeshFile, I, FOmmFileStamp::Of(MeshFile));
 
             FOmmBakeInputStore::FLoadedGeometry Lido;
             if (!Store.LoadGeometry(&Chaves[I], Lido)) {
@@ -245,6 +245,30 @@ int main(int argc, char** argv) {
             FOmmBakeInputStore::FLoadedGeometry Lixo;
             if (Store.LoadGeometry(&Desconhecida, Lixo)) {
                 std::fprintf(stderr, "malha sem procedencia devolveu geometria\n");
+                ++Falhas;
+            }
+        }
+        // CARIMBO ERRADO tem de recusar, mesmo com caminho, magic, versao e indice corretos.
+        //
+        // E o caso que o caminho sozinho nao cobria: um recook preserva magic e versao e pode
+        // trocar UVs, indices ou a ordem das malhas. Sem esta recusa o rebake bakearia geometria
+        // que nao esta nos buffers de GPU, em silencio.
+        {
+            FOmmBakeInputStore Envelhecido;
+            FGpuMesh Chave;
+            FOmmFileStamp Falso = FOmmFileStamp::Of(MeshFile);
+            Falso.WriteTime += 1; // como se o arquivo tivesse sido reescrito depois do load
+            Envelhecido.RetainMeshSource(&Chave, MeshFile, 0, Falso);
+            FOmmBakeInputStore::FLoadedGeometry Lixo;
+            if (Envelhecido.LoadGeometry(&Chave, Lixo)) {
+                std::fprintf(stderr, "carimbo divergente foi aceito pelo leitor\n");
+                ++Falhas;
+            }
+            // E com o carimbo certo o MESMO store aceita — senao isto passaria recusando tudo.
+            FOmmBakeInputStore Correto;
+            Correto.RetainMeshSource(&Chave, MeshFile, 0, FOmmFileStamp::Of(MeshFile));
+            if (!Correto.LoadGeometry(&Chave, Lixo)) {
+                std::fprintf(stderr, "carimbo correto foi recusado pelo leitor\n");
                 ++Falhas;
             }
         }

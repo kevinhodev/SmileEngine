@@ -651,6 +651,8 @@ namespace Smile {
         // O bake de UM par (malha, material) a partir das entradas retidas. Nulo em falha, sempre
         // com log dizendo QUAL peca faltou — micro-map de procedencia parcial e o que a fase
         // existe para impedir.
+        // Desfaz uma edicao de entrada de bake que nao pode ser reconstruida. Ver o corpo.
+        void RevertOmmInputs(FMaterial& Material, const FOpacityMicromapData* Existing);
         std::shared_ptr<FOpacityMicromapData> BakeOpacityMicromapFor(const FGpuMesh* Mesh,
                                                                      const FMaterial* Material);
         // Reconstrucao completa; drena as filas e exige command list fechado.
