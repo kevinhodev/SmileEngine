@@ -37,7 +37,9 @@ namespace SmileEditor {
     bool RenderSettingsController::Ready() const {
         if (!Renderer) return false;
         auto Access = Renderer.Lock();
-        return Access && Access->IsInitialized();
+        // Inicializacao de device/scene nao basta para captura: se o timer single-shot perdeu
+        // o wake-up, aceitar no frame zero deixa a captura aguardando para sempre.
+        return Access && Access->IsInitialized() && Access->GetFrameIndex() > 0;
     }
 
     FRenderSettingsSnapshot RenderSettingsController::CollectSettings(

@@ -24,6 +24,7 @@ namespace SmileEditor {
     namespace {
         constexpr float kMouseSensitivity = 0.15f;
         constexpr int   kResizeDebounceMs = 80;
+        constexpr int   kRenderRetryMs    = 50;
     }
 
     ViewportWidget::ViewportWidget(QWidget* _Parent)
@@ -332,8 +333,9 @@ namespace SmileEditor {
             ApplyPendingResize();
         }
         FrameTimer.restart();
-        if (Initialized && !RendererStoppedFlag && !RendererThread.HasFrameInFlight() &&
-            !RendererThread.HasJobInFlight())
+        // Mesmo se um job ainda estiver terminando, o tick precisa existir: ele faz a
+        // retentativa caso a transicao para idle aconteca antes deste showEvent.
+        if (Initialized && !RendererStoppedFlag)
             RedrawTimer->start();
     }
 
@@ -396,16 +398,35 @@ namespace SmileEditor {
         Q_UNUSED(_Event);
     }
 
+    void ViewportWidget::ScheduleRenderRetry() {
+        if (RendererShutdownRequested || RendererStoppedFlag || !Initialized || !isVisible())
+            return;
+
+        // RedrawTimer e single-shot. Um retorno por job/frame em voo nao pode depender apenas
+        // do sinal de conclusao: showEvent e BecameIdle podem observar lados opostos da mesma
+        // transicao e ambos perderem o unico wake-up. A retentativa e coalescida e para assim
+        // que um frame e aceito; nao e um polling permanente do renderer.
+        QTimer::singleShot(kRenderRetryMs, this, [this]() {
+            if (RendererShutdownRequested || RendererStoppedFlag || !Initialized ||
+                !isVisible() || !RedrawTimer || RedrawTimer->isActive())
+                return;
+            RedrawTimer->start();
+        });
+    }
+
     void ViewportWidget::OnRenderTimer() {
         if (RendererShutdownRequested) return;
         EnsureRendererIsInitialized();
-        if (!Initialized || !RendererThread.IsReady() ||
-            RendererThread.HasFrameInFlight() || RendererThread.HasJobInFlight()) return;
+        if (!Initialized || !RendererThread.IsReady()) return;
+        if (RendererThread.HasFrameInFlight() || RendererThread.HasJobInFlight()) {
+            ScheduleRenderRetry();
+            return;
+        }
 
         // O tick é coalescido quando outro acesso sincronizado possui o Renderer.
         auto RendererAccess = Renderer.TryLock();
         if (!RendererAccess || !RendererAccess->IsInitialized()) {
-            if (isVisible() && RedrawTimer) RedrawTimer->start(1);
+            ScheduleRenderRetry();
             return;
         }
 
@@ -446,6 +467,9 @@ namespace SmileEditor {
                 setAttribute(Qt::WA_OpaquePaintEvent, true);
             }
             // O callback do frame rearma o timer single-shot.
+        } else {
+            // RequestFrame pode perder uma corrida com um job submetido depois das checagens.
+            ScheduleRenderRetry();
         }
     }
 
@@ -463,7 +487,10 @@ namespace SmileEditor {
             if (RedrawTimer) RedrawTimer->stop();
             return;
         }
-        if (RendererThread.HasJobInFlight()) return;
+        if (RendererThread.HasJobInFlight()) {
+            ScheduleRenderRetry();
+            return;
+        }
         if (PendingResizeSize.isValid() && PendingResizeSize != AppliedResizeSize &&
             ResizeDebounce && !InteractiveResize)
             ResizeDebounce->start(0);

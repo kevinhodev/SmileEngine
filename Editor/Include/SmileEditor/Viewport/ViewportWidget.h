@@ -145,6 +145,8 @@ namespace SmileEditor {
         void FlushPendingGizmoInput(Smile::Renderer& Renderer);
         void ResetTransientInput();
         void ApplyPendingResize();
+        // Recupera um wake-up perdido entre show/job/frame sem manter um timer periodico.
+        void ScheduleRenderRetry();
         bool IsHeld(int key) const { return HeldKeys.contains(key); }
 
         RenderThread     RendererThread;
