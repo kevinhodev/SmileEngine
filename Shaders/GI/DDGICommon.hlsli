@@ -24,36 +24,11 @@
 float3 RT_WorldToTlas(float3 worldPos, float3 tlasOrigin) { return worldPos - tlasOrigin; }
 float3 RT_TlasToWorld(float3 tlasPos, float3 tlasOrigin) { return tlasPos + tlasOrigin; }
 
-#define INSTGEO_FLAG_ALPHATEST 1u  // clip por albedo.a vs AlphaCutoff (folhagem; FORCE_NON_OPAQUE na TLAS)
-#define INSTGEO_FLAG_EMISSIVE  2u  // tem mapa emissivo (EmissiveMapIndex valido)
-#define INSTGEO_FLAG_FOLIAGE   4u  // ShadingModel Foliage (two-sided + transmissao no PT)
-#define INSTGEO_FLAG_MRMAP     8u  // tem mapa metallic-roughness (MrMapIndex valido)
-#define INSTGEO_FLAG_SPECPACK  16u // o mapa MR e "Specular" (R=AO, G=rough, B=metal); senao R=metal
-#define INSTGEO_FLAG_METALMAP  32u // tem mapa Metalness separado (MetalMapIndex valido; R=metal)
-#define INSTGEO_FLAG_ROUGHMAP  64u // tem mapa Roughness separado (RoughMapIndex valido; R=rough)
-#define INSTGEO_FLAG_TRANSLUCENT 128u // material Blend; usado pelo BvhDebug
-
-// Layout de 100 bytes espelhado por FRTInstanceGeo.
-struct InstanceGeo {
-    float4 BaseColor;
-    uint   VertexSrv;
-    uint   IndexSrv;
-    uint   TriangleSrv;
-    uint   AlbedoIndex;
-    uint   HasAlbedo;
-    uint   TwoSidedRT;   // TwoSided ou AlphaTest para o RT
-    uint   Flags;
-    float  AlphaCutoff;
-    float  RoughnessFactor;
-    float4 EmissiveFactor; // rgb = EmissiveFactor * EmissiveStrength; w = MetallicFactor
-    uint   EmissiveMapIndex;
-    uint   MrMapIndex;
-    uint   MetalMapIndex; // mapa Metalness separado (slot +6); valido sob INSTGEO_FLAG_METALMAP
-    uint   RoughMapIndex; // mapa Roughness separado (slot +7); valido sob INSTGEO_FLAG_ROUGHMAP
-    // tint.rgb + intensidade.a. O hit de RT reconstrói o mesmo
-    // TransColor = BaseColor * (rgb * a) usado pelo deferred.
-    float4 SubsurfaceColor;
-};
+// `InstanceGeo`, `GpuMaterialRecord` e os SMILE_MAT_FLAG_* moraram aqui ate a Fase 2. Saíram para
+// uma casa propria porque deixaram de descrever so o ray tracing: sao as TABELAS da cena, e o
+// raster vai le-las na Fase 3. O que ficou neste header e o que ele sempre foi — matematica de
+// DDGI e decodificacao do payload por triangulo.
+#include "../Scene/GpuSceneTables.hlsli"
 
 struct DDGIVertex {
     float3 Position;

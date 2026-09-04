@@ -1206,17 +1206,18 @@ namespace Smile {
     }
 
     void FRenderSettings::NotifyMaterialRTStateChanged() {
-        // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar). O dreno
-        // e necessario: o InstanceGeo e um upload heap sem versao por frame em voo, entao
-        // reescrever com frames voando corromperia o que eles leem. Custa um stall, mas isto so
-        // dispara em edicao manual de material.
+        // REFRESH (nao e invalidacao — e trabalho a refazer, nao memoria a descartar).
         //
-        // As DUAS filas: havia so o Flush da direta, e o trace do DDGI le o snapshot na COMPUTE.
-        // Ver a nota do caminho barato do Renderer::OnSceneStructureChanged, que tinha o mesmo
-        // buraco pelo mesmo motivo.
-        R.Backend->DirectQueue.Flush();
-        R.Backend->ComputeQueue.WaitIdle();
-        R.RaytracingScene.RefreshInstanceGeo(R.SceneState->Scene);
+        // SEM DRENO desde a Fase 2, e essa e a mudanca: antes isto fazia Flush na direta +
+        // WaitIdle na compute para poder reescrever o snapshot por instancia, que e upload heap
+        // sem versao por frame em voo — um stall completo a cada tick de slider de material.
+        //
+        // O snapshot nao carrega mais material nenhum: ele guarda {descritor da tabela, linha}, e
+        // nenhum dos dois muda quando uma PROPRIEDADE de material muda. O que muda e a linha, e
+        // ela sobe por CopyBufferRegion no topo da command list do proximo frame — antes do
+        // primeiro leitor, inclusive o da fila de compute, que so e submetido depois de um
+        // segmento posterior desta mesma lista.
+        R.MaterialTable.MarkDirty();
         R.SceneState->TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
         // E os historicos acumulados sobre a aparencia antiga.
         Invalidate(Dom::MaterialRTState);

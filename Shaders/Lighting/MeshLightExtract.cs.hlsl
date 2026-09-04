@@ -9,7 +9,8 @@
 // emissiva do projeto e estatica — reextrair 26 mil triangulos por frame seria banda jogada fora,
 // e em escala de jogo (1M de triangulos = 32 MB por frame) deixaria de ser detalhe.
 
-#include "../GI/DDGICommon.hlsli"   // InstanceGeo, DDGIVertex, INSTGEO_FLAG_EMISSIVE
+#include "../GI/DDGICommon.hlsli"   // InstanceGeo, DDGIVertex
+#include "../Scene/GpuSceneTablesAccess.hlsli" // RT_LoadMaterial (ja usa ResourceDescriptorHeap)
 #include "MeshLightCommon.hlsli"
 
 cbuffer MeshLightCB : register(b0) {
@@ -62,6 +63,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     if (!FindTask(index, task, tri)) return;
 
     const InstanceGeo geo = Instances[task.InstanceIndex];
+    const GpuMaterialRecord mat = RT_LoadMaterial(geo);
     StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
     Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
 
@@ -76,12 +78,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const float3 e0 = p1 - p0;
     const float3 e1 = p2 - p0;
 
-    // EmissiveFactor.rgb ja vem escalado pelo RTEmissiveScale (ver FillInstanceGeo): uma malha
+    // EmissiveFactor.rgb ja vem escalado pelo RTEmissiveScale (ver FGpuMaterialRecord): uma malha
     // marcada como "brilha mas nao ilumina" chega aqui com radiancia zero e sai com fluxo zero,
     // entao a alias table da fase 4 nunca a escolhe.
-    float3 radiance = geo.EmissiveFactor.rgb;
+    float3 radiance = mat.EmissiveFactor.rgb;
 
-    if ((geo.Flags & INSTGEO_FLAG_EMISSIVE) != 0u) {
+    if ((mat.Flags & SMILE_MAT_FLAG_EMISSIVEMAP) != 0u) {
         // Radiancia MEDIA do triangulo, nao um point sample do centro. Elipse inscrita no
         // triangulo em UV, com os eixos paralelos a aresta mais curta e a mediana oposta a ela:
         // triangulo comprido/fino vira amostragem bem anisotropica, triangulo normal vira quase
@@ -102,7 +104,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         const float2 longGrad  = (longEdge1 + longEdge2) / 3.0f;
         const float2 centerUV  = (uv0 + uv1 + uv2) / 3.0f;
 
-        Texture2D<float4> emissiveTex = ResourceDescriptorHeap[geo.EmissiveMapIndex];
+        Texture2D<float4> emissiveTex =
+            ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_EMISSIVE)];
         radiance *= emissiveTex.SampleGrad(LinearWrap, centerUV, shortGrad, longGrad).rgb;
     }
 

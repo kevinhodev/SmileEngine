@@ -200,6 +200,39 @@ set_tests_properties(Smile.GpuMaterialRecord PROPERTIES
     LABELS "scene;materials;gpu-driven;abi"
 )
 
+# ABI C++ <-> HLSL das tabelas canonicas, executada em WARP, mais a parte CPU pura da tabela
+# (DiffMaterialRows). Depende da sonda compilada pelo target Shaders.
+add_executable(SmileGpuSceneTablesWarpTests
+    GpuSceneTablesWarpTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Scene/GpuMaterialRecord.cpp
+)
+target_compile_features(SmileGpuSceneTablesWarpTests PRIVATE cxx_std_20)
+target_include_directories(SmileGpuSceneTablesWarpTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+target_compile_definitions(SmileGpuSceneTablesWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_SCENE_TABLES_PROBE_CSO="${SMILE_SHADER_OUTPUT_DIR}/GpuSceneTablesProbe.cs_6_0.cso"
+)
+target_link_libraries(SmileGpuSceneTablesWarpTests PRIVATE d3d12 dxgi)
+add_dependencies(SmileGpuSceneTablesWarpTests Shaders)
+set_target_properties(SmileGpuSceneTablesWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuSceneTablesWarp
+    COMMAND SmileGpuSceneTablesWarpTests
+)
+
+set_tests_properties(Smile.GpuSceneTablesWarp PROPERTIES
+    LABELS "scene;materials;gpu-driven;abi;warp"
+    TIMEOUT 180
+)
+
 add_executable(SmileRenderPassRegistryTests
     RenderPassRegistryTests.cpp
 )

@@ -10,7 +10,7 @@
 #include "Smile/Graphics/RayTracing/RTMasks.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Resources/Material.h"
-#include "Smile/Graphics/Scene/GpuMaterialRecord.h"
+#include "Smile/Graphics/Scene/GpuSceneTables.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -56,38 +56,11 @@ namespace Smile {
             _CL->ResourceBarrier(1, &UAV);
         }
 
-        // Espelho C++ do `InstanceGeo` do HLSL (ver RTGeometry.hlsli / HitShading.hlsli). O
-        // static_assert e o contrato: qualquer campo acrescentado aqui desloca o resto e faz todo
-        // hit de RT ler material trocado, em silencio.
-        struct FRTInstanceGeo {
-            Vec4 BaseColor;
-            // VB/IB continuam aqui: o MeshLightExtract ainda percorre a malha por vertice, e o
-            // raster/BLAS seguem consumindo os mesmos buffers. Quem saiu deles foi o caminho de
-            // HIT (PT_LoadHitSurface, HitFaceNormal, HitIsBackface, HitGeomNormal, AlphaTestPass),
-            // que agora le o TriangleSrv.
-            u32  VertexSrv   = 0;
-            u32  IndexSrv    = 0;
-            // Payload pre-cozido por triangulo (FRTTriangle, 32 B), indexado por PrimitiveIndex.
-            // Compartilhado por TODAS as instancias da mesma FGpuMesh — ele descreve geometria em
-            // espaco local, entao duas instancias da mesma malha leem o mesmo buffer.
-            u32  TriangleSrv = 0;
-            u32  AlbedoIndex = 0;
-            u32  HasAlbedo   = 0;
-            u32  TwoSidedRT  = 0; // = FMaterial::IsTwoSidedForRT (inclui AlphaTest), nao a flag crua
-            u32  Flags       = 0;
-            f32  AlphaCutoff = 0.5f;
-            f32  RoughnessFactor = 0.5f;
-            Vec4 EmissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f };
-            u32  EmissiveMapIndex = 0;
-            u32  MrMapIndex       = 0;
-            u32  MetalMapIndex    = 0; // mapa Metalness separado (slot +6)
-            u32  RoughMapIndex    = 0; // mapa Roughness separado (slot +7)
-            Vec4 SubsurfaceColor{ 1.0f, 1.0f, 1.0f, 0.0f };
-        };
-        // 100 B: Vec4 aqui e alinhado em 4, entao o struct nao ganha padding
-        // de cauda e o stride do StructuredBuffer casa byte a byte com o `InstanceGeo` do HLSL —
-        // que e o unico contrato que importa (StructuredBuffer nao exige stride multiplo de 16).
-        static_assert(sizeof(FRTInstanceGeo) == 100, "FRTInstanceGeo deve casar com o HLSL (100B)");
+        // O snapshot por instancia MUDOU DE CASA na Fase 2: era um struct local deste arquivo
+        // (FRTInstanceGeo, 100 B, treze campos de material copiados por instancia) e virou
+        // Smile::FGpuInstanceGeo, ao lado das outras tabelas canonicas. A montagem continua aqui,
+        // porque quem preenche tem de ser o dono da correspondencia com a TLAS.
+        using FRTInstanceGeo = FGpuInstanceGeo;
     }
 
     static_assert(FRaytracingScene::kInstanceSlots == FCommandQueue::kFramesInFlight,
@@ -216,35 +189,14 @@ namespace Smile {
     // liga as duas — o InstanceID que a TLAS carrega e o indice deste vetor, e e por ele que o hit
     // de RT indexa o snapshot. Preencher aqui, e nao no dono do volume DDGI, e o que garante que
     // as duas nunca sejam construidas em momentos diferentes.
-    void FRaytracingScene::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
+    void FRaytracingScene::FillInstanceGeo(const FScene& _Scene, const FGpuMaterialTable& _Materials,
+                                           u8* _Mapped, u32 _Count) const {
+        const u32 MaterialSrv = _Materials.Srv();
         for (u32 i = 0; i < _Count; ++i) {
             const FRenderable& R = _Scene.Renderables()[i];
-            // A linha CANONICA do material (Graphics/Scene/GpuMaterialRecord.h) e a fonte; o
-            // snapshot por instancia so a espalha nos campos que o HLSL ainda le separados. Foi o
-            // primeiro passo da Fase 2: enquanto a derivacao morava aqui dentro, "o que o RT ve
-            // de um material" nao existia em lugar nenhum que pudesse ser testado sem GPU.
-            const FGpuMaterialRecord M = FGpuMaterialRecord::FromMaterial(R.Material);
-
             FRTInstanceGeo g{};
-            g.BaseColor       = M.BaseColor;
-            g.TwoSidedRT      = (M.Flags & kMaterialFlagTwoSided) ? 1u : 0u;
-            g.AlphaCutoff     = M.AlphaCutoff;
-            g.RoughnessFactor = M.RoughnessFactor;
-            g.SubsurfaceColor = M.SubsurfaceColor;
-            g.EmissiveFactor  = M.EmissiveFactor;
-            // Os dois bits que viraram campo inteiro no snapshot saem do Flags espalhado; o resto
-            // dos bits ja tem o mesmo valor numerico dos INSTGEO_FLAG_* do HLSL.
-            g.Flags = M.Flags & ~(kMaterialFlagAlbedoMap | kMaterialFlagTwoSided);
-            if (M.Flags & kMaterialFlagAlbedoMap) {
-                g.AlbedoIndex = M.TextureIndex(kMaterialTexAlbedo);
-                g.HasAlbedo   = 1;
-            }
-            // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive,
-            // 5=height, 6=metalness, 7=roughness.
-            if (M.Flags & kMaterialFlagEmissiveMap) g.EmissiveMapIndex = M.TextureIndex(kMaterialTexEmissive);
-            if (M.Flags & kMaterialFlagMRMap)       g.MrMapIndex       = M.TextureIndex(kMaterialTexMR);
-            if (M.Flags & kMaterialFlagMetalMap)    g.MetalMapIndex    = M.TextureIndex(kMaterialTexMetal);
-            if (M.Flags & kMaterialFlagRoughMap)    g.RoughMapIndex    = M.TextureIndex(kMaterialTexRough);
+            g.MaterialSrv = MaterialSrv;
+            g.MaterialId  = _Materials.RowOf(R.Material);
             // Tres slots CONSECUTIVOS por malha unica: [VB][IB][RTTri]. O base vem do
             // MeshGeoSlot, que e indexado pela FGpuMesh — entao N instancias da mesma malha
             // recebem o MESMO TriangleSrv, que e o que torna o payload por malha e nao por
@@ -259,14 +211,15 @@ namespace Smile {
         }
     }
 
-    void FRaytracingScene::RefreshInstanceGeo(const FScene& _Scene) {
+    void FRaytracingScene::RefreshInstanceGeo(const FScene& _Scene,
+                                              const FGpuMaterialTable& _Materials) {
         if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
         const u32 Count = std::min(InstanceGeoCount,
                                    static_cast<u32>(_Scene.Renderables().size()));
         u8*         Mapped = nullptr;
         D3D12_RANGE NoRead{ 0, 0 };
         if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
-        FillInstanceGeo(_Scene, Mapped, Count);
+        FillInstanceGeo(_Scene, _Materials, Mapped, Count);
         InstanceGeoBuf->Unmap(0, nullptr);
     }
 
@@ -304,7 +257,7 @@ namespace Smile {
 
     void FRaytracingScene::Build(FD3D12Device& _Device, FCommandQueue& _Queue,
                                  FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
-                                 const Vec3& _TlasOrigin) {
+                                 const FGpuMaterialTable& _Materials, const Vec3& _TlasOrigin) {
         if (!_Device.RaytracingSupported() || !_Device.Device5())
             throw std::runtime_error("DXR Tier 1.2 obrigatorio para construir a cena OMM");
 
@@ -682,7 +635,7 @@ namespace Smile {
             /*ForConstantBuffer*/ false);
         InstanceGeoBuf   = GeoUpload.Resource;
         InstanceGeoCount = GeoCapacity;
-        FillInstanceGeo(_Scene, GeoUpload.Mapped, NumRenderables);
+        FillInstanceGeo(_Scene, _Materials, GeoUpload.Mapped, NumRenderables);
         std::memset(GeoUpload.Mapped + static_cast<size_t>(NumRenderables) * sizeof(FRTInstanceGeo),
                     0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(FRTInstanceGeo));
         InstanceGeoBuf->Unmap(0, nullptr);

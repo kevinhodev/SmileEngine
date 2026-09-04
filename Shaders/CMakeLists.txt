@@ -139,6 +139,9 @@ smile_compile_shader(Temporal/DualMotion.cs.hlsl      cs_6_0 main SHADER_OUTPUTS
 # Sonda de teste: expoe TemporalResolvePreviousIndex para execucao em WARP. Nao entra em passe
 # nenhum, mas passa pelo MESMO DXC -- testar a fonte sob outro compilador nao provaria o mesmo.
 smile_compile_shader(Temporal/TemporalResolveProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+# Sonda de ABI das tabelas canonicas da cena (Fase 2). Mesma logica da de cima: o static_assert do
+# C++ nao diz nada sobre o espelho HLSL, e um campo trocado de lugar compila dos dois lados.
+smile_compile_shader(Scene/GpuSceneTablesProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
 # Occlusion culling — cadeia HZB (min-reduce do depth em reverse-Z, estilo UE)

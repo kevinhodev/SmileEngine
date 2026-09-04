@@ -129,6 +129,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         } else {
             const uint instId = q.CommittedInstanceID();
             const InstanceGeo geo = Instances[instId];
+            const GpuMaterialRecord mat = RT_LoadMaterial(geo);
             const float3 n = HitGeomNormal(instId, q.CommittedPrimitiveIndex(),
                                            q.CommittedTriangleBarycentrics(),
                                            q.CommittedWorldToObject3x4(), ray.Direction);
@@ -138,9 +139,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 // CATEGORIA — a mesma que a instancia carrega na TLAS (RaytracingScene.cpp):
                 // translucido tem prioridade porque a categoria e exclusiva (um bit por
                 // instancia) e o material Blend nunca e alpha-test ao mesmo tempo.
-                if ((geo.Flags & INSTGEO_FLAG_TRANSLUCENT) != 0u)
+                if ((mat.Flags & SMILE_MAT_FLAG_TRANSLUCENT) != 0u)
                     base = float3(0.25f, 0.55f, 1.00f);      // azul   — translucido
-                else if ((geo.Flags & INSTGEO_FLAG_ALPHATEST) != 0u)
+                else if ((mat.Flags & SMILE_MAT_FLAG_ALPHATEST) != 0u)
                     base = float3(1.00f, 0.85f, 0.15f);      // amarelo — alpha-test / folhagem
                 else
                     base = float3(0.35f, 0.85f, 0.35f);      // verde  — opaco
@@ -148,7 +149,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
                 // Two-sided desaturado: e o eixo que decide se um passe pode cullar backface, e
                 // ficou fora de sincronia com o raster mais de uma vez. Ver a nota sobre a
                 // instance flag vencer a ray flag em RaytracingScene.cpp.
-                if (geo.TwoSidedRT != 0u)
+                if ((mat.Flags & SMILE_MAT_FLAG_TWOSIDED) != 0u)
                     base = lerp(base, dot(base, float3(0.299f, 0.587f, 0.114f)).xxx, 0.55f);
             } else {
                 // INSTANCIA — hash do id. DDGI_Hash com 3 sais diferentes; o piso de 0.15 evita

@@ -781,9 +781,10 @@ namespace Smile {
                 break;
             case FMeshLights::ETransformRefresh::Unchanged:
                 SceneState->MeshLightTransformsVersion = SceneState->Scene.TransformsVersion();
-                // Ninguem se MOVEU, mas a radiancia pode ter mudado. A extracao le a cor do
-                // InstanceGeo (ja reescrito pelo NotifyMaterialRTStateChanged acima), entao um
-                // MarkDirty basta: refaz fluxo por triangulo e alias table sem realocar nada.
+                // Ninguem se MOVEU, mas a radiancia pode ter mudado. A extracao le a cor da
+                // tabela de materiais, cujas linhas sujas sobem no topo desta mesma command list
+                // — antes do MeshLights.Record —, entao um MarkDirty basta: refaz fluxo por
+                // triangulo e alias table sem realocar nada.
                 if (SceneState->MeshLightEmissiveDirty) {
                     MeshLights.MarkDirty();
                     SceneState->MeshLightEmissiveDirty = false;
@@ -803,6 +804,14 @@ namespace Smile {
         Backend->DirectProfiler.BeginFrame(Backend->DirectQueue.FrameIndex(),
                                            FrameState->FrameIndex);
         Backend->DirectProfiler.Begin(Backend->DirectQueue.List(), "Frame (GPU)");
+
+        // Linhas sujas da tabela canonica de materiais, AQUI e nao mais perto do primeiro leitor.
+        // Aqui nada foi gravado ainda nesta command list, o que torna a precedencia sobre TODO
+        // consumidor uma propriedade da posicao e nao um detalhe a reconferir quando alguem
+        // acrescentar um passe. Vale tambem para a fila de COMPUTE: o update async do DDGI le a
+        // tabela pela mesma indirecao e e submetido com SubmitAfter sobre um segmento posterior
+        // desta lista. No caso comum nao emite nada — nenhuma linha suja, nenhuma barreira.
+        MaterialTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
 
         ObjectPicker.Tick();
 

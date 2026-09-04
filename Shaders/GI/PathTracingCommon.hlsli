@@ -29,6 +29,13 @@
 // (ReSTIRGITrace, ReflectionTrace) ja o incluiam por conta propria; a guarda de include cuida.
 #include "../Reflections/GGXSample.hlsli"
 
+// RT_LoadMaterial: a linha do material do hit. Incluido AQUI, e nao herdado da cadeia do
+// HitShading, porque este header e incluido por dois caminhos independentes (HitShading.hlsli e
+// RadianceCacheUpdate.cs.hlsl) e depender da ordem de include de um deles e como a build quebra
+// meses depois. Ja usa ResourceDescriptorHeap nas amostragens abaixo, entao nao acrescenta
+// exigencia nenhuma de root signature.
+#include "../Scene/GpuSceneTablesAccess.hlsli"
+
 // Estado do CAMINHO que chegou ao hit — o que se sabe do raio, nao da superficie.
 //
 // Origin/Dir/SegmentLength/RayRoughness sao o que o render usa. Depth, Mode, Throughput, Pdf e
@@ -151,7 +158,8 @@ FHitSurface PT_LoadHitSurface(InstanceGeo geo, uint tri, float2 bary, float3x4 w
     const bool hitFromBehind = faceOk ? (dot(faceN,  rayDir) > 0.0f)
                                       : (dot(S.GeomN, rayDir) > 0.0f);
     S.HitFromBehind = hitFromBehind;
-    S.SignedDist    = (geo.TwoSidedRT == 0 && hitFromBehind) ? -hitDist : hitDist;
+    const bool twoSided = (RT_LoadMaterial(geo).Flags & SMILE_MAT_FLAG_TWOSIDED) != 0u;
+    S.SignedDist    = (!twoSided && hitFromBehind) ? -hitDist : hitDist;
 
     // Normal de FACE, so p/ a ORIGEM dos shadow rays. A interpolada continua mandando na BRDF, no
     // N.L e no sample do DDGI — o offset e um problema de escapar do PLANO do triangulo, e quem
@@ -188,28 +196,34 @@ float3 PT_ViewDir(FPathState Path) { return normalize(-Path.Dir); }
 // Material
 // --------------------------------------------------------------------------------------------
 FHitMaterial PT_LoadHitMaterial(InstanceGeo geo, float2 uv, float albedoLOD, float roughnessMin) {
-    float3 albedo = geo.BaseColor.rgb;
-    if (geo.HasAlbedo != 0) {
-        Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
+    const GpuMaterialRecord mat = RT_LoadMaterial(geo);
+
+    float3 albedo = mat.BaseColor.rgb;
+    if ((mat.Flags & SMILE_MAT_FLAG_ALBEDOMAP) != 0u) {
+        Texture2D<float4> albedoTex =
+            ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_ALBEDO)];
         albedo *= albedoTex.SampleLevel(LinearWrap, uv, albedoLOD).rgb;
     }
 
     // Metallic/roughness seguem o mesmo workflow do G-buffer. O MR e amostrado uma vez para os
     // dois parametros; mapas separados ocupam os slots +6/+7.
-    float metallic  = geo.EmissiveFactor.w; // MetallicFactor cabe no .w do snapshot
-    float roughness = geo.RoughnessFactor;
-    if ((geo.Flags & INSTGEO_FLAG_MRMAP) != 0u) {
-        Texture2D<float4> mrTex = ResourceDescriptorHeap[geo.MrMapIndex];
+    float metallic  = mat.EmissiveFactor.w; // MetallicFactor cabe no .w da linha
+    float roughness = mat.RoughnessFactor;
+    if ((mat.Flags & SMILE_MAT_FLAG_MRMAP) != 0u) {
+        Texture2D<float4> mrTex =
+            ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_MR)];
         const float4 mr = mrTex.SampleLevel(LinearWrap, uv, albedoLOD);
-        metallic  *= ((geo.Flags & INSTGEO_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
+        metallic  *= ((mat.Flags & SMILE_MAT_FLAG_SPECPACK) != 0u) ? mr.b : mr.r;
         roughness *= mr.g;
     }
-    if ((geo.Flags & INSTGEO_FLAG_METALMAP) != 0u) {
-        Texture2D<float4> metalTex = ResourceDescriptorHeap[geo.MetalMapIndex];
+    if ((mat.Flags & SMILE_MAT_FLAG_METALMAP) != 0u) {
+        Texture2D<float4> metalTex =
+            ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_METAL)];
         metallic *= metalTex.SampleLevel(LinearWrap, uv, albedoLOD).r;
     }
-    if ((geo.Flags & INSTGEO_FLAG_ROUGHMAP) != 0u) {
-        Texture2D<float4> roughTex = ResourceDescriptorHeap[geo.RoughMapIndex];
+    if ((mat.Flags & SMILE_MAT_FLAG_ROUGHMAP) != 0u) {
+        Texture2D<float4> roughTex =
+            ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_ROUGH)];
         roughness *= roughTex.SampleLevel(LinearWrap, uv, albedoLOD).r;
     }
     metallic = saturate(metallic);
@@ -233,7 +247,7 @@ FHitMaterial PT_LoadHitMaterial(InstanceGeo geo, float2 uv, float albedoLOD, flo
     FHitMaterial M;
     M.DiffuseColor  = albedo * (1.0f - metallic);
     M.SpecularColor = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
-    M.TransColor    = albedo * geo.SubsurfaceColor.rgb * geo.SubsurfaceColor.a;
+    M.TransColor    = albedo * mat.SubsurfaceColor.rgb * mat.SubsurfaceColor.a;
     M.Roughness     = roughness;
     M.Alpha         = roughness * roughness;
     M.A2            = M.Alpha * M.Alpha;
@@ -245,9 +259,11 @@ FHitMaterial PT_LoadHitMaterial(InstanceGeo geo, float2 uv, float albedoLOD, flo
 // reflexoes/ReSTIR. O mapa e obrigatorio quando existe (factor costuma ser 1 e o mapa e
 // quase todo preto — so o factor estouraria a superficie inteira).
 float3 PT_LoadHitEmissive(InstanceGeo geo, float2 uv, float albedoLOD) {
-    float3 emissive = geo.EmissiveFactor.rgb;
-    if ((geo.Flags & INSTGEO_FLAG_EMISSIVE) != 0u) {
-        Texture2D<float4> emissiveTex = ResourceDescriptorHeap[geo.EmissiveMapIndex];
+    const GpuMaterialRecord mat = RT_LoadMaterial(geo);
+    float3 emissive = mat.EmissiveFactor.rgb;
+    if ((mat.Flags & SMILE_MAT_FLAG_EMISSIVEMAP) != 0u) {
+        Texture2D<float4> emissiveTex =
+            ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_EMISSIVE)];
         emissive *= emissiveTex.SampleLevel(LinearWrap, uv, albedoLOD).rgb;
     }
     return emissive;

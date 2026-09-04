@@ -50,6 +50,7 @@
 #include "Smile/Graphics/GI/NrdDenoiser.h"
 #include "Smile/Graphics/GI/Reflections.h"
 #include "Smile/Graphics/GI/AmbientOcclusion.h"
+#include "Smile/Graphics/Scene/GpuSceneTables.h"
 #include "Smile/Graphics/Scene/HiZOcclusion.h"
 #include "Smile/Graphics/PostProcess/PostProcess.h"
 #include "Smile/Graphics/Editor/MaterialPreview.h"
@@ -640,6 +641,8 @@ namespace Smile {
         void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
+        // Reconstroi a tabela canonica de materiais. Drena as filas (o chamador ja drenou).
+        void RebuildMaterialTable();
         // Reconstrucao completa; drena as filas e exige command list fechado.
         void RebuildMeshLights();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
@@ -900,6 +903,11 @@ namespace Smile {
 
         FLocalShadows   LocalShadows; // sombras de spot (F3a); budget kMaxShadows/frame
  
+        // Tabela CANONICA de materiais da cena (Fase 2). Mora no Renderer, e nao dentro da cena
+        // de RT, porque o RT e consumidor dela: o raster passa a le-la na Fase 3, e o snapshot
+        // por instancia so carrega o par {descritor, linha} que aponta para ca.
+        FGpuMaterialTable MaterialTable;
+
         FRaytracingScene RaytracingScene;
         // Recursos neutros quando nao existe volume DDGI.
         FGIFallbackResources GIFallback;

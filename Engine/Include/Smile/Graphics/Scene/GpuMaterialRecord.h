@@ -16,7 +16,7 @@
 //
 // ATENCAO: layout consumido pela GPU e espelhado em HLSL (Shaders/Scene/GpuSceneTables.hlsli).
 // Qualquer mudanca de campo, ordem ou tamanho exige atualizar o espelho e o teste de ABI
-// (Tests/GpuSceneTablesTests.cpp) no MESMO commit.
+// (Tests/GpuSceneTablesWarpTests.cpp) no MESMO commit.
 
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/Resources/Material.h"

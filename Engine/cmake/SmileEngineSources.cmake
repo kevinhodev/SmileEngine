@@ -147,6 +147,7 @@ smile_graphics_domain(Scene
     Camera
     GBuffer
     GpuMaterialRecord
+    GpuSceneTables
     HiZOcclusion
     Terrain
 )

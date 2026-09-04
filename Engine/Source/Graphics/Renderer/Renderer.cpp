@@ -648,6 +648,7 @@ namespace Smile {
         FDlssPass::ShutdownStreamline();   // desliga o Streamline apos liberar os recursos do DLSS/RR
         BvhDebug.Release(Backend->SRVHeap);
         GIFallback.Release(Backend->SRVHeap);       // 3 slots + os recursos neutros do fallback indireto
+        MaterialTable.Release(Backend->SRVHeap);    // 1 slot + o buffer da tabela canonica
         FShaderTimer::ShutdownApi();       // libera o slot falso da extensao + o buffer dummy
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);

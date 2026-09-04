@@ -1,8 +1,10 @@
 #ifndef SMILE_GI_RTGEOMETRY_HLSLI
 #define SMILE_GI_RTGEOMETRY_HLSLI
 
-// RT_LoadTriangle. Separado do DDGICommon porque usa ResourceDescriptorHeap — ver a nota la.
+// RT_LoadTriangle / RT_LoadMaterial. Separados do DDGICommon porque usam ResourceDescriptorHeap —
+// ver a nota la.
 #include "RTTriangleAccess.hlsli"
+#include "../Scene/GpuSceneTablesAccess.hlsli"
 
 // Decodificacao de GEOMETRIA no ponto de hit (normal de face / de shading), extraida do
 // HitShading.hlsli p/ passes que precisam da superficie mas nao da iluminacao — hoje o
@@ -56,7 +58,7 @@ bool HitFaceNormal(RTTriangle tri, float3x4 worldToObject, out float3 outFaceN) 
 bool HitIsBackface(uint instId, uint tri, float3x4 worldToObject, float3 rayDir,
                    out bool outTwoSided) {
     InstanceGeo geo = Instances[instId];
-    outTwoSided = (geo.TwoSidedRT != 0);
+    outTwoSided = (RT_LoadMaterial(geo).Flags & SMILE_MAT_FLAG_TWOSIDED) != 0u;
 
     float3 faceN;
     if (!HitFaceNormal(RT_LoadTriangle(geo, tri), worldToObject, faceN))

@@ -13,12 +13,17 @@ namespace Smile {
     class FTextureSRVHeap;
     class FScene;
     class FGpuMesh;
+    class FGpuMaterialTable;
     struct FOpacityMicromapData;
 
     class FRaytracingScene {
     public:
+        // A tabela de materiais entra como PARAMETRO, e nao como membro: o RT e consumidor dela,
+        // nao dono (decisao D12 do GPU-DRIVEN-PLAN). O que ele guarda do material passou a ser
+        // um par {descritor da tabela, linha} por instancia.
         void Build(FD3D12Device& Device, FCommandQueue& Queue, FTextureSRVHeap& SRVHeap,
-                   const FScene& Scene, const Vec3& TlasOrigin);
+                   const FScene& Scene, const FGpuMaterialTable& Materials,
+                   const Vec3& TlasOrigin);
 
         // Rebuild SO da TLAS (BLAS/pool intactos) na command list do FRAME — p/ transform de
         // renderable mudado no editor (gizmo). Rebuild em vez de update (recomendacao
@@ -58,10 +63,10 @@ namespace Smile {
         // de entao, COM folga (SceneCapacityFor); o RefreshInstanceGeo trunca nele. Quem cria
         // objeto com a cena ja carregada precisa consultar antes (Renderer::OnSceneStructureChanged).
         u32  InstanceGeoCapacity() const { return InstanceGeoCount; }
-        // Re-upload do snapshot sem refazer o Build. Chamar quando uma propriedade de material que
-        // o RT enxerga muda em runtime (AlphaTest, TwoSided, emissivo...) ou quando a lista de
-        // renderaveis muda e ainda cabe na folga: o snapshot e criado uma vez e nao acompanha a
-        // edicao sozinho.
+        // Re-upload do snapshot sem refazer o Build. Depois da Fase 2 isto e necessario apenas
+        // quando a ESTRUTURA muda — renderavel criado/removido, malha ou material trocado num
+        // renderavel —, e nao mais quando uma PROPRIEDADE de material muda: aquelas vivem na
+        // FGpuMaterialTable e sobem por linha suja, sem tocar aqui.
         //
         // ⚠️ CONTRATO: o chamador drena as DUAS filas antes — Flush na direta e WaitIdle na
         // compute, nesta ordem. E upload heap sem versao por frame em voo, entao escrever com
@@ -69,7 +74,7 @@ namespace Smile {
         // update do DDGI roda na COMPUTE e chega ao snapshot pela tabela de trace dele. Drenar so
         // a direta deixa passar exatamente esse leitor. Nao da para drenar aqui dentro: as filas
         // sao do Renderer.
-        void RefreshInstanceGeo(const FScene& Scene);
+        void RefreshInstanceGeo(const FScene& Scene, const FGpuMaterialTable& Materials);
         // Teto de instancias que os rebuilds por frame conseguem endereçar: TLAS, scratch e
         // uploads foram dimensionados para ele no Build. Passar disso exige Build de novo —
         // quem cria objeto com a cena carregada precisa consultar (Renderer::OnSceneStructureChanged).
@@ -84,7 +89,8 @@ namespace Smile {
         void CollectInstances(const FScene& Scene, const Vec3& TlasOrigin,
                               std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& Out) const;
         // Definido no .cpp (FRTInstanceGeo e local daquele arquivo); _Mapped tem _Count entradas.
-        void FillInstanceGeo(const FScene& Scene, u8* Mapped, u32 Count) const;
+        void FillInstanceGeo(const FScene& Scene, const FGpuMaterialTable& Materials,
+                             u8* Mapped, u32 Count) const;
 
         bool   Built          = false;
         u32    TlasSRVSlot_    = 0xFFFFFFFFu;

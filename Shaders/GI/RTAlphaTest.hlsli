@@ -1,8 +1,10 @@
 #ifndef SMILE_RT_ALPHATEST_HLSLI
 #define SMILE_RT_ALPHATEST_HLSLI
 
-// RT_LoadTriangle. Separado do DDGICommon porque usa ResourceDescriptorHeap — ver a nota la.
+// RT_LoadTriangle / RT_LoadMaterial. Separados do DDGICommon porque usam ResourceDescriptorHeap —
+// ver a nota la.
 #include "RTTriangleAccess.hlsli"
+#include "../Scene/GpuSceneTablesAccess.hlsli"
 
 // Alpha-test de candidatos do RayQuery (extraido do HitShading.hlsli p/ passes que so precisam
 // de visibilidade, ex. ReSTIRGISpatial). Contrato de bindings (declarados pelo shader que
@@ -21,15 +23,20 @@
 // leituras dependentes com stride de 32 B para usar 24 B. Agora sao os 12 B de UV do registro.
 bool AlphaTestPass(uint instId, uint tri, float2 bary) {
     InstanceGeo geo = Instances[instId];
-    if ((geo.Flags & INSTGEO_FLAG_ALPHATEST) == 0u || geo.HasAlbedo == 0u)
-        return true; // sem alpha-test -> trata como opaco
+    // A linha do material vem antes do payload do triangulo de proposito: a saida antecipada
+    // (material sem alpha-test) depende so dela, e nesse caso o registro de 32 B nem e lido.
+    GpuMaterialRecord mat = RT_LoadMaterial(geo);
+    const uint kNeeded = SMILE_MAT_FLAG_ALPHATEST | SMILE_MAT_FLAG_ALBEDOMAP;
+    if ((mat.Flags & kNeeded) != kNeeded)
+        return true; // sem alpha-test, ou sem albedo p/ testar -> trata como opaco
     float2 uv = RT_InterpolatedUV(RT_LoadTriangle(geo, tri), bary);
-    Texture2D<float4> albedoTex = ResourceDescriptorHeap[geo.AlbedoIndex];
+    Texture2D<float4> albedoTex =
+        ResourceDescriptorHeap[MaterialTextureIndex(mat, SMILE_MAT_TEX_ALBEDO)];
     // O fator de opacidade do material entra no recorte, igual ao raster (GBuffer.ps.hlsl faz
     // clip(ClipAlpha * BaseColorFactor.a - AlphaCutoff)). Sem ele, um cutout com BaseColorFactor.a
     // < 1 (fade de LOD, dissolve) sumia da tela e continuava SOLIDO para os raios — sombra, oclusao
     // de GI e reflexo de uma geometria que o raster ja tinha descartado.
-    return albedoTex.SampleLevel(LinearWrap, uv, 0.0f).a * geo.BaseColor.a >= geo.AlphaCutoff;
+    return albedoTex.SampleLevel(LinearWrap, uv, 0.0f).a * mat.BaseColor.a >= mat.AlphaCutoff;
 }
 
 // Drena a traversal honrando o alpha-test: opacos auto-comitam; candidatos nao-opacos so comitam

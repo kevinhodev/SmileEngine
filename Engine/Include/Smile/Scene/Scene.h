@@ -27,8 +27,9 @@ namespace Smile {
     // que estourar. Por isso a conta mora aqui, e nao replicada em cada SetupForScene.
     //
     // Custo por entrada de capacidade: 512 B de ObjectCB (256 x 2 frames), 256 B de transform do
-    // TemporalMotion (128 x 2), 128 B de instance desc da TLAS (64 x 2 slots), 100 B de InstanceGeo
-    // (ver o static_assert do FRTInstanceGeo) e 76 B do HiZ = 1072 B. A folga de uma cena de 1591
+    // TemporalMotion (128 x 2), 128 B de instance desc da TLAS (64 x 2 slots), 20 B de InstanceGeo
+    // (ver o static_assert do FGpuInstanceGeo; eram 100 B antes de o material sair dele na Fase 2)
+    // e 76 B do HiZ = 992 B. A folga de uma cena de 1591
     // objetos sai na casa das centenas de KB, contra ~200 MB de pool de BLAS que o re-setup
     // reconstroi. Tabela por escala e por HEAP em Docs/GPU-DRIVEN-PLAN.md, Fase 0.
     constexpr u32 SceneCapacityFor(u32 RenderableCount) {

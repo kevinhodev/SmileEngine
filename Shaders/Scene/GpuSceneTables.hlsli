@@ -1,0 +1,79 @@
+#ifndef SMILE_SCENE_GPUSCENETABLES_HLSLI
+#define SMILE_SCENE_GPUSCENETABLES_HLSLI
+
+// ================================================================================================
+// Espelho HLSL das tabelas canonicas da GPU scene (Fase 2 do GPU-DRIVEN-PLAN).
+//
+// Espelha, byte a byte:
+//   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 64 B)
+//   InstanceGeo       <- Smile::FGpuInstanceGeo     (Graphics/Scene/GpuSceneTables.h, 20 B)
+//
+// A ABI e verificada em WARP por Tests/GpuSceneTablesWarpTests.cpp, que compila a sonda
+// Shaders/Scene/GpuSceneTablesProbe.cs.hlsl com o DXC de producao e le os campos de volta.
+// Reordenar um campo aqui sem mexer no C++ faz esse teste falhar; sem ele, faria todo hit de RT
+// ler material trocado em silencio.
+//
+// ATENCAO: este header e PURO. Nada de ResourceDescriptorHeap aqui — shaders de RASTER
+// (DebugView.ps, DeferredLighting.ps) o alcancam pelo DDGICommon.hlsli, e o DXC valida o corpo de
+// toda funcao mesmo sem chamada. O acessor bindless mora em GpuSceneTablesAccess.hlsli. Mesma
+// regra ja escrita no RTTriangleAccess.hlsli, e pelo mesmo incidente.
+// ================================================================================================
+
+// Bits de GpuMaterialRecord::Flags. Os oito primeiros herdam o valor numerico dos antigos
+// INSTGEO_FLAG_*, que viviam no snapshot por instancia; os dois ultimos eram campos uint inteiros
+// (HasAlbedo, TwoSidedRT).
+#define SMILE_MAT_FLAG_ALPHATEST   1u   // clip por albedo.a * BaseColor.a vs AlphaCutoff (folhagem)
+#define SMILE_MAT_FLAG_EMISSIVEMAP 2u   // tem mapa emissivo
+#define SMILE_MAT_FLAG_FOLIAGE     4u   // ShadingModel Foliage (two-sided + transmissao no PT)
+#define SMILE_MAT_FLAG_MRMAP       8u   // tem mapa metallic-roughness
+#define SMILE_MAT_FLAG_SPECPACK    16u  // o mapa MR e "Specular" (R=AO, G=rough, B=metal)
+#define SMILE_MAT_FLAG_METALMAP    32u  // tem mapa Metalness separado (R=metal)
+#define SMILE_MAT_FLAG_ROUGHMAP    64u  // tem mapa Roughness separado (R=rough)
+#define SMILE_MAT_FLAG_TRANSLUCENT 128u // material Blend; usado pelo BvhDebug
+#define SMILE_MAT_FLAG_ALBEDOMAP   256u // tem mapa de albedo (era o uint HasAlbedo)
+#define SMILE_MAT_FLAG_TWOSIDED    512u // FMaterial::IsTwoSidedForRT (era o uint TwoSidedRT)
+
+// Deslocamentos na tabela contigua de descritores do material (FMaterial reserva oito).
+#define SMILE_MAT_TEX_ALBEDO   0u
+#define SMILE_MAT_TEX_NORMAL   1u
+#define SMILE_MAT_TEX_MR       2u
+#define SMILE_MAT_TEX_AO       3u
+#define SMILE_MAT_TEX_EMISSIVE 4u
+#define SMILE_MAT_TEX_HEIGHT   5u
+#define SMILE_MAT_TEX_METAL    6u
+#define SMILE_MAT_TEX_ROUGH    7u
+
+// Uma linha por MATERIAL, e nao por instancia. Editar um material toca esta linha; as instancias
+// que o usam nao sao tocadas.
+struct GpuMaterialRecord {
+    float4 BaseColor;       // rgb tint + a opacidade (o alpha-test dos raios usa o .a)
+    float4 EmissiveFactor;  // rgb = fator * forca * RTEmissiveScale; w = MetallicFactor
+    float4 SubsurfaceColor; // tint rgb + intensidade a
+    float  RoughnessFactor;
+    float  AlphaCutoff;
+    uint   Flags;           // SMILE_MAT_FLAG_*
+    uint   TextureBase;     // primeiro descritor do material; 0xFFFFFFFF = sem tabela
+};
+
+// Indice bindless de um mapa. Sem tabela, devolve a propria base invalida em vez de um vizinho
+// plausivel — um bit de flag errado tem de aparecer como descritor absurdo, nao como textura de
+// outro material.
+uint MaterialTextureIndex(GpuMaterialRecord _M, uint _Offset) {
+    return (_M.TextureBase == 0xFFFFFFFFu) ? 0xFFFFFFFFu : (_M.TextureBase + _Offset);
+}
+
+// Snapshot por INSTANCIA, indexado pelo InstanceID da TLAS. Depois da Fase 2 ele carrega apenas
+// endereco: tres descritores de geometria (a malha) e o par que localiza a linha do material.
+//
+// Antes ele tinha 100 B e carregava treze campos de material COPIADOS por instancia. Era isso que
+// obrigava toda edicao de material a reescrever a cena inteira, num upload heap sem versao por
+// frame, com as duas filas drenadas.
+struct InstanceGeo {
+    uint VertexSrv;   // StructuredBuffer<DDGIVertex> da malha (MeshLightExtract ainda o percorre)
+    uint IndexSrv;    // Buffer<uint> da malha
+    uint TriangleSrv; // StructuredBuffer<RTTriangle>, payload por triangulo (cozido v8)
+    uint MaterialSrv; // StructuredBuffer<GpuMaterialRecord>: a tabela inteira da cena
+    uint MaterialId;  // linha dentro dela; 0 = material default (renderavel sem material)
+};
+
+#endif
