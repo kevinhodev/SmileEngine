@@ -4,6 +4,8 @@
 #include "Smile/Graphics/Resources/Texture.h"
 #include "Smile/Scene/SceneLoader.h"
 #include <cstdio>
+#include <cstring>
+#include <vector>
 #include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
@@ -133,9 +135,52 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "bake %u devolveu resultado invalido\n", BakeCount);
             return 5;
         }
+
+        // O MESMO bake, a partir das entradas COMPACTAS que o runtime retem para rebake: UVs
+        // extraidas do Vertex e os indices, sem posicao nem normal.
+        //
+        // Isto e o que autoriza reter 8 B por vertice em vez dos 32 B do Vertex inteiro. Se o
+        // baker passasse a ler qualquer outra coisa da malha — posicao, normal, o payload de
+        // RT — os dois resultados divergiriam aqui, e nao meses depois como recorte errado de
+        // folhagem numa cena que ninguem esta olhando.
+        std::vector<f32> UVs(Mesh.Vertices.size() * 2);
+        for (size_t V = 0; V < Mesh.Vertices.size(); ++V) {
+            UVs[V * 2 + 0] = Mesh.Vertices[V].TexCoord[0];
+            UVs[V * 2 + 1] = Mesh.Vertices[V].TexCoord[1];
+        }
+        FOmmGeometry Compacta;
+        Compacta.TexCoords      = UVs.data();
+        Compacta.TexCoordStride = sizeof(f32) * 2;
+        Compacta.VertexCount    = static_cast<u32>(Mesh.Vertices.size());
+        Compacta.Indices        = Mesh.Indices.data();
+        Compacta.IndexCount     = static_cast<u32>(Mesh.Indices.size());
+
+        const auto Compacto = FOpacityMicromapBaker::Bake(
+            Compacta, Alpha, M.BaseColorFactor[3], M.AlphaCutoff);
+        if (!Compacto || !Compacto->Valid()) {
+            std::fprintf(stderr, "bake compacto %u devolveu resultado invalido\n", BakeCount);
+            return 5;
+        }
+        const bool Igual =
+            Compacto->TriangleCount == Omm->TriangleCount &&
+            Compacto->IndexFormat   == Omm->IndexFormat &&
+            Compacto->IndexStride   == Omm->IndexStride &&
+            Compacto->Indices       == Omm->Indices &&
+            Compacto->ArrayData     == Omm->ArrayData &&
+            Compacto->Histogram.size() == Omm->Histogram.size() &&
+            Compacto->Descs.size()  == Omm->Descs.size() &&
+            std::memcmp(Compacto->Descs.data(), Omm->Descs.data(),
+                        Omm->Descs.size() * sizeof(Omm->Descs[0])) == 0;
+        if (!Igual) {
+            std::fprintf(stderr,
+                         "bake %u: entrada compacta divergiu da malha completa "
+                         "(mesh=%u material=%u)\n", BakeCount, R.MeshIndex, R.MaterialIndex);
+            return 7;
+        }
         ++BakeCount;
     }
 
-    std::printf("[OMM TEST] %u pares mesh/material masked validados\n", BakeCount);
+    std::printf("[OMM TEST] %u pares mesh/material masked validados; "
+                "entrada compacta identica a malha completa em todos\n", BakeCount);
     return BakeCount ? 0 : 6;
 }

@@ -122,11 +122,11 @@ namespace Smile {
             }
         }
 
-        std::shared_ptr<FOpacityMicromapData> MakeAllUnknown(const FMesh& _Mesh,
+        std::shared_ptr<FOpacityMicromapData> MakeAllUnknown(const FOmmGeometry& _Geometry,
                                                               f32 _BaseAlpha,
                                                               f32 _AlphaCutoff) {
             auto Out = std::make_shared<FOpacityMicromapData>();
-            Out->TriangleCount    = static_cast<u32>(_Mesh.Indices.size() / 3);
+            Out->TriangleCount    = _Geometry.IndexCount / 3u;
             Out->IndexFormat      = DXGI_FORMAT_R32_UINT;
             Out->IndexStride      = sizeof(u32);
             Out->BakedBaseAlpha   = _BaseAlpha;
@@ -141,15 +141,36 @@ namespace Smile {
         }
     }
 
+    FOmmGeometry FOpacityMicromapBaker::GeometryOf(const FMesh& _Mesh) {
+        if (_Mesh.Vertices.empty() || _Mesh.Indices.empty()) return {};
+        FOmmGeometry G;
+        G.TexCoords      = &_Mesh.Vertices.front().TexCoord[0];
+        G.TexCoordStride = sizeof(Vertex);
+        G.VertexCount    = static_cast<u32>(_Mesh.Vertices.size());
+        G.Indices        = _Mesh.Indices.data();
+        G.IndexCount     = static_cast<u32>(_Mesh.Indices.size());
+        return G;
+    }
+
     std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
         const FMesh& _Mesh, const FTextureCPUData* _AlphaTexture,
         f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
         u32 _InternalThreadCount) {
-        if (_Mesh.Vertices.empty() || _Mesh.Indices.empty() || (_Mesh.Indices.size() % 3) != 0)
-            Fail("mesh sem triangulos validos");
+        // O teto de 32 bits e conferido AQUI, sobre o vetor, e nao na FOmmGeometry: la os
+        // tamanhos ja sao u32, entao o estouro teria acontecido no cast silenciosamente.
         if (_Mesh.Vertices.size() > std::numeric_limits<u32>::max() ||
             _Mesh.Indices.size() > std::numeric_limits<u32>::max())
             Fail("mesh excede os limites de 32 bits do baker");
+        return Bake(GeometryOf(_Mesh), _AlphaTexture, _BaseAlpha, _AlphaCutoff,
+                    _EnableInternalThreads, _InternalThreadCount);
+    }
+
+    std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
+        const FOmmGeometry& _Geometry, const FTextureCPUData* _AlphaTexture,
+        f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
+        u32 _InternalThreadCount) {
+        if (!_Geometry.Valid())
+            Fail("geometria de bake invalida (sem UV, sem indice, ou contagem nao-triangular)");
 
         FAlphaPlane Alpha = ExtractAlpha(_AlphaTexture, _BaseAlpha);
         const float Cutoff = std::clamp(_AlphaCutoff, 0.0f, 1.0f);
@@ -201,11 +222,11 @@ namespace Smile {
             Input.runtimeSamplerDesc.filter         = omm::TextureFilterMode::Linear;
             Input.alphaMode             = omm::AlphaMode::Test;
             Input.texCoordFormat        = omm::TexCoordFormat::UV32_FLOAT;
-            Input.texCoords             = &_Mesh.Vertices.front().TexCoord[0];
-            Input.texCoordStrideInBytes = sizeof(Vertex);
+            Input.texCoords             = _Geometry.TexCoords;
+            Input.texCoordStrideInBytes = _Geometry.TexCoordStride;
             Input.indexFormat           = omm::IndexFormat::UINT_32;
-            Input.indexBuffer           = _Mesh.Indices.data();
-            Input.indexCount            = static_cast<u32>(_Mesh.Indices.size());
+            Input.indexBuffer           = _Geometry.Indices;
+            Input.indexCount            = _Geometry.IndexCount;
             Input.dynamicSubdivisionScale = 2.0f;
             Input.rejectionThreshold      = 0.0f;
             Input.alphaCutoff              = BakeCutoff;
@@ -222,7 +243,7 @@ namespace Smile {
 
             const omm::Result BakeStatus = omm::Cpu::Bake(Baker, Input, &Result);
             if (BakeStatus == omm::Result::WORKLOAD_TOO_BIG) {
-                auto Out = MakeAllUnknown(_Mesh, _BaseAlpha, _AlphaCutoff);
+                auto Out = MakeAllUnknown(_Geometry, _BaseAlpha, _AlphaCutoff);
                 LogWarning("[OMM] - Workload excedeu 2^30; usando indices OMM UNKNOWN em " +
                            std::to_string(Out->TriangleCount) + " triangulos");
                 omm::Cpu::DestroyTexture(Baker, Texture); Texture = 0;
@@ -235,7 +256,7 @@ namespace Smile {
             if (!Baked) Fail("baker devolveu descritor nulo");
 
             auto Out = std::make_shared<FOpacityMicromapData>();
-            Out->TriangleCount = static_cast<u32>(_Mesh.Indices.size() / 3);
+            Out->TriangleCount = _Geometry.IndexCount / 3u;
             Out->BakedBaseAlpha = _BaseAlpha;
             Out->BakedAlphaCutoff = _AlphaCutoff;
             if (Baked->indexCount != Out->TriangleCount)

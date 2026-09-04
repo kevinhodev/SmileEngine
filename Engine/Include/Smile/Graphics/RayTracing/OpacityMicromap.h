@@ -81,16 +81,48 @@ namespace Smile {
         bool MatchesInputs(const FOmmInputKey& Live) const { return BakedInputs == Live; }
     };
 
+    // A GEOMETRIA que o bake consome, e nada alem dela.
+    //
+    // Sao dois arrays: as UVs (com stride, porque no FMesh elas vivem dentro do Vertex) e os
+    // indices. Posicao e normal NAO entram — o micro-map e definido no espaco de textura do
+    // triangulo. Isso importa para o rebake em runtime: reter as entradas de uma malha mascarada
+    // custa 8 B por vertice e 4 B por indice, e nao os 32 B do Vertex inteiro.
+    struct FOmmGeometry {
+        const f32* TexCoords     = nullptr;
+        u32        TexCoordStride = 0; // bytes entre UVs consecutivas
+        u32        VertexCount   = 0;
+        const u32* Indices       = nullptr;
+        u32        IndexCount    = 0;
+
+        bool Valid() const {
+            return TexCoords && Indices && VertexCount > 0 && IndexCount > 0 &&
+                   (IndexCount % 3) == 0 && TexCoordStride >= sizeof(f32) * 2;
+        }
+    };
+
     class FOpacityMicromapBaker {
     public:
         // Baker CPU oficial NVIDIA, em 4-state. AlphaTexture nula representa uma textura branca;
         // BaseAlpha e multiplicado no plano antes do bake para casar com AlphaTestPass no HLSL.
         // Falha lanca: OMM e requisito da engine, portanto nao existe retorno para o BLAS antigo.
+        static std::shared_ptr<FOpacityMicromapData> Bake(const FOmmGeometry& Geometry,
+                                                          const FTextureCPUData* AlphaTexture,
+                                                          f32 BaseAlpha,
+                                                          f32 AlphaCutoff,
+                                                          bool EnableInternalThreads = true,
+                                                          u32 InternalThreadCount = 0);
+
+        // Conveniencia para quem tem a malha inteira em maos (o import). Extrai a FOmmGeometry e
+        // delega — o bake resultante e o MESMO, e o teste prova isso comparando byte a byte.
         static std::shared_ptr<FOpacityMicromapData> Bake(const FMesh& Mesh,
                                                           const FTextureCPUData* AlphaTexture,
                                                           f32 BaseAlpha,
                                                           f32 AlphaCutoff,
                                                           bool EnableInternalThreads = true,
                                                           u32 InternalThreadCount = 0);
+
+        // A geometria de bake de uma malha, apontando PARA DENTRO dela. Nao copia: o chamador
+        // garante que a malha sobreviva ao uso.
+        static FOmmGeometry GeometryOf(const FMesh& Mesh);
     };
 }
