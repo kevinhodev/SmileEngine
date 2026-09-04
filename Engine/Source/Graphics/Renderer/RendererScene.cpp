@@ -210,7 +210,16 @@ namespace Smile {
                               || (TemporalMotion.InstanceCount() > 0 &&
                                   Count > TemporalMotion.InstanceCount())
                               || (RaytracingScene.InstanceGeoCapacity() > 0 &&
-                                  Count > RaytracingScene.InstanceGeoCapacity());
+                                  Count > RaytracingScene.InstanceGeoCapacity())
+                              // O remap temporal e indexado por SLOT, e o pool de slots cresce
+                              // por churn sem a contagem viva mudar: aposentar e realocar
+                              // mantendo 8 vivos leva o pool a 88 com o remap parado em 72, e
+                              // o Collect nao renumera os sobreviventes -- os 8 vivos ficam
+                              // SEM mapeamento e o dual motion morre calado ate a proxima
+                              // troca de cena. Nenhuma condicao acima pega isso, porque todas
+                              // olham a contagem de renderables.
+                              || SlotRemapNeedsGrowth(SceneState->Scene.GpuSlots().Capacity(),
+                                                      TemporalMotion.SlotCapacity());
 
         if (NeedsResize) {
             if (Count > MaxObjects) {

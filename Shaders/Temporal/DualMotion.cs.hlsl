@@ -7,7 +7,10 @@ cbuffer TemporalMotionCB : register(b0) {
     float4 CameraPos;
     float4 ScreenParams;
     float4 Params; // x=frame slot, y=history valid, z=position reject scale, w=instance count
-    float4 IdentityParams; // x=previous instance count, y=slot capacity
+    // uint4, e nao float4: sao CAPACIDADES comparadas com indices, e capacidade nao herda o
+    // teto de 24 bits do id -- acima dele o float arredonda e o guard passa a mentir nos dois
+    // sentidos (rejeita slot valido, ou aceita indice alem do remap).
+    uint4 IdentityParams; // x=previous instance count, y=slot capacity
 };
 
 Texture2D<float2> RasterVelocity : register(t0);
@@ -51,7 +54,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     uint occluderId;
     // Contagem ANTERIOR, e nao a de agora: um id gravado quando a cena tinha mais objetos
     // passaria na contagem atual sem nunca ter sido valido nela.
-    if (!TemporalDecodeInstance(previousAtBase.w, (uint)IdentityParams.x, occluderId)) return;
+    if (!TemporalDecodeInstance(previousAtBase.w, IdentityParams.x, occluderId)) return;
 
     const float reject = Params.z * max(length(current.xyz - CameraPos.xyz), 1.0f);
     const float baseError = length(previousAtBase.xyz - expectedPrevious);
@@ -65,7 +68,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // reprova (removido, slot reciclado, fora do remap) e cai no caminho convencional.
     uint occluderIndex;
     if (!TemporalResolvePreviousIndex(occluderId, PreviousIdentity, SlotToCurrentIndex,
-                                      CurrentIdentity, (uint)IdentityParams.y, (uint)Params.w,
+                                      CurrentIdentity, IdentityParams.y, (uint)Params.w,
                                       occluderIndex)) return;
 
     const float3 occluderCurrent = TemporalTransformPoint(
@@ -80,7 +83,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     uint backgroundId;
     // Aqui basta a contagem ANTERIOR: o backgroundId e so um gate de existe superficie real
     // neste ponto, e nunca indexa transform -- entao nao precisa ser resolvido.
-    if (!TemporalDecodeInstance(previousAtDual.w, (uint)IdentityParams.x, backgroundId)) return;
+    if (!TemporalDecodeInstance(previousAtDual.w, IdentityParams.x, backgroundId)) return;
     const float dualError = length(previousAtDual.xyz - expectedPrevious);
     if (dualError >= min(baseError, reject * 4.0f)) return;
 

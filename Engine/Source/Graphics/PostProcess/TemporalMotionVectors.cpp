@@ -147,7 +147,7 @@ namespace Smile {
         // e cai no fallback -- degrada para sem historico, que e o desfecho seguro, e nunca
         // para o objeto errado.
         {
-            SlotCapacity_ = std::max(Capacity, Scene.GpuSlots().Capacity());
+            SlotCapacity_ = SlotRemapCapacityFor(Capacity, Scene.GpuSlots().Capacity());
             const u64 RemapBytes = static_cast<u64>(SlotCapacity_) * sizeof(u32);
             SlotRemap = GpuResources::CreateBuffer(Device, RemapBytes,
                                                   D3D12_RESOURCE_FLAG_NONE,
@@ -346,8 +346,7 @@ namespace Smile {
         CPU.Params = { static_cast<f32>(FrameSlot), HistoryValid ? 1.0f : 0.0f,
                        PositionRejectScale, static_cast<f32>(Count) };
         // PreviousCount_ ainda e o do frame passado aqui -- ele so avanca depois do memcpy.
-        CPU.IdentityParams = { static_cast<f32>(PreviousCount_),
-                               static_cast<f32>(SlotCapacity_), 0.0f, 0.0f };
+        CPU.IdentityParams = FTemporalIdentityParams{ PreviousCount_, SlotCapacity_, 0u, 0u };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(FTemporalMotionConstants),
                     &CPU, sizeof(CPU));
         PreviousCount_ = Count;

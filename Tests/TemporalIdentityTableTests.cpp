@@ -14,10 +14,13 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
+#include "Smile/Graphics/PostProcess/TemporalMotionVectors.h"
 #include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Scene/GpuSceneHandle.h"
+#include "Smile/Scene/Scene.h"
 
 namespace {
     int Failures = 0;
@@ -246,7 +249,97 @@ int main() {
               "e o objeto que saiu nao resolve, porque o remap ja nao o aponta");
     }
 
-    // 8. GATE DE FONTE: O SHADER TEM DE FAZER O QUE ESTA ESPECIFICADO ACIMA.
+    // 8. CHURN CRESCE O POOL SEM A CONTAGEM VIVA MUDAR, E O REMAP TEM DE ACOMPANHAR.
+    //
+    // Achado do review. Aposentar e realocar mantendo 8 vivos leva o pool a 88 enquanto o remap,
+    // dimensionado no setup, fica em 72 -- e o Collect devolve slots mas NAO renumera os
+    // sobreviventes, entao os 8 vivos ficam sem mapeamento e assim continuam. Nenhuma condicao de
+    // resize do renderer pegava isso, porque todas olhavam a contagem de renderables.
+    {
+        FGpuSceneSlots Slots;
+        std::vector<FGpuSceneHandle> Vivos;
+        for (u32 i = 0; i < 8; ++i) Vivos.push_back(Slots.Allocate());
+
+        auto Churn = [&](u32 Rodadas) {
+            static FGpuFenceSet Fence{};
+            for (u32 R = 0; R < Rodadas; ++R) {
+                for (FGpuSceneHandle& H : Vivos) {
+                    ++Fence.Direct;
+                    ++Fence.AsyncCompute;
+                    Slots.Retire(H, Fence);
+                    H = Slots.Allocate();
+                }
+            }
+            Slots.Collect(FGpuFenceSet{ 1000000, 1000000 });
+        };
+
+        // FASE 1 -- dimensionar so pela cena esta errado, e o churn prova.
+        const u32 SoPelaCena = SceneCapacityFor(static_cast<u32>(Vivos.size()));
+        Churn(10);
+        Check(Slots.Capacity() > SoPelaCena,
+              "o pool passou da capacidade derivada da cena, com a contagem viva parada");
+
+        u32 ForaSoPelaCena = 0;
+        for (const FGpuSceneHandle& H : Vivos) {
+            if (H.Slot >= SoPelaCena) ++ForaSoPelaCena;
+        }
+        Check(ForaSoPelaCena > 0,
+              "e vivos caem fora dela: o Collect devolve slots, mas nao renumera sobreviventes");
+
+        // FASE 2 -- a regra de producao cobre o POOL, e a folga absorve o churn normal.
+        const u32 RemapNoSetup = SlotRemapCapacityFor(SoPelaCena, 8u /*pool no setup*/);
+        Check(!SlotRemapNeedsGrowth(Slots.Capacity(), RemapNoSetup),
+              "com a folga, esse churn todo ainda cabe: o re-setup nao dispara a cada edicao");
+        for (const FGpuSceneHandle& H : Vivos) {
+            Check(H.Slot < RemapNoSetup, "e todo vivo continua mapeado");
+        }
+
+        // FASE 3 -- churn suficiente estoura ate a folga, e AI o gate tem de disparar.
+        Churn(20);
+        Check(SlotRemapNeedsGrowth(Slots.Capacity(), RemapNoSetup),
+              "passada a folga, a capacidade do POOL dispara o re-setup -- nenhuma condicao "
+              "baseada na contagem de renderables veria isso");
+
+        const u32 RemapDepois =
+            SlotRemapCapacityFor(SceneCapacityFor(static_cast<u32>(Vivos.size())),
+                                 Slots.Capacity());
+        for (const FGpuSceneHandle& H : Vivos) {
+            Check(H.Slot < RemapDepois, "e apos o re-setup todo vivo volta a mapear");
+        }
+        Check(RemapDepois > Slots.Capacity(),
+              "o remap fica ACIMA do pool: colado nele, o proximo slot estouraria de novo e cada "
+              "edicao reconstruiria TLAS e GI");
+    }
+
+    // 9. A CAPACIDADE DE SLOTS NAO CABE EM FLOAT.
+    //
+    // Achado do review. O teto de 2^24 limita o ID de instancia; a capacidade do pool nao herda
+    // esse teto, e a folga do SceneCapacityFor ja a leva acima dele. Os dois casos abaixo erram em
+    // sentidos OPOSTOS, que e o que torna o defeito dificil de ver.
+    {
+        static_assert(std::is_same_v<decltype(FTemporalIdentityParams::SlotCapacity), u32>,
+                      "a capacidade viaja como inteiro no cbuffer");
+        static_assert(std::is_same_v<decltype(FTemporalIdentityParams::PreviousInstanceCount), u32>,
+                      "a contagem anterior tambem");
+
+        for (u32 Renderables : { 16000001u, 16000003u }) {
+            const u32 Cap = SceneCapacityFor(Renderables);
+            Check(Cap > kMaxTemporalInstanceCount,
+                  "a capacidade passa do teto de 24 bits, mesmo com a contagem abaixo dele");
+
+            // volatile para o compilador nao dobrar o round-trip: sem isto o MSVC devolve o valor
+            // original e a demonstracao mente.
+            volatile float ComoFloat = static_cast<float>(Cap);
+            Check(static_cast<u32>(ComoFloat) != Cap,
+                  "em float ela nao volta igual -- rejeitaria slot valido ou aceitaria indice "
+                  "alem do remap");
+
+            const FTemporalIdentityParams P{ 0u, Cap, 0u, 0u };
+            Check(P.SlotCapacity == Cap, "em inteiro ela chega exata ao shader");
+        }
+    }
+
+    // 10. GATE DE FONTE: O SHADER TEM DE FAZER O QUE ESTA ESPECIFICADO ACIMA.
     //
     // Guarda de FONTE, e nao de comportamento -- e o criterio pratico que importa: reverter o
     // leitor para indexar transform com id do frame passado deixa isto vermelho.
@@ -272,6 +365,15 @@ int main() {
                       "e confirma slot E generation contra a tabela atual -- so o slot aceitaria "
                       "o ocupante reciclado");
             }
+        }
+
+        // A regra so serve se alguem a CHAMAR. O teste acima pina o predicado; este pedaco
+        // pina que o renderer o consulta -- que e a regressao realista aqui, apagar a condicao.
+        const std::string Renderer = LerArquivo(SMILE_RENDERERSCENE_PATH, Abriu);
+        Check(Abriu, "o RendererScene foi encontrado");
+        if (Abriu) {
+            Check(Renderer.find("SlotRemapNeedsGrowth") != std::string::npos,
+                  "o renderer consulta a capacidade do pool para decidir re-setup");
         }
 
         const std::string Dual = LerArquivo(SMILE_DUALMOTION_PATH, Abriu);

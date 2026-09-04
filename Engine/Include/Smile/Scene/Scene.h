@@ -36,6 +36,24 @@ namespace Smile {
         return RenderableCount + (Slack > 64u ? Slack : 64u);
     }
 
+    // Capacidade do remap slot -> indice do motion temporal.
+    //
+    // Cobre o POOL, e nao so a cena: os slots incluem os APOSENTADOS, entao aposentar e
+    // realocar mantendo a mesma contagem viva faz o pool crescer sozinho. Medido: 8 vivos em
+    // churn levam o pool a 88 com o remap parado em 72, e como o Collect devolve slots mas nao
+    // renumera os sobreviventes, os 8 vivos ficam SEM mapeamento e assim continuam.
+    //
+    // Com a folga por cima, e nao colado no pool: colado, o proximo slot estoura de novo, e
+    // como a reacao a isso e re-setup de cena inteira, cada edicao reconstruiria TLAS e GI.
+    constexpr u32 SlotRemapCapacityFor(u32 SceneCapacity, u32 PoolCapacity) {
+        return SceneCapacityFor(SceneCapacity > PoolCapacity ? SceneCapacity : PoolCapacity);
+    }
+
+    // A condicao de re-setup que a contagem de renderables NAO expressa.
+    constexpr bool SlotRemapNeedsGrowth(u32 PoolCapacity, u32 RemapCapacity) {
+        return RemapCapacity > 0 && PoolCapacity > RemapCapacity;
+    }
+
     // Que TIPO de objeto um Id designa.
     //
     // O Id e unico em TODA a cena — mesh e luz saem do mesmo contador — mas as listas continuam

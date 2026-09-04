@@ -697,11 +697,13 @@ target_compile_features(SmileTemporalIdentityTableTests PRIVATE cxx_std_20)
 target_include_directories(SmileTemporalIdentityTableTests PRIVATE
     ${PROJECT_SOURCE_DIR}/Engine/Include
 )
+target_link_libraries(SmileTemporalIdentityTableTests PRIVATE d3d12 dxgi)
 # Os dois fontes que o gate le. Executar HLSL exigiria GPU; o criterio que importa e que reverter
 # o leitor para indexar transform com id antigo deixe o gate vermelho.
 target_compile_definitions(SmileTemporalIdentityTableTests PRIVATE
     SMILE_TEMPORAL_COMMON_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/TemporalMotionCommon.hlsli"
     SMILE_DUALMOTION_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/DualMotion.cs.hlsl"
+    SMILE_RENDERERSCENE_PATH="${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Renderer/RendererScene.cpp"
 )
 set_target_properties(SmileTemporalIdentityTableTests PROPERTIES
     AUTOMOC OFF
