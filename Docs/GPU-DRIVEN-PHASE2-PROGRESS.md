@@ -7,10 +7,13 @@ validadas em runtime; os quatro findings da revisão estão corrigidos. Faltam *
 proprietário**, e são elas que seguram o encerramento da fase:
 
 1. **`FGpuSceneInstance`** — desenhada e orçada, não implementada. Ver a seção do layout.
-2. **OMM** — o gate pede substituir/versionar o micro-map **e reconstruir os BLAS afetados**.
-   Versionar está feito; reconstruir não. Ou se implementa o rebake em runtime (o que exige reter
-   dados de CPU que o runtime hoje descarta), ou o gate muda formalmente para aceitar a política de
-   recusa. Não dá para declarar fechado do jeito que está.
+2. **Validação interativa** de três caminhos que não têm teste automatizado: a troca de textura de
+   material (hazard de lifetime de GPU — quem prova é a debug layer numa sessão Debug), o slider de
+   subsurface, e agora o rebake de micro-map. O rebake é observável: editar o corte de alpha numa
+   folhagem e soltar tem de logar `[OMM] Rebake em runtime: N par(es)...` e fazer o painel mostrar
+   BLAS refeitos, sem que o recorte da folhagem no GI divirja do raster.
+
+O gate do OMM deixou de ser pendência: **decidido pela reconstrução** e implementado.
 
 Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 
@@ -171,7 +174,7 @@ todo hit de RT.
 |---|---|
 | atualização de material toca uma linha, não todos os `FRTInstanceGeo` | **feito**, testado em `DiffMaterialRows` |
 | o caminho estável não chama `Flush`/`WaitIdle` por edição de material | **feito**: `NotifyMaterialRTStateChanged` perdeu os dois |
-| OMM invalidado quando suas ENTRADAS mudam | **parcial** — ver abaixo |
+| OMM invalidado quando suas ENTRADAS mudam | **feito**: chaveado pelas quatro entradas, rebakeado no commit da edição e os BLAS afetados reconstruídos. Falta validação interativa |
 | layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e instância; falta a de instâncias da Fase 4 |
 | cena grande reporta bytes persistentes por tabela e sujos por frame | **feito e medido** na sintética de 1M: `rowsDirty=0` e `copyRegions=0` em regime estável. VRAM e staging são campos separados; ver "o que os bytes medem" |
 | formato-base novo e deliberado | **decidido não bumpar** — ver a nota de estado da Fase 2 no plano |
@@ -189,20 +192,40 @@ errado em folhagem, que uma comparação estática pode não mostrar.
 (desligá-lo troca o BLAS exigido). O importador carimba; micro-map sem carimbo não casa com nada,
 então um caminho de criação novo que esqueça de carimbar falha alto.
 
-Os dois caminhos que ainda podiam mover uma entrada passaram a **recusar**, como o toggle de Alpha
-Test e o Alpha Cutoff já recusavam: a troca do slot BaseColor e o sidecar — que é arquivo editável
-à mão, nunca passou pelos setters e é aplicado DEPOIS do bake.
+### A reconstrução (decisão do proprietário, 2026-09-04)
 
-**O que falta, e por quê.** O gate pede "o `FOpacityMicromapData` é substituído/versionado **e os
-BLAS afetados são reconstruídos**". Versionar está feito; reconstruir não. Um rebake em runtime
-precisa dos vértices da malha e dos pixels da textura, e o runtime não guarda nem um nem outro
-depois do load (`FGpuMesh` só tem os buffers de GPU; `FTextureCPUData` é local do import). Fazer
-isso é reter dados de CPU para os pares alpha-tested ou reler o `.smesh` do disco — trabalho de
-tamanho próprio, e a decisão de financiá-lo é do proprietário.
+Por um tempo as quatro edições que invalidam o micro-map foram **recusadas**, porque o runtime não
+guardava com que rebakear. O proprietário optou por reconstruir, e é o que existe agora — as quatro
+voltaram a ser edições de verdade.
 
-Enquanto não existir, o invariante que **está** garantido é o que protege a imagem: nenhum
-micro-map é consumido cuja chave de entradas divirja das entradas vivas. Recusar a mutação sustenta
-esse invariante; é uma extensão da política que já valia para duas das quatro entradas.
+**O que a cena retém, e por que é pouco.** O baker lê exatamente duas coisas: as UVs e os índices.
+Posição e normal nunca entram — o micro-map é definido no espaço de textura do triângulo. Isso está
+provado, não suposto: o teste do OMM bakeia os 122 pares mascarados da Bistro pelos dois caminhos e
+exige resultado **byte a byte idêntico**. São 8 B por vértice e 4 B por índice, só para malhas
+mascaradas, dedupados por malha. A textura de alpha **não** é retida: é relida do disco no rebake,
+porque guardar o BC7 de folhagem residente custaria dezenas de MB por um caminho que roda quando
+alguém mexe num slider.
+
+**Quando dispara.** No **commit** da edição, nunca por tick. Arrastar o corte de alpha numa
+folhagem dispararia um rebake por movimento do mouse; o `SliderRow` ganhou um sinal `committed`
+(controle solto, ou passo discreto de teclado/roda) e é ele que publica. O valor em si continua
+acompanhando o arraste — o raster e o recorte por raio mostram o cutoff novo imediatamente; o que
+espera é o micro-map.
+
+**Os BLAS afetados.** `EnsureBlasFor` reconstrói apenas os pares `{malha, micro-map}` que passam a
+ser exigidos, cada um num recurso próprio, e o `BlasByMesh` passa a apontar para lá. O espaço
+antigo fica órfão dentro do `BlasPool` — e isso **não custa memória**: o pool já estava alocado no
+tamanho dele. O que cresce são as alocações laterais, e é isso que `RebuiltBlasBytes` mede.
+Compactar o pool moveria todos os BLAS de endereço e obrigaria a refazer a TLAS inteira: mais risco
+do que o desperdício justifica.
+
+Uma travessia cobre as três transições que uma edição produz: micro-map rebakeado, alpha test
+ligado (bake do zero) e alpha test desligado (passa a exigir o BLAS opaco daquela malha, que pode
+nunca ter sido construído — e sem ele o `CollectInstances` derrubava a render thread).
+
+**O que ainda não é reconstruível**, e falha alto dizendo qual peça faltou: malha criada em runtime
+(sem entradas retidas) e material cujo BaseColor foi gerado em vez de vir de arquivo — o proxy do
+terreno é o caso real. Nenhum dos dois é alpha-tested hoje.
 
 ## Telemetria
 

@@ -7,6 +7,7 @@
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Water/OceanSpectrum.h"
 #include "Smile/Graphics/RayTracing/RTMasks.h" // kRTMaskShadowFull: mascara dos shadow rays de direta local
 #include "Smile/Graphics/Backend/D3D12/Barriers.h"
@@ -99,6 +100,154 @@ namespace Smile {
                               SceneState->Scene, MaterialTable, MeshTable,
                               SceneState->Camera.GetPosition());
         SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
+    }
+
+    // Rebakeia todo micro-map cujas ENTRADAS mudaram, e reconstroi os BLAS que passam a ser
+    // exigidos. E o que fecha o gate da Fase 2 — antes disto o editor RECUSAVA as edicoes que
+    // invalidavam o micro-map, porque o runtime nao guardava com que rebakear.
+    //
+    // Tres transicoes, e uma so travessia cobre as tres:
+    //   - material masked cujo alpha/cutoff/textura mudou -> rebake e BLAS do micro-map novo;
+    //   - alpha test LIGADO num material que nao tinha micro-map -> bake do zero;
+    //   - alpha test DESLIGADO -> o par passa a exigir o BLAS opaco daquela malha, que pode nunca
+    //     ter sido construido, e sem ele o CollectInstances derruba a render thread.
+    u32 Renderer::RebakeStaleOpacityMicromaps() {
+        if (!Initialized || !RaytracingScene.IsBuilt()) return 0;
+
+        // Pares (malha, material) que precisam de micro-map novo, e o conjunto de BLAS exigido
+        // depois da edicao. Agrupado por PAR porque o micro-map e propriedade do par: N
+        // renderaveis que compartilham malha e material compartilham um bake so.
+        struct FPairKey {
+            const FGpuMesh*  Mesh;
+            const FMaterial* Material;
+            bool operator==(const FPairKey& O) const {
+                return Mesh == O.Mesh && Material == O.Material;
+            }
+        };
+        struct FPairHash {
+            size_t operator()(const FPairKey& K) const {
+                return std::hash<const void*>{}(K.Mesh) ^
+                       (std::hash<const void*>{}(K.Material) << 1);
+            }
+        };
+        std::unordered_map<FPairKey, std::shared_ptr<FOpacityMicromapData>, FPairHash> Rebaked;
+        std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Required;
+        std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Forget;
+
+        for (FRenderable& R : SceneState->Scene.Renderables()) {
+            if (!R.Mesh || !R.Mesh->IsValid()) continue;
+            const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
+            const FOmmInputKey Live = FOmmInputKey::From(R.Mesh, R.Material);
+
+            if (!AlphaTest) {
+                // Deixou de ser masked: solta o micro-map e exige o BLAS opaco.
+                //
+                // So na TRANSICAO. Empilhar o par opaco para todo renderavel opaco da cena faria
+                // `Required` nunca ficar vazio, e ai a saida antecipada la embaixo nunca
+                // aconteceria — toda chamada pagaria o dreno das duas filas, inclusive as em que
+                // nada mudou. Numa cena de 1M seriam um milhao de pares para o EnsureBlasFor
+                // conferir e descartar.
+                if (R.OpacityMicromap) {
+                    Forget.push_back({ R.Mesh, R.OpacityMicromap.get() });
+                    R.OpacityMicromap.reset();
+                    Required.push_back({ R.Mesh, nullptr });
+                }
+                continue;
+            }
+            if (R.OpacityMicromap && R.OpacityMicromap->MatchesInputs(Live)) continue;
+
+            const FPairKey Key{ R.Mesh, R.Material };
+            auto It = Rebaked.find(Key);
+            if (It == Rebaked.end()) {
+                auto Novo = BakeOpacityMicromapFor(R.Mesh, R.Material);
+                if (!Novo) continue; // o bake ja logou a peca que faltou; o antigo segue valendo
+                It = Rebaked.emplace(Key, std::move(Novo)).first;
+            }
+            if (R.OpacityMicromap && R.OpacityMicromap != It->second)
+                Forget.push_back({ R.Mesh, R.OpacityMicromap.get() });
+            R.OpacityMicromap = It->second;
+            Required.push_back({ R.Mesh, It->second.get() });
+        }
+
+        if (Rebaked.empty() && Required.empty()) return 0;
+
+        // O dreno vem aqui, e nao no topo: sem nada a refazer, a edicao nao paga stall nenhum.
+        Backend->DirectQueue.Flush();
+        Backend->ComputeQueue.WaitIdle();
+
+        const u32 BuiltBlas = RaytracingScene.EnsureBlasFor(Backend->Device, Backend->DirectQueue,
+                                                            Required);
+        // Sos DEPOIS de os BLAS novos existirem: enquanto a chave antiga estiver no mapa ela
+        // continua sendo um destino valido, e removE-la antes abriria uma janela em que o
+        // CollectInstances nao acha BLAS nenhum para o par.
+        for (const auto& [Mesh, Omm] : Forget) RaytracingScene.ForgetBlas(Mesh, Omm);
+
+        // O snapshot por instancia nao carrega micro-map, mas a TLAS carrega: mask,
+        // FORCE_NON_OPAQUE e o proprio endereco do BLAS saem daqui.
+        SceneState->TlasFlagsDirty = true;
+        // A aparencia mudou para os raios; os historicos acumulados sobre a antiga nao valem.
+        Settings().NotifyMaterialRTStateChanged();
+
+        if (!Rebaked.empty() || BuiltBlas > 0)
+            LogInfo("[OMM] Rebake em runtime: " + std::to_string(Rebaked.size()) +
+                    " par(es) rebakeado(s), " + std::to_string(BuiltBlas) + " BLAS reconstruido(s)");
+        return static_cast<u32>(Rebaked.size());
+    }
+
+    // O bake de UM par, a partir das entradas retidas. Devolve nulo (e diz por que) quando falta
+    // alguma peca — nunca devolve um micro-map de procedencia parcial.
+    std::shared_ptr<FOpacityMicromapData> Renderer::BakeOpacityMicromapFor(
+        const FGpuMesh* _Mesh, const FMaterial* _Material) {
+        if (!_Mesh || !_Material) return nullptr;
+
+        const FOmmGeometry Geometry = OmmBakeInputs.GeometryOf(_Mesh);
+        if (!Geometry.Valid()) {
+            LogError("[OMM] Rebake impossivel: as entradas de bake desta malha nao foram retidas "
+                     "(malha criada em runtime, ou cena carregada antes da retencao existir)");
+            return nullptr;
+        }
+
+        // A textura de alpha e RELIDA do disco. Guardar os pixels residentes custaria dezenas de
+        // MB de BC7 de folhagem por um caminho que roda quando alguem mexe num slider.
+        FTextureCPUData Alpha;
+        const FTextureCPUData* AlphaPtr = nullptr;
+        if (_Material->Albedo) {
+            const auto* Source = OmmBakeInputs.TextureSourceOf(_Material->Albedo);
+            if (!Source) {
+                LogError("[OMM] Rebake impossivel: a textura de BaseColor deste material nao tem "
+                         "procedencia conhecida (gerada em runtime?)");
+                return nullptr;
+            }
+            try {
+                Alpha = FTexture::LoadCPUAuto(Source->Path, Source->IsNormalMap, Source->sRGB);
+            } catch (const std::exception& Error) {
+                LogError(std::string("[OMM] Rebake impossivel: falha ao reler a textura de alpha: ") +
+                         Error.what());
+                return nullptr;
+            }
+            if (!Alpha.Valid()) {
+                LogError("[OMM] Rebake impossivel: a textura de alpha relida veio invalida");
+                return nullptr;
+            }
+            AlphaPtr = &Alpha;
+        }
+
+        try {
+            auto Out = FOpacityMicromapBaker::Bake(Geometry, AlphaPtr,
+                                                   _Material->Constants.BaseColorFactor.W,
+                                                   _Material->Constants.AlphaCutoff);
+            if (!Out || !Out->Valid()) {
+                LogError("[OMM] Rebake devolveu micro-map invalido");
+                return nullptr;
+            }
+            // Carimbo das entradas: sem ele o proprio micro-map recem-feito seria considerado
+            // obsoleto no frame seguinte, e o rebake entraria em laco.
+            Out->BakedInputs = FOmmInputKey::From(_Mesh, _Material);
+            return Out;
+        } catch (const std::exception& Error) {
+            LogError(std::string("[OMM] Rebake falhou no baker: ") + Error.what());
+            return nullptr;
+        }
     }
 
     // (Re)cria as tabelas canonicas da cena. Chamada sempre com as duas filas drenadas — e o

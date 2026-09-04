@@ -183,12 +183,11 @@ namespace Smile {
                     try {
                         const fs::path Relative(Imported->TexturePaths[I]);
                         const std::wstring FullPath = (Imported->SceneDir / Relative).wstring();
-                        std::string Extension = Relative.extension().string();
-                        for (char& C : Extension) if (C >= 'A' && C <= 'Z') C += 32;
-                        Imported->TextureData[I] = (Extension == ".dds")
-                            ? FTexture::LoadDDSCPU(FullPath, TextureFlags[I].SRGB)
-                            : FTexture::LoadCPU(
-                                FullPath, TextureFlags[I].IsNormal, TextureFlags[I].SRGB);
+                        // A escolha DDS/nao-DDS mora no FTexture::LoadCPUAuto: o rebake de
+                        // micro-map em runtime rele a mesma textura do disco e precisa decodificar
+                        // do MESMO jeito.
+                        Imported->TextureData[I] = FTexture::LoadCPUAuto(
+                            FullPath, TextureFlags[I].IsNormal, TextureFlags[I].SRGB);
                     } catch (const std::exception& Error) {
                         LogError("LoadCookedScene: falha ao preparar textura " +
                                  Imported->TexturePaths[I] + ": " + Error.what());

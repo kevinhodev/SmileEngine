@@ -35,6 +35,14 @@ namespace Smile {
 
         bool TlasFlagsDirty         = false;
         bool MaterialRTStateDirty   = false;
+        // Uma ENTRADA de bake de micro-map mudou (alpha, cutoff, textura de BaseColor, toggle de
+        // alpha test). Separado do MaterialRTStateDirty porque o custo e outra ordem de grandeza:
+        // aquele sobe uma linha de 64 B, este rebakeia o par e reconstroi BLAS.
+        //
+        // Marcado no COMMIT da edicao, e nao por tick de slider: arrastar o corte de alpha numa
+        // folhagem dispararia um rebake por movimento do mouse. Quem publica isto e o
+        // MaterialsBridge quando o controle e solto.
+        bool OmmInputsDirty         = false;
         bool MeshLightEmissiveDirty = false;
         bool IndirectLightingDirty  = false;
         bool SceneContentDirty      = false;

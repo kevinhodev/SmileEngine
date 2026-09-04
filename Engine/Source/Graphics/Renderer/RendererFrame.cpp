@@ -744,6 +744,13 @@ namespace Smile {
         SceneState->Scene.GpuSlots().Collect(CompletedFenceSet());
 
         // Dirty flags da UI sao coalescidas por dominio antes de abrir o command list.
+        // ANTES do MaterialRTStateDirty: o rebake muda micro-map e BLAS e ele proprio pede o
+        // refresh de estado de RT no fim, entao consumir na outra ordem faria o trabalho duas
+        // vezes. Com a command list ainda fechada, que e o contrato do dreno la dentro.
+        if (SceneState->OmmInputsDirty) {
+            SceneState->OmmInputsDirty = false;
+            RebakeStaleOpacityMicromaps();
+        }
         if (SceneState->MaterialRTStateDirty) {
             SceneState->MaterialRTStateDirty = false;
             Settings().NotifyMaterialRTStateChanged();
@@ -1013,6 +1020,9 @@ namespace Smile {
         CpuStatsBuilding.MaterialRowsDirty         = MaterialTable.LastDirtyRows();
         CpuStatsBuilding.MaterialCopyRegions       = MaterialTable.LastCopyRegions();
         CpuStatsBuilding.MaterialRowsUploadedTotal = MaterialTable.TotalRowsUploaded();
+        CpuStatsBuilding.OmmRetainedBytes          = OmmBakeInputs.RetainedBytes();
+        CpuStatsBuilding.OmmRebuiltBlasBytes       = RaytracingScene.RebuiltBlasBytes();
+        CpuStatsBuilding.OmmRebuiltBlasCount       = RaytracingScene.RebuiltBlasCount();
         CpuStatsBuilding.MeshTableBytes            = MeshTable.ResidentBytes();
         CpuStatsBuilding.MeshStagingBytes          = MeshTable.StagingBytes();
         CpuStatsBuilding.MeshTableRows             = MeshTable.RowCount();

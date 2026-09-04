@@ -34,6 +34,30 @@ namespace Smile {
         bool RecordTlasRebuild(ID3D12GraphicsCommandList4* CL, const FScene& Scene,
                                const Vec3& TlasOrigin, u32 FrameSlot);
 
+        // Garante que exista BLAS para cada par {malha, micro-map} EXIGIDO agora, construindo o
+        // que faltar. Micro-map nulo pede a variante opaca.
+        //
+        // Uma chamada so cobre as tres transicoes que uma edicao de material produz: micro-map
+        // rebakeado (par novo), alpha test desligado (passa a exigir o BLAS opaco, que pode nunca
+        // ter sido construido para aquela malha) e alpha test ligado (o inverso).
+        //
+        // O BLAS novo vai para um recurso PROPRIO, e nao para o BlasPool: o tamanho depende do
+        // micro-map, entao ele nao cabe no offset do antigo. O espaco antigo fica orfao no pool
+        // ate a proxima carga — memoria parada, medida em OrphanedBlasBytes(). Compactar o pool
+        // moveria TODOS os BLAS de endereco e obrigaria a refazer a TLAS inteira, que e mais risco
+        // do que o desperdicio justifica.
+        //
+        // ⚠️ CONTRATO: grava e submete numa command list propria, e espera a fila. O chamador ja
+        // drenou (e edicao manual de material). Devolve quantos BLAS foram construidos.
+        u32 EnsureBlasFor(FD3D12Device& Device, FCommandQueue& Queue,
+                          const std::vector<std::pair<const FGpuMesh*,
+                                                      const FOpacityMicromapData*>>& Required);
+
+        // Um par {malha, micro-map} que ninguem mais usa. Some do mapa para o ponteiro do
+        // micro-map morto nao virar chave pendurada; o BLAS em si continua vivo no pool ou no
+        // recurso proprio, porque frames em voo ainda podem referencia-lo.
+        void ForgetBlas(const FGpuMesh* Mesh, const FOpacityMicromapData* Omm);
+
         void Release(FTextureSRVHeap& SRVHeap);
 
         // Upload de instancias versionado por frame em voo (CPU escreve enquanto a GPU
@@ -124,7 +148,22 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
         u32                                    InstanceGeoCount    = 0; // capacidade, nao a cena
         u32                                    InstanceGeoSRVSlot_ = 0xFFFFFFFFu;
+        // BLAS reconstruidos fora do pool pelo EnsureBlasFor. Cada um e um recurso proprio, e o
+        // vetor existe para mante-los vivos: o BlasByMesh guarda GPUVA, que nao segura nada.
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> RebuiltBlas;
+        u64 RebuiltBlasBytes_ = 0;
+
         // Os SRVs bindless de geometria por malha unica ([VB][IB][RTTri]) e a enumeracao das
         // malhas unicas saíram daqui na Fase 2 e vivem na FGpuMeshTable. Ver a nota no Build.
+    public:
+        // VRAM que os rebakes acrescentaram: os BLAS construidos FORA do pool.
+        //
+        // E esta a grandeza que cresce, e nao o espaco que sobra orfao dentro do pool — o pool ja
+        // estava alocado no tamanho dele, entao tornar um pedaco inalcancavel nao custa um byte a
+        // mais. Publicado porque o modo de falha e crescimento silencioso: uma sessao longa de
+        // edicao de cutoff acumula um BLAS por rebake, e sem numero isso so apareceria como VRAM
+        // a mais muito depois. Zera na proxima carga de cena, que refaz o pool.
+        u64 RebuiltBlasBytes() const { return RebuiltBlasBytes_; }
+        u32 RebuiltBlasCount() const { return static_cast<u32>(RebuiltBlas.size()); }
     };
 }

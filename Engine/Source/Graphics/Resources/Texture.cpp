@@ -284,6 +284,16 @@ namespace Smile {
         GpuResource.Reset();
     }
 
+    FTextureCPUData FTexture::LoadCPUAuto(const std::wstring& _Path, bool _IsNormalMap,
+                                          bool _sRGB) {
+        // Comparacao case-insensitive do sufixo, como o SceneLoader ja fazia minusculando a
+        // extensao antes de comparar.
+        const std::wstring kDds = L".dds";
+        const bool IsDds = _Path.size() >= kDds.size() &&
+                           _wcsicmp(_Path.c_str() + _Path.size() - kDds.size(), kDds.c_str()) == 0;
+        return IsDds ? LoadDDSCPU(_Path, _sRGB) : LoadCPU(_Path, _IsNormalMap, _sRGB);
+    }
+
     FTextureCPUData FTexture::LoadCPU(const std::wstring& _Path, bool _IsNormalMap, bool _sRGB) {
         FTextureCPUData Data;
         Data.IsNormalMap = _IsNormalMap;

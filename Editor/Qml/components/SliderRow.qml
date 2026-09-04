@@ -13,6 +13,11 @@ Item {
     property real boundValue: 0
     property bool interactive: true
     signal moved(real v)
+    // Edicao COMMITADA: o controle foi solto, ou mudou por um passo discreto (teclado/roda).
+    // Existe para trabalho caro demais para rodar por tick de arraste — o rebake de micro-map de
+    // opacidade e o primeiro consumidor. `moved` continua saindo em todo movimento, entao quem
+    // so precisa atualizar valor nao muda nada.
+    signal committed(real v)
     width: parent.width
     height: 38
     opacity: interactive ? 1.0 : 0.48
@@ -40,7 +45,10 @@ Item {
         from: row.from
         to: row.to
         stepSize: row.stepSize
-        onMoved: row.moved(value)
+        // Um `moved` fora de arraste ja E um commit: teclado e roda mexem o valor sem nunca
+        // pressionar. Sem este braco, quem edita pelo teclado nunca dispararia o trabalho caro.
+        onMoved: { row.moved(value); if (!pressed) row.committed(value) }
+        onPressedChanged: if (!pressed) row.committed(value)
         Binding {
             target: sl; property: "value"
             value: row.boundValue

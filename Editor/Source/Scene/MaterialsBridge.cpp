@@ -339,6 +339,10 @@ namespace SmileEditor {
             if (!Ovr) continue;
             JsonToMaterial(*Ovr, *M);
             M->UpdateConstants();
+            // O sidecar pode escrever alphaTest/alphaCutoff, que sao entradas do bake do
+            // micro-map, e ele e aplicado DEPOIS do bake do import. Incondicional porque o
+            // rebake e no-op quando nada divergiu: ele so drena as filas se achar algo obsoleto.
+            CommitOmmInputs();
             // O sidecar reescreve cor base, emissivo, rough/metal, cutoff e shading model — tudo
             // que o InstanceGeo copia. Sem isto a persistencia so valia p/ o raster: a cena reabria
             // com o material editado na tela e o GI iluminando pelos valores cozidos.
@@ -766,11 +770,13 @@ namespace SmileEditor {
     void MaterialsBridge::SetAlphaTest(bool _V) {
         auto M = SelMat(); if (!M) return;
         if ((M->Constants.AlphaTest != 0) == _V) return;
-        // OMM e o tipo do BLAS pertencem ao estado carregado. Trocar opaco <-> masked sem
-        // rebake deixaria a TLAS sem a variante exigida e encerraria a render thread.
-        Smile::LogWarning(
-            "Materiais: toggle de Alpha Test rejeitado; OMM exige recarregar/rebake da cena");
-        emit MaterialModeChanged();
+        M->Constants.AlphaTest = _V ? 1u : 0u;
+        M->UpdateConstants();
+        // Toggle e edicao DISCRETA: nao ha arraste, entao o commit e imediato. Ligar pede um bake
+        // do zero; desligar pede o BLAS opaco daquela malha, que pode nunca ter sido construido.
+        // As duas transicoes sao do RebakeStaleOpacityMicromaps.
+        TouchSelectedRT(EChangeDomain::MaterialMode);
+        CommitOmmInputs();
     }
 
     qreal MaterialsBridge::AlphaCutoff() const {
@@ -781,16 +787,14 @@ namespace SmileEditor {
     void MaterialsBridge::SetAlphaCutoff(qreal _V) {
         auto M = SelMat(); if (!M) return;
         if (std::abs(M->Constants.AlphaCutoff - float(_V)) <= 1.0e-6f) return;
-        if (M->Constants.AlphaTest) {
-            Smile::LogWarning(
-                "Materiais: Alpha Cutoff rejeitado; o OMM masked exige recarregar/rebake da cena");
-            emit MaterialModeChanged();
-            return;
-        }
         M->Constants.AlphaCutoff = float(_V);
         M->UpdateConstants();
-        // InstanceGeo.AlphaCutoff: e o cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli).
-        // O toggle AlphaTest ja sincronizava; o VALOR nao — recorte do raster e do raio divergiam.
+        // O cutoff que o alpha-test dos RAIOS usa (RTAlphaTest.hlsli) sai da linha do material e
+        // sobe por tick — o raster e o recorte por raio acompanham o slider.
+        //
+        // O que NAO sobe por tick e o micro-map: ele tambem e derivado do cutoff, e rebakeá-lo a
+        // cada movimento do mouse congelaria o editor numa folhagem. O commit vem do
+        // commitOmmInputs, chamado quando o controle e solto.
         TouchSelectedRT(EChangeDomain::MaterialMode);
     }
 
@@ -941,34 +945,32 @@ namespace SmileEditor {
         Smile::FTexture** Ptr = SlotPointer(_M, _Slot);
         Smile::u32*      Flag = SlotHasFlag(_M, _Slot);
         if (!Ptr || !Flag || !Renderer) return;
-        // O slot 0 e o BaseColor, e o alpha dele e uma das quatro ENTRADAS do bake do micro-map
-        // (ver FOmmInputKey). Num material alpha-tested, trocar a textura deixava o OMM
-        // classificando microtriangulos pelo alpha da textura ANTIGA: sem excecao, sem erro, so
-        // folhagem com recorte errado — e o recorte errado do RT nao aparece no raster, entao
-        // uma comparacao estatica pode nem mostrar.
-        //
-        // Recusa, como o toggle de Alpha Test e o Alpha Cutoff ja recusavam. Rebake em runtime
-        // exigiria os vertices da malha e os pixels da textura, e o runtime nao guarda nem um nem
-        // outro depois do load; enquanto nao guardar, a saida honesta e nao deixar a entrada
-        // mudar. Ver Docs/GPU-DRIVEN-PHASE2-PROGRESS.md.
-        if (_Slot == 0 && _M.Constants.AlphaTest) {
-            Smile::LogWarning(
-                "Materiais: troca de BaseColor rejeitada em material Alpha Test; o OMM foi "
-                "bakeado com o alpha da textura atual e exige recarregar/rebake da cena");
-            return;
-        }
         const bool Valid = _T && _T->IsValid();
         *Ptr  = Valid ? _T : nullptr;
         *Flag = Valid ? 1 : 0;
         if (Valid && _M.IsFinalized())
             Renderer->UpdateMaterialTextureSlot(_M, Smile::u32(_Slot), _T);
         _M.UpdateConstants();
-        // Os slots 0/2/4 viram indices bindless no InstanceGeo (Albedo/MrMap/EmissiveMap) e o
-        // HasAlbedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste quando e 0). Sem
-        // re-subir o snapshot: adicionar albedo num material sem textura deixava a folhagem como
-        // quad solido so no RT, e limpar o slot mantinha o raio amostrando o descritor antigo.
+        // Os slots viram indices bindless na linha do material (base + deslocamento) e o bit de
+        // albedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste sem ele). Sem sujar a
+        // linha: adicionar albedo num material sem textura deixava a folhagem como quad solido so
+        // no RT, e limpar o slot mantinha o raio amostrando o descritor antigo.
         if (Renderer) Renderer->Settings().MarkMaterialRTStateDirty();
+        // O slot 0 e o BaseColor, de onde sai o plano de alpha do micro-map: trocar a textura de
+        // um material masked invalida o bake. Troca de textura e edicao DISCRETA (um dialogo de
+        // arquivo), entao o commit e imediato.
+        if (_Slot == 0 && _M.Constants.AlphaTest) CommitOmmInputs();
     }
+
+    // Publica que uma ENTRADA do bake de micro-map mudou. Separado do TouchSelectedRT porque o
+    // custo e outra ordem de grandeza — rebake do par e reconstrucao de BLAS — e por isso ele so
+    // pode sair no COMMIT da edicao, nunca por tick de slider.
+    void MaterialsBridge::CommitOmmInputs() {
+        if (Renderer) Renderer->Settings().MarkOmmInputsDirty();
+    }
+
+    // Chamado pelo QML quando o controle e SOLTO. Ver SliderRow::committed.
+    void MaterialsBridge::commitOmmInputs() { CommitOmmInputs(); }
 
     Smile::FTexture* MaterialsBridge::LoadTextureCached(const QString& _Path, int _Slot) {
         if (!Renderer) return nullptr;
@@ -1430,28 +1432,15 @@ namespace SmileEditor {
         Flag("parallaxSelfShadow", C.ParallaxSelfShadow);
         Flag("parallaxRefine", C.ParallaxRefine);
         // alphaTest e alphaCutoff sao ENTRADAS do bake do micro-map (ver FOmmInputKey), e este
-        // caminho roda DEPOIS do bake — o sidecar e aplicado sobre a cena ja carregada. Escrever
-        // qualquer um dos dois num material masked deixava o OMM obsoleto e derrubava a render
-        // thread no proximo rebuild da TLAS ("OMM desatualizado..."), o que so nao acontecia
-        // porque os setters da UI ja recusavam essas duas edicoes. O sidecar e arquivo editavel a
-        // mao e nao passa pelos setters.
+        // caminho roda DEPOIS do bake — o sidecar e aplicado sobre a cena ja carregada.
         //
-        // Material OPACO nao tem micro-map nenhum, entao ali o cutoff continua livre — e o mesmo
-        // criterio do SetAlphaCutoff.
-        {
-            Smile::u32 WantAlphaTest = C.AlphaTest;
-            float      WantCutoff    = C.AlphaCutoff;
-            Flag("alphaTest", WantAlphaTest);
-            Num("alphaCutoff", WantCutoff);
-            const bool TocaOmm = C.AlphaTest != 0 || WantAlphaTest != 0;
-            if (!TocaOmm) {
-                C.AlphaCutoff = WantCutoff;
-            } else if (WantAlphaTest != C.AlphaTest || WantCutoff != C.AlphaCutoff) {
-                Smile::LogWarning(
-                    "Materiais: override de alphaTest/alphaCutoff ignorado em '" + _M.Name +
-                    "'; sao entradas do bake do OMM e exigem recozinhar/recarregar a cena");
-            }
-        }
+        // Eram RECUSADOS aqui enquanto nao havia rebake em runtime: escrever um dos dois num
+        // material masked deixava o micro-map obsoleto e derrubava a render thread no proximo
+        // rebuild da TLAS. Agora eles sao aplicados como qualquer outro override, e quem
+        // reconcilia e o RebakeStaleOpacityMicromaps — consumido no topo do frame seguinte, antes
+        // de qualquer gravacao, e portanto antes do CollectInstances que reclamaria.
+        Flag("alphaTest", C.AlphaTest);
+        Num("alphaCutoff", C.AlphaCutoff);
         if (_O.contains(QStringLiteral("shadingModel")))
             C.ShadingModel = Smile::u32(_O.value(QStringLiteral("shadingModel")).toInt(int(C.ShadingModel)));
         {

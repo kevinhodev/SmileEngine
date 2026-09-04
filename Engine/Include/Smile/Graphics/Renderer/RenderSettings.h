@@ -506,6 +506,9 @@ namespace Smile {
         // e zero (a tabela suja por conteudo), e o custo de esquecer o canal e um campo lido pelo
         // path tracer que para de ser atualizado — ver MaterialsBridge::TouchSelected.
         void MarkMaterialRowsDirty();
+        // Uma ENTRADA do bake de micro-map mudou. Chamar no COMMIT da edicao (controle solto), e
+        // nao por tick: o consumo rebakeia o par e reconstroi BLAS.
+        void MarkOmmInputsDirty();
         void MarkIndirectLightingDirty();
         // Conteudo da cena mudou sem a lista mudar de tamanho: visibilidade de objeto, edicao de
         // luz puntual. NAO derruba o atlas do DDGI — quem chama isto tambem chama

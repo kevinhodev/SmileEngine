@@ -214,6 +214,7 @@ namespace SmileEditor {
     QString      StatsBridge::GetSrvHeapText() const { return Snapshot.SrvHeapText; }
     QString      StatsBridge::GetGpuSlotsText() const { return Snapshot.GpuSlotsText; }
     QString      StatsBridge::GetMaterialTableText() const { return Snapshot.MaterialTableText; }
+    QString      StatsBridge::GetOmmRebakeText() const { return Snapshot.OmmRebakeText; }
     double       StatsBridge::GetSrvHeapFrac() const { return Snapshot.SrvHeapFrac; }
 
     // Estatísticas de caster pertencem à última atualização da cascata; cascatas congeladas
@@ -552,6 +553,17 @@ namespace SmileEditor {
                     .arg(Cpu.MaterialRowsDirty
                              ? QStringLiteral("  (sujas %1 em %2 copias)")
                                    .arg(Cpu.MaterialRowsDirty).arg(Cpu.MaterialCopyRegions)
+                             : QString());
+
+            // Rebake de micro-map. Os BLAS refeitos aparecem SO quando existem: em uso normal sao
+            // zero, e uma coluna de zeros permanente esconderia a sessao em que deixaram de ser.
+            Next.OmmRebakeText =
+                QStringLiteral("%1 KB retidos%2")
+                    .arg(QString::number(Cpu.OmmRetainedBytes / 1024.0, 'f', 1))
+                    .arg(Cpu.OmmRebuiltBlasCount
+                             ? QStringLiteral("  (%1 BLAS refeito(s), %2 KB)")
+                                   .arg(Cpu.OmmRebuiltBlasCount)
+                                   .arg(QString::number(Cpu.OmmRebuiltBlasBytes / 1024.0, 'f', 1))
                              : QString());
         }
 

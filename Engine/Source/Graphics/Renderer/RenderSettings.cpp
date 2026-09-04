@@ -1183,6 +1183,13 @@ namespace Smile {
         R.MaterialTable.MarkDirty();
     }
 
+    // Coalescido por uma flag, ao contrario do MarkMaterialRowsDirty: aqui HA trabalho caro a
+    // adiar — um bake de par e a reconstrucao dos BLAS dele —, e ele so pode acontecer com a
+    // command list fechada.
+    void FRenderSettings::MarkOmmInputsDirty() {
+        R.SceneState->OmmInputsDirty = true;
+    }
+
     void FRenderSettings::MarkIndirectLightingDirty() {
         R.SceneState->IndirectLightingDirty = true;
     }

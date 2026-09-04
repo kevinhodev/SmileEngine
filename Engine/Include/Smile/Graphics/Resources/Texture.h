@@ -44,6 +44,13 @@ namespace Smile {
 
         static FTextureCPUData LoadCPU(const std::wstring& Path, bool IsNormalMap = false, bool sRGB = false);
 
+        // LoadCPU ou LoadDDSCPU, escolhido pela EXTENSAO. Existe porque essa escolha tinha dois
+        // donos: o SceneLoader no load da cena e, desde o rebake de micro-map em runtime, o
+        // FOmmBakeInputStore relendo a mesma textura do disco. Duas copias da regra divergem no
+        // dia em que aparecer um terceiro formato, e a divergencia apareceria como um bake feito
+        // sobre um alpha decodificado de outro jeito.
+        static FTextureCPUData LoadCPUAuto(const std::wstring& Path, bool IsNormalMap, bool sRGB);
+
         // Category permite contabilizar a VRAM fora de SceneTextures (ex.: heightmap do
         // terreno na categoria Terrain).
         static FTexture CreateFromCPU(ID3D12Device* Device, FUploadQueue& UploadQueue,

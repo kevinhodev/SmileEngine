@@ -719,6 +719,7 @@ Rectangle {
                                     { label: "SRV heap", value: root.statsModel.srvHeapText },
                                     { label: "Slots de cena", value: root.statsModel.gpuSlotsText },
                                     { label: "Tabelas da cena", value: root.statsModel.materialTableText },
+                                    { label: "Rebake de micro-map", value: root.statsModel.ommRebakeText },
                                     { label: "ObjectConstants/frame", value: root.statsModel.objectConstantsText },
                                     { label: "RAM compartilhada", value: root.statsModel.vramNonLocalText }
                                  ]

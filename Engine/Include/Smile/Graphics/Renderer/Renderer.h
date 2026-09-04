@@ -37,6 +37,7 @@
 #include "Smile/Graphics/Environment/RainWetness.h"
 #include "Smile/Graphics/Lighting/SunShadows.h"
 #include "Smile/Graphics/Lighting/LocalShadows.h"
+#include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
 #include "Smile/Graphics/RayTracing/RaytracingScene.h"
 #include "Smile/Graphics/GI/GIFallback.h"
 #include "Smile/Graphics/GI/IndirectPolicy.h"
@@ -643,6 +644,15 @@ namespace Smile {
         void BuildRaytracingScene();
         // Reconstroi as tabelas canonicas da cena (materiais + meshes). O chamador ja drenou.
         void RebuildSceneTables();
+        // Rebakeia todo micro-map cuja chave de entradas divergiu, substitui o dado em todos os
+        // renderaveis que o compartilham e reconstroi os BLAS afetados. Drena as filas: e edicao
+        // manual, e o caminho estavel nao passa por aqui. Devolve quantos pares foram refeitos.
+        u32 RebakeStaleOpacityMicromaps();
+        // O bake de UM par (malha, material) a partir das entradas retidas. Nulo em falha, sempre
+        // com log dizendo QUAL peca faltou — micro-map de procedencia parcial e o que a fase
+        // existe para impedir.
+        std::shared_ptr<FOpacityMicromapData> BakeOpacityMicromapFor(const FGpuMesh* Mesh,
+                                                                     const FMaterial* Material);
         // Reconstrucao completa; drena as filas e exige command list fechado.
         void RebuildMeshLights();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
@@ -906,6 +916,10 @@ namespace Smile {
         // Tabela CANONICA de materiais da cena (Fase 2). Mora no Renderer, e nao dentro da cena
         // de RT, porque o RT e consumidor dela: o raster passa a le-la na Fase 3, e o snapshot
         // por instancia so carrega o par {descritor, linha} que aponta para ca.
+        // Entradas de bake retidas para rebake de micro-map em runtime. Ver FOmmBakeInputStore:
+        // sem elas a unica saida diante de uma edicao que invalida o OMM era recusar a edicao.
+        FOmmBakeInputStore OmmBakeInputs;
+
         FGpuMaterialTable MaterialTable;
         // Tabela canonica de meshes. Dona dos descritores bindless de geometria e a UNICA
         // enumeradora das malhas unicas da cena — as duas coisas moravam no FRaytracingScene, e

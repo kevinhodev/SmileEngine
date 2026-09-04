@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -100,6 +101,9 @@ namespace Smile {
             // Depois dos dois drenos acima, o concluido alcancou o submetido: o Collect aqui
             // devolve tudo, e a cena nova reusa em vez de crescer.
             SceneState->Scene.GpuSlots().Collect(Required);
+            // As entradas de bake retidas descrevem a cena que esta indo embora: os ponteiros de
+            // malha e de textura morrem nas linhas seguintes.
+            OmmBakeInputs.Clear();
             for (auto& m : ImportedMaterials) m->Release(Backend->SRVHeap);
             ImportedMaterials.clear();
             for (auto& t : ImportedTextures) t->Release(Backend->SRVHeap);
@@ -117,12 +121,28 @@ namespace Smile {
         const std::vector<std::string>& relList = Imported.TexturePaths;
         std::unordered_map<std::string, FTexture*> texByPath;
         std::unordered_map<std::string, const FTextureCPUData*> texCpuByPath;
+        // Quais caminhos sao BaseColor de algum material. So esses interessam ao rebake de
+        // micro-map — o plano de alpha do bake sai do BaseColor — e restringir a eles evita
+        // registrar procedencia com as flags erradas: uma textura usada so como normal map foi
+        // decodificada com sRGB=false, e guardar (false, true) para ela seria uma armadilha
+        // esperando um consumidor futuro.
+        std::unordered_set<std::string> baseColorPaths;
+        for (const SSceneMaterial& M : Imported.Materials)
+            if (M.BaseColor[0]) baseColorPaths.insert(M.BaseColor);
+
         u32 uploaded = 0;
         for (size_t i = 0; i < relList.size(); ++i) {
             if (i < Imported.TextureData.size()) texCpuByPath[relList[i]] = &Imported.TextureData[i];
             if (!texs[i].IsValid()) { texByPath[relList[i]] = nullptr; continue; }
             auto up = std::make_unique<FTexture>(std::move(texs[i]));
             texByPath[relList[i]] = up.get();
+            // Procedencia da textura, para o rebake de micro-map poder rele-la do disco. Guardada
+            // AQUI porque e o unico ponto que ainda tem os dois lados: o ponteiro vivo e o caminho
+            // de onde ele veio. BaseColor e sRGB e nao e normal map — as mesmas flags do load.
+            if (baseColorPaths.contains(relList[i]))
+                OmmBakeInputs.RetainTexturePath(
+                    up.get(), (Imported.SceneDir / std::filesystem::path(relList[i])).wstring(),
+                    /*IsNormalMap*/ false, /*sRGB*/ true);
             ImportedTextures.push_back(std::move(up));
             ++uploaded;
         }
@@ -347,6 +367,11 @@ namespace Smile {
                 if (It == ommJobByMeshMaterial.end() || It->second >= ommResults.size())
                     throw std::runtime_error("Job OMM ausente para renderable alpha-tested");
                 out.OpacityMicromap = ommResults[It->second];
+                // Retem as entradas de bake DESTA malha. Aqui, e nao no laco de jobs, porque e
+                // este ponto que conhece a FGpuMesh — o job so tinha o FMesh de CPU, que morre
+                // com o import. Idempotente: varios renderaveis e varios materiais compartilham
+                // a mesma malha e o store deduplica.
+                OmmBakeInputs.RetainMesh(out.Mesh, Imported.Meshes[r.MeshIndex]);
                 // Carimba as ENTRADAS do bake na forma que o runtime reconhece. Aqui, e nao no
                 // baker: e este ponto que conhece a malha de GPU e o material, e o baker so viu o
                 // FMesh de CPU e os pixels. O carimbo e idempotente — o mesmo micro-map e

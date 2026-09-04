@@ -52,6 +52,9 @@ namespace SmileEditor {
         // edicao: um caminho que suje a tabela por frame devolveria, disfarcado de upload
         // incremental, o custo por frame que a fase existe para remover.
         Q_PROPERTY(QString materialTableText READ GetMaterialTableText NOTIFY Updated)
+        // Rebake de micro-map em runtime: memoria retida para poder rebakear, e a VRAM que os
+        // BLAS refeitos acrescentaram. Os dois crescem em silencio se algo rebakear demais.
+        Q_PROPERTY(QString ommRebakeText READ GetOmmRebakeText NOTIFY Updated)
 
     public:
         explicit StatsBridge(QObject* Parent = nullptr);
@@ -84,6 +87,7 @@ namespace SmileEditor {
         QString      GetSrvHeapText() const;
         QString      GetGpuSlotsText() const;
         QString      GetMaterialTableText() const;
+        QString      GetOmmRebakeText() const;
         double       GetSrvHeapFrac() const;
 
     signals:
@@ -122,6 +126,7 @@ namespace SmileEditor {
             QString      SrvHeapText  = QStringLiteral("—");
             QString      GpuSlotsText = QStringLiteral("—");
             QString      MaterialTableText = QStringLiteral("—");
+            QString      OmmRebakeText = QStringLiteral("—");
             double       SrvHeapFrac = 0.0;
         } Snapshot;
 

@@ -176,6 +176,14 @@ namespace SmileEditor {
         // override persistido no sidecar. clear zera o Has*Map (SRV fica, shader ignora).
         Q_INVOKABLE void browseSlotTexture(int slot);
         Q_INVOKABLE void clearSlot(int slot);
+        // Uma ENTRADA do bake de micro-map foi COMMITADA (controle solto). Chamado pelo QML no
+        // `committed` do slider de corte de alpha; edicoes discretas (toggle, troca de textura)
+        // chamam o equivalente interno direto, porque nao ha arraste.
+        //
+        // Existe separado dos setters porque rebakear por tick de slider congelaria o editor numa
+        // folhagem: o bake do par mais a reconstrucao dos BLAS custam ordens de grandeza mais que
+        // subir a linha do material.
+        Q_INVOKABLE void commitOmmInputs();
         // F2: picking reverso — seleciona a primeira mesh do material no renderer e pede
         // pro MainWindow revelar o Outliner (que segue a selecao sozinho).
         Q_INVOKABLE void selectInScene();
@@ -281,6 +289,8 @@ namespace SmileEditor {
         void   TouchSelected(EChangeDomain Domain);
         // Atualiza tambem InstanceGeo; use apenas para campos lidos pelo ray tracing.
         void   TouchSelectedRT(EChangeDomain Domain);
+        // Publica que uma entrada do bake de micro-map mudou. Ver commitOmmInputs.
+        void   CommitOmmInputs();
         bool   IsModified(const Smile::FMaterial* M) const;
         // Aplica overrides apenas a materiais novos para preservar edicoes ainda nao salvas.
         void   ApplyOverrides(const QSet<const Smile::FMaterial*>& _Fresh);

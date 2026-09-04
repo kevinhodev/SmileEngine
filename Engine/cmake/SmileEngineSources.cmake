@@ -174,6 +174,7 @@ smile_graphics_domain(GI
 )
 
 smile_graphics_domain(RayTracing
+    OmmBakeInputs
     OpacityMicromap
     RayEpsilons
     RaytracingScene

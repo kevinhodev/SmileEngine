@@ -940,6 +940,10 @@ Rectangle {
                         boundValue: root.materialsModel.alphaCutoff
                         valueText: root.fmt(root.materialsModel.alphaCutoff)
                         onMoved: (v) => root.materialsModel.alphaCutoff = v
+                        // O cutoff e uma das entradas do bake do micro-map de opacidade. O valor
+                        // acompanha o arraste (raster e recorte por raio), mas o rebake — que
+                        // reconstroi BLAS — so sai quando o controle e solto.
+                        onCommitted: root.materialsModel.commitOmmInputs()
                     }
                     ToggleRow {
                         label: "Translúcido (blend)"

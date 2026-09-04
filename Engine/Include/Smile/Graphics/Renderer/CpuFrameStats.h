@@ -154,6 +154,14 @@ namespace Smile {
         // Tabela canonica de meshes. Sem contador de sujas por frame: geometria nao e editavel em
         // runtime, entao as linhas dela so mudam num Setup — e o dia em que passarem a mudar por
         // frame e o dia em que este par de numeros precisa crescer.
+        // Rebake de micro-map em runtime (Fase 2). Retidos = UV/indices que a cena segura para
+        // poder rebakear; refeitos = VRAM que os BLAS reconstruidos FORA do pool acrescentaram.
+        // Os dois sao custos novos e permanentes dentro da sessao, e crescimento silencioso e o
+        // modo de falha dos dois.
+        u64 OmmRetainedBytes  = 0;
+        u64 OmmRebuiltBlasBytes = 0;
+        u32 OmmRebuiltBlasCount = 0;
+
         u64 MeshTableBytes    = 0;
         u64 MeshStagingBytes  = 0;
         u32 MeshTableRows     = 0;
