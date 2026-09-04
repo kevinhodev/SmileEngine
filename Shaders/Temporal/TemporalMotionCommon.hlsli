@@ -29,6 +29,48 @@ bool TemporalDecodeInstance(float encoded, uint instanceCount, out uint instance
     return value > 0u && instanceId < instanceCount;
 }
 
+// Entrada da tabela de identidades. MESMO layout do FGpuIdentityEntry no C++, onde ha
+// static_assert de tamanho E de offset -- trocar a ordem aqui nao daria erro de compilacao,
+// daria dados trocados.
+struct FGpuIdentityEntry {
+    uint Slot;
+    uint Generation;
+};
+
+// Traduz um id gravado no frame ANTERIOR para o indice do MESMO objeto no frame ATUAL.
+//
+// Sem isto, um id antigo era reinterpretado pela lista de agora: com [A,B,C], remover A faz o
+// id 1 (que era B) passar a designar C, e o resultado e o transform do objeto errado -- sem
+// erro, so movimento errado.
+//
+// A cadeia inteira: id anterior -> tabela ANTERIOR -> {slot,generation} -> remap -> indice
+// atual -> confirmacao contra a tabela ATUAL. O ultimo passo e o que separa "o slot existe" de
+// "e o mesmo objeto": um slot reciclado devolve indice valido com OUTRO ocupante, e so a
+// generation reprova isso.
+bool TemporalResolvePreviousIndex(uint previousId,
+                                  StructuredBuffer<FGpuIdentityEntry> previousTable,
+                                  StructuredBuffer<uint>              slotToCurrentIndex,
+                                  StructuredBuffer<FGpuIdentityEntry> currentTable,
+                                  uint slotCapacity,
+                                  uint currentCount,
+                                  out uint currentIndex) {
+    currentIndex = 0u;
+
+    // Generation 0 nunca e alocada (ver GpuSceneHandle.cpp), entao entrada zerada = vazia. E o
+    // que a tabela guarda para as posicoes alem da contagem viva.
+    const FGpuIdentityEntry was = previousTable[previousId];
+    if (was.Generation == 0u || was.Slot >= slotCapacity) return false;
+
+    const uint candidate = slotToCurrentIndex[was.Slot];
+    if (candidate >= currentCount) return false;
+
+    const FGpuIdentityEntry now = currentTable[candidate];
+    if (now.Slot != was.Slot || now.Generation != was.Generation) return false;
+
+    currentIndex = candidate;
+    return true;
+}
+
 float3 TemporalTransformPoint(float3 p, row_major float4x4 m) {
     const float4 h = mul(float4(p, 1.0f), m);
     return h.xyz / max(abs(h.w), 1.0e-6f);

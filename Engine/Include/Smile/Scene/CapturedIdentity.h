@@ -71,6 +71,42 @@ namespace Smile {
     static_assert(offsetof(FGpuIdentityEntry, Slot) == 0, "Slot vem primeiro no HLSL");
     static_assert(offsetof(FGpuIdentityEntry, Generation) == 4, "Generation vem depois");
 
+    // Preenche a tabela de identidades de um frame: indice de instancia -> {slot, generation}.
+    //
+    // O indice e o InstanceID que a TLAS carrega (hoje, a posicao na lista). As posicoes alem
+    // da contagem viva ficam ZERADAS, e generation 0 nunca e alocada -- e assim que o leitor
+    // separa posicao vazia de objeto real sem depender so da contagem.
+    //
+    // Templada no acessor para que a producao e o teste executem ESTE codigo, e nao duas
+    // versoes parecidas: o risco real aqui e o preenchimento errado, e um teste sobre uma copia
+    // nao o pegaria.
+    template <typename FHandleAt>
+    void BuildIdentityTable(FGpuIdentityEntry* Out, u32 Capacity, u32 Count,
+                            FHandleAt&& HandleAt) {
+        if (!Out) return;
+        const u32 Live = Count < Capacity ? Count : Capacity;
+        for (u32 i = 0; i < Capacity; ++i) Out[i] = FGpuIdentityEntry{};
+        for (u32 i = 0; i < Live; ++i) {
+            const FGpuSceneHandle H = HandleAt(i);
+            Out[i] = FGpuIdentityEntry{ H.Slot, H.Generation };
+        }
+    }
+
+    // Preenche o remap slot -> indice na lista ATUAL.
+    //
+    // kInvalidSlot marca slot sem ocupante na lista de agora (removido, aposentado, ou nunca
+    // usado). Slot alem da capacidade do buffer e IGNORADO em vez de escrever fora: o leitor ja
+    // rejeita slot >= capacidade e cai no fallback, que e degradar para sem historico.
+    template <typename FHandleAt>
+    void BuildSlotRemap(u32* Out, u32 SlotCapacity, u32 Count, FHandleAt&& HandleAt) {
+        if (!Out) return;
+        for (u32 i = 0; i < SlotCapacity; ++i) Out[i] = FGpuSceneHandle::kInvalidSlot;
+        for (u32 i = 0; i < Count; ++i) {
+            const u32 Slot = HandleAt(i).Slot;
+            if (Slot < SlotCapacity) Out[Slot] = i;
+        }
+    }
+
     // Inverso do Encode. Devolve identidade ZERADA (Id == 0) para o vazio e para qualquer valor
     // fora da tabela.
     //

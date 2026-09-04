@@ -4,6 +4,7 @@
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Scene/Scene.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <iterator>
 
@@ -44,7 +45,7 @@ namespace Smile {
             Free(SurfaceSRVSlot[i], 1);
             Free(SurfaceUAVSlot[i], 1);
             Free(SurfaceTable[i], 3);
-            Free(DualTable[i], 4);
+            Free(DualTable[i], 7);
             Surface[i].Reset();
             SurfaceState[i] = D3D12_RESOURCE_STATE_COMMON;
         }
@@ -73,6 +74,15 @@ namespace Smile {
             IdentityState[f] = D3D12_RESOURCE_STATE_COPY_DEST;
         }
         IdentityStaging = GpuResources::FUploadBuffer{};
+        if (SlotRemapSRVSlot != kInvalidSlot) {
+            SRVHeap.Free(SlotRemapSRVSlot, 1);
+            SlotRemapSRVSlot = kInvalidSlot;
+        }
+        SlotRemap.Reset();
+        SlotRemapStaging = GpuResources::FUploadBuffer{};
+        SlotRemapState   = D3D12_RESOURCE_STATE_COPY_DEST;
+        SlotCapacity_    = 0;
+        PreviousCount_   = 0;
         PreviousModels.Invalidate();
         InstanceCount_ = 0;
         TlasSRVSlot = InstanceGeoSRVSlot = kInvalidSlot;
@@ -127,6 +137,36 @@ namespace Smile {
                 SRVHeap.CreateSRV(Device, IdentityTable[f].Get(), S, IdentitySRVSlot[f]);
             }
             IdentityStaging = GpuResources::CreateUploadBuffer(Device, TableBytes, kFrames);
+        }
+
+        // Remap slot -> indice atual. Dimensionado pelo MAIOR entre a capacidade de slots e a
+        // da cena: os slots incluem os APOSENTADOS, entao o pool pode passar da contagem viva
+        // sem que a cena tenha crescido.
+        //
+        // Se ainda assim o pool crescer alem disto, o shader rejeita todo slot >= SlotCapacity_
+        // e cai no fallback -- degrada para sem historico, que e o desfecho seguro, e nunca
+        // para o objeto errado.
+        {
+            SlotCapacity_ = std::max(Capacity, Scene.GpuSlots().Capacity());
+            const u64 RemapBytes = static_cast<u64>(SlotCapacity_) * sizeof(u32);
+            SlotRemap = GpuResources::CreateBuffer(Device, RemapBytes,
+                                                  D3D12_RESOURCE_FLAG_NONE,
+                                                  D3D12_RESOURCE_STATE_COPY_DEST,
+                                                  EVramCategory::RenderTargets,
+                                                  "TemporalSlotRemap");
+            SlotRemapState = D3D12_RESOURCE_STATE_COPY_DEST;
+
+            SlotRemapSRVSlot = SRVHeap.Allocate(1);
+            D3D12_SHADER_RESOURCE_VIEW_DESC S{};
+            S.Format                     = DXGI_FORMAT_UNKNOWN;
+            S.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            S.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+            S.Buffer.FirstElement        = 0;
+            S.Buffer.NumElements         = SlotCapacity_;
+            S.Buffer.StructureByteStride = sizeof(u32);
+            SRVHeap.CreateSRV(Device, SlotRemap.Get(), S, SlotRemapSRVSlot);
+
+            SlotRemapStaging = GpuResources::CreateUploadBuffer(Device, RemapBytes, kFrames);
         }
 
         for (u32 f = 0; f < kFrames; ++f) {
@@ -188,28 +228,39 @@ namespace Smile {
             MakeViews(Surface[i].Get(), SurfaceFormat, SurfaceSRVSlot[i], SurfaceUAVSlot[i]);
         MakeViews(ReliableMotion.Get(), MotionFormat, ReliableMotionSRV, ReliableMotionUAV);
 
-        auto CopyTable = [&](u32 DstSlot, const u32* Slots, u32 Count) {
+        // O tamanho vem do PROPRIO array, e nao de um contador ao lado.
+        //
+        // Antes eram Src[4]/Counts[4] com o Count passado separado, e crescer um range de 4 para 7
+        // escrevia fora da pilha sem nada reclamar -- os testes desta area sao de CPU pura e nao
+        // criam device, entao nao havia quem pegasse. Com a referencia ao array, os dois nao tem
+        // como divergir.
+        auto CopyTable = [&](u32 DstSlot, const auto& Slots) {
+            constexpr size_t N = std::tuple_size_v<std::remove_cvref_t<decltype(Slots)>>;
             D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(DstSlot);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src[4]{};
-            UINT Counts[4]{};
-            for (u32 i = 0; i < Count; ++i) {
+            D3D12_CPU_DESCRIPTOR_HANDLE Src[N]{};
+            UINT Counts[N]{};
+            for (size_t i = 0; i < N; ++i) {
                 Src[i] = SRVHeap.CpuHandleStaging(Slots[i]);
                 Counts[i] = 1;
             }
-            UINT DstCount = Count;
-            Device->CopyDescriptors(1, &Dst, &DstCount, Count, Src, Counts,
+            UINT DstCount = static_cast<UINT>(N);
+            Device->CopyDescriptors(1, &Dst, &DstCount, static_cast<UINT>(N), Src, Counts,
                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         };
 
         for (u32 f = 0; f < kFrames; ++f) {
             SurfaceTable[f] = SRVHeap.Allocate(3);
-            const u32 SurfaceSlots[3] = { DepthSlot, TlasSRVSlot, InstanceGeoSRVSlot };
-            CopyTable(SurfaceTable[f], SurfaceSlots, 3);
+            const std::array<u32, 3> SurfaceSlots{ DepthSlot, TlasSRVSlot, InstanceGeoSRVSlot };
+            CopyTable(SurfaceTable[f], SurfaceSlots);
 
-            DualTable[f] = SRVHeap.Allocate(4);
-            const u32 DualSlots[4] = {
-                VelocitySlot, SurfaceSRVSlot[f], SurfaceSRVSlot[1u - f], TransformSRVSlot[f] };
-            CopyTable(DualTable[f], DualSlots, 4);
+            // t4/t5 seguem a mesma alternancia das superficies: o frame le a tabela ANTERIOR
+            // para traduzir o id antigo e a ATUAL para confirmar que a traducao aterrissou no
+            // mesmo objeto.
+            DualTable[f] = SRVHeap.Allocate(7);
+            const std::array<u32, 7> DualSlots{
+                VelocitySlot, SurfaceSRVSlot[f], SurfaceSRVSlot[1u - f], TransformSRVSlot[f],
+                IdentitySRVSlot[1u - f], IdentitySRVSlot[f], SlotRemapSRVSlot };
+            CopyTable(DualTable[f], DualSlots);
         }
 
         Ready = true;
@@ -265,11 +316,20 @@ namespace Smile {
         if (IdentityStaging) {
             auto* Table = reinterpret_cast<FGpuIdentityEntry*>(
                 IdentityStaging.Slice(FrameSlot % kFrames));
-            for (u32 i = 0; i < InstanceCount_; ++i) Table[i] = FGpuIdentityEntry{};
-            for (u32 i = 0; i < Count; ++i) {
-                const FGpuSceneHandle H = Scene.Renderables()[i].GpuHandle;
-                Table[i] = FGpuIdentityEntry{ H.Slot, H.Generation };
-            }
+            BuildIdentityTable(Table, InstanceCount_, Count, [&](u32 i) {
+                return Scene.Renderables()[i].GpuHandle;
+            });
+        }
+
+        // Remap do frame: slot -> indice na lista. kInvalidSlot marca slot sem ocupante na
+        // lista de agora (removido, aposentado, ou nunca usado); o shader o reprova pela
+        // comparacao com a contagem.
+        if (SlotRemapStaging) {
+            auto* Remap = reinterpret_cast<u32*>(
+                SlotRemapStaging.Slice(FrameSlot % kFrames));
+            BuildSlotRemap(Remap, SlotCapacity_, Count, [&](u32 i) {
+                return Scene.Renderables()[i].GpuHandle;
+            });
         }
         for (u32 i = Count; i < InstanceCount_; ++i) {
             Dst[i].CurrentToPrevious = Mat44::Identity();
@@ -285,8 +345,12 @@ namespace Smile {
                              1.0f / static_cast<f32>(Height) };
         CPU.Params = { static_cast<f32>(FrameSlot), HistoryValid ? 1.0f : 0.0f,
                        PositionRejectScale, static_cast<f32>(Count) };
+        // PreviousCount_ ainda e o do frame passado aqui -- ele so avanca depois do memcpy.
+        CPU.IdentityParams = { static_cast<f32>(PreviousCount_),
+                               static_cast<f32>(SlotCapacity_), 0.0f, 0.0f };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(FTemporalMotionConstants),
                     &CPU, sizeof(CPU));
+        PreviousCount_ = Count;
     }
 
     D3D12_GPU_VIRTUAL_ADDRESS FTemporalMotionVectors::CBAddr() const {
@@ -321,14 +385,35 @@ namespace Smile {
             static_cast<u64>(f) * IdentityStaging.SliceBytes,
             static_cast<u64>(InstanceCount_) * sizeof(FGpuIdentityEntry));
 
-        D3D12_RESOURCE_BARRIER B{};
-        B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        B.Transition.pResource   = IdentityTable[f].Get();
-        B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        B.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        _CommandList->ResourceBarrier(1, &B);
+        // O remap acompanha a tabela: mesma fila, mesmo ponto, para o consumidor ver os dois
+        // coerentes entre si.
+        if (SlotRemapState != D3D12_RESOURCE_STATE_COPY_DEST) {
+            D3D12_RESOURCE_BARRIER R{};
+            R.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            R.Transition.pResource   = SlotRemap.Get();
+            R.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            R.Transition.StateBefore = SlotRemapState;
+            R.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+            _CommandList->ResourceBarrier(1, &R);
+            SlotRemapState = D3D12_RESOURCE_STATE_COPY_DEST;
+        }
+        _CommandList->CopyBufferRegion(
+            SlotRemap.Get(), 0, SlotRemapStaging.Get(),
+            static_cast<u64>(f) * SlotRemapStaging.SliceBytes,
+            static_cast<u64>(SlotCapacity_) * sizeof(u32));
+
+        D3D12_RESOURCE_BARRIER B[2]{};
+        for (u32 i = 0; i < 2; ++i) {
+            B[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            B[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        }
+        B[0].Transition.pResource = IdentityTable[f].Get();
+        B[1].Transition.pResource = SlotRemap.Get();
+        _CommandList->ResourceBarrier(2, B);
         IdentityState[f] = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        SlotRemapState   = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     }
 
     void FTemporalMotionVectors::Transition(ID3D12GraphicsCommandList* CL,
@@ -379,7 +464,7 @@ namespace Smile {
 
     void FTemporalMotionVectors::CreatePipelines(ID3D12Device* _Device) {
         SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_9.cso", 3, 1, true);
-        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 4, 1, false);
+        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 7, 1, false);
     }
 
 

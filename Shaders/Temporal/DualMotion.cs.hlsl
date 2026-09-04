@@ -7,12 +7,18 @@ cbuffer TemporalMotionCB : register(b0) {
     float4 CameraPos;
     float4 ScreenParams;
     float4 Params; // x=frame slot, y=history valid, z=position reject scale, w=instance count
+    float4 IdentityParams; // x=previous instance count, y=slot capacity
 };
 
 Texture2D<float2> RasterVelocity : register(t0);
 Texture2D<float4> CurrentSurface : register(t1);
 Texture2D<float4> PreviousSurface : register(t2);
 StructuredBuffer<FTemporalInstanceTransform> InstanceTransforms : register(t3);
+// A tabela ANTERIOR traduz o id gravado no frame passado; a ATUAL confirma que a traducao caiu
+// no mesmo objeto; o remap diz onde ele esta na lista de agora.
+StructuredBuffer<FGpuIdentityEntry> PreviousIdentity   : register(t4);
+StructuredBuffer<FGpuIdentityEntry> CurrentIdentity    : register(t5);
+StructuredBuffer<uint>              SlotToCurrentIndex : register(t6);
 RWTexture2D<float2> ReliableMotion : register(u0);
 
 bool InBounds(float2 uv) { return all(uv > 0.0f) && all(uv < 1.0f); }
@@ -43,7 +49,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         current.xyz, InstanceTransforms[currentId].CurrentToPrevious);
     const float4 previousAtBase = LoadSurfaceAtUv(PreviousSurface, prevUv);
     uint occluderId;
-    if (!TemporalDecodeInstance(previousAtBase.w, (uint)Params.w, occluderId)) return;
+    // Contagem ANTERIOR, e nao a de agora: um id gravado quando a cena tinha mais objetos
+    // passaria na contagem atual sem nunca ter sido valido nela.
+    if (!TemporalDecodeInstance(previousAtBase.w, (uint)IdentityParams.x, occluderId)) return;
 
     const float reject = Params.z * max(length(current.xyz - CameraPos.xyz), 1.0f);
     const float baseError = length(previousAtBase.xyz - expectedPrevious);
@@ -51,8 +59,17 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     // Eq. 25.6: Y e o fetch convencional no frame anterior; Z e o mesmo oclusor levado de
     // volta ao frame atual. A translacao relativa X-Z desloca Y para uma regiao de fundo.
+    // O id do oclusor foi gravado pela lista do frame PASSADO, e InstanceTransforms e indexado
+    // pela lista de AGORA -- usa-lo direto entregava o transform de outro objeto sempre que a
+    // lista mudava. A resolucao abaixo o converte para o indice atual do MESMO objeto, ou
+    // reprova (removido, slot reciclado, fora do remap) e cai no caminho convencional.
+    uint occluderIndex;
+    if (!TemporalResolvePreviousIndex(occluderId, PreviousIdentity, SlotToCurrentIndex,
+                                      CurrentIdentity, (uint)IdentityParams.y, (uint)Params.w,
+                                      occluderIndex)) return;
+
     const float3 occluderCurrent = TemporalTransformPoint(
-        previousAtBase.xyz, InstanceTransforms[occluderId].PreviousToCurrent);
+        previousAtBase.xyz, InstanceTransforms[occluderIndex].PreviousToCurrent);
     float2 zUv;
     if (!TemporalProjectUv(occluderCurrent, ViewProj, zUv)) return;
     const float2 dualPrevUv = prevUv + (uv - zUv);
@@ -61,7 +78,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // A validacao no dominio de mundo evita trocar uma desoclusao por outro objeto qualquer.
     const float4 previousAtDual = LoadSurfaceAtUv(PreviousSurface, dualPrevUv);
     uint backgroundId;
-    if (!TemporalDecodeInstance(previousAtDual.w, (uint)Params.w, backgroundId)) return;
+    // Aqui basta a contagem ANTERIOR: o backgroundId e so um gate de existe superficie real
+    // neste ponto, e nunca indexa transform -- entao nao precisa ser resolvido.
+    if (!TemporalDecodeInstance(previousAtDual.w, (uint)IdentityParams.x, backgroundId)) return;
     const float dualError = length(previousAtDual.xyz - expectedPrevious);
     if (dualError >= min(baseError, reject * 4.0f)) return;
 

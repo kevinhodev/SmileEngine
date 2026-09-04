@@ -33,6 +33,9 @@ namespace Smile {
         Vec4  CameraPos;    // xyz = camera atual
         Vec4  ScreenParams; // width, height, 1/width, 1/height
         Vec4  Params;       // x=frame slot, y=history valid, z=position reject scale, w=instance count
+        // A superficie ANTERIOR tem de ser validada contra a contagem ANTERIOR: um id gravado
+        // quando a cena tinha mais objetos passa na contagem de agora sem ser valido.
+        Vec4  IdentityParams; // x=previous instance count, y=slot capacity, zw=reservado
     };
     static_assert(sizeof(FTemporalMotionConstants) == 256);
 
@@ -144,6 +147,20 @@ namespace Smile {
         D3D12_RESOURCE_STATES  IdentityState[kFrames] = {
             D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_DEST
         };
+        // Remap slot -> indice na lista ATUAL. Fecha a cadeia: a tabela anterior diz QUEM era,
+        // e o remap diz ONDE ele esta agora, porque InstanceTransforms continua indexado pela
+        // lista.
+        //
+        // Um so buffer, e nao ping-pong como a tabela: o remap e lido apenas pelo frame que o
+        // escreveu, entao nao precisa sobreviver a F+1. A tabela precisa -- e dai a assimetria.
+        // A copia sai ordenada na fila direta depois das leituras do frame anterior.
+        ComPtr<ID3D12Resource>      SlotRemap;
+        GpuResources::FUploadBuffer SlotRemapStaging;
+        u32                         SlotRemapSRVSlot = kInvalidSlot;
+        D3D12_RESOURCE_STATES       SlotRemapState   = D3D12_RESOURCE_STATE_COPY_DEST;
+        u32                         SlotCapacity_    = 0;
+        // Contagem do frame anterior, para validar a superficie anterior contra ela.
+        u32 PreviousCount_ = 0;
         u32 InstanceCount_ = 0;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> Surface[kFrames];

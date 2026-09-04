@@ -686,3 +686,34 @@ set_tests_properties(Smile.SlotKeyedHistory PROPERTIES
     LABELS "scene;identity;gpu-driven"
     TIMEOUT 60
 )
+
+# Tabela de identidades por frame + remap de slot. So precisa do allocator: o preenchimento e
+# header-only e templado no acessor, de proposito, para que teste e producao rodem o mesmo codigo.
+add_executable(SmileTemporalIdentityTableTests
+    TemporalIdentityTableTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/GpuSceneHandle.cpp
+)
+target_compile_features(SmileTemporalIdentityTableTests PRIVATE cxx_std_20)
+target_include_directories(SmileTemporalIdentityTableTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+# Os dois fontes que o gate le. Executar HLSL exigiria GPU; o criterio que importa e que reverter
+# o leitor para indexar transform com id antigo deixe o gate vermelho.
+target_compile_definitions(SmileTemporalIdentityTableTests PRIVATE
+    SMILE_TEMPORAL_COMMON_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/TemporalMotionCommon.hlsli"
+    SMILE_DUALMOTION_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/DualMotion.cs.hlsl"
+)
+set_target_properties(SmileTemporalIdentityTableTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+add_test(
+    NAME Smile.TemporalIdentityTable
+    COMMAND SmileTemporalIdentityTableTests
+)
+set_tests_properties(Smile.TemporalIdentityTable PROPERTIES
+    LABELS "scene;identity;gpu-driven"
+    TIMEOUT 60
+)
