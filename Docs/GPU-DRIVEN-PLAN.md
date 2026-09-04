@@ -14,6 +14,11 @@
 > **Responsabilidades acordadas:** Opus é o implementador e único escritor dos milestones; Codex é
 > o revisor sênior read-only; o proprietário da engine decide divergências e promoção de fase. O
 > revisor não corrige o diff que revisa.
+>
+> **Exceção autorizada pelo proprietário em 2026-09-03:** Codex assume a implementação
+> restante da Fase 1 nesta continuação. Não iniciar a Fase 2 automaticamente. O estado e a
+> evidência atuais estão em [GPU-DRIVEN-PHASE1-VALIDATION.md](GPU-DRIVEN-PHASE1-VALIDATION.md);
+> as notas datadas abaixo preservam o raciocínio das etapas anteriores.
 
 ## 1. Resultado pretendido
 
@@ -943,7 +948,7 @@ para membership por `ObjectId`.
 O que a medição de fato decide para o desenho é mais modesto e mais útil: a posição na lista não é
 o eixo de custo, então não vale complicar a Fase 1 para evitar deslocamento. O eixo é N.
 
-### Os quatro consumidores, como estão hoje
+### Estado de partida dos quatro consumidores
 
 Levantado, e o HiZ confirmado por três pontos independentes — ele é **por objeto**, indexado pelo
 índice denso da cena, e não por batch:
@@ -955,7 +960,7 @@ Levantado, e o HiZ confirmado por três pontos independentes — ele é **por ob
 | Picking | `ObjectId = índice + 1` | `Picking.h:30` |
 | HiZ | `WriteBounds(FrameSlot, SceneIndex, …)` → shader `VisibleOut[i]` → CPU `OcclusionVis[A.SceneIndex]` | `HiZOcclusion.cpp:216`, `Shaders/HZB/HZBTest.cs.hlsl:37`, `RendererPasses.cpp:2014` |
 
-Nenhum deles está quebrado hoje, e vale registrar porque eu errei isso primeiro: os índices são
+Nenhum deles estava quebrado no ponto de partida, e vale registrar porque eu errei isso primeiro: os índices eram
 frágeis mas **protegidos por descarte global**. Há duas rotas independentes — o
 `SceneState->PreviousModels.clear()` explícito no `OnSceneStructureChanged`
 (`RendererScene.cpp:178`, com comentário nomeando o risco) e o domínio `SceneStructure`, que inclui
@@ -1140,7 +1145,10 @@ fronteira entre frames, o último submetido já cobre tudo que pode referenciar 
 contrato só abriria a armadilha da fila **ociosa**, em que `Completed` nunca alcança um `Required`
 de "próxima" e o slot fica preso em `Retired` para sempre.
 
-### Pendência: o id temporal vem da TLAS
+### Problema de origem: o id temporal vem da TLAS
+
+**Estado atual:** resolvido pelos remaps de frame nos três leitores; o texto abaixo documenta
+o defeito que motivou a migração, não uma pendência nova. Ver o relatório da continuação.
 
 Os históricos de CPU (`PrevMVP` do raster e transforms do motion vector de RT) já são endereçados
 por slot de residência. O que **não** ficou resolvido é a interpretação do id na GPU: o
@@ -1229,7 +1237,10 @@ junto com a divergência de teto entre shader e CPU.
 **Testes centrais do slice:** `[A,B,C] → [B,C]`, renderável pulado na TLAS, slot reciclado, objeto
 removido sem reuso, e tabela anterior ainda em consumo.
 
-O descarte global permanece até a migração conjunta estar validada.
+A migração conjunta agora tem teste com renderer e GPU reais. O descarte global de identidade
+saiu de `SceneStructure` (TemporalMotion/HiZ, modelos raster e picking pendente). Corte de câmera,
+resize/reload e invalidações de radiância continuam válidos. Os drenos que protegem
+`InstanceGeo` e `MeshLights` também permanecem: handles estáveis não versionam esses buffers.
 
 ### Desenho do remap do HiZ
 
@@ -1256,6 +1267,11 @@ dele.
 - `Engine/Source/Graphics/Renderer/RendererScene.cpp`
 
 ### Gate de saída
+
+**Estado: fechado em 2026-09-04.** A implementação, as provas negativas, a execução em WARP/RTX,
+a comparação das oito imagens e a correção do editor preso no frame zero estão registradas em
+[GPU-DRIVEN-PHASE1-VALIDATION.md](GPU-DRIVEN-PHASE1-VALIDATION.md). A Fase 2 exige liberação
+explícita do proprietário; este fechamento não a inicia automaticamente.
 
 - nenhum consumidor usa posição na `RenderableList` como identidade durável;
 - selecionar, duplicar, remover e mover não troca histórico entre objetos;
