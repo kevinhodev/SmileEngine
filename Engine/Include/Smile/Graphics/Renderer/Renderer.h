@@ -186,6 +186,8 @@ namespace Smile {
     class Renderer {
         // FRenderSettings roteia configuracao e invalidacao sem expor o estado interno.
         friend class FRenderSettings;
+        // Harness opt-in de integracao; nao adiciona API de mutacao ao editor.
+        friend struct FRendererIdentityTestAccess;
 
     public:
         Renderer();

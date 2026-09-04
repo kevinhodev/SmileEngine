@@ -55,6 +55,12 @@ namespace Smile {
             Entries[Handle.Slot] = FEntry{ Value, Handle };
         }
 
+        // Invisibilidade nao aposenta a residencia, mas encerra a continuidade do historico.
+        void Forget(FGpuSceneHandle Handle) {
+            if (Handle.Generation != 0 && Handle.Slot < Entries.size() &&
+                Entries[Handle.Slot].Handle == Handle) Entries[Handle.Slot] = FEntry{};
+        }
+
         u32  Capacity() const { return static_cast<u32>(Entries.size()); }
         bool Empty()    const { return Entries.empty(); }
 

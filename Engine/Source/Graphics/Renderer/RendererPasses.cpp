@@ -297,7 +297,7 @@ namespace Smile {
                                        RenderWidth(), RenderHeight(), Lt.KeyDir, Lt.KeyInt,
                                        Lt.KeyColor, FrameState->TemporalSampleIndex, ReflSkyIntensity, Vw.View,
                                        WaterUsesAtmosphere, WaterEnvironmentIntensity, GILightCount,
-                                       TemporalMotion.InstanceCount(), Modes.MotionHistoryValidThisFrame);
+                                       TemporalMotion.InstanceCount(), Modes.MotionHistoryValidThisFrame, TemporalMotion.IdentityParams());
         }
 
         if (Modes.ReSTIRGIActive) {
@@ -768,7 +768,7 @@ namespace Smile {
                                             /*EnableTemporalPermutation=*/Modes.RRMode,
                                             TemporalMotion.InstanceCount(),
                                             Modes.MotionHistoryValidThisFrame,
-                                            MeshLights.LightCount());
+                                            MeshLights.LightCount(), TemporalMotion.IdentityParams());
                     ReSTIRDI.Record(CommandList, Backend->SRVHeap, &Backend->DirectProfiler);
                 }
 
@@ -1481,9 +1481,7 @@ namespace Smile {
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "HZB");
                 HiZ.RecordBuild(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot);
-                HiZ.RecordTest(CommandList, Backend->SRVHeap, FrameSlot,
-                               static_cast<u32>(SceneState->Scene.Renderables().size()),
-                               Vw.ViewProjUnjittered);
+                HiZ.RecordTest(CommandList, Backend->SRVHeap, FrameSlot, Vw.ViewProjUnjittered);
             }
             Batch.Transition(Targets.DepthBuffer.Get(),
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -1972,11 +1970,15 @@ namespace Smile {
             // agora e o slot, que pode passar da contagem de renderaveis quando ha buracos.
             SceneState->PreviousModels.EnsureCapacity(SceneState->Scene.GpuSlots().Capacity());
             const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
+            if (WriteOcclusionBounds) HiZ.BeginFrame(FrameSlot, SceneState->Scene.GpuSlots());
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
+                if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) {
+                    SceneState->PreviousModels.Forget(R.GpuHandle);
+                    continue;
+                }
                 if (WriteOcclusionBounds)
-                    HiZ.WriteBounds(FrameSlot, static_cast<u32>(si), R.AABBMin, R.AABBMax);
-                if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) continue;
+                    HiZ.WriteBounds(FrameSlot, R.GpuHandle, R.AABBMin, R.AABBMax);
                 if (AllItems.size() >= MaxObjects) break;
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
                 const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
@@ -2010,11 +2012,7 @@ namespace Smile {
         // HiZ), abaixo e culling + sort.
         const auto TimerAfterBuild = std::chrono::steady_clock::now();
 
-        // Resultado do teste HZB gravado ha kFramesInFlight frames neste slot (a fence
-        // ja foi esperada no BeginFrame). nullptr = sem teste valido -> tudo visivel.
-        const u32* OcclusionVis = UseOcclusionCulling
-            ? HiZ.ResolveResults(FrameSlot, static_cast<u32>(SceneState->Scene.Renderables().size()))
-            : nullptr;
+        // O readback foi publicado por handle antes de reutilizar o remap deste frame slot.
         u32 OccludedCount = 0;
 
         auto& VisibleScratch = _Ctx.Visible;
@@ -2022,10 +2020,9 @@ namespace Smile {
         for (const FDrawItem& A : AllItems) {
             if (UseFrustumCulling && Vw.AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
             // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
-            // latencia do readback e o pop incomodaria bem aqui). O resultado so cobre
-            // [0, Capacity); indices alem disso (ex.: proxy RT do terreno) ficam visiveis.
-            if (OcclusionVis && A.SceneIndex < HiZ.Capacity() &&
-                !OcclusionVis[A.SceneIndex] &&
+            // latencia do readback e o pop incomodaria bem aqui). Handles sem resultado
+            // na captura consumida ficam visiveis, inclusive residencias novas.
+            if (UseOcclusionCulling && !HiZ.IsVisible(A.R->GpuHandle) &&
                 static_cast<int>(A.SceneIndex) != SelectedRenderable) {
                 ++OccludedCount;
                 continue;

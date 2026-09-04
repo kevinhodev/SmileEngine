@@ -24,6 +24,7 @@ cbuffer ReSTIRDICB : register(b0) {
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
     row_major float4x4 PrevViewProj;
     float4 MeshSampling; // x=candidatas mesh; y=BRDF-ratio demodulation
+    uint4 IdentityParams; // previous count, remap capacity
 };
 
 #include "../RayOffset.hlsli"
@@ -42,6 +43,9 @@ StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
 Texture2D<float4> CurrentSurface : register(t10);
 Texture2D<float4> PreviousSurface : register(t11);
 StructuredBuffer<FTriangleLightGPU> TriLights : register(t12);
+StructuredBuffer<FGpuIdentityEntry> PreviousIdentity : register(t13);
+StructuredBuffer<uint> SlotToCurrentIndex : register(t14);
+StructuredBuffer<FGpuIdentityEntry> CurrentIdentity : register(t15);
 
 SamplerState LinearWrap : register(s1);
 RWTexture2D<float4> OutDirect : register(u0);
@@ -127,7 +131,7 @@ float2 ComputeBrdfRatio(int2 px, float3 centerPos, float3 L,
 float4 ComputeShadowMotion(int2 px, float3 receiverPos, float3 receiverNormal,
                            float3 blockerPos, uint blockerId, FGPULightFull light) {
     if (TemporalPolicy.y < 0.5f) return 0.0f;
-    const uint instanceCount = (uint)CameraPos.w;
+    const uint instanceCount = IdentityParams.z;
     uint receiverId;
     if (!TemporalDecodeInstance(CurrentSurface.Load(int3(px, 0)).w,
                                 instanceCount, receiverId) || blockerId >= instanceCount)
@@ -154,8 +158,10 @@ float4 ComputeShadowMotion(int2 px, float3 receiverPos, float3 receiverNormal,
     const int2 prevPx = clamp(int2(prevUv * ScreenParams.xy), int2(0, 0),
                               int2(ScreenParams.xy) - 1);
     const float4 previous = PreviousSurface.Load(int3(prevPx, 0));
-    uint previousId;
-    if (!TemporalDecodeInstance(previous.w, instanceCount, previousId)) return 0.0f;
+    uint resolvedId;
+    if (!TemporalMatchPreviousSurface(previous.w, IdentityParams.x, receiverId,
+                                      PreviousIdentity, SlotToCurrentIndex, CurrentIdentity,
+                                      IdentityParams.y, instanceCount, resolvedId)) return 0.0f;
 
     // Eq. 25.4: confianca maxima quando o ponto real anterior se desloca no plano virtual
     // (theta ~= pi/2). A forma gaussiana reduz o peso em receptores curvos/descontinuos.

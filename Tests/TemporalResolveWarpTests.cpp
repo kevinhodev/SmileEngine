@@ -66,6 +66,7 @@ namespace {
         u32         CurrentCount;
         bool        EsperaResolver;
         u32         EsperaIndice;
+        u32         ReceiverPlusOne = 0;
     };
 
     // Executor minimo: sobe os quatro buffers de entrada, despacha a sonda e le o resultado.
@@ -141,7 +142,7 @@ namespace {
 }
 
 int main() try {
-    // ---- cena: [A,B,C,D] vira [B,C,E], com E reciclando o slot de A -----------------------------
+    // ---- cena: [A,B,C,D] vira [B,vazio,C,E], com E reciclando o slot de A -----------------------------
     FGpuSceneSlots Slots;
     const FGpuSceneHandle A = Slots.Allocate();
     const FGpuSceneHandle B = Slots.Allocate();
@@ -166,28 +167,32 @@ int main() try {
 
     // Ordem escolhida para C cair no INDICE 2: o caso da contagem precisa de um candidato que
     // seja indice pequeno e plausivel, e nao do kInvalidSlot que os removidos devolvem.
-    const std::vector<FGpuSceneHandle> ListaAtual{ B, E, C };
+    const std::vector<FGpuSceneHandle> ListaAtual{ B, FGpuSceneHandle{}, C, E }; // ID 1 pulado pela TLAS
     std::vector<FGpuIdentityEntry> Atual(kCapacidade);
-    BuildIdentityTable(Atual.data(), kCapacidade, 3u, [&](u32 i) { return ListaAtual[i]; });
+    BuildIdentityTable(Atual.data(), kCapacidade, 4u, [&](u32 i) { return ListaAtual[i]; });
     std::vector<u32> Remap(kSlots);
-    BuildSlotRemap(Remap.data(), kSlots, 3u, [&](u32 i) { return ListaAtual[i]; });
+    BuildSlotRemap(Remap.data(), kSlots, 4u, [&](u32 i) { return ListaAtual[i]; });
 
     const bool Reciclou = (E.Slot == A.Slot) && (E.Generation != A.Generation);
     Check(Reciclou, "o cenario reciclou o slot de A para E, que e o caso central");
 
     const FCaso kCasos[] = {
-        { "sobrevivente que mudou de posicao: B era 1, agora e 0", 1u, kSlots, 3u, true,  0u },
-        { "objeto removido nao resolve",                           3u, kSlots, 3u, false, 0u },
-        { "slot RECICLADO nao resolve: so a generation separa",    0u, kSlots, 3u, false, 0u },
-        { "posicao vazia da tabela (generation 0) nao resolve",    5u, kSlots, 3u, false, 0u },
+        { "sobrevivente que mudou de posicao: B era 1, agora e 0", 1u, kSlots, 4u, true,  0u },
+        { "objeto removido nao resolve",                           3u, kSlots, 4u, false, 0u },
+        { "slot RECICLADO nao resolve: so a generation separa",    0u, kSlots, 4u, false, 0u },
+        { "posicao vazia da tabela (generation 0) nao resolve",    5u, kSlots, 4u, false, 0u },
         // Mesmo id do primeiro caso, mas com o remap curto demais para o slot dele: tem de
         // reprovar em vez de ler fora.
         { "slot alem da capacidade do remap nao resolve",          1u, 1u,     3u, false, 0u },
-        // O remap aponta para o indice 2 (E), mas a contagem daquele frame e 2: o candidato e um
+        // O remap aponta para o indice 2 (C), mas a contagem daquele frame e 2: o candidato e um
         // indice PEQUENO e plausivel, e so a comparacao com a contagem o reprova. Sem esse caso,
         // trocar o limite por "!= invalido" passava despercebido.
         { "candidato valido porem acima da contagem nao resolve",  2u, kSlots, 2u, false, 0u },
-        { "e com a contagem certa esse mesmo id resolve",          2u, kSlots, 3u, true,  2u },
+        { "e com a contagem certa esse mesmo id resolve",          2u, kSlots, 4u, true,  2u },
+        { "receptor B casa apos mudar de indice",                  1u, kSlots, 4u, true,  0u, 1u },
+        { "receptor C nao pode usar superficie antiga de B",       1u, kSlots, 4u, false, 0u, 3u },
+        { "receptor novo nao casa com o slot reciclado",           0u, kSlots, 4u, false, 0u, 4u },
+        { "superficie vazia nao casa com receptor",      0xFFFFFFFFu, kSlots, 4u, false, 0u, 1u },
     };
     constexpr u32 kNumCasos = static_cast<u32>(std::size(kCasos));
 
@@ -196,22 +201,17 @@ int main() try {
         Ids.push_back(Caso.PreviousId);
         Ids.push_back(Caso.SlotCapacity);
         Ids.push_back(Caso.CurrentCount);
-        Ids.push_back(0u);
+        Ids.push_back(Caso.ReceiverPlusOne);
     }
 
     // ---- WARP ------------------------------------------------------------------------------------
     FSonda S;
     wrl::ComPtr<IDXGIFactory4> Factory;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&Factory)))) {
-        std::cerr << "DXGI indisponivel -- teste pulado\n";
-        return 0;
-    }
+    Hr(CreateDXGIFactory1(IID_PPV_ARGS(&Factory)), "CreateDXGIFactory1 (WARP obrigatorio)");
     wrl::ComPtr<IDXGIAdapter> Warp;
-    if (FAILED(Factory->EnumWarpAdapter(IID_PPV_ARGS(&Warp))) ||
-        FAILED(D3D12CreateDevice(Warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&S.Device)))) {
-        std::cerr << "WARP indisponivel -- teste pulado\n";
-        return 0;
-    }
+    Hr(Factory->EnumWarpAdapter(IID_PPV_ARGS(&Warp)), "EnumWarpAdapter (WARP obrigatorio)");
+    Hr(D3D12CreateDevice(Warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&S.Device)),
+       "D3D12CreateDevice (WARP obrigatorio)");
 
     const std::vector<u8> Bytecode = LerArquivo(SMILE_RESOLVE_PROBE_CSO);
     Check(!Bytecode.empty(), "a sonda compilada foi encontrada");
@@ -283,7 +283,7 @@ int main() try {
 
     // 256 bytes de verdade: copiar 256 de um struct de 16 lia fora da pilha.
     alignas(16) u8 CB[256]{};
-    const u32 Constantes[4]{ kSlots, 3u, kNumCasos, 0u };
+    const u32 Constantes[4]{ 4u, 4u, kNumCasos, 0u };
     std::memcpy(CB, Constantes, sizeof(Constantes));
     auto BufCB = S.Upload(CB, sizeof(CB));
 
@@ -323,11 +323,20 @@ int main() try {
     Hr(S.Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&S.Fence)), "CreateFence");
     Hr(S.Queue->Signal(S.Fence.Get(), 1), "Signal");
     if (S.Fence->GetCompletedValue() < 1) {
-        HANDLE Evento = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        Hr(S.Fence->SetEventOnCompletion(1, Evento), "SetEventOnCompletion");
-        WaitForSingleObject(Evento, 20000);
-        CloseHandle(Evento);
+        struct FEvent {
+            HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            ~FEvent() { if (Value) CloseHandle(Value); }
+        } Evento;
+        if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
+        Hr(S.Fence->SetEventOnCompletion(1, Evento.Value), "SetEventOnCompletion");
+        const DWORD Wait = WaitForSingleObject(Evento.Value, 20000);
+        if (Wait == WAIT_FAILED) Hr(HRESULT_FROM_WIN32(GetLastError()), "WaitForSingleObject");
+        if (Wait != WAIT_OBJECT_0) throw std::runtime_error("timeout aguardando o readback WARP");
     }
+    const UINT64 Completed = S.Fence->GetCompletedValue();
+    if (Completed == UINT64_MAX) Hr(S.Device->GetDeviceRemovedReason(), "WARP device removed");
+    if (Completed == UINT64_MAX || Completed < 1)
+        throw std::runtime_error("readback WARP sem conclusao confirmada da fence");
 
     const u32* Saida = nullptr;
     Hr(BufLeitura->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&Saida))), "Map saida");

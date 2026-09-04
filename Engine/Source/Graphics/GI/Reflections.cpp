@@ -34,8 +34,8 @@ namespace Smile {
     }
 
     void FReflections::RecreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_9.cso", 12, 3, true);
-        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_9.cso", 12, 2, true);
+        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_9.cso", 15, 3, true);
+        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_9.cso", 15, 2, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 5, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 4, 1, false);
@@ -47,7 +47,7 @@ namespace Smile {
         TraceTimed = false;
         if (FShaderTimer::IsAvailable()) {
             try {
-                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_9.cso", 12, 3, true, true);
+                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_9.cso", 15, 3, true, true);
                 TraceTimed = true;
             } catch (const std::exception&) {
                 LogWarning("ReflectionTraceTimed.cso ausente — timer das reflexoes indisponivel.");
@@ -267,7 +267,7 @@ namespace Smile {
         Free(ResolvedMotionUAVSlot, 1);
         Free(TraceUAVTable, 3);
         Free(ResolvedUAVTable, 2);
-        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 12);
+        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 15);
         Free(ResolveTableStart, 5);
         Free(SpecPackSrvTable, 3);
         Free(SpecPackUAVSlot, 1);
@@ -312,7 +312,8 @@ namespace Smile {
                                        u32 _SceneColorMipCount,
                                        u32 _AtmosphereSpecularSlot, u32 _HDRSpecularSlot,
                                       const u32 _TransformSlots[FCommandQueue::kFramesInFlight],
-                                      const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight]) {
+                                      const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight],
+                                      const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
@@ -331,7 +332,8 @@ namespace Smile {
             _ProbeDataSlot == kInvalidSlot)
             return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
-            if (_TransformSlots[f] == kInvalidSlot || _SurfaceSlots[f] == kInvalidSlot) return;
+            if (_TransformSlots[f] == kInvalidSlot || _SurfaceSlots[f] == kInvalidSlot ||
+                IdentitySlots[f] == kInvalidSlot || RemapSlot == kInvalidSlot) return;
 
         Width = _Width; Height = _Height;
         HalfWidth = (_Width + 1) / 2; HalfHeight = (_Height + 1) / 2;
@@ -425,18 +427,21 @@ namespace Smile {
         };
         UINT TDstCount = 8; UINT TSrcCounts[8] = { 1,1,1,1,1,1,1,1 };
         for (u32 i = 0; i < kTraceTables; ++i) {
-            TraceTable[i] = _SRVHeap.Allocate(12);
+            TraceTable[i] = _SRVHeap.Allocate(15);
             D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TraceTable[i]);
             _Device->CopyDescriptors(1, &TDst, &TDstCount, 8, TSrc, TSrcCounts,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             D3D12_CPU_DESCRIPTOR_HANDLE MotionDst = _SRVHeap.CpuHandle(TraceTable[i] + 9);
-            D3D12_CPU_DESCRIPTOR_HANDLE MotionSrc[3] = {
+            D3D12_CPU_DESCRIPTOR_HANDLE MotionSrc[6] = {
                 _SRVHeap.CpuHandleStaging(_TransformSlots[i]),
                 _SRVHeap.CpuHandleStaging(_SurfaceSlots[i]),
                 _SRVHeap.CpuHandleStaging(_SurfaceSlots[1u - i]),
+                _SRVHeap.CpuHandleStaging(IdentitySlots[1u - i]),
+                _SRVHeap.CpuHandleStaging(RemapSlot),
+                _SRVHeap.CpuHandleStaging(IdentitySlots[i]),
             };
-            UINT MotionCount = 3; UINT MotionOnes[3] = { 1,1,1 };
-            _Device->CopyDescriptors(1, &MotionDst, &MotionCount, 3, MotionSrc, MotionOnes,
+            UINT MotionCount = 6; UINT MotionOnes[6] = { 1,1,1,1,1,1 };
+            _Device->CopyDescriptors(1, &MotionDst, &MotionCount, 6, MotionSrc, MotionOnes,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             // A agua nao pertence ao snapshot temporal dos opacos. Seu trace usa t0..t7 iguais,
@@ -636,7 +641,8 @@ namespace Smile {
                                       f32 _SkyIntensity,
                                       const Mat44& _View, bool _UseAtmosphereSky,
                                       f32 _WaterEnvironmentIntensity, u32 _PunctualLightCount,
-                                      u32 _TemporalInstanceCount, bool _MotionHistoryValid) {
+                                      u32 _TemporalInstanceCount, bool _MotionHistoryValid, FTemporalIdentityParams IdentityParams) {
+        CPU.IdentityParams = IdentityParams;
         if (!Ready) return;
         FrameSlot = _FrameSlot;
         CPU.InvViewProj     = _InvViewProj;

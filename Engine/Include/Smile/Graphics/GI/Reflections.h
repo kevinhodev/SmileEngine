@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -66,7 +67,9 @@ namespace Smile {
         FDDGICascadeConstants GICascades;
         Vec4 EnvironmentSky;
         Vec4 EnvironmentGround;
+        FTemporalIdentityParams IdentityParams;
     };
+    static_assert(offsetof(ReflectionConstants, IdentityParams) == 864, "uint4 de identidade no trace");
     static_assert(offsetof(ReflectionConstants, GICascades) == 688,
                   "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
     static_assert(offsetof(ReflectionConstants, ReGIRGridMinSlots) == 480,
@@ -108,7 +111,8 @@ namespace Smile {
                             u32 SceneColorSlot, u32 SceneDepthSlot, u32 SceneColorMipCount,
                             u32 AtmosphereSpecularSlot, u32 HDRSpecularSlot,
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
-                            const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
+                            const u32 SurfaceSlots[FCommandQueue::kFramesInFlight],
+                            const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
@@ -122,7 +126,7 @@ namespace Smile {
                             const Mat44& View, bool UseAtmosphereSky,
                             f32 WaterEnvironmentIntensity,
                             u32 PunctualLightCount, u32 TemporalInstanceCount,
-                            bool MotionHistoryValid);
+                            bool MotionHistoryValid, FTemporalIdentityParams IdentityParams);
 
         // Copia o SRV das luzes para o t8 da tabela deste FrameSlot, compartilhada por glossy e
         // mirror e versionada por frame em voo.

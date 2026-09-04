@@ -14,11 +14,22 @@
 
 #include "Smile/Core/Types.h"
 #include "Smile/Scene/GpuSceneHandle.h"
+#include "Smile/Scene/SlotKeyedHistory.h"
+#include <span>
+#include <limits>
 
 #include <cstddef>
 #include <vector>
 
 namespace Smile {
+    struct FTemporalIdentityParams {
+        u32 PreviousInstanceCount = 0;
+        u32 SlotCapacity          = 0;
+        u32 CurrentInstanceCount  = 0;
+        u32 Reserved1             = 0;
+    };
+    static_assert(sizeof(FTemporalIdentityParams) == 16, "uint4 no HLSL");
+
     struct FCapturedIdentity {
         // Residencia GPU no momento da captura. Guarda para consumidores que NAO tem Id (o
         // readback do HiZ endereca por slot) e para o caso de a residencia ser aposentada sem o
@@ -114,6 +125,31 @@ namespace Smile {
             Out[H.Slot] = i;
         }
     }
+
+    // Publicacao de readback atrasado. O epoch impede que um slot nao testado nesta
+    // amostra herde oclusao antiga; a generation impede heranca por um ocupante novo.
+    class FCapturedVisibility {
+    public:
+        void Invalidate() { Entries.Invalidate(); Epoch = 0; }
+        void Publish(const FGpuSceneSlots& Slots, std::span<const FGpuSceneHandle> Handles,
+                     std::span<const u32> Results) {
+            if (Epoch == std::numeric_limits<u64>::max()) Invalidate();
+            ++Epoch;
+            Entries.EnsureCapacity(Slots.Capacity());
+            if (Handles.size() != Results.size()) return; // amostra incompleta: tudo visivel
+            for (size_t i = 0; i < Handles.size(); ++i)
+                if (Slots.IsAlive(Handles[i])) Entries.Store(Handles[i], { Epoch, Results[i] });
+        }
+        bool IsVisible(FGpuSceneHandle Handle) const {
+            const FValue Missing{};
+            const FValue& Value = Entries.PreviousOr(Handle, Missing);
+            return Value.Epoch != Epoch || Value.Epoch == 0 || Value.Visible != 0;
+        }
+    private:
+        struct FValue { u64 Epoch = 0; u32 Visible = 1; };
+        TSlotKeyedHistory<FValue> Entries;
+        u64 Epoch = 0;
+    };
 
     // Inverso do Encode. Devolve identidade ZERADA (Id == 0) para o vazio e para qualquer valor
     // fora da tabela.

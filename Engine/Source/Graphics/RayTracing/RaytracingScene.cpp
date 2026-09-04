@@ -141,7 +141,7 @@ namespace Smile {
         u32 Idx = 0;
         for (const FRenderable& R : _Scene.Renderables()) {
             const u32 ThisIdx = Idx++;
-            if (!R.Visible || !R.Mesh || !R.Mesh->IsValid()) continue;
+            if (!_Scene.GpuSlots().IsAlive(R.RaytracingHandle())) continue;
             const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
             const FOpacityMicromapData* Omm = AlphaTest ? R.OpacityMicromap.get() : nullptr;
             if (AlphaTest && (!Omm || !Omm->Valid()))
@@ -172,6 +172,9 @@ namespace Smile {
             for (int Row = 0; Row < 3; ++Row)
                 for (int Col = 0; Col < 4; ++Col)
                     Inst.Transform[Row][Col] = T.M[Row][Col];
+            // Indice na tabela DESTE frame, nao identidade duravel. Mantem os buracos da
+            // lista para casar com InstanceGeo e BuildIdentityTable; leitores atrasados
+            // resolvem pela tabela capturada, nunca pela lista de outro frame.
             Inst.InstanceID                          = ThisIdx;
             Inst.InstanceContributionToHitGroupIndex = 0;
             Inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;

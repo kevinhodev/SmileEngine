@@ -215,13 +215,12 @@ namespace Smile {
                                              T::RadianceCache | Resolve;
 
         // A LISTA de renderaveis mudou: um objeto nasceu ou morreu, e o indice de todos os que
-        // vinham depois andou. Mais largo que o MaterialRTState, por dois motivos que se somam:
+        // vinham depois andou. Radiancia muda; identidade dos sobreviventes permanece.
         //
-        //  1. Os historicos indexados por INDICE passam a ler outro objeto — nao e valor velho,
-        //     e valor de outra pessoa. Sao o TemporalMotion (buffer de transforms por InstanceID)
-        //     e o HiZOcclusion (ring de readback por indice de cena, com kFramesInFlight de
-        //     atraso, ou seja: resultado gravado ANTES da mudanca chega DEPOIS dela).
-        //  2. Os historicos de radiancia acumularam sobre uma geometria que nao existe mais (ou
+        // A identidade ja nao depende da posicao: TemporalMotion usa tabelas por frame,
+        // HiZOcclusion valida o handle capturado, e picking/modelos preservam sobreviventes.
+        // Estes historicos NAO sao descartados por mudanca estrutural.
+        // Os historicos de radiancia acumularam sobre uma geometria que nao existe mais (ou
         //     sem uma que passou a existir). Vale ate para o ReGIR: a geometria removida podia
         //     ser emissiva e estar nos pools de luz.
         //
@@ -246,8 +245,7 @@ namespace Smile {
         // que nao existe mais. (Invalidacao por regiao aqui e barata de fazer depois: a chave ja
         // carrega a posicao quantizada.)
         inline constexpr T SceneStructure = T::ReGIR | T::ReSTIRGI | T::ReSTIRDI |
-                                            T::Reflections | T::NrdDirect | T::TemporalMotion |
-                                            T::HiZOcclusion | T::VolumetricFog |
+                                            T::Reflections | T::NrdDirect | T::VolumetricFog |
                                             T::ProbeDiagnostic | T::RadianceCache | Resolve;
 
         // Mudou o CONTEUDO da cena sem a LISTA de renderaveis mudar de tamanho: o olho do
@@ -260,8 +258,8 @@ namespace Smile {
         //    irradiancia da cena toda pela estimativa de UM trace, e editar uma luz deixa 99%
         //    das sondas corretas. Quem chama invalida por REGIAO (FDDGI::InvalidateRegion) com a
         //    caixa de influencia da luz ou a AABB do objeto.
-        //  - TemporalMotion e HiZOcclusion, porque sao indexados por INDICE e aqui a lista nao
-        //    andou: nenhuma entrada passou a descrever outro objeto.
+        //  - TemporalMotion e HiZOcclusion, porque a identidade capturada protege as entradas.
+        //    Ocultacao tambem remove a entrada da tabela RT daquele frame.
         //
         // O resto entra inteiro, e ReSTIRDI/NrdDirect entram AQUI e nao no SkyRadiance porque
         // ali a mudanca e do sol/ceu, que seguem no caminho dedicado — luz puntual e exatamente
@@ -354,6 +352,11 @@ namespace Smile {
         constexpr bool Contains(T Set, T Subset) {
             return (static_cast<u32>(Set) & static_cast<u32>(Subset)) == static_cast<u32>(Subset);
         }
+        // Identidade preserva sobreviventes; teleporte ainda descarta as superficies antigas.
+        inline constexpr T IdentityHistories = T::TemporalMotion | T::HiZOcclusion;
+        static_assert((static_cast<u32>(SceneStructure) & static_cast<u32>(IdentityHistories)) == 0);
+        static_assert((static_cast<u32>(SceneContent) & static_cast<u32>(IdentityHistories)) == 0);
+        static_assert(Contains(CameraCut, IdentityHistories));
         static_assert(Contains(DeterministicCapture, CameraCut),
             "a captura tem de derrubar pelo menos o que o corte de camera derruba");
         static_assert(Contains(DeterministicCapture,

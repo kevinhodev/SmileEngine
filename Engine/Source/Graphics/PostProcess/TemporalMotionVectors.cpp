@@ -283,15 +283,20 @@ namespace Smile {
         // (linhas 52-53) grava CommittedInstanceID() + 1 na superficie, e o DualMotion le esse da
         // ANTERIOR para indexar InstanceTransforms do frame ATUAL.
         //
-        // PENDENCIA, e ela nao e resolvida por este slice: com [A, B, C], remover A faz o id 1
-        // gravado para B no frame passado passar a identificar C -- o historico por slot esta
-        // certo, e a INTERPRETACAO do id antigo esta errada. So a migracao da TLAS fecha isso, e
-        // ate la o descarte global e o que protege. Ver GPU-DRIVEN-PLAN, Fase 1.
+        // IDs antigos sao resolvidos pela tabela anterior + remap atual + generation,
+        // compartilhados por DualMotion, ReflectionMotion e ReSTIRDI. A posicao abaixo
+        // continua sendo so o endereco dos transforms DESTE frame.
         PreviousModels.EnsureCapacity(Scene.GpuSlots().Capacity());
 
         for (u32 i = 0; i < Count; ++i) {
             const FRenderable& R       = Scene.Renderables()[i];
             const Mat44        Current = R.Transform.Matrix();
+            if (!Scene.GpuSlots().IsAlive(R.RaytracingHandle())) {
+                PreviousModels.Forget(R.GpuHandle);
+                Dst[i].CurrentToPrevious = Mat44::Identity();
+                Dst[i].PreviousToCurrent = Mat44::Identity();
+                continue;
+            }
 
             // Sem historico daquele objeto, Previous = Current, o que zera o movimento DO
             // OBJETO -- nao o motion vector de tela, que continua carregando o movimento da
@@ -317,7 +322,8 @@ namespace Smile {
             auto* Table = reinterpret_cast<FGpuIdentityEntry*>(
                 IdentityStaging.Slice(FrameSlot % kFrames));
             BuildIdentityTable(Table, InstanceCount_, Count, [&](u32 i) {
-                return Scene.Renderables()[i].GpuHandle;
+                const auto Handle = Scene.Renderables()[i].RaytracingHandle();
+                return Scene.GpuSlots().IsAlive(Handle) ? Handle : FGpuSceneHandle{};
             });
         }
 
@@ -328,7 +334,8 @@ namespace Smile {
             auto* Remap = reinterpret_cast<u32*>(
                 SlotRemapStaging.Slice(FrameSlot % kFrames));
             BuildSlotRemap(Remap, SlotCapacity_, Count, [&](u32 i) {
-                return Scene.Renderables()[i].GpuHandle;
+                const auto Handle = Scene.Renderables()[i].RaytracingHandle();
+                return Scene.GpuSlots().IsAlive(Handle) ? Handle : FGpuSceneHandle{};
             });
         }
         for (u32 i = Count; i < InstanceCount_; ++i) {
@@ -346,7 +353,7 @@ namespace Smile {
         CPU.Params = { static_cast<f32>(FrameSlot), HistoryValid ? 1.0f : 0.0f,
                        PositionRejectScale, static_cast<f32>(Count) };
         // PreviousCount_ ainda e o do frame passado aqui -- ele so avanca depois do memcpy.
-        CPU.IdentityParams = FTemporalIdentityParams{ PreviousCount_, SlotCapacity_, 0u, 0u };
+        CPU.IdentityParams = FTemporalIdentityParams{ PreviousCount_, SlotCapacity_, Count, 0u };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(FTemporalMotionConstants),
                     &CPU, sizeof(CPU));
         PreviousCount_ = Count;

@@ -213,9 +213,13 @@ namespace Smile {
         }
     }
 
-    void FHiZOcclusion::WriteBounds(u32 _FrameSlot, u32 _SceneIndex, const Vec3& _AABBMin,
+    void FHiZOcclusion::WriteBounds(u32 _FrameSlot, FGpuSceneHandle Handle, const Vec3& _AABBMin,
                                     const Vec3& _AABBMax) {
-        if (!MappedBounds || _SceneIndex >= ObjectCapacity) return;
+        auto& Handles = SlotMeta[_FrameSlot].Handles;
+        if (!MappedBounds || Handles.size() >= ObjectCapacity || Handle.Generation == 0 ||
+            Handle.Slot == FGpuSceneHandle::kInvalidSlot) return;
+        const u32 _SceneIndex = static_cast<u32>(Handles.size());
+        Handles.push_back(Handle);
         FBoundsEntry E{};
         E.Center[0] = (_AABBMin.X + _AABBMax.X) * 0.5f;
         E.Center[1] = (_AABBMin.Y + _AABBMax.Y) * 0.5f;
@@ -230,12 +234,11 @@ namespace Smile {
     }
 
     void FHiZOcclusion::RecordTest(ID3D12GraphicsCommandList* _Cmd, FTextureSRVHeap& _SRVHeap,
-                                   u32 _FrameSlot, u32 _ObjectCount,
-                                   const Mat44& _ViewProjNoJitter) {
+                                   u32 _FrameSlot, const Mat44& _ViewProjNoJitter) {
         FSlotMeta& Meta = SlotMeta[_FrameSlot];
         Meta.Valid = false;
-        if (!Ready || ObjectCapacity == 0 || _ObjectCount == 0) return;
-        const u32 Count = std::min(_ObjectCount, ObjectCapacity);
+        const u32 Count = static_cast<u32>(Meta.Handles.size());
+        if (!Ready || ObjectCapacity == 0 || Count == 0) return;
 
         FTestConstants TC{};
         TC.ViewProj    = _ViewProjNoJitter;
@@ -272,21 +275,25 @@ namespace Smile {
                                static_cast<u64>(Count) * sizeof(u32));
 
         Meta.Count    = Count;
-        Meta.RawCount = _ObjectCount;
         Meta.Valid    = true;
     }
 
-    // _ExpectedCount = renderables.size() do frame que consome. Deve bater com a
-    // RawCount do teste (mesma cena); a capacidade clampada NAO entra na comparacao
-    // (o resultado cobre [0, Count) e o chamador so le indices < Capacity()).
-    const u32* FHiZOcclusion::ResolveResults(u32 _FrameSlot, u32 _ExpectedCount) const {
-        const FSlotMeta& Meta = SlotMeta[_FrameSlot];
-        if (!MappedReadback || !Meta.Valid || Meta.RawCount != _ExpectedCount) return nullptr;
-        return MappedReadback + static_cast<size_t>(_FrameSlot) * ObjectCapacity;
+    void FHiZOcclusion::BeginFrame(u32 _FrameSlot, const FGpuSceneSlots& Slots) {
+        FSlotMeta& Meta = SlotMeta[_FrameSlot];
+        if (MappedReadback && Meta.Valid && Meta.Count == Meta.Handles.size()) {
+            const u32* Results = MappedReadback + static_cast<size_t>(_FrameSlot) * ObjectCapacity;
+            Visibility.Publish(Slots, Meta.Handles, std::span<const u32>(Results, Meta.Count));
+        } else {
+            Visibility.Publish(Slots, {}, {});
+        }
+        Meta.Valid = false;
+        Meta.Count = 0;
+        Meta.Handles.clear();
     }
 
     void FHiZOcclusion::InvalidateResults() {
         for (u32 s = 0; s < kSlots; ++s) SlotMeta[s].Valid = false;
+        Visibility.Invalidate();
     }
 
     void FHiZOcclusion::CreatePipelines(ID3D12Device* _Device) {

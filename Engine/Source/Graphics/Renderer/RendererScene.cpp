@@ -195,11 +195,9 @@ namespace Smile {
         if (_ChangedMin && _ChangedMax)
             DDGI.InvalidateRegion(*_ChangedMin, *_ChangedMax, EGIRegionChange::Geometry);
 
-        // Picks em voo carregam indices e nao sobrevivem a uma mudanca estrutural.
-        ObjectPicker.CancelPending();
+        // Pick pendente e historicos de modelos sao por identidade capturada. Sobreviventes
+        // preservam o historico mesmo com a cauda da lista deslocada.
         SceneState->Selection = SceneState->Scene.FindObject(SceneState->Selection.Id);
-        // PreviousModels e indexado pela ordem da cena, que acabou de mudar.
-        SceneState->PreviousModels.Invalidate();
 
         // Estruturas de GPU compartilham a folga de SceneCapacityFor; ao excede-la, todo o setup
         // de cena precisa ser refeito porque TLAS, InstanceGeo e SRVs possuem capacidade fixa.
@@ -434,6 +432,8 @@ namespace Smile {
             ? TemporalMotion.MotionSRV() : Targets.VelocitySRVSlot;
         const u32 TemporalTransformSlots[FCommandQueue::kFramesInFlight] = {
             TemporalMotion.TransformSRV(0), TemporalMotion.TransformSRV(1) };
+        const u32 TemporalIdentitySlots[FCommandQueue::kFramesInFlight] = {
+            TemporalMotion.IdentitySRV(0), TemporalMotion.IdentitySRV(1) };
         const u32 TemporalSurfaceSlots[FCommandQueue::kFramesInFlight] = {
             TemporalMotion.SurfaceSRV(0), TemporalMotion.SurfaceSRV(1) };
 
@@ -441,7 +441,7 @@ namespace Smile {
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), Targets.DepthSRVSlot,
             ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV(),
             MeshLights.LightSRVSlot(), MeshLights.AliasSRVSlot(),
-            DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots);
+            DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots, TemporalIdentitySlots, TemporalMotion.RemapSRV());
         // A direta nao depende do volume DDGI. Ela ja vinha antes do early-out que existia aqui;
         // agora ninguem depende, e a ordem so reflete que o pack dela le o TemporalMotion acima.
         SetupNrdDirect();
@@ -460,7 +460,7 @@ namespace Smile {
             Targets.VelocitySRVSlot,
             Targets.SceneCopyTableStart, Targets.SceneCopyTableStart + 1, Targets.SceneColorMipCount,
             Atmosphere.SkyReflectionSRV(), HDREnv.SpecularSRV(),
-            TemporalTransformSlots, TemporalSurfaceSlots);
+            TemporalTransformSlots, TemporalSurfaceSlots, TemporalIdentitySlots, TemporalMotion.RemapSRV());
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());

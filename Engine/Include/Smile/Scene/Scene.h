@@ -98,17 +98,13 @@ namespace Smile {
     enum class EMobility : u8 { Static = 0, Dynamic };
 
     struct FRenderable {
-        // Identidade ESTAVEL do renderavel (0 = ainda nao atribuida). Mesmo motivo do FLight::Id:
-        // o INDICE na lista nao serve como identidade, porque remover o objeto 0 desloca todo
-        // mundo. A diferenca e que aqui o indice tambem e ENDERECO DE GPU em quatro sistemas —
-        // InstanceID da TLAS, slot do buffer de transforms do TemporalMotion, entrada do readback
-        // do HiZ e o ID que o passe de picking grava. Por isso o indice continua sendo o que o
-        // renderer usa por frame (denso, sem indirecao) e o Id so aparece onde algo precisa
-        // sobreviver a uma mudanca da lista: selecao, undo futuro, serializacao futura.
+        // Identidade ESTAVEL do editor (0 = ainda nao atribuida). O indice da lista continua
+        // sendo endereco local de frame na TLAS/InstanceGeo/transforms; nao e identidade duravel.
+        // Picking captura {GpuHandle, Id}; temporal e HiZ resolvem pelo handle daquele frame.
         u64         Id = 0;
 
         // Residencia GPU. Separada do Id (identidade de EDITOR) e da posicao na lista (ordem
-        // AUTORAL): e a identidade que os quatro consumidores de GPU vao passar a usar no lugar
+        // AUTORAL): e a identidade que os quatro consumidores de GPU usam no lugar
         // do indice. Invalido significa "sem residencia" — a FScene ainda tem o objeto, mas
         // nada de GPU pode enderecar por ele.
         FGpuSceneHandle GpuHandle;
@@ -154,6 +150,11 @@ namespace Smile {
         Vec3        AABBMin  = { -1e9f, -1e9f, -1e9f };
         Vec3        AABBMax  = {  1e9f,  1e9f,  1e9f };
 
+        // Um ID de frame pode ter buracos: objetos ocultos/sem geometria nao entram na TLAS.
+        // O mesmo predicado alimenta a tabela temporal; RaytracingOnly continua elegivel.
+        FGpuSceneHandle RaytracingHandle() const {
+            return Visible && Mesh && Mesh->IsValid() ? GpuHandle : FGpuSceneHandle{};
+        }
         void RefreshWorldBounds();
     };
 

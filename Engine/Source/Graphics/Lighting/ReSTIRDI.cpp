@@ -25,7 +25,7 @@ namespace Smile {
         // de superficie do frame anterior (t12).
         constexpr u32 kInitialSRVs = 13;
         constexpr u32 kInitialUAVs = 2;
-        constexpr u32 kSpatialSRVs = 13;
+        constexpr u32 kSpatialSRVs = 16;
         constexpr u32 kSpatialUAVs = 5;
 
         // Posicao dos descritores de MESH LIGHT dentro de cada tabela. Existem com nome porque o
@@ -134,7 +134,8 @@ namespace Smile {
                                    u32 MeshLightSlot, u32 MeshAliasSlot,
                                    const u32 LightSlots[FCommandQueue::kFramesInFlight],
                                    const u32 TransformSlots[FCommandQueue::kFramesInFlight],
-                                   const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]) {
+                                   const u32 SurfaceSlots[FCommandQueue::kFramesInFlight],
+                                   const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot) {
         if (!Initialized) return;
         ReleaseResize(SRVHeap);
         if (NewWidth == 0 || NewHeight == 0 ||
@@ -145,7 +146,7 @@ namespace Smile {
             MeshAliasSlot == kInvalidSlot) return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (LightSlots[f] == kInvalidSlot || TransformSlots[f] == kInvalidSlot ||
-                SurfaceSlots[f] == kInvalidSlot) return;
+                SurfaceSlots[f] == kInvalidSlot || IdentitySlots[f] == kInvalidSlot || RemapSlot == kInvalidSlot) return;
 
         Width = NewWidth; Height = NewHeight;
         Output = CreateUAVTexture(Device, Width, Height, kOutputFormat);
@@ -183,16 +184,7 @@ namespace Smile {
         }
 
         auto CopyTable = [&](u32 DstSlot, const u32* Slots, u32 Count) {
-            D3D12_CPU_DESCRIPTOR_HANDLE Dst = SRVHeap.CpuHandle(DstSlot);
-            D3D12_CPU_DESCRIPTOR_HANDLE Src[16]{};
-            UINT SrcCounts[16]{};
-            for (u32 i = 0; i < Count; ++i) {
-                Src[i] = SRVHeap.CpuHandleStaging(Slots[i]);
-                SrcCounts[i] = 1;
-            }
-            UINT DstCount = Count;
-            Device->CopyDescriptors(1, &Dst, &DstCount, Count, Src, SrcCounts,
-                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            SRVHeap.CopyTable(Device, DstSlot, std::span<const u32>(Slots, Count));
         };
 
         SpatialUAVTable = SRVHeap.Allocate(kSpatialUAVs);
@@ -224,7 +216,7 @@ namespace Smile {
                     ResWSRV[p], ResBSRV[p], LightSlots[f], TransformSlots[f],
                     SurfaceSlots[f], SurfaceSlots[1u - f],
                     // t12: pool de mesh lights — ver kSpatialMeshLightIdx.
-                    MeshLightSlot };
+                    MeshLightSlot, IdentitySlots[1u - f], RemapSlot, IdentitySlots[f] };
                 CopyTable(SpatialTable[p][f], SpatialSlots, kSpatialSRVs);
             }
         }
@@ -371,7 +363,8 @@ namespace Smile {
                                    u32 FrameIndex, u32 LightCount, u32 ShadowRayMask,
                                    bool EnableTemporalPermutation,
                                    u32 TemporalInstanceCount, bool MotionHistoryValid,
-                                   u32 MeshLightCount) {
+                                   u32 MeshLightCount, FTemporalIdentityParams IdentityParams) {
+        CPU.IdentityParams = IdentityParams;
         FrameSlot = NewFrameSlot;
         if (!MappedCB || NewWidth == 0 || NewHeight == 0) return;
         CPU.InvViewProj = InvViewProj;

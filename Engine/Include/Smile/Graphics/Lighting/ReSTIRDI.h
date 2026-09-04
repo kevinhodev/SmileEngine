@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/RayTracing/RayEpsilons.h"
@@ -35,7 +36,9 @@ namespace Smile {
         // arredondava os 320 anteriores para 512. Ha folga para mais sete float4 antes de a fatia
         // do CBV precisar dobrar.
         Vec4  MeshSampling;  // x = candidatas mesh; y = BRDF-ratio demodulation; zw livres
+        FTemporalIdentityParams IdentityParams;
     };
+    static_assert(offsetof(ReSTIRDIConstants, IdentityParams) == 336, "uint4 de identidade no spatial");
     static_assert(sizeof(ReSTIRDIConstants) == 512,
                   "ReSTIRDIConstants deve ocupar fatias CBV alinhadas a 256 bytes");
     // O Pass A alcanca o MeshSampling declarando o PrevViewProj que ele nao le — cbuffer e
@@ -71,7 +74,8 @@ namespace Smile {
                             u32 MeshLightSlot, u32 MeshAliasSlot,
                             const u32 LightSlots[FCommandQueue::kFramesInFlight],
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
-                            const u32 SurfaceSlots[FCommandQueue::kFramesInFlight]);
+                            const u32 SurfaceSlots[FCommandQueue::kFramesInFlight],
+                            const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot);
         // Reescreve SO os descritores de mesh light das tabelas de trace, sem realocar alvo nem
         // reservoir. Chamar sempre que o FMeshLights se reconstruir fora do SetupForResize — hoje,
         // o caminho barato do Renderer::OnSceneStructureChanged. As tabelas guardam uma COPIA do
@@ -93,7 +97,7 @@ namespace Smile {
                             u32 Width, u32 Height, u32 FrameIndex, u32 LightCount,
                             u32 ShadowRayMask, bool EnableTemporalPermutation,
                             u32 TemporalInstanceCount, bool MotionHistoryValid,
-                            u32 MeshLightCount);
+                            u32 MeshLightCount, FTemporalIdentityParams IdentityParams);
         void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
                     FGpuProfiler* Profiler = nullptr);
         void RecordNrdPack(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);

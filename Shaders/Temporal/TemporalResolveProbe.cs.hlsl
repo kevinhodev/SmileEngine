@@ -13,7 +13,7 @@
 #include "TemporalMotionCommon.hlsli"
 
 cbuffer ProbeCB : register(b0) {
-    uint4 Params; // x=slotCapacity, y=currentCount, z=quantidade de casos
+    uint4 Params; // x=previousCount, y=reserved, z=quantidade de casos
 };
 
 StructuredBuffer<FGpuIdentityEntry> PreviousIdentity   : register(t0);
@@ -33,7 +33,11 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     uint index = 0xFFFFFFFFu;
     const uint4 caso = PreviousIds[i];
-    const bool ok = TemporalResolvePreviousIndex(caso.x,
+    const bool ok = caso.w != 0u
+        ? TemporalMatchPreviousSurface((float)(caso.x + 1u), Params.x, caso.w - 1u,
+                                      PreviousIdentity, SlotToCurrentIndex, CurrentIdentity,
+                                      caso.y, caso.z, index)
+        : TemporalResolvePreviousIndex(caso.x,
                                                  PreviousIdentity,
                                                  SlotToCurrentIndex,
                                                  CurrentIdentity,

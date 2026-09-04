@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Smile/Core/Types.h"
+#include "Smile/Scene/CapturedIdentity.h"
 #include "Smile/Math/Math.h"
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
@@ -16,7 +17,7 @@ namespace Smile {
     //   1. RecordBuild — cadeia de mips do depth do prepass (min-reduce em reverse-Z);
     //   2. RecordTest  — 1 thread/AABB contra o HZB com a VP SEM jitter do proprio N,
     //      resultado copiado pro slot N do readback ring (kFramesInFlight);
-    //   3. frame N+2: ResolveResults(slot) — a fence do slot ja foi esperada no
+    //   3. frame N+2: BeginFrame(slot) — a fence do slot ja foi esperada no
     //      BeginFrame, a CPU le sem stall e o Renderer descarta ocludidos do draw list.
     // Conservador: fora do frustum/cruzando near/entrada nula/frame invalido = visivel.
     //
@@ -59,19 +60,19 @@ namespace Smile {
         void RecordBuild(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                          u32 DepthSRVSlot);
 
-        // AABB do renderable SceneIndex no slot atual (antes do RecordTest).
-        void WriteBounds(u32 FrameSlot, u32 SceneIndex, const Vec3& AABBMin,
+        // Depois da fence do frame slot: consome o remap antigo ANTES de reutiliza-lo.
+        void BeginFrame(u32 FrameSlot, const FGpuSceneSlots& Slots);
+        // Dispatch compacto: a ordem desta captura pertence ao teste, nunca a cena.
+        void WriteBounds(u32 FrameSlot, FGpuSceneHandle Handle, const Vec3& AABBMin,
                          const Vec3& AABBMax);
 
         // Teste + copia pro readback do slot. Chamar DEPOIS do RecordBuild do mesmo
         // frame; ViewProj SEM jitter. Marca o slot como valido p/ o resolve futuro.
         void RecordTest(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
-                        u32 FrameSlot, u32 ObjectCount, const Mat44& ViewProjNoJitter);
+                        u32 FrameSlot, const Mat44& ViewProjNoJitter);
 
-        // Resultados gravados ha kFramesInFlight frames neste slot: 1 = visivel,
-        // 0 = ocludido, indexado por SceneIndex. nullptr se o slot ainda nao tem
-        // resultado valido ou se a lista mudou de tamanho (tudo visivel).
-        const u32* ResolveResults(u32 FrameSlot, u32 ExpectedCount) const;
+        // Sem resultado DAQUELE handle na amostra consumida, usa visivel.
+        bool IsVisible(FGpuSceneHandle Handle) const { return Visibility.IsVisible(Handle); }
 
         // Descarta os resultados pendentes (toggle re-ligado, cena trocada, teleporte).
         void InvalidateResults();
@@ -117,10 +118,12 @@ namespace Smile {
             f32   DepthBias;
             f32   Pad[3];
         };
-        // Count  = entradas realmente testadas neste slot = min(RawCount, capacity).
-        // RawCount = renderables.size() no frame do teste; muda so quando a lista muda
-        // de tamanho de verdade (troca/carga de cena) -> invalida o resultado no resolve.
-        struct FSlotMeta { u32 Count = 0; u32 RawCount = 0; bool Valid = false; };
+        struct FSlotMeta {
+            std::vector<FGpuSceneHandle> Handles;
+            u32 Count = 0;
+            bool Valid = false;
+        };
+        FCapturedVisibility Visibility;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> BoundsBuffer;   // upload ring kSlots
         Microsoft::WRL::ComPtr<ID3D12Resource> ResultBuffer;   // default, UAV

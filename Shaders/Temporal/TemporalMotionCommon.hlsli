@@ -76,6 +76,21 @@ bool TemporalResolvePreviousIndex(uint previousId,
     return true;
 }
 
+// Reprojecao de receptores: duas superficies de frames diferentes so casam depois do remap.
+// Compartilhado pelos leitores reais e pela sonda WARP.
+bool TemporalMatchPreviousSurface(float encoded, uint previousCount, uint receiverIndex,
+                                   StructuredBuffer<FGpuIdentityEntry> previousTable,
+                                   StructuredBuffer<uint> slotToCurrentIndex,
+                                   StructuredBuffer<FGpuIdentityEntry> currentTable,
+                                   uint slotCapacity, uint currentCount, out uint currentIndex) {
+    currentIndex = 0u;
+    uint previousId;
+    if (!TemporalDecodeInstance(encoded, previousCount, previousId)) return false;
+    return TemporalResolvePreviousIndex(previousId, previousTable, slotToCurrentIndex,
+                                        currentTable, slotCapacity, currentCount, currentIndex) &&
+           currentIndex == receiverIndex;
+}
+
 float3 TemporalTransformPoint(float3 p, row_major float4x4 m) {
     const float4 h = mul(float4(p, 1.0f), m);
     return h.xyz / max(abs(h.w), 1.0e-6f);

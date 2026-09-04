@@ -28,13 +28,7 @@ namespace Smile {
 
     // Contadores que o shader compara com indices. Ficam em u32 porque sao CAPACIDADES, e
     // capacidade nao herda o teto de 24 bits do id.
-    struct FTemporalIdentityParams {
-        u32 PreviousInstanceCount = 0;
-        u32 SlotCapacity          = 0;
-        u32 Reserved0             = 0;
-        u32 Reserved1             = 0;
-    };
-    static_assert(sizeof(FTemporalIdentityParams) == 16, "uint4 no HLSL");
+
 
     struct alignas(256) FTemporalMotionConstants {
         Mat44 InvViewProj;
@@ -110,6 +104,8 @@ namespace Smile {
             return SurfaceSRVSlot[Slot % FCommandQueue::kFramesInFlight];
         }
         u32 InstanceCount() const { return InstanceCount_; }
+        u32 RemapSRV() const { return SlotRemapSRVSlot; }
+        FTemporalIdentityParams IdentityParams() const { return CPU.IdentityParams; }
         // Capacidade do remap. O renderer compara com a capacidade do POOL para decidir
         // re-setup: os slots crescem por churn, sem a contagem viva mudar.
         u32 SlotCapacity() const { return SlotCapacity_; }

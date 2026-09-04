@@ -10,7 +10,7 @@ float4 ComputeGlossyMotion(uint2 px, float3 receiverPos, float3 receiverNormal,
                            float3 secondaryHit, uint secondaryInstance,
                            float roughness, uint randomStream) {
     if (DebugParams.z < 0.5f) return 0.0f; // surface history ainda nao existe
-    const uint instanceCount = (uint)PrevCameraPos.w;
+    const uint instanceCount = IdentityParams.z;
     uint receiverInstance;
     if (!TemporalDecodeInstance(TemporalSurface.Load(int3(px, 0)).w,
                                 instanceCount, receiverInstance) ||
@@ -51,9 +51,10 @@ float4 ComputeGlossyMotion(uint2 px, float3 receiverPos, float3 receiverNormal,
     const int2 previousPx = clamp(int2(prevUv * ScreenParams.xy), int2(0, 0),
                                   int2(ScreenParams.xy) - 1);
     const float4 actualPrevious = PrevTemporalSurface.Load(int3(previousPx, 0));
-    uint previousInstance;
-    if (!TemporalDecodeInstance(actualPrevious.w, instanceCount, previousInstance) ||
-        previousInstance != receiverInstance)
+    uint resolvedInstance;
+    if (!TemporalMatchPreviousSurface(actualPrevious.w, IdentityParams.x, receiverInstance,
+                                      PreviousIdentity, SlotToCurrentIndex, CurrentIdentity,
+                                      IdentityParams.y, instanceCount, resolvedInstance))
         return 0.0f;
 
     const float planeDistance = abs(dot(actualPrevious.xyz - prevS, prevN));

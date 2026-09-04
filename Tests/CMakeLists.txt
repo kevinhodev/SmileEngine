@@ -1,3 +1,20 @@
+option(SMILE_ENABLE_RENDERER_IDENTITY_TESTS "Run Phase 1 integration on a DXR-capable GPU" OFF)
+if(SMILE_ENABLE_RENDERER_IDENTITY_TESTS)
+    add_executable(SmileRendererIdentityTests RendererIdentityTests.cpp)
+    target_link_libraries(SmileRendererIdentityTests PRIVATE SmileEngine)
+    target_compile_features(SmileRendererIdentityTests PRIVATE cxx_std_20)
+    set_target_properties(SmileRendererIdentityTests PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF FOLDER "Tests")
+    # Same output directory and runtime dependencies (Agility/NRD/Streamline) as the editor.
+    add_dependencies(SmileRendererIdentityTests SmileEditor Shaders)
+    add_test(NAME Smile.RendererIdentity
+        COMMAND SmileRendererIdentityTests "${CMAKE_CURRENT_BINARY_DIR}/SyntheticScenes/Synthetic_10k.sscene")
+    set_tests_properties(Smile.RendererIdentity PROPERTIES
+        LABELS "gpu-driven;identity;hardware" TIMEOUT 240
+        FIXTURES_REQUIRED SyntheticScene_10k RESOURCE_LOCK CookedSceneMemory
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:SmileEditor>")
+endif()
+
 add_executable(SmileMathPrimitivesTests
     MathPrimitivesTests.cpp
 )
@@ -702,6 +719,8 @@ target_link_libraries(SmileTemporalIdentityTableTests PRIVATE d3d12 dxgi)
 # o leitor para indexar transform com id antigo deixe o gate vermelho.
 target_compile_definitions(SmileTemporalIdentityTableTests PRIVATE
     SMILE_DUALMOTION_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/DualMotion.cs.hlsl"
+    SMILE_REFLECTIONMOTION_PATH="${PROJECT_SOURCE_DIR}/Shaders/Reflections/ReflectionMotion.hlsli"
+    SMILE_DISPATIAL_PATH="${PROJECT_SOURCE_DIR}/Shaders/Lighting/ReSTIRDISpatial.cs.hlsl"
     SMILE_RENDERERSCENE_PATH="${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Renderer/RendererScene.cpp"
 )
 set_target_properties(SmileTemporalIdentityTableTests PROPERTIES

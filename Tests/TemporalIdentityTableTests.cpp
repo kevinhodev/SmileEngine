@@ -384,6 +384,15 @@ int main() {
                   "o renderer consulta a capacidade do pool para decidir re-setup");
         }
 
+        for (const char* Path : { SMILE_REFLECTIONMOTION_PATH, SMILE_DISPATIAL_PATH }) {
+            const auto Reader = LerArquivo(Path, Abriu);
+            Check(Abriu, "leitor de reflexao/DI encontrado");
+            Check(Reader.find("TemporalMatchPreviousSurface(") != std::string::npos,
+                  "leitor usa o matcher executado pela sonda WARP");
+            Check(Reader.find("IdentityParams.z") != std::string::npos,
+                  "contagem atual e inteira, nao capacidade convertida para float");
+        }
+
         const std::string Dual = LerArquivo(SMILE_DUALMOTION_PATH, Abriu);
         Check(Abriu, "o DualMotion foi encontrado");
         if (Abriu) {
@@ -396,6 +405,36 @@ int main() {
             Check(Dual.find("IdentityParams.x, backgroundId") != std::string::npos,
                   "assim como o fundo, que tambem vem da superficie anterior");
         }
+    }
+
+    // HiZ: publica a lista compacta capturada, nao a posicao atual da cena.
+    {
+        FGpuSceneSlots Slots;
+        const auto A = Slots.Allocate(), B = Slots.Allocate(), C = Slots.Allocate();
+        FCapturedVisibility Visibility;
+        const std::vector<FGpuSceneHandle> Captured{ C, A, B };
+        const std::vector<u32> Results{ 0u, 0u, 1u };
+        Slots.Retire(A, {4, 8});
+        Visibility.Publish(Slots, Captured, Results);
+        Check(!Visibility.IsVisible(C), "HiZ: C continua ocludido apos A sair da lista");
+        Check(Visibility.IsVisible(B), "HiZ: B nao herda oclusao de A");
+        Check(Visibility.IsVisible(A), "HiZ: resultado de handle Retired e descartado");
+        Slots.Collect({4, 8});
+        const auto E = Slots.Allocate();
+        Check(E.Slot == A.Slot && E.Generation != A.Generation, "HiZ: exercita reuso real");
+        Visibility.Publish(Slots, Captured, Results);
+        Check(Visibility.IsVisible(E), "HiZ: readback antigo nao oculta o ocupante novo");
+        const std::vector<FGpuSceneHandle> OnlyB{B};
+        const std::vector<u32> Hidden{0u};
+        Visibility.Publish(Slots, OnlyB, Hidden);
+        Check(Visibility.IsVisible(C), "HiZ: ausente no snapshot novo nao herda oclusao antiga");
+        Check(!Visibility.IsVisible(B), "HiZ: snapshot novo efetivamente publicado");
+        Visibility.Invalidate();
+        Check(Visibility.IsVisible(B), "HiZ: teleporte/resize invalida publicacao");
+        Visibility.Publish(Slots, OnlyB, {});
+        Check(Visibility.IsVisible(B), "HiZ: readback incompleto usa visivel");
+        Visibility.Publish(Slots, {}, {});
+        Check(Visibility.IsVisible(FGpuSceneHandle{0,0}), "HiZ: handle zerado e conservador");
     }
 
     if (Failures == 0) {

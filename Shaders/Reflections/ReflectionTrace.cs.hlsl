@@ -47,6 +47,7 @@ cbuffer ReflectionCB : register(b0) {
     float4 GICascadeScrollOffset[4];
     float4 EnvironmentSky;
     float4 EnvironmentGround;
+    uint4 IdentityParams; // previous count, remap capacity
 };
 
 // Politica de culling DESTE passe. O Lumen culla na reflexao e nao culla no gather do ReSTIR; a
@@ -77,6 +78,9 @@ StructuredBuffer<FPunctualLight> SceneLights : register(t8); // F5: luzes puntua
 StructuredBuffer<FTemporalInstanceTransform> TemporalTransforms : register(t9);
 Texture2D<float4> TemporalSurface : register(t10);
 Texture2D<float4> PrevTemporalSurface : register(t11);
+StructuredBuffer<FGpuIdentityEntry> PreviousIdentity : register(t12);
+StructuredBuffer<uint> SlotToCurrentIndex : register(t13);
+StructuredBuffer<FGpuIdentityEntry> CurrentIdentity : register(t14);
 
 RWTexture2D<float4>             RWReflection : register(u0);
 RWTexture2D<float4>             RWRayData    : register(u1); 

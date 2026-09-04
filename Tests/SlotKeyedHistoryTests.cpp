@@ -190,6 +190,26 @@ int main() {
               "e, sobretudo, nao APAGA o historico valido que estava la");
     }
 
+    // Ocultar encerra a continuidade somente do objeto ocultado.
+    {
+        TSlotKeyedHistory<Mat44> H;
+        H.EnsureCapacity(2);
+        const FGpuSceneHandle A{0, 2}, B{1, 1};
+        const Mat44 Atual = Marca(9, 3);
+        H.Store(A, Marca(1, 1));
+        H.Store(B, Marca(2, 1));
+        H.Forget({0, 1});
+        H.Forget({0, 0});
+        H.Forget({});
+        Check(Igual(H.PreviousOr(A, Atual), Marca(1, 1)),
+              "Forget de handle obsoleto/invalido nao apaga o ocupante atual");
+        H.Forget(A);
+        Check(Igual(H.PreviousOr(A, Atual), Atual), "reaparecer comeca no transform atual");
+        Check(Igual(H.PreviousOr(B, Atual), Marca(2, 1)), "ocultar A preserva B");
+        H.Store(A, Atual);
+        Check(Igual(H.PreviousOr(A, Marca(0, 0)), Atual), "reaparecido volta a guardar");
+    }
+
     // 8. Round-trip do id de instancia pelo canal FLOAT da superficie temporal.
     //
     // O shader grava (id + 1) num float32 e o decoder le de volta. O decoder tinha um "+ 0.5f"
