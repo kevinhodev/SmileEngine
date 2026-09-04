@@ -10,14 +10,14 @@
 //
 // O que ele guarda e PROCEDENCIA, nao dado:
 //
-//   MALHA — o arquivo .smesh e o indice da entrada. A geometria de bake (UVs + indices) e lida
+//   MALHA — o arquivo .smesh, o indice da entrada e o hash das UVs+indices. A geometria e lida
 //   sob demanda. A primeira versao disto retinha os proprios UVs e indices, e isso tinha dois
 //   defeitos: pagava memoria residente por uma operacao manual e rara, e so podia reter as malhas
 //   que ja eram MASCARADAS no import — entao ligar Alpha Test num material opaco depois nao tinha
 //   com que bakear. Guardando procedencia, cabe reter TODAS as malhas por ~40 B cada, e a
 //   transicao opaco -> masked passa a funcionar.
 //
-//   TEXTURA — o caminho do arquivo, com as flags de decodificacao do load original. Mesma razao:
+//   TEXTURA — o caminho, as flags de decodificacao do load original e o hash dos pixels. Mesma razao:
 //   guardar o BC7 de folhagem residente custaria dezenas de MB por um caminho que roda quando
 //   alguem mexe num slider.
 //
@@ -28,6 +28,7 @@
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Resources/Texture.h"
 
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -36,45 +37,92 @@ namespace Smile {
     class FGpuMesh;
     class FTexture;
 
-    // IDENTIDADE do arquivo de onde uma entrada de bake veio: tamanho e hora de escrita.
+    // IDENTIDADE das entradas de bake: um hash do CONTEUDO que o loader carregou.
     //
-    // Caminho sozinho NAO e procedencia. Um recook mantem magic e versao, e pode trocar as UVs,
-    // os indices ou a ORDEM das malhas — e o rebake aceitaria em silencio, produzindo um
-    // micro-map que descreve geometria diferente da que esta nos buffers de GPU. A textura tem o
-    // mesmo TOCTOU: reler o caminho nao garante reler os bytes que foram enviados a GPU.
+    // Caminho sozinho nao e procedencia — um recook mantem magic e versao e pode trocar UVs,
+    // indices ou a ORDEM das malhas. Carimbo de arquivo {tamanho, hora} tambem nao serve, e a
+    // razao e uma janela concreta: o loader le os bytes, o import bakeia, e so DEPOIS o carimbo
+    // seria tirado. Um recook nesse intervalo deixa os buffers antigos na GPU e registra o
+    // carimbo do arquivo NOVO — a validacao passaria justamente no caso que ela existe para pegar.
     //
-    // O que ele prova, exatamente: a geometria residente foi carregada DAQUELE arquivo e nao muda
-    // depois; logo, arquivo inalterado implica geometria inalterada. Nao prova mais que isso — uma
-    // edicao in-place que preserve tamanho E hora passaria —, e essa nao e a ameaca: o caso real e
-    // recozinhar com o editor aberto, que reescreve o arquivo.
+    // O hash sai dos bytes que o loader ja tem em RAM, entao nao acrescenta leitura nenhuma ao
+    // load: e uma passada sobre dado que ja esta residente. Na releitura do rebake o mesmo hash e
+    // recalculado e comparado.
     //
-    // Fingerprint de ARQUIVO e nao de conteudo por causa do custo: hashear a geometria e as
-    // texturas de BaseColor da cena somaria centenas de MB de leitura ao load, todo load, para
-    // proteger uma operacao manual e rara.
-    struct FOmmFileStamp {
-        u64 SizeBytes = 0;
-        i64 WriteTime = 0; // rep() do file_time_type; so a igualdade importa
-        bool Valid() const { return SizeBytes != 0; }
-        friend bool operator==(const FOmmFileStamp& A, const FOmmFileStamp& B) {
-            return A.SizeBytes == B.SizeBytes && A.WriteTime == B.WriteTime;
+    // Zero significa "sem fingerprint" e nunca casa com nada: procedencia indisponivel falha
+    // FECHADA. Registrar sem fingerprint e recusado na entrada, e nao ha caminho em que duas
+    // consultas com erro passem a "bater" — que era o defeito do carimbo de arquivo.
+    using FOmmContentHash = u64;
+    inline constexpr FOmmContentHash kOmmNoContentHash = 0;
+
+    // FNV-1a por PALAVRA. Nao e criptografico e nao precisa ser: o que ele detecta e recook e
+    // troca de asset, nao adversario.
+    inline FOmmContentHash OmmHashAppend(FOmmContentHash H, const void* Data, size_t Bytes) {
+        const auto* B = static_cast<const u8*>(Data);
+        size_t I = 0;
+        for (; I + 8 <= Bytes; I += 8) {
+            u64 Word;
+            std::memcpy(&Word, B + I, sizeof(Word));
+            H ^= Word;
+            H *= 1099511628211ull;
         }
-        friend bool operator!=(const FOmmFileStamp& A, const FOmmFileStamp& B) { return !(A == B); }
-        // Zerado quando o arquivo nao existe ou nao pode ser consultado.
-        static FOmmFileStamp Of(const std::wstring& Path);
-    };
+        for (; I < Bytes; ++I) {
+            H ^= B[I];
+            H *= 1099511628211ull;
+        }
+        return H;
+    }
+
+    // Fingerprint da GEOMETRIA de bake. Percorre as UVs POR ELEMENTO e nao por bytes crus, porque
+    // os dois lados usam strides diferentes — no import as UVs vivem dentro do Vertex (32 B) e na
+    // releitura vem compactadas (8 B). Hashear bytes crus daria valores diferentes para a mesma
+    // geometria, e a validacao recusaria tudo.
+    //
+    // Os bits do float, e nao o valor: comparacao de igualdade de ponto flutuante nao e o que se
+    // quer aqui, e NaN nao seria igual a si mesmo.
+    inline FOmmContentHash OmmHashGeometry(const f32* TexCoords, u32 StrideBytes, u32 VertexCount,
+                                           const u32* Indices, u32 IndexCount) {
+        if (!TexCoords || !Indices || VertexCount == 0 || IndexCount == 0)
+            return kOmmNoContentHash;
+        FOmmContentHash H = 1469598103934665603ull;
+        H = OmmHashAppend(H, &VertexCount, sizeof(VertexCount));
+        H = OmmHashAppend(H, &IndexCount, sizeof(IndexCount));
+        const auto* Base = reinterpret_cast<const u8*>(TexCoords);
+        for (u32 V = 0; V < VertexCount; ++V) {
+            u32 Bits[2];
+            std::memcpy(Bits, Base + static_cast<size_t>(V) * StrideBytes, sizeof(Bits));
+            H = OmmHashAppend(H, Bits, sizeof(Bits));
+        }
+        H = OmmHashAppend(H, Indices, static_cast<size_t>(IndexCount) * sizeof(u32));
+        // Um hash que caia em zero por acidente viraria "sem fingerprint"; deslocar preserva a
+        // distincao sem enfraquecer nada.
+        return H == kOmmNoContentHash ? 1ull : H;
+    }
+
+    // Fingerprint da TEXTURA de alpha: tudo o que o baker consome dela, e nada mais — os pixels do
+    // mip 0, as dimensoes, o FORMATO (o baker manda os bytes crus para o DirectXTex, entao BC7 e
+    // RGBA8 sobre os mesmos bytes sao alphas diferentes) e o IsNormalMap (que zera o canal alpha
+    // no decode, o unico canal que o bake le).
+    //
+    // Nao recebe as flags do load por parametro: elas ja estao NO DADO (o sRGB vira variante
+    // _SRGB do formato, o IsNormalMap e um campo). Passa-las de fora abriria a possibilidade de
+    // registrar um fingerprint que descreve algo diferente do que foi decodificado.
+    FOmmContentHash OmmHashTexture(const FTextureCPUData& Data);
 
     class FOmmBakeInputStore {
     public:
-        // De qual arquivo cozido, e qual entrada dentro dele, a geometria desta malha veio. O
-        // carimbo do arquivo e tirado AQUI, no import, que e quando ele descreve os bytes que
-        // foram para a GPU. Idempotente por malha.
+        // De qual arquivo cozido, e qual entrada dentro dele, a geometria desta malha veio, com o
+        // fingerprint do CONTEUDO que o loader carregou. Registro sem fingerprint e recusado:
+        // procedencia indisponivel tem de falhar fechada. Idempotente por malha.
         void RetainMeshSource(const FGpuMesh* Mesh, const std::wstring& MeshFilePath, u32 MeshIndex,
-                              const FOmmFileStamp& Stamp);
+                              FOmmContentHash ContentHash);
 
-        // De onde a textura veio, ja resolvido em caminho absoluto, com as flags de decodificacao
-        // que o load original usou. Sem elas o rebake decodificaria o mesmo arquivo de outro jeito.
-        void RetainTexturePath(const FTexture* Texture, std::wstring Path, bool IsNormalMap,
-                               bool sRGB);
+        // De onde a textura veio, ja resolvido em caminho absoluto, junto com o DADO que o load
+        // produziu. As flags de decodificacao e o fingerprint saem dele: passar as flags de fora
+        // permitiria registrar (sRGB, normal map) que nao sao os que geraram estes pixels, e o
+        // rebake releria o arquivo de um jeito diferente do que subiu para a GPU.
+        void RetainTexturePath(const FTexture* Texture, std::wstring Path,
+                               const FTextureCPUData& Data);
 
         void Clear();
 
@@ -125,13 +173,13 @@ namespace Smile {
         struct FMeshSource {
             std::wstring  FilePath;
             u32           MeshIndex = 0;
-            FOmmFileStamp Stamp;
+            FOmmContentHash ContentHash = kOmmNoContentHash;
         };
         struct FTextureSource {
-            std::wstring  Path;
-            bool          IsNormalMap = false;
-            bool          sRGB        = false;
-            FOmmFileStamp Stamp;
+            std::wstring    Path;
+            bool            IsNormalMap = false;
+            bool            sRGB        = false;
+            FOmmContentHash ContentHash = kOmmNoContentHash;
         };
 
         std::unordered_map<const FGpuMesh*, FMeshSource>    Meshes_;

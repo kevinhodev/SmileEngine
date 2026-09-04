@@ -340,6 +340,8 @@ namespace SmileEditor {
         // Espelhos p/ o Refresh detectar mudanca externa (load de cena, picking).
         int CachedMatCount = -1;
         int CachedSelMesh  = -1;
+        // Reversoes de entrada de bake de micro-map aplicadas pelo renderer. Ver Refresh().
+        quint64 CachedRevertVersion = 0;
     };
 
     // Serve a imagem do preview pro QML (Image { source: "image://materialpreview/..." }).

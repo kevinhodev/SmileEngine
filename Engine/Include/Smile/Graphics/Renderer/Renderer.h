@@ -235,6 +235,12 @@ namespace Smile {
         // Constants direto (CBV upload mapeado) e chama UpdateConstants() p/ aplicar.
         std::vector<std::unique_ptr<FMaterial>>& GetMaterials() { return ImportedMaterials; }
 
+        // Sobe a cada REVERSAO de entrada de bake de micro-map feita pelo renderer. A edicao
+        // que a provocou veio da UI, e sem descobrir a reversao o controle continuaria exibindo
+        // um valor que a cena nao tem. O Editor compara esta versao por frame. Ver
+        // MaterialRevertVersion_ e RevertOmmInputs.
+        u64 GetMaterialRevertVersion() const { return MaterialRevertVersion_; }
+
         // Carga avulsa de textura em runtime (Editor de Materiais: troca de mapa num slot).
         // .dds direto; resto via WIC (png/jpg/bmp) com mips por decimacao. sRGB so muda a
         // view (albedo/emissivo). Dona da textura: ImportedTextures. nullptr em falha.
@@ -648,11 +654,11 @@ namespace Smile {
         // renderaveis que o compartilham e reconstroi os BLAS afetados. Drena as filas: e edicao
         // manual, e o caminho estavel nao passa por aqui. Devolve quantos pares foram refeitos.
         u32 RebakeStaleOpacityMicromaps();
+        // Desfaz uma edicao de entrada de bake que nao pode ser reconstruida. Ver o corpo.
+        void RevertOmmInputs(FMaterial& Material, const FOpacityMicromapData* Existing);
         // O bake de UM par (malha, material) a partir das entradas retidas. Nulo em falha, sempre
         // com log dizendo QUAL peca faltou — micro-map de procedencia parcial e o que a fase
         // existe para impedir.
-        // Desfaz uma edicao de entrada de bake que nao pode ser reconstruida. Ver o corpo.
-        void RevertOmmInputs(FMaterial& Material, const FOpacityMicromapData* Existing);
         std::shared_ptr<FOpacityMicromapData> BakeOpacityMicromapFor(const FGpuMesh* Mesh,
                                                                      const FMaterial* Material);
         // Reconstrucao completa; drena as filas e exige command list fechado.
@@ -921,6 +927,9 @@ namespace Smile {
         // Entradas de bake retidas para rebake de micro-map em runtime. Ver FOmmBakeInputStore:
         // sem elas a unica saida diante de uma edicao que invalida o OMM era recusar a edicao.
         FOmmBakeInputStore OmmBakeInputs;
+        // Sobe a cada reversao de entrada de bake. O editor compara por frame e reemite os sinais
+        // de propriedade — sem isto o controle continuaria mostrando o valor recusado.
+        u64 MaterialRevertVersion_ = 0;
 
         FGpuMaterialTable MaterialTable;
         // Tabela canonica de meshes. Dona dos descritores bindless de geometria e a UNICA

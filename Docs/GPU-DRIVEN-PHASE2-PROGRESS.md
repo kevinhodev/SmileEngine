@@ -11,7 +11,9 @@ proprietário**, e são elas que seguram o encerramento da fase:
    material (hazard de lifetime de GPU — quem prova é a debug layer numa sessão Debug), o slider de
    subsurface, e agora o rebake de micro-map. O rebake é observável: editar o corte de alpha numa
    folhagem e soltar tem de logar `[OMM] Rebake em runtime: N par(es)...` e fazer o painel mostrar
-   BLAS refeitos, sem que o recorte da folhagem no GI divirja do raster.
+   BLAS refeitos, sem que o recorte da folhagem no GI divirja do raster. Vale exercitar também o
+   caminho de **recusa** — trocar o BaseColor por uma textura gerada em runtime: o log tem de dizer
+   qual peça faltou e o controle na UI tem de **voltar sozinho** ao valor anterior.
 
 O gate do OMM deixou de ser pendência: **decidido pela reconstrução** e implementado.
 
@@ -27,7 +29,13 @@ Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 | `9186d93` | telemetria de bytes persistentes e bytes sujos por frame |
 | `b65063c` | `FGpuMeshRecord` + `FGpuMeshTable`, dona dos descritores de geometria |
 | `ab5f466` | layout e orçamento da tabela de instâncias |
-| (este) | os quatro findings da revisão de runtime |
+| `cb6cab5` | os quatro findings da revisão de runtime |
+| `1c1280f` | contratos `u32`/`u64` separados no MCP |
+| `5063c84` | entrada compacta de geometria para o baker |
+| `7e9c9a6` | rebake em runtime + reconstrução dos BLAS afetados |
+| `ee39f68` | os quatro furos do caminho de reconstrução |
+| `2877d82` | procedência que identifica bytes; recusa em vez de meia aplicação |
+| (este) | fingerprint de conteúdo, atomicidade por material, ranges antes das alocações |
 
 ## Findings da revisão (2026-09-04)
 
@@ -258,18 +266,38 @@ publicado no mapa — então sem o conjunto, N instâncias da mesma folhagem con
 e N BLAS idênticos. O custo escalaria por instância, exatamente o oposto do que a dedup do bake já
 garante.
 
-**Procedência é do arquivo, não do caminho.** Caminho sozinho não identifica bytes: um recook
+**Procedência é do conteúdo, não do caminho.** Caminho sozinho não identifica bytes: um recook
 preserva magic e versão e pode trocar UVs, índices ou a ordem das malhas, e o rebake aceitaria em
 silêncio — produzindo um micro-map que descreve geometria diferente da que está nos buffers de GPU.
-A textura tem o mesmo TOCTOU. Cada origem carrega um carimbo `{tamanho, hora de escrita}` tirado no
-import, conferido antes de qualquer releitura.
+A textura tem o mesmo TOCTOU. Cada origem carrega um **fingerprint do conteúdo** (FNV-1a por
+palavra) tirado no import, recalculado e conferido a cada releitura.
 
-O que o carimbo prova, exatamente: a geometria residente foi carregada daquele arquivo e não muda
-depois, logo arquivo inalterado implica geometria inalterada. Não prova mais que isso — uma edição
-in-place que preserve tamanho **e** hora passaria — e essa não é a ameaça: o caso real é recozinhar
-com o editor aberto, que reescreve o arquivo. Carimbo de arquivo e não hash de conteúdo por custo:
-hashear geometria e texturas de BaseColor somaria centenas de MB de leitura a **todo** load para
-proteger uma operação manual e rara.
+Um carimbo `{tamanho, hora de escrita}` chegou a ser a resposta aqui e **não servia**, por uma
+janela concreta: o carimbo só poderia ser tirado depois de o loader ler os bytes, então um recook
+*nesse intervalo* deixaria os buffers antigos na GPU e registraria a identidade do arquivo **novo**
+— a validação passaria exatamente no caso que ela existe para pegar. Fora isso, tamanho e hora
+iguais com conteúdo diferente também passavam.
+
+O fingerprint não custa I/O: ele sai dos bytes que o loader **já tem em RAM** — os mesmos que
+viraram os buffers de GPU —, uma passada sobre dado residente. Duas consequências de forma:
+
+- A geometria é percorrida **por elemento**, não por bytes crus: no import as UVs vivem dentro do
+  `Vertex` (32 B) e na releitura vêm compactadas (8 B). Hash de bytes crus daria valores diferentes
+  para a mesma geometria e a validação recusaria tudo — o modo de falha silencioso deste tipo de
+  gate, e por isso as 1591 malhas do Bistro são conferidas contra o loader no teste.
+- A textura hasheia o que o baker consome dela e nada mais: pixels do mip 0, dimensões, `Format` (o
+  baker entrega os bytes crus ao DirectXTex) e `IsNormalMap` (que zera o alpha no decode). As flags
+  de load **não são parâmetro** — saem do próprio dado —, senão daria para registrar um fingerprint
+  que descreve algo diferente do que foi decodificado.
+
+**Fingerprint ausente falha FECHADA.** `kOmmNoContentHash` é recusado no registro, não no consumo:
+uma entrada sem fingerprint casaria com qualquer arquivo, e duas consultas com erro passariam a
+"bater" uma com a outra — que era o defeito estrutural do carimbo.
+
+**O leitor sob demanda valida os ranges antes de alocar.** `VertexCount` e `IndexCount` vêm do
+arquivo e dimensionam os vetores; conferir depois de alocar significa um `.smesh` corrompido pedindo
+dezenas de GB antes de qualquer checagem. Mesmo critério do `ArrayFits` do `SceneLoader`, com a
+multiplicação checada contra overflow em vez de assumida.
 
 **Quando o rebake não pode acontecer, a edição é DESFEITA**, não ignorada. Seguir com o micro-map
 antigo deixaria material e micro-map descrevendo coisas diferentes — o estado híbrido que o
@@ -279,9 +307,54 @@ porque sem OMM não há BLAS que sirva um material masked. Os dois casos avisam 
 é revertida — o descritor dela já foi reescrito no heap —, e por isso ali a saída é desligar o
 alpha test: visível e reversível pelo usuário, em vez de silenciosamente errado.
 
+**A unidade de atomicidade é o MATERIAL, e a reconciliação roda em fases.** Levantar os pares stale
+sem mutar nada, bakear todos, reverter os materiais que falharam, montar o conjunto de BLAS exigido
+pelo estado **final** e só então publicar. Publicar dentro do laço de bake — como a primeira versão
+fazia — deixava um material de duas malhas com a primeira já publicada e o material revertido por
+baixo dela. Um material que falha em qualquer par não publica par nenhum: os bakes que deram certo
+são descartados.
+
+Um caso que só aparece depois da reversão: material revertido **para opaco** larga o micro-map e
+passa a exigir o BLAS opaco daquelas malhas — que pode nunca ter sido construído. Como esse par só
+existe *por causa* da reversão, ele precisa entrar no `Required` depois dela e antes do
+`EnsureBlasFor`; sem isso o `CollectInstances` cairia em "BLAS opaco ausente" no rebuild seguinte,
+com o dirty flag já consumido — ninguém tentaria de novo.
+
+**A UI descobre a reversão.** `RevertOmmInputs` incrementa um contador
+(`GetMaterialRevertVersion()`) que o `MaterialsBridge::Refresh` compara por frame; quando ele anda,
+os sinais de propriedade são reemitidos e os badges de todas as linhas recalculados. Um contador e
+não um sinal porque o `Renderer` não conhece Qt, e a ponte já tem um tick por frame ligado ao
+`FrameReady`. Sem isso o slider ou o checkbox continuariam exibindo o valor que acabou de ser
+recusado — a UI mostrando um estado que a cena não tem.
+
+**Textura carregada em runtime também retém procedência.** Trocar o BaseColor de um material
+alpha-tested — o caso que motivou a reconstrução — criava uma textura sem procedência: o rebake
+devolvia nulo, o micro-map antigo ficava e o `CollectInstances` abortava por chave desatualizada. O
+`ImportRuntimeTexture` decodifica **uma vez** para CPU e usa esse mesmo dado para subir à GPU e para
+registrar o fingerprint; reler o arquivo só para hashear reabriria a janela que o fingerprint existe
+para fechar.
+
 **O que ainda não é reconstruível**, e falha alto dizendo qual peça faltou: malha criada em runtime
 (sem procedência) e material cujo BaseColor foi gerado em vez de vir de arquivo — o proxy do
 terreno é o caso real. Nenhum dos dois é alpha-tested hoje.
+
+### Cobertura do caminho de reconstrução
+
+`Smile.OpacityMicromapBake.BistroExterior` cobre a procedência inteira, e cada guarda foi provada
+**negativamente** — a regressão injetada, o teste vermelho, a injeção desfeita:
+
+| guarda | prova negativa |
+|---|---|
+| ranges antes das alocações | lambda `RangeFits` neutralizada → o teste **morre** (`0xC0000409`) na entrada com `VertexCount = 0xFFFFFFFF`, que é exatamente o ponto: sem a checagem o vetor de ~137 GB é construído antes de qualquer validação |
+| fingerprint da geometria | comparação desligada no `LoadGeometry` → `fingerprint divergente foi aceito pelo leitor` |
+| fingerprint da textura | comparação desligada no `LoadAlphaTexture` → `textura com conteudo divergente foi aceita` (o teste registra o caminho de uma textura com o dado de outra, que é o que um recook produz) |
+| fail-closed no registro | `kOmmNoContentHash` aceito no `RetainMeshSource` → `registro sem fingerprint foi aceito` |
+| hash por elemento | stride assumido compacto → `LoadGeometry falhou` nas **1591** malhas, que é o modo de falha silencioso que essa forma evita |
+
+O que **não** tem prova automatizada, e continua sendo o mesmo conjunto de sempre: a atomicidade por
+material, a reversão para opaco exigindo o BLAS opaco e a reemissão dos sinais na ponte Qt. Os três
+são de sessão de editor com GPU. O rebake é observável no log
+(`[OMM] Rebake em runtime: N par(es)...`) e no painel de BLAS refeitos.
 
 ## Telemetria
 

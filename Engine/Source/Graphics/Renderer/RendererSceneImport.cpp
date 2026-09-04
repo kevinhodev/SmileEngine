@@ -122,10 +122,8 @@ namespace Smile {
         std::unordered_map<std::string, FTexture*> texByPath;
         std::unordered_map<std::string, const FTextureCPUData*> texCpuByPath;
         // Quais caminhos sao BaseColor de algum material. So esses interessam ao rebake de
-        // micro-map — o plano de alpha do bake sai do BaseColor — e restringir a eles evita
-        // registrar procedencia com as flags erradas: uma textura usada so como normal map foi
-        // decodificada com sRGB=false, e guardar (false, true) para ela seria uma armadilha
-        // esperando um consumidor futuro.
+        // micro-map — o plano de alpha do bake sai do BaseColor —, e restringir a eles evita pagar
+        // uma entrada de procedencia por normal map, AO e afins, que nenhum bake consulta.
         std::unordered_set<std::string> baseColorPaths;
         for (const SSceneMaterial& M : Imported.Materials)
             if (M.BaseColor[0]) baseColorPaths.insert(M.BaseColor);
@@ -138,11 +136,15 @@ namespace Smile {
             texByPath[relList[i]] = up.get();
             // Procedencia da textura, para o rebake de micro-map poder rele-la do disco. Guardada
             // AQUI porque e o unico ponto que ainda tem os dois lados: o ponteiro vivo e o caminho
-            // de onde ele veio. BaseColor e sRGB e nao e normal map — as mesmas flags do load.
-            if (baseColorPaths.contains(relList[i]))
+            // de onde ele veio.
+            //
+            // O DADO decodificado vai junto: dele saem as flags de load e o hash dos pixels que
+            // acabaram de subir para a GPU. O rebake recalcula o mesmo hash sobre a releitura;
+            // divergiu, recusa.
+            if (baseColorPaths.contains(relList[i]) && i < Imported.TextureData.size())
                 OmmBakeInputs.RetainTexturePath(
                     up.get(), (Imported.SceneDir / std::filesystem::path(relList[i])).wstring(),
-                    /*IsNormalMap*/ false, /*sRGB*/ true);
+                    Imported.TextureData[i]);
             ImportedTextures.push_back(std::move(up));
             ++uploaded;
         }
@@ -363,11 +365,23 @@ namespace Smile {
         // dezenas de bytes por malha.
         {
             const std::wstring MeshFile = (fs::path(Imported.BasePath) += L".smesh").wstring();
-            // UM carimbo para o arquivo inteiro, tirado agora: e este arquivo, nesta versao, que
-            // acabou de virar os buffers de GPU. Ver FOmmFileStamp.
-            const FOmmFileStamp Stamp = FOmmFileStamp::Of(MeshFile);
-            for (u32 i = 0; i < mh.MeshCount && i < meshPtrs.size(); ++i)
-                OmmBakeInputs.RetainMeshSource(meshPtrs[i], MeshFile, i, Stamp);
+            // O fingerprint sai dos BYTES QUE O LOADER JA TEM em RAM — os mesmos que viraram os
+            // buffers de GPU logo acima. Nao acrescenta leitura ao load: e uma passada sobre dado
+            // residente.
+            //
+            // Um carimbo de arquivo nao serviria, e a razao e uma janela concreta: o loader le, o
+            // import bakeia, e o carimbo so sairia aqui — um recook nesse intervalo deixaria os
+            // buffers antigos na GPU e registraria a identidade do arquivo NOVO.
+            for (u32 i = 0; i < mh.MeshCount && i < meshPtrs.size() && i < Imported.Meshes.size();
+                 ++i) {
+                const FMesh& Src = Imported.Meshes[i];
+                if (Src.Vertices.empty() || Src.Indices.empty()) continue;
+                OmmBakeInputs.RetainMeshSource(
+                    meshPtrs[i], MeshFile, i,
+                    OmmHashGeometry(&Src.Vertices.front().TexCoord[0], sizeof(Vertex),
+                                    static_cast<u32>(Src.Vertices.size()), Src.Indices.data(),
+                                    static_cast<u32>(Src.Indices.size())));
+            }
         }
 
         for (u32 i = 0; i < sh.RenderableCount; ++i) {

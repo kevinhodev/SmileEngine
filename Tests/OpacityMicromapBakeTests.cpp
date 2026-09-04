@@ -3,11 +3,14 @@
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Resources/Texture.h"
+#include "Smile/Scene/CookedFormat.h"
 #include "Smile/Scene/SceneLoader.h"
 #include <cstdio>
 #include <cstring>
 #include <vector>
 #include <filesystem>
+#include <fstream>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -204,11 +207,19 @@ int main(int argc, char** argv) {
         // A malha e so a CHAVE do store; nada nela e lido, entao um objeto vazio serve e o teste
         // segue sem device.
         std::vector<FGpuMesh> Chaves(Imported->Meshes.size());
+        // O fingerprint sai do FMesh do loader, como no import de verdade: UVs com o stride do
+        // Vertex (32 B) de um lado, compactadas (8 B) do outro. Se o hash nao fosse por elemento,
+        // este teste ficaria vermelho em todas as malhas.
+        auto HashDoLoader = [](const FMesh& M) {
+            return OmmHashGeometry(&M.Vertices.front().TexCoord[0], sizeof(Vertex),
+                                   static_cast<u32>(M.Vertices.size()), M.Indices.data(),
+                                   static_cast<u32>(M.Indices.size()));
+        };
         u32 Conferidas = 0, Falhas = 0;
         for (u32 I = 0; I < Imported->Meshes.size(); ++I) {
             const FMesh& Esperado = Imported->Meshes[I];
             if (Esperado.Vertices.empty() || Esperado.Indices.empty()) continue;
-            Store.RetainMeshSource(&Chaves[I], MeshFile, I, FOmmFileStamp::Of(MeshFile));
+            Store.RetainMeshSource(&Chaves[I], MeshFile, I, HashDoLoader(Esperado));
 
             FOmmBakeInputStore::FLoadedGeometry Lido;
             if (!Store.LoadGeometry(&Chaves[I], Lido)) {
@@ -248,35 +259,181 @@ int main(int argc, char** argv) {
                 ++Falhas;
             }
         }
-        // CARIMBO ERRADO tem de recusar, mesmo com caminho, magic, versao e indice corretos.
+        // FINGERPRINT ERRADO tem de recusar, mesmo com caminho, magic, versao e indice corretos.
         //
         // E o caso que o caminho sozinho nao cobria: um recook preserva magic e versao e pode
         // trocar UVs, indices ou a ordem das malhas. Sem esta recusa o rebake bakearia geometria
         // que nao esta nos buffers de GPU, em silencio.
-        {
+        //
+        // Um carimbo {tamanho, hora} tambem nao servia, e por um motivo que este teste nao alcanca:
+        // ele seria tirado DEPOIS de o loader ler os bytes, entao um recook nessa janela registra o
+        // arquivo novo contra os buffers antigos. O hash sai dos bytes carregados; nao ha janela.
+        u32 IndiceValido = u32(-1);
+        for (u32 I = 0; I < Imported->Meshes.size(); ++I)
+            if (!Imported->Meshes[I].Vertices.empty() && !Imported->Meshes[I].Indices.empty()) {
+                IndiceValido = I;
+                break;
+            }
+        if (IndiceValido != u32(-1)) {
             FOmmBakeInputStore Envelhecido;
             FGpuMesh Chave;
-            FOmmFileStamp Falso = FOmmFileStamp::Of(MeshFile);
-            Falso.WriteTime += 1; // como se o arquivo tivesse sido reescrito depois do load
-            Envelhecido.RetainMeshSource(&Chave, MeshFile, 0, Falso);
+            const FOmmContentHash Certo = HashDoLoader(Imported->Meshes[IndiceValido]);
+            // Como se o .smesh tivesse sido recozinhado depois do load: mesmo arquivo, outro
+            // conteudo do ponto de vista de quem carregou.
+            Envelhecido.RetainMeshSource(&Chave, MeshFile, IndiceValido, Certo ^ 1ull);
             FOmmBakeInputStore::FLoadedGeometry Lixo;
             if (Envelhecido.LoadGeometry(&Chave, Lixo)) {
-                std::fprintf(stderr, "carimbo divergente foi aceito pelo leitor\n");
+                std::fprintf(stderr, "fingerprint divergente foi aceito pelo leitor\n");
                 ++Falhas;
             }
-            // E com o carimbo certo o MESMO store aceita — senao isto passaria recusando tudo.
+            // E com o fingerprint certo o MESMO caminho aceita — senao isto passaria recusando
+            // tudo, que e o modo de falha silencioso deste tipo de gate.
             FOmmBakeInputStore Correto;
-            Correto.RetainMeshSource(&Chave, MeshFile, 0, FOmmFileStamp::Of(MeshFile));
+            Correto.RetainMeshSource(&Chave, MeshFile, IndiceValido, Certo);
             if (!Correto.LoadGeometry(&Chave, Lixo)) {
-                std::fprintf(stderr, "carimbo correto foi recusado pelo leitor\n");
+                std::fprintf(stderr, "fingerprint correto foi recusado pelo leitor\n");
                 ++Falhas;
+            }
+            // FAIL-CLOSED NO REGISTRO: sem fingerprint nao ha procedencia, e aceitar o registro
+            // criaria uma entrada que casa com qualquer arquivo. Duas consultas "sem hash" nao
+            // podem passar a bater uma com a outra.
+            FOmmBakeInputStore SemHash;
+            SemHash.RetainMeshSource(&Chave, MeshFile, IndiceValido, kOmmNoContentHash);
+            if (SemHash.MeshCount() != 0 || SemHash.LoadGeometry(&Chave, Lixo)) {
+                std::fprintf(stderr, "registro sem fingerprint foi aceito\n");
+                ++Falhas;
+            }
+        }
+
+        // ARQUIVO MALFORMADO: as contagens vem DO ARQUIVO e dimensionam os vetores do leitor.
+        // Validar os ranges depois de alocar significaria um .smesh corrompido pedindo dezenas de
+        // GB antes de qualquer checagem.
+        //
+        // O primeiro caso e a prova negativa de verdade: 4,29e9 vertices x 32 B sao ~137 GB, e sem
+        // a checagem previa o vector e construido antes de o leitor olhar o tamanho do arquivo — o
+        // teste morre em bad_alloc em vez de ficar vermelho. Os outros dois sao ranges impossiveis
+        // com contagens sensatas, o caso comum de um offset apontando para fora do blob.
+        {
+            namespace fs = std::filesystem;
+            const fs::path Falso = fs::temp_directory_path() / L"smile_omm_malformado.smesh";
+            SMeshHeader Cabecalho{};
+            Cabecalho.Magic     = kSMeshMagic;
+            Cabecalho.Version   = kCookedVersion;
+            Cabecalho.MeshCount = 1;
+            auto Escrever = [&](const SMeshEntry& E, size_t BlobBytes) {
+                std::ofstream Out(Falso, std::ios::binary | std::ios::trunc);
+                Out.write(reinterpret_cast<const char*>(&Cabecalho), sizeof(Cabecalho));
+                Out.write(reinterpret_cast<const char*>(&E), sizeof(E));
+                const std::vector<char> Blob(BlobBytes, 0);
+                if (BlobBytes) Out.write(Blob.data(), static_cast<std::streamsize>(BlobBytes));
+            };
+            auto Recusa = [&](const char* Caso) {
+                FOmmBakeInputStore Loja;
+                FGpuMesh Chave;
+                Loja.RetainMeshSource(&Chave, Falso.wstring(), 0, 0x1234ull);
+                FOmmBakeInputStore::FLoadedGeometry Lixo;
+                if (Loja.LoadGeometry(&Chave, Lixo)) {
+                    std::fprintf(stderr, "arquivo malformado aceito: %s\n", Caso);
+                    ++Falhas;
+                }
+            };
+            SMeshEntry Entrada{};
+            Entrada.VertexCount = 0xFFFFFFFFu;
+            Entrada.IndexCount  = 3;
+            Escrever(Entrada, 256);
+            Recusa("VertexCount absurdo");
+
+            Entrada.VertexCount  = 4;
+            Entrada.IndexCount   = 3;
+            Entrada.VertexOffset = 1u << 20;
+            Escrever(Entrada, 256);
+            Recusa("VertexOffset fora do blob");
+
+            Entrada.VertexOffset = 0;
+            Entrada.IndexCount   = 300;
+            Entrada.IndexOffset  = 128;
+            Escrever(Entrada, 256);
+            Recusa("IndexCount maior que o blob");
+
+            std::error_code Ec;
+            fs::remove(Falso, Ec);
+        }
+        // A PROCEDENCIA DA TEXTURA, com o mesmo criterio: releitura do disco batendo com o que o
+        // loader decodificou, conteudo divergente sendo recusado.
+        //
+        // O que este bloco prova de verdade e que as duas pontas decodificam IGUAL — o loader por
+        // LoadCPUAuto com as flags do cozido, o store por LoadCPUAuto com as flags que ele
+        // derivou do proprio dado. Se essa derivacao errasse, o hash divergiria e TODO rebake de
+        // material com textura trocada seria recusado em silencio.
+        u32 TexturasConferidas = 0;
+        for (u32 I = 0; I < Imported->TexturePaths.size() && TexturasConferidas < 4; ++I) {
+            if (I >= Imported->TextureData.size() || !Imported->TextureData[I].Valid()) continue;
+            const std::wstring Caminho =
+                (Imported->SceneDir / std::filesystem::path(Imported->TexturePaths[I])).wstring();
+
+            FOmmBakeInputStore Loja;
+            FTexture ChaveTex;
+            Loja.RetainTexturePath(&ChaveTex, Caminho, Imported->TextureData[I]);
+            if (Loja.TextureCount() != 1) {
+                std::fprintf(stderr, "textura %u: registro de procedencia recusado\n", I);
+                ++Falhas;
+                continue;
+            }
+            FTextureCPUData Relida;
+            if (!Loja.LoadAlphaTexture(&ChaveTex, Relida)) {
+                std::fprintf(stderr, "textura %u: releitura recusada pelo fingerprint\n", I);
+                ++Falhas;
+                continue;
+            }
+            if (!Relida.Valid() ||
+                Relida.Mips.front().Pixels != Imported->TextureData[I].Mips.front().Pixels) {
+                std::fprintf(stderr, "textura %u: pixels relidos divergem do loader\n", I);
+                ++Falhas;
+                continue;
+            }
+            ++TexturasConferidas;
+        }
+        {
+            // Textura sem procedencia (gerada em runtime) nao pode devolver pixels.
+            FTexture Desconhecida;
+            FTextureCPUData Lixo;
+            if (Store.LoadAlphaTexture(&Desconhecida, Lixo)) {
+                std::fprintf(stderr, "textura sem procedencia devolveu pixels\n");
+                ++Falhas;
+            }
+        }
+        // CONTEUDO TROCADO tem de recusar. Nao da para injetar um hash errado — o store o calcula
+        // do dado, e essa e a metade da protecao —, entao o teste registra o caminho de UMA
+        // textura com o dado de OUTRA: exatamente o que um recook produziria, um arquivo que nao e
+        // mais o que virou os bytes na GPU.
+        {
+            u32 A = u32(-1), B = u32(-1);
+            for (u32 I = 0; I < Imported->TexturePaths.size(); ++I) {
+                if (I >= Imported->TextureData.size() || !Imported->TextureData[I].Valid()) continue;
+                if (A == u32(-1)) { A = I; continue; }
+                if (Imported->TextureData[I].Mips.front().Pixels !=
+                    Imported->TextureData[A].Mips.front().Pixels) { B = I; break; }
+            }
+            if (A != u32(-1) && B != u32(-1)) {
+                FOmmBakeInputStore Trocada;
+                FTexture ChaveTex;
+                Trocada.RetainTexturePath(
+                    &ChaveTex,
+                    (Imported->SceneDir / std::filesystem::path(Imported->TexturePaths[B])).wstring(),
+                    Imported->TextureData[A]);
+                FTextureCPUData Lixo;
+                if (Trocada.LoadAlphaTexture(&ChaveTex, Lixo)) {
+                    std::fprintf(stderr, "textura com conteudo divergente foi aceita\n");
+                    ++Falhas;
+                }
             }
         }
         if (Falhas > 0) {
             std::fprintf(stderr, "[OMM TEST] %u falha(s) no leitor sob demanda\n", Falhas);
             return 8;
         }
-        std::printf("[OMM TEST] leitor sob demanda: %u malhas identicas ao loader\n", Conferidas);
+        std::printf("[OMM TEST] leitor sob demanda: %u malhas e %u texturas identicas ao loader\n",
+                    Conferidas, TexturasConferidas);
     }
 
     std::printf("[OMM TEST] %u pares mesh/material masked validados; entrada compacta identica a "

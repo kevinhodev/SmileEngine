@@ -25,6 +25,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace Smile {
     FScene& Renderer::GetScene() { return SceneState->Scene; }
@@ -119,7 +121,7 @@ namespace Smile {
         // renderaveis que compartilham malha e material compartilham um bake so.
         struct FPairKey {
             const FGpuMesh*  Mesh;
-            const FMaterial* Material;
+            FMaterial*       Material;
             bool operator==(const FPairKey& O) const {
                 return Mesh == O.Mesh && Material == O.Material;
             }
@@ -130,54 +132,100 @@ namespace Smile {
                        (std::hash<const void*>{}(K.Material) << 1);
             }
         };
+        // FASES SEPARADAS, e a separacao e o conserto: levantar, bakear, garantir os BLAS e so
+        // entao publicar. A versao anterior atribuia o micro-map novo ao renderavel dentro do laco
+        // que ainda podia falhar num par seguinte — entao um material com duas malhas em que a
+        // segunda falhasse ficava com a primeira ja publicada e o material revertido por baixo.
         std::unordered_map<FPairKey, std::shared_ptr<FOpacityMicromapData>, FPairHash> Rebaked;
-        std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Required;
-        std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Forget;
+        // Materiais em que ALGUM par falhou. A unidade da atomicidade e o material, e nao o par,
+        // porque e o material que a reversao muda.
+        std::unordered_set<FMaterial*> Failed;
+        // Pares stale, na ordem em que aparecem. Nada e escrito no renderavel nesta fase.
+        std::vector<std::pair<u32, FPairKey>> Stale;   // (indice do renderavel, par)
+        std::vector<u32> DroppedMasked;                // renderaveis que deixaram de ser masked
 
-        for (FRenderable& R : SceneState->Scene.Renderables()) {
+        auto& Renderables = SceneState->Scene.Renderables();
+
+        // --- Fase 1: levantar o que mudou, sem mutar nada -------------------------------------
+        for (u32 I = 0; I < Renderables.size(); ++I) {
+            FRenderable& R = Renderables[I];
             if (!R.Mesh || !R.Mesh->IsValid()) continue;
             const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
-            const FOmmInputKey Live = FOmmInputKey::From(R.Mesh, R.Material);
 
             if (!AlphaTest) {
-                // Deixou de ser masked: solta o micro-map e exige o BLAS opaco.
-                //
-                // So na TRANSICAO. Empilhar o par opaco para todo renderavel opaco da cena faria
-                // `Required` nunca ficar vazio, e ai a saida antecipada la embaixo nunca
-                // aconteceria — toda chamada pagaria o dreno das duas filas, inclusive as em que
-                // nada mudou. Numa cena de 1M seriam um milhao de pares para o EnsureBlasFor
-                // conferir e descartar.
-                if (R.OpacityMicromap) {
-                    Forget.push_back({ R.Mesh, R.OpacityMicromap.get() });
-                    R.OpacityMicromap.reset();
-                    Required.push_back({ R.Mesh, nullptr });
+                // Deixou de ser masked. So na TRANSICAO: empilhar o par opaco para todo renderavel
+                // opaco da cena faria a saida antecipada nunca acontecer, e toda chamada pagaria o
+                // dreno — numa cena de 1M, um milhao de pares para conferir e descartar.
+                if (R.OpacityMicromap) DroppedMasked.push_back(I);
+                continue;
+            }
+            if (R.OpacityMicromap &&
+                R.OpacityMicromap->MatchesInputs(FOmmInputKey::From(R.Mesh, R.Material)))
+                continue;
+            Stale.push_back({ I, FPairKey{ R.Mesh, R.Material } });
+        }
+        if (Stale.empty() && DroppedMasked.empty()) return 0;
+
+        // --- Fase 2: bakear todos os pares, marcando o material inteiro em caso de falha -------
+        for (const auto& [Index, Key] : Stale) {
+            if (Rebaked.contains(Key) || Failed.contains(Key.Material)) continue;
+            auto Novo = BakeOpacityMicromapFor(Key.Mesh, Key.Material);
+            if (!Novo) { Failed.insert(Key.Material); continue; }
+            Rebaked.emplace(Key, std::move(Novo));
+        }
+        // Um material que falhou em QUALQUER par nao publica par nenhum: os bakes que deram certo
+        // sao descartados, senao ele ficaria metade novo e metade revertido.
+        if (!Failed.empty())
+            for (auto It = Rebaked.begin(); It != Rebaked.end();)
+                It = Failed.contains(It->first.Material) ? Rebaked.erase(It) : std::next(It);
+
+        // --- Fase 3a: reverter os materiais que falharam --------------------------------------
+        // Antes de montar o conjunto de BLAS, porque a reversao MUDA o que sera exigido: um
+        // material revertido para opaco passa a precisar do BLAS opaco das malhas dele.
+        for (FMaterial* M : Failed) {
+            const FOpacityMicromapData* Existing = nullptr;
+            for (const auto& [Index, Key] : Stale)
+                if (Key.Material == M && Renderables[Index].OpacityMicromap) {
+                    Existing = Renderables[Index].OpacityMicromap.get();
+                    break;
+                }
+            RevertOmmInputs(*M, Existing);
+        }
+
+        // --- Fase 3b: o conjunto de BLAS exigido pelo estado FINAL ----------------------------
+        std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Required;
+        std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Forget;
+        // As referencias antigas ficam VIVAS ate o ForgetBlas. Os pares de Forget guardam ponteiro
+        // cru, e a publicacao la embaixo solta o shared_ptr do renderavel: se fosse a ultima
+        // referencia, o dado morreria antes de a chave ser usada para tirar a entrada do mapa.
+        std::vector<std::shared_ptr<FOpacityMicromapData>> Retired;
+
+        for (u32 I : DroppedMasked) {
+            Required.push_back({ Renderables[I].Mesh, nullptr });
+            Forget.push_back({ Renderables[I].Mesh, Renderables[I].OpacityMicromap.get() });
+            Retired.push_back(Renderables[I].OpacityMicromap);
+        }
+        for (const auto& [Index, Key] : Stale) {
+            FRenderable& R = Renderables[Index];
+            const auto It = Rebaked.find(Key);
+            if (It != Rebaked.end()) {
+                Required.push_back({ Key.Mesh, It->second.get() });
+                if (R.OpacityMicromap && R.OpacityMicromap != It->second) {
+                    Forget.push_back({ Key.Mesh, R.OpacityMicromap.get() });
+                    Retired.push_back(R.OpacityMicromap);
                 }
                 continue;
             }
-            if (R.OpacityMicromap && R.OpacityMicromap->MatchesInputs(Live)) continue;
-
-            const FPairKey Key{ R.Mesh, R.Material };
-            auto It = Rebaked.find(Key);
-            if (It == Rebaked.end()) {
-                auto Novo = BakeOpacityMicromapFor(R.Mesh, R.Material);
-                if (!Novo) {
-                    // DESFAZ A EDICAO. Seguir com o micro-map antigo deixaria material e
-                    // micro-map descrevendo coisas diferentes — o estado hibrido que o
-                    // CollectInstances aborta no proximo rebuild da TLAS. Como o bake nao pode
-                    // acompanhar, o unico estado consistente e voltar as entradas para as que o
-                    // micro-map existente descreve.
-                    RevertOmmInputs(*R.Material, R.OpacityMicromap.get());
-                    continue;
-                }
-                It = Rebaked.emplace(Key, std::move(Novo)).first;
-            }
-            if (R.OpacityMicromap && R.OpacityMicromap != It->second)
+            // Material revertido. Se a reversao o deixou opaco, este renderavel larga o micro-map
+            // e passa a exigir o BLAS opaco — sem isso o CollectInstances cairia em "BLAS opaco
+            // ausente" no proximo rebuild, e o dirty flag ja foi consumido: ninguem tentaria de
+            // novo.
+            if (R.Material && R.Material->Constants.AlphaTest == 0 && R.OpacityMicromap) {
+                Required.push_back({ R.Mesh, nullptr });
                 Forget.push_back({ R.Mesh, R.OpacityMicromap.get() });
-            R.OpacityMicromap = It->second;
-            Required.push_back({ R.Mesh, It->second.get() });
+                Retired.push_back(R.OpacityMicromap);
+            }
         }
-
-        if (Rebaked.empty() && Required.empty()) return 0;
 
         // O dreno vem aqui, e nao no topo: sem nada a refazer, a edicao nao paga stall nenhum.
         Backend->DirectQueue.Flush();
@@ -185,8 +233,17 @@ namespace Smile {
 
         const u32 BuiltBlas = RaytracingScene.EnsureBlasFor(Backend->Device, Backend->DirectQueue,
                                                             Required);
-        // Sos DEPOIS de os BLAS novos existirem: enquanto a chave antiga estiver no mapa ela
-        // continua sendo um destino valido, e removE-la antes abriria uma janela em que o
+
+        // --- Fase 4: publicar. Daqui em diante nada mais pode falhar --------------------------
+        for (u32 I : DroppedMasked) Renderables[I].OpacityMicromap.reset();
+        for (const auto& [Index, Key] : Stale) {
+            FRenderable& R = Renderables[Index];
+            const auto It = Rebaked.find(Key);
+            if (It != Rebaked.end()) R.OpacityMicromap = It->second;
+            else if (R.Material && R.Material->Constants.AlphaTest == 0) R.OpacityMicromap.reset();
+        }
+        // So DEPOIS de os BLAS novos existirem: enquanto a chave antiga estiver no mapa ela
+        // continua sendo um destino valido, e remove-la antes abriria uma janela em que o
         // CollectInstances nao acha BLAS nenhum para o par.
         for (const auto& [Mesh, Omm] : Forget) RaytracingScene.ForgetBlas(Mesh, Omm);
 
@@ -227,6 +284,13 @@ namespace Smile {
         // A linha canonica tem de acompanhar a reversao, senao o RT continuaria lendo o valor
         // recusado.
         MaterialTable.MarkDirty();
+        // E a UI tambem: quem mexeu no slider continuaria vendo o valor que acabou de ser
+        // recusado, sem nenhum sinal de que ele nao valeu. O editor compara esta versao a cada
+        // frame (MaterialsBridge::Refresh) e reemite os sinais de propriedade quando ela anda.
+        //
+        // Um contador, e nao um sinal: o Renderer nao conhece Qt, e a ponte ja tem um tick por
+        // frame ligado ao FrameReady.
+        ++MaterialRevertVersion_;
     }
 
     // O bake de UM par, a partir das entradas retidas. Devolve nulo (e diz por que) quando falta
@@ -850,10 +914,18 @@ namespace Smile {
             return _wcsnicmp(_Path.c_str() + _Path.size() - N, Ext, N) == 0;
         };
 
-        FTexture Tex = EndsWith(L".dds")
-            ? FTexture::LoadDDS(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Path, _sRGB)
-            : FTexture::CreateFromCPU(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap,
-                                      FTexture::LoadCPU(_Path, _IsNormalMap, _sRGB));
+        // A decodificacao CPU sai para uma variavel: e dela que o fingerprint de procedencia e
+        // tirado, sobre EXATAMENTE os bytes que sobem para a GPU. Ler o arquivo de novo so para
+        // hashear reabriria a janela que o fingerprint existe para fechar — entre as duas leituras
+        // o arquivo pode mudar, e o hash registrado passaria a descrever algo que nao esta na GPU.
+        //
+        // Nao custa leitura a mais em nenhum dos dois ramos: o LoadDDS e literalmente
+        // CreateFromCPU(LoadDDSCPU(...)), so aberto aqui.
+        const FTextureCPUData Cpu = EndsWith(L".dds")
+            ? FTexture::LoadDDSCPU(_Path, _sRGB)
+            : FTexture::LoadCPU(_Path, _IsNormalMap, _sRGB);
+        FTexture Tex = FTexture::CreateFromCPU(Backend->Device.Native(), Backend->UploadQueue,
+                                               Backend->SRVHeap, Cpu);
         if (!Tex.IsValid()) return nullptr;
 
         ImportedTextures.push_back(std::make_unique<FTexture>(std::move(Tex)));
@@ -863,9 +935,9 @@ namespace Smile {
         // Sem isto, trocar a BaseColor de um material alpha-tested — que e o caso que motivou a
         // reconstrucao — criava uma textura sem procedencia, o rebake devolvia nulo por
         // "procedencia desconhecida", o micro-map antigo continuava e o CollectInstances abortava
-        // por chave desatualizada. As flags sao as MESMAS com que a textura acabou de ser
-        // decodificada logo acima; qualquer outra coisa aqui faria o rebake ler um alpha diferente.
-        OmmBakeInputs.RetainTexturePath(Out, _Path, _IsNormalMap, _sRGB);
+        // por chave desatualizada. O dado decodificado logo acima e a fonte das flags e do hash:
+        // o rebake vai reler com exatamente a mesma receita.
+        OmmBakeInputs.RetainTexturePath(Out, _Path, Cpu);
         return Out;
     }
 

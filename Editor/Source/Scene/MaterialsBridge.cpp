@@ -389,6 +389,32 @@ namespace SmileEditor {
             return;
         }
 
+        // O renderer pode ter REVERTIDO uma edicao de entrada de bake de micro-map (rebake
+        // impossivel: malha sem procedencia, .smesh recozinhado por baixo, textura que nao da para
+        // reler). A reversao acontece dentro do renderer, e sem descobri-la aqui o slider e o
+        // checkbox continuariam exibindo o valor que acabou de ser RECUSADO — a UI mostrando um
+        // estado que a cena nao tem.
+        const quint64 RevertVersion = Renderer->GetMaterialRevertVersion();
+        if (RevertVersion != CachedRevertVersion) {
+            CachedRevertVersion = RevertVersion;
+            // Badges de TODAS as linhas: o rebake roda no fim do arraste, e ate la a selecao pode
+            // ter mudado — a linha revertida nem sempre e a selecionada. E O(materiais) por
+            // reversao, nao por frame.
+            const auto& Mats = Renderer->GetMaterials();
+            for (auto& R : Rows) {
+                if (R.MatIdx < 0 || R.MatIdx >= (int)Mats.size()) continue;
+                R.Badges = BadgesOf(*Mats[R.MatIdx]);
+            }
+            if (!Rows.isEmpty())
+                emit dataChanged(index(0), index(Rows.size() - 1), QList<int>{ RBadges });
+            // As propriedades do painel so existem para o selecionado; reemitir e barato e as faz
+            // reler o material (ja revertido) na proxima avaliacao do binding.
+            emit MaterialModeChanged();
+            emit MaterialStateChanged();
+            MarkPreviewDirty();
+            if (SelectedMat >= 0) InvalidateThumb(SelectedMat);
+        }
+
         // Picking do viewport: clicar numa mesh seleciona o material dela no browser
         // (o "Pegar da cena" da Cry, de graca — o picking GPU ja existe).
         const int SelMesh = Renderer->GetSelectedObject();

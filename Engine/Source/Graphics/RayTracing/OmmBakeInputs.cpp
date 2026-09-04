@@ -7,41 +7,65 @@
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <system_error>
 
 namespace Smile {
-    FOmmFileStamp FOmmFileStamp::Of(const std::wstring& _Path) {
-        FOmmFileStamp S;
-        std::error_code Ec;
-        const std::filesystem::path P(_Path);
-        const auto Size = std::filesystem::file_size(P, Ec);
-        if (Ec) return S;
-        const auto Time = std::filesystem::last_write_time(P, Ec);
-        if (Ec) return S;
-        S.SizeBytes = static_cast<u64>(Size);
-        S.WriteTime = static_cast<i64>(Time.time_since_epoch().count());
-        return S;
+    namespace {
+        // O sRGB do load nao sobrevive no FTextureCPUData como flag; ele vira a VARIANTE _SRGB do
+        // formato (ver FTexture::LoadCPU e o ToSRGB do LoadDDSCPU). Recuperar dai e exato para o
+        // que importa: reler com esta resposta produz o mesmo DXGI_FORMAT, e portanto o mesmo
+        // fingerprint. Formatos sem variante sRGB (BC4/BC5) devolvem false e continuam batendo,
+        // porque o ToSRGB tambem os deixa como estao.
+        bool FormatIsSrgb(DXGI_FORMAT _Fmt) {
+            switch (_Fmt) {
+                case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+                case DXGI_FORMAT_BC1_UNORM_SRGB:
+                case DXGI_FORMAT_BC2_UNORM_SRGB:
+                case DXGI_FORMAT_BC3_UNORM_SRGB:
+                case DXGI_FORMAT_BC7_UNORM_SRGB:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    FOmmContentHash OmmHashTexture(const FTextureCPUData& _Data) {
+        if (!_Data.Valid()) return kOmmNoContentHash;
+        const FMipData& Mip = _Data.Mips.front();
+        if (Mip.Pixels.empty()) return kOmmNoContentHash;
+
+        FOmmContentHash H = 1469598103934665603ull;
+        // Dimensoes, formato e IsNormalMap entram junto com os pixels: os tres mudam o alpha que o
+        // baker extrai destes mesmos bytes.
+        const u32 Meta[4] = { Mip.Width, Mip.Height, static_cast<u32>(_Data.Format),
+                              _Data.IsNormalMap ? 1u : 0u };
+        H = OmmHashAppend(H, Meta, sizeof(Meta));
+        H = OmmHashAppend(H, Mip.Pixels.data(), Mip.Pixels.size());
+        return H == kOmmNoContentHash ? 1ull : H;
     }
 
     void FOmmBakeInputStore::RetainMeshSource(const FGpuMesh* _Mesh,
                                               const std::wstring& _MeshFilePath, u32 _MeshIndex,
-                                              const FOmmFileStamp& _Stamp) {
-        if (!_Mesh || _MeshFilePath.empty()) return;
+                                              FOmmContentHash _ContentHash) {
+        // Fail-closed na ENTRADA: sem fingerprint nao ha o que validar depois, e registrar assim
+        // criaria uma procedencia que aceita qualquer coisa.
+        if (!_Mesh || _MeshFilePath.empty() || _ContentHash == kOmmNoContentHash) return;
         const auto [It, Inserted] = Meshes_.insert_or_assign(
-            _Mesh, FMeshSource{ _MeshFilePath, _MeshIndex, _Stamp });
+            _Mesh, FMeshSource{ _MeshFilePath, _MeshIndex, _ContentHash });
         if (Inserted)
             RetainedBytes_ += sizeof(FMeshSource) + _MeshFilePath.size() * sizeof(wchar_t);
     }
 
     void FOmmBakeInputStore::RetainTexturePath(const FTexture* _Texture, std::wstring _Path,
-                                               bool _IsNormalMap, bool _sRGB) {
-        if (!_Texture || _Path.empty()) return;
+                                               const FTextureCPUData& _Data) {
+        const FOmmContentHash ContentHash = OmmHashTexture(_Data);
+        if (!_Texture || _Path.empty() || ContentHash == kOmmNoContentHash) return;
         const u64 Bytes = sizeof(FTextureSource) + _Path.size() * sizeof(wchar_t);
-        // O carimbo sai daqui, e nao do chamador: e o unico ponto que ve o caminho no momento em
-        // que a textura residente acabou de ser criada a partir dele.
-        const FOmmFileStamp Stamp = FOmmFileStamp::Of(_Path);
         const auto [It, Inserted] = Textures_.insert_or_assign(
-            _Texture, FTextureSource{ std::move(_Path), _IsNormalMap, _sRGB, Stamp });
+            _Texture, FTextureSource{ std::move(_Path), _Data.IsNormalMap,
+                                      FormatIsSrgb(_Data.Format), ContentHash });
         if (Inserted) RetainedBytes_ += Bytes;
     }
 
@@ -61,11 +85,6 @@ namespace Smile {
         if (It == Textures_.end()) return false;
         const FTextureSource& Source = It->second;
 
-        if (FOmmFileStamp::Of(Source.Path) != Source.Stamp) {
-            LogError("[OMM] Rebake: a textura de alpha mudou no disco desde o load; os pixels "
-                     "relidos nao sao os que estao na GPU. Recarregue a cena");
-            return false;
-        }
         try {
             _Out = FTexture::LoadCPUAuto(Source.Path, Source.IsNormalMap, Source.sRGB);
         } catch (const std::exception& Error) {
@@ -73,7 +92,16 @@ namespace Smile {
                      Error.what());
             return false;
         }
-        return _Out.Valid();
+        if (!_Out.Valid()) return false;
+
+        // O fingerprint depois da decodificacao, sobre os MESMOS bytes que o import hasheou.
+        if (OmmHashTexture(_Out) != Source.ContentHash) {
+            LogError("[OMM] Rebake: a textura de alpha no disco nao e a que esta na GPU (o arquivo "
+                     "mudou desde o load). Recarregue a cena");
+            _Out = {};
+            return false;
+        }
+        return true;
     }
 
     bool FOmmBakeInputStore::LoadGeometry(const FGpuMesh* _Mesh, FLoadedGeometry& _Out) const {
@@ -84,20 +112,13 @@ namespace Smile {
         if (It == Meshes_.end()) return false;
         const FMeshSource& Source = It->second;
 
-        // O CARIMBO antes de qualquer leitura. Magic e versao nao bastam: um recook normal
-        // preserva os dois e pode trocar UVs, indices ou a ordem das malhas — e ai o micro-map
-        // novo descreveria geometria que nao esta nos buffers de GPU, sem nenhum sinal.
-        if (FOmmFileStamp::Of(Source.FilePath) != Source.Stamp) {
-            LogError("[OMM] Rebake: o .smesh mudou no disco desde o load (recook?); a geometria "
-                     "lida nao seria a que esta na GPU. Recarregue a cena");
-            return false;
-        }
-
-        std::ifstream File(Source.FilePath, std::ios::binary);
+        std::ifstream File(Source.FilePath, std::ios::binary | std::ios::ate);
         if (!File) {
             LogError("[OMM] Rebake: nao consegui abrir o .smesh da malha");
             return false;
         }
+        const std::streamoff FileBytes = File.tellg();
+        File.seekg(0);
 
         SMeshHeader Header{};
         File.read(reinterpret_cast<char*>(&Header), sizeof(Header));
@@ -131,6 +152,27 @@ namespace Smile {
         const std::streamoff GeometryBase =
             static_cast<std::streamoff>(sizeof(SMeshHeader)) +
             static_cast<std::streamoff>(Header.MeshCount) * sizeof(SMeshEntry);
+        if (GeometryBase > FileBytes) {
+            LogError("[OMM] Rebake: tabela de meshes maior que o arquivo");
+            return false;
+        }
+        const u64 GeometryBytes = static_cast<u64>(FileBytes - GeometryBase);
+
+        // OS RANGES ANTES DAS ALOCACOES. VertexCount e IndexCount vem do arquivo e dimensionam os
+        // vetores abaixo: conferir depois de alocar significaria um arquivo corrompido pedindo
+        // gigabytes antes de qualquer validacao. Mesmo criterio do ArrayFits do SceneLoader, e com
+        // a multiplicacao checada contra overflow em vez de assumida.
+        auto RangeFits = [GeometryBytes](u64 _Offset, u64 _Count, u64 _Stride) {
+            if (_Count == 0) return true;
+            if (_Count > (std::numeric_limits<u64>::max)() / _Stride) return false;
+            const u64 Bytes = _Count * _Stride;
+            return _Offset <= GeometryBytes && Bytes <= GeometryBytes - _Offset;
+        };
+        if (!RangeFits(Entry.VertexOffset, Entry.VertexCount, sizeof(Vertex)) ||
+            !RangeFits(Entry.IndexOffset, Entry.IndexCount, sizeof(u32))) {
+            LogError("[OMM] Rebake: blob de geometria truncado ou entrada fora do arquivo");
+            return false;
+        }
 
         // Os vertices sao lidos inteiros e as UVs extraidas: o bake so quer 8 dos 32 B, mas ler
         // salteado do disco seria uma seek por vertice.
@@ -165,6 +207,20 @@ namespace Smile {
         for (u32 V = 0; V < Entry.VertexCount; ++V) {
             _Out.TexCoords[V * 2 + 0] = Vertices[V].TexCoord[0];
             _Out.TexCoords[V * 2 + 1] = Vertices[V].TexCoord[1];
+        }
+
+        // O FINGERPRINT, sobre o que acabou de ser lido, contra o que o loader carregou. Magic,
+        // versao, indice e limites ja passaram — e nada disso distingue um recook que trocou as
+        // UVs mantendo as contagens.
+        const FOmmContentHash Lido = OmmHashGeometry(
+            _Out.TexCoords.data(), sizeof(f32) * 2, Entry.VertexCount,
+            _Out.Indices.data(), Entry.IndexCount);
+        if (Lido != Source.ContentHash) {
+            LogError("[OMM] Rebake: a geometria no .smesh nao e a que esta nos buffers de GPU (o "
+                     "arquivo foi recozinhado desde o load). Recarregue a cena");
+            _Out.TexCoords.clear();
+            _Out.Indices.clear();
+            return false;
         }
         return true;
     }
