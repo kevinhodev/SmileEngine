@@ -812,6 +812,7 @@ namespace Smile {
         // tabela pela mesma indirecao e e submetido com SubmitAfter sobre um segmento posterior
         // desta lista. No caso comum nao emite nada — nenhuma linha suja, nenhuma barreira.
         MaterialTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
+        MeshTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
 
         ObjectPicker.Tick();
 
@@ -1011,6 +1012,8 @@ namespace Smile {
         CpuStatsBuilding.MaterialRowsDirty         = MaterialTable.LastDirtyRows();
         CpuStatsBuilding.MaterialCopyRegions       = MaterialTable.LastCopyRegions();
         CpuStatsBuilding.MaterialRowsUploadedTotal = MaterialTable.TotalRowsUploaded();
+        CpuStatsBuilding.MeshTableBytes            = MeshTable.PersistentBytes();
+        CpuStatsBuilding.MeshTableRows             = MeshTable.RowCount();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.
         CpuStatsBuilding.SourceFrameIndex = FrameState->FrameIndex;

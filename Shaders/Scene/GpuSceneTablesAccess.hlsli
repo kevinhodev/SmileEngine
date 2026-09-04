@@ -32,4 +32,14 @@ GpuMaterialRecord RT_LoadMaterial(InstanceGeo _Geo) {
     return Materials[_Geo.MaterialId];
 }
 
+// Linha da malha do hit: bounds locais, contagens e os descritores de VB/IB.
+//
+// Nao ha chamador no caminho quente, e e de proposito: o payload por triangulo, que TODO hit le,
+// continua desnormalizado no InstanceGeo. Quem passa por aqui e caminho frio — o MeshLightExtract,
+// uma vez por cena — e o culling da Fase 6, que le bounds e nao geometria.
+GpuMeshRecord RT_LoadMesh(InstanceGeo _Geo) {
+    StructuredBuffer<GpuMeshRecord> Meshes = ResourceDescriptorHeap[_Geo.MeshSrv];
+    return Meshes[_Geo.MeshId];
+}
+
 #endif

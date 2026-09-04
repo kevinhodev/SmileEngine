@@ -64,8 +64,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     const InstanceGeo geo = Instances[task.InstanceIndex];
     const GpuMaterialRecord mat = RT_LoadMaterial(geo);
-    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[geo.VertexSrv];
-    Buffer<uint>                 Idx   = ResourceDescriptorHeap[geo.IndexSrv];
+    // VB/IB vem da linha da MALHA desde a Fase 2 — eles eram copiados por instancia e sao
+    // propriedade da geometria. Este e o caminho frio (uma extracao por cena), que e exatamente
+    // por que ele foi escolhido para consumir a tabela: prova a cadeia instancia -> malha ->
+    // geometria no renderer real sem tocar no caminho quente do hit.
+    const GpuMeshRecord mesh = RT_LoadMesh(geo);
+    StructuredBuffer<DDGIVertex> Verts = ResourceDescriptorHeap[mesh.VertexSrv];
+    Buffer<uint>                 Idx   = ResourceDescriptorHeap[mesh.IndexSrv];
 
     const uint i0 = Idx[tri * 3 + 0];
     const uint i1 = Idx[tri * 3 + 1];

@@ -317,6 +317,8 @@ namespace SmileEditor {
         Out.MaterialRowsDirty         = S.MaterialRowsDirty;
         Out.MaterialCopyRegions       = S.MaterialCopyRegions;
         Out.MaterialRowsUploadedTotal = S.MaterialRowsUploadedTotal;
+        Out.MeshTableBytes            = S.MeshTableBytes;
+        Out.MeshTableRows             = S.MeshTableRows;
         // TODOS os passes, inclusive os zerados: uma serie temporal com conjunto de chaves
         // variavel obrigaria o agente a tratar ausencia como zero, e ausencia tambem poderia
         // significar "passe removido". Zero explicito nao tem essa ambiguidade.

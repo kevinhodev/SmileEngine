@@ -641,8 +641,8 @@ namespace Smile {
         void RecreateAllPSOs();
         void BuildDefaultScene();
         void BuildRaytracingScene();
-        // Reconstroi a tabela canonica de materiais. Drena as filas (o chamador ja drenou).
-        void RebuildMaterialTable();
+        // Reconstroi as tabelas canonicas da cena (materiais + meshes). O chamador ja drenou.
+        void RebuildSceneTables();
         // Reconstrucao completa; drena as filas e exige command list fechado.
         void RebuildMeshLights();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);
@@ -907,6 +907,10 @@ namespace Smile {
         // de RT, porque o RT e consumidor dela: o raster passa a le-la na Fase 3, e o snapshot
         // por instancia so carrega o par {descritor, linha} que aponta para ca.
         FGpuMaterialTable MaterialTable;
+        // Tabela canonica de meshes. Dona dos descritores bindless de geometria e a UNICA
+        // enumeradora das malhas unicas da cena — as duas coisas moravam no FRaytracingScene, e
+        // a segunda ja tinha divergido uma vez quando o FDDGI reconstruia a mesma lista.
+        FGpuMeshTable     MeshTable;
 
         FRaytracingScene RaytracingScene;
         // Recursos neutros quando nao existe volume DDGI.

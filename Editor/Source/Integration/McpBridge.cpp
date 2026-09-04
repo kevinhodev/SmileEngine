@@ -285,6 +285,12 @@ namespace SmileEditor {
                     { QStringLiteral("rowsUploadedTotal"),
                       static_cast<double>(_Cpu.MaterialRowsUploadedTotal) },
                 } },
+                // Tabela canonica de meshes. Sem sujas por frame: geometria nao e editavel em
+                // runtime, entao as linhas dela so mudam num Setup.
+                { QStringLiteral("meshTable"), QJsonObject{
+                    { QStringLiteral("rows"),          static_cast<double>(_Cpu.MeshTableRows) },
+                    { QStringLiteral("residentBytes"), static_cast<double>(_Cpu.MeshTableBytes) },
+                } },
                 { QStringLiteral("passes"), Passes },
             };
         }

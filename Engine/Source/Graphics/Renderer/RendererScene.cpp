@@ -69,24 +69,27 @@ namespace Smile {
     void Renderer::BuildRaytracingScene() {
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
-        // A tabela de materiais vem ANTES do snapshot que a referencia: o InstanceGeo grava o
-        // descritor e a linha, entao construi-lo primeiro gravaria um descritor invalido em toda
-        // instancia. As filas ja estao drenadas aqui, que e o contrato do SetupForMaterials.
-        RebuildMaterialTable();
+        // As tabelas canonicas vem ANTES do snapshot que as referencia: o InstanceGeo grava
+        // descritor e linha das duas, entao construi-lo primeiro gravaria descritor invalido em
+        // toda instancia. A de meshes vem antes tambem porque o Build le a lista de malhas unicas
+        // dela para dimensionar os BLAS. As filas ja estao drenadas aqui, que e o contrato dos
+        // Setup.
+        RebuildSceneTables();
         RaytracingScene.Build(Backend->Device, Backend->DirectQueue, Backend->SRVHeap,
-                              SceneState->Scene, MaterialTable,
+                              SceneState->Scene, MaterialTable, MeshTable,
                               SceneState->Camera.GetPosition());
         SceneState->TlasTransformsVersion = SceneState->Scene.TransformsVersion();
     }
 
-    // (Re)cria a tabela canonica de materiais. Chamada sempre com as duas filas drenadas — e o
-    // contrato do FGpuMaterialTable::SetupForMaterials, porque ela substitui um recurso lido pelas
-    // duas. Nao e o caminho de EDICAO de material: aquele e MarkDirty + RecordUpload, sem dreno.
-    void Renderer::RebuildMaterialTable() {
+    // (Re)cria as tabelas canonicas da cena. Chamada sempre com as duas filas drenadas — e o
+    // contrato dos Setup, porque elas substituem recursos lidos pelas duas. Nao e o caminho de
+    // EDICAO de material: aquele e MarkDirty + RecordUpload, sem dreno.
+    void Renderer::RebuildSceneTables() {
         std::vector<FMaterial*> Raw;
         Raw.reserve(ImportedMaterials.size());
         for (const auto& M : ImportedMaterials) Raw.push_back(M.get());
         MaterialTable.SetupForMaterials(Backend->Device.Native(), Backend->SRVHeap, Raw);
+        MeshTable.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene);
     }
 
     void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg,
@@ -246,7 +249,7 @@ namespace Smile {
             // InstanceGeo nao e versionado por frame e pode estar sendo lido nas duas filas.
             Backend->DirectQueue.Flush();
             Backend->ComputeQueue.WaitIdle();
-            RaytracingScene.RefreshInstanceGeo(SceneState->Scene, MaterialTable);
+            RaytracingScene.RefreshInstanceGeo(SceneState->Scene, MaterialTable, MeshTable);
             // As tasks de MeshLights guardam InstanceIndex e precisam ser reconstruidas.
             RebuildMeshLights();
         }

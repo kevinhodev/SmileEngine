@@ -21,8 +21,9 @@ cbuffer ProbeCB : register(b0) {
 
 StructuredBuffer<GpuMaterialRecord> Materials : register(t0);
 StructuredBuffer<InstanceGeo>       Instances : register(t1);
+StructuredBuffer<GpuMeshRecord>     Meshes    : register(t2);
 
-// Seis uint4 por instancia: os treze campos das duas structs mais os tres derivados que provam
+// Nove uint4 por instancia: todos os campos das tres structs mais os tres derivados que provam
 // que as CONSTANTES tambem casam (deslocamento de textura e dois bits de flag).
 RWStructuredBuffer<uint4> Results : register(u0);
 
@@ -31,20 +32,27 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const uint i = dtid.x;
     if (i >= Params.x) return;
 
-    // Indexar Instances[i] prova o STRIDE do snapshot; usar o MaterialId que veio dele para
-    // indexar Materials prova o stride da tabela e a ligacao entre as duas.
+    // Indexar Instances[i] prova o STRIDE do snapshot; usar o MaterialId e o MeshId que vieram
+    // dele para indexar as tabelas prova o stride de cada uma e a ligacao entre as tres.
     const InstanceGeo       g = Instances[i];
     const GpuMaterialRecord m = Materials[g.MaterialId];
+    const GpuMeshRecord     h = Meshes[g.MeshId];
 
-    const uint b = i * 6u;
+    const uint b = i * 9u;
     Results[b + 0u] = asuint(m.BaseColor);
     Results[b + 1u] = asuint(m.EmissiveFactor);
     Results[b + 2u] = asuint(m.SubsurfaceColor);
     Results[b + 3u] = uint4(asuint(m.RoughnessFactor), asuint(m.AlphaCutoff),
                             m.Flags, m.TextureBase);
-    Results[b + 4u] = uint4(g.VertexSrv, g.IndexSrv, g.TriangleSrv, g.MaterialSrv);
+    Results[b + 4u] = uint4(g.TriangleSrv, g.MeshSrv, g.MeshId, g.MaterialSrv);
     Results[b + 5u] = uint4(g.MaterialId,
                             MaterialTextureIndex(m, SMILE_MAT_TEX_EMISSIVE),
                             (m.Flags & SMILE_MAT_FLAG_TWOSIDED)  != 0u ? 1u : 0u,
                             (m.Flags & SMILE_MAT_FLAG_ALBEDOMAP) != 0u ? 1u : 0u);
+    Results[b + 6u] = uint4(asuint(h.LocalAABBMin), asuint(h.LocalAABBMax.x));
+    Results[b + 7u] = uint4(asuint(h.LocalAABBMax.yz), h.VertexSrv, h.IndexSrv);
+    Results[b + 8u] = uint4(h.TriangleSrv, h.VertexCount, h.IndexCount, h.TriangleCount);
+    // Flags e VirtualGeometryId sao reservados e valem 0; conferi-los no C++ exigiria dois uint4
+    // so para dois zeros. O static_assert do offset ja fixa a posicao deles, e o dia em que
+    // ganharem valor este teste ganha a leitura junto.
 }

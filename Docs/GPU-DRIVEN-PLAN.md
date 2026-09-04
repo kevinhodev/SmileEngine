@@ -1281,6 +1281,22 @@ explícita do proprietário; este fechamento não a inicia automaticamente.
 
 ## Fase 2 — Tabelas canônicas e formato-base deliberado
 
+> **Estado em 2026-09-04 — EM ANDAMENTO.** Materiais e meshes entregues; instâncias e a comparação
+> visual pendentes. Detalhe, evidência e o que cada gate fechou (e o que não fechou) em
+> [GPU-DRIVEN-PHASE2-PROGRESS.md](GPU-DRIVEN-PHASE2-PROGRESS.md).
+>
+> **Decisão do proprietário, 2026-09-04 — o formato-base NÃO é bumpado nesta fase.** A verificação
+> que motivou a pergunta: a Fase 2 não precisa persistir byte nenhum. O `SMeshEntry` v8 já traz
+> bounds locais, offsets e contagens de VB/IB e a região de `FRTTriangle`; formato de vértice e de
+> índice são únicos no runtime, não há submeshes, geometry pages são Fase 4/8 e clusters são
+> Fase 9+. Bumpar agora custaria recozinhar os 11 pares e regravar `Tools/cook-baseline.json` para
+> acrescentar campos sem consumidor — o oposto de "sem serializar consumidor imaginário".
+>
+> O `VirtualGeometryId` fica declarado e RESERVADO no `FGpuMeshRecord` (runtime), com valor zero e
+> sem contraparte no arquivo. O bump deliberado — número **10**, pulando o 9 queimado pelo
+> protótipo descartado — acontece quando houver byte novo de verdade: geometry pages na Fase 8 ou
+> o sidecar `.svgeo` na Fase 9.
+
 ### Objetivo
 
 Introduzir `FGpuSceneInstance`, `FGpuMeshRecord` e `FGpuMaterialRecord` como fontes canônicas sem

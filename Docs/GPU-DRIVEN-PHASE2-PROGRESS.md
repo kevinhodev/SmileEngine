@@ -2,8 +2,8 @@
 
 Data: 2026-09-04
 
-Estado: **em andamento**. A tabela de materiais está entregue; instâncias, meshes e o formato-base
-ainda não.
+Estado: **em andamento**. As tabelas de materiais e de meshes estao entregues; a de instancias e a
+comparacao visual nao.
 
 Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 
@@ -14,7 +14,8 @@ Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 | `0dd9ad7` | `FGpuMaterialRecord`: a linha canônica de material, extraída do snapshot por instância |
 | `b9055da` | tabela residente na GPU, `FRTInstanceGeo` de 100 B → 20 B, espelho HLSL, fim do dreno |
 | `4745a70` | OMM versionado pelas quatro entradas do bake |
-| (este) | telemetria de bytes persistentes e bytes sujos por frame |
+| `9186d93` | telemetria de bytes persistentes e bytes sujos por frame |
+| (este) | `FGpuMeshRecord` + `FGpuMeshTable`, dona dos descritores de geometria |
 
 ### A linha canônica
 
@@ -45,9 +46,35 @@ um cbuffer. Assim os treze shaders que já leem o snapshot alcançam a tabela se
 nova: eles já indexam o heap direto para VB/IB/payload de triângulo. Custa 4 B por instância e
 economiza 84.
 
+### A tabela de meshes
+
+Vale ser honesto sobre o que ela **não** dá: zero byte de economia no snapshot por instância —
+`VertexSrv`/`IndexSrv` saem, `MeshSrv`/`MeshId` entram, e ele continua em 20 B. O ganho é
+estrutural, e são três coisas concretas:
+
+1. **Uma casa para o que é da malha.** Bounds locais, contagens e os descritores bindless de
+   geometria. Os bounds ainda vivem duplicados em cada `FRenderable` que usa a malha (copiados do
+   `SMeshEntry` no load); a duplicação sai quando a tabela de instâncias existir, na Fase 4.
+2. **A posse dos descritores de geometria saiu do `FRaytracingScene`** — decisão D12: o ray tracing
+   é consumidor da cena, não dono dela. Junto veio a enumeração das malhas únicas, que agora tem um
+   dono só; o `Build` lê a lista de lá para dimensionar os BLAS. Isso não é arrumação: aquela
+   enumeração já divergiu uma vez, quando o `FDDGI` a reconstruía "com um critério idêntico,
+   palavra por palavra".
+3. **Um consumidor real, no caminho frio.** O `MeshLightExtract` passou a ler VB/IB da linha da
+   malha. É uma extração por cena, então prova a cadeia instância → malha → geometria no renderer
+   de verdade sem tocar no caminho quente.
+
+O `TriangleSrv` fica **desnormalizado** no snapshot, e é a única exceção: o `AlphaTestPass` roda
+por *candidato de travessia*, não por hit comitado, então em folhagem é chamado várias vezes por
+raio. Passar por instância → malha → payload acrescentaria uma leitura dependente exatamente ali.
+A decisão D3 autoriza: tabela canônica, snapshot especializado.
+
+`VirtualGeometryId` está declarado e reservado na linha, com valor zero e sem contraparte no
+arquivo cozido — ver a decisão de formato no plano.
+
 ### O snapshot por instância
 
-`FGpuInstanceGeo`, 20 B, só endereço: três descritores de geometria e o par `{MaterialSrv,
+`FGpuInstanceGeo`, 20 B, só endereço: o payload por triângulo, o par `{MeshSrv, MeshId}` e o par `{MaterialSrv,
 MaterialId}`. Mudou de casa — era um struct local de `RaytracingScene.cpp`; a montagem continua
 lá, porque quem preenche tem de ser o dono da correspondência com a TLAS, e essa correspondência
 (a ordem, com os buracos preservados) é contrato da Fase 1.
@@ -71,8 +98,9 @@ todo hit de RT.
 | atualização de material toca uma linha, não todos os `FRTInstanceGeo` | **feito**, testado em `DiffMaterialRows` |
 | o caminho estável não chama `Flush`/`WaitIdle` por edição de material | **feito**: `NotifyMaterialRTStateChanged` perdeu os dois |
 | OMM invalidado quando suas ENTRADAS mudam | **parcial** — ver abaixo |
-| layouts e versões com testes de ABI, offsets e bounds | **feito para material e instância**; falta mesh |
+| layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e instância; falta a de instâncias da Fase 4 |
 | cena grande reporta bytes persistentes por tabela e sujos por frame | **feito** (painel + MCP); falta a medida numa cena grande |
+| formato-base novo e deliberado | **decidido não bumpar** — ver a nota de estado da Fase 2 no plano |
 | raster CPU e RT mantêm paridade visual | **não medido** — exige GPU |
 
 ## OMM: o que foi fechado e o que não foi
@@ -118,11 +146,12 @@ aparece no instantâneo e aparece na soma.
 
 ## Falta na fase
 
-- `FGpuSceneInstance`: colunas SoA (meta, bounds, transform, prev-transform) e o `FRTInstanceGeo`
-  derivando delas;
-- `FGpuMeshRecord`, com `VirtualGeometryId` reservado e não serializado;
-- formato-base novo e deliberado (o número 9 fica queimado pelo experimento descartado; o próximo
-  é o 10), com recozimento dos 11 pares e novo `Tools/cook-baseline.json`;
+- `FGpuSceneInstance`: colunas SoA (meta, bounds, transform, prev-transform). É o item que sobra do
+  trabalho da fase, e ele esbarra em sistemas que já mantêm colunas próprias por frame — o
+  `FTemporalMotionVectors` sobe transforms e o `FHiZOcclusion` sobe bounds. Fazer a tabela sem
+  migrar os dois cria uma terceira cópia dos mesmos dados; migrá-los é mais que a Fase 2 pede, e o
+  consumidor que justifica a tabela (culling na GPU) só existe na Fase 6. **Decisão pendente do
+  proprietário**, com o mesmo peso da que resolveu o formato;
 - medir bytes persistentes e sujos numa cena grande de verdade;
 - comparação visual CPU/RT no mesmo regime da Fase 1 (preset scientific, `N=128`, 4 cenas × 2
   câmeras). **Exige GPU e aval do proprietário.**

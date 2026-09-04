@@ -150,6 +150,12 @@ namespace Smile {
         u32 MaterialCopyRegions      = 0; // CopyBufferRegion emitidos neste frame
         u64 MaterialRowsUploadedTotal = 0; // desde o ultimo setup da tabela
 
+        // Tabela canonica de meshes. Sem contador de sujas por frame: geometria nao e editavel em
+        // runtime, entao as linhas dela so mudam num Setup — e o dia em que passarem a mudar por
+        // frame e o dia em que este par de numeros precisa crescer.
+        u64 MeshTableBytes = 0;
+        u32 MeshTableRows  = 0;
+
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
         // e GPU de frames diferentes sem perceber.

@@ -72,14 +72,8 @@ namespace Smile {
             _SRVHeap.Free(InstanceGeoSRVSlot_, 1);
             InstanceGeoSRVSlot_ = kInvalidSlot;
         }
-        if (MeshGeoSlotBase != kInvalidSlot) {
-            _SRVHeap.Free(MeshGeoSlotBase, MeshGeoSlotCount);
-            MeshGeoSlotBase  = kInvalidSlot;
-            MeshGeoSlotCount = 0;
-        }
         InstanceGeoBuf.Reset();
         InstanceGeoCount = 0;
-        MeshGeoSlot.clear();
         BlasPool.Reset();
         BlasByMesh.clear();
         OmmArrays.clear();
@@ -192,36 +186,42 @@ namespace Smile {
     // de RT indexa o snapshot. Preencher aqui, e nao no dono do volume DDGI, e o que garante que
     // as duas nunca sejam construidas em momentos diferentes.
     void FRaytracingScene::FillInstanceGeo(const FScene& _Scene, const FGpuMaterialTable& _Materials,
-                                           u8* _Mapped, u32 _Count) const {
+                                           const FGpuMeshTable& _Meshes, u8* _Mapped,
+                                           u32 _Count) const {
         const u32 MaterialSrv = _Materials.Srv();
+        const u32 MeshSrv     = _Meshes.Srv();
         for (u32 i = 0; i < _Count; ++i) {
             const FRenderable& R = _Scene.Renderables()[i];
             FRTInstanceGeo g{};
             g.MaterialSrv = MaterialSrv;
             g.MaterialId  = _Materials.RowOf(R.Material);
-            // Tres slots CONSECUTIVOS por malha unica: [VB][IB][RTTri]. O base vem do
-            // MeshGeoSlot, que e indexado pela FGpuMesh — entao N instancias da mesma malha
-            // recebem o MESMO TriangleSrv, que e o que torna o payload por malha e nao por
-            // instancia (a conta de VRAM segue triangulos unicos).
-            auto It = R.Mesh ? MeshGeoSlot.find(R.Mesh) : MeshGeoSlot.end();
-            if (It != MeshGeoSlot.end()) {
-                g.VertexSrv   = It->second;
-                g.IndexSrv    = It->second + 1;
-                g.TriangleSrv = It->second + 2;
-            }
+            g.MeshSrv     = MeshSrv;
+            g.MeshId      = _Meshes.RowOf(R.Mesh);
+            // O payload por triangulo continua DESNORMALIZADO aqui (ver FGpuInstanceGeo): e o
+            // caminho quente, e N instancias da mesma malha recebem o mesmo descritor — o que
+            // torna o payload por malha e nao por instancia, e mantem a conta de VRAM em
+            // triangulos unicos.
+            //
+            // O guard pela LINHA, e nao pelo ponteiro: sem ele uma malha desconhecida receberia
+            // GeometrySlotOf()+2 = 2, um descritor plausivel de outro dono. Zero e o que o mapa
+            // anterior deixava, e continua inalcancavel — renderavel sem malha valida nao entra
+            // na TLAS, entao nenhum hit enderaca esta linha.
+            g.TriangleSrv = g.MeshId != FGpuMeshTable::kMissingRow
+                          ? _Meshes.GeometrySlotOf(R.Mesh) + 2u : 0u;
             std::memcpy(_Mapped + i * sizeof(FRTInstanceGeo), &g, sizeof(FRTInstanceGeo));
         }
     }
 
     void FRaytracingScene::RefreshInstanceGeo(const FScene& _Scene,
-                                              const FGpuMaterialTable& _Materials) {
+                                              const FGpuMaterialTable& _Materials,
+                                              const FGpuMeshTable& _Meshes) {
         if (!InstanceGeoBuf || InstanceGeoCount == 0) return;
         const u32 Count = std::min(InstanceGeoCount,
                                    static_cast<u32>(_Scene.Renderables().size()));
         u8*         Mapped = nullptr;
         D3D12_RANGE NoRead{ 0, 0 };
         if (FAILED(InstanceGeoBuf->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped)))) return;
-        FillInstanceGeo(_Scene, _Materials, Mapped, Count);
+        FillInstanceGeo(_Scene, _Materials, _Meshes, Mapped, Count);
         InstanceGeoBuf->Unmap(0, nullptr);
     }
 
@@ -259,7 +259,8 @@ namespace Smile {
 
     void FRaytracingScene::Build(FD3D12Device& _Device, FCommandQueue& _Queue,
                                  FTextureSRVHeap& _SRVHeap, const FScene& _Scene,
-                                 const FGpuMaterialTable& _Materials, const Vec3& _TlasOrigin) {
+                                 const FGpuMaterialTable& _Materials,
+                                 const FGpuMeshTable& _Meshes, const Vec3& _TlasOrigin) {
         if (!_Device.RaytracingSupported() || !_Device.Device5())
             throw std::runtime_error("DXR Tier 1.2 obrigatorio para construir a cena OMM");
 
@@ -278,11 +279,8 @@ namespace Smile {
             const FOpacityMicromapData* Omm  = nullptr;
         };
         std::vector<FBlasKey> UniqueBlas;
-        std::vector<const FGpuMesh*> UniqueMeshes;
-        std::unordered_set<const FGpuMesh*> SeenMeshes;
         for (const FRenderable& R : _Scene.Renderables()) {
             if (!R.Mesh || !R.Mesh->IsValid()) continue;
-            if (SeenMeshes.insert(R.Mesh).second) UniqueMeshes.push_back(R.Mesh);
 
             const bool AlphaTest = R.Material && R.Material->Constants.AlphaTest;
             const FOpacityMicromapData* Omm = AlphaTest ? R.OpacityMicromap.get() : nullptr;
@@ -305,7 +303,6 @@ namespace Smile {
             return;
         }
         const u32 NumBlas   = static_cast<u32>(UniqueBlas.size());
-        const u32 NumMeshes = static_cast<u32>(UniqueMeshes.size());
 
         // VB/IB dos meshes ja vivem em estado combinado de leitura que inclui NON_PIXEL
         // (GpuMesh.cpp) — o build de BLAS le direto, sem transicao de ida e volta.
@@ -587,45 +584,12 @@ namespace Smile {
         // InstanceGeoSRV segue invalido — o mesmo criterio que o FDDGI aplicava quando era dono
         // disto (ele desistia com TlasSRVSlot == kInvalidSlot).
         //
-        // Os SRVs bindless de VB/IB saem do MESMO UniqueMeshes que dimensionou os BLAS. O DDGI
-        // reconstruia essa lista com um criterio identico, palavra por palavra; uma so agora.
-        // TRES por malha desde a v8: [VB][IB][RTTri]. O terceiro e o payload pre-cozido por
-        // triangulo, que o caminho de hit passou a ler no lugar da cadeia IB -> 3 vertices.
-        MeshGeoSlotCount = NumMeshes * 3;
-        MeshGeoSlotBase  = _SRVHeap.Allocate(MeshGeoSlotCount);
-        {
-            D3D12_SHADER_RESOURCE_VIEW_DESC GeoSrv{};
-            GeoSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
-            GeoSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            for (u32 i = 0; i < NumMeshes; ++i) {
-                const FGpuMesh* M      = UniqueMeshes[i];
-                const u32       VbSlot = MeshGeoSlotBase + i * 3;
-
-                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
-                GeoSrv.Buffer.FirstElement        = M->VertexFirstElement();
-                GeoSrv.Buffer.NumElements         = M->VertexCount();
-                GeoSrv.Buffer.StructureByteStride = sizeof(Vertex);
-                _SRVHeap.CreateSRV(_Device.Native(), M->VertexResource(), GeoSrv, VbSlot);
-                GeoSrv.Format                     = DXGI_FORMAT_R32_UINT;
-                GeoSrv.Buffer.FirstElement        = M->IndexFirstElement();
-                GeoSrv.Buffer.NumElements         = M->GetIndexCount();
-                GeoSrv.Buffer.StructureByteStride = 0;
-                _SRVHeap.CreateSRV(_Device.Native(), M->IndexResource(), GeoSrv, VbSlot + 1);
-
-                // Malha sem payload nao deveria existir (o loader recusa cozido sem a regiao, e o
-                // caminho procedural gera no upload), mas um descritor NULO tipado e melhor que
-                // um slot nao escrito: o shader le zeros e cai no fallback de normal invalida,
-                // em vez de amostrar lixo de um descritor herdado.
-                GeoSrv.Format                     = DXGI_FORMAT_UNKNOWN;
-                GeoSrv.Buffer.FirstElement        = M->RTTriangleFirstElement();
-                GeoSrv.Buffer.NumElements         = M->RTTriangleCount();
-                GeoSrv.Buffer.StructureByteStride = sizeof(FRTTriangle);
-                _SRVHeap.CreateSRV(_Device.Native(),
-                                   M->RTTriangleCount() > 0 ? M->RTTriangleResource() : nullptr,
-                                   GeoSrv, VbSlot + 2);
-                MeshGeoSlot[M] = VbSlot;
-            }
-        }
+        // Os descritores bindless de geometria — TRES por malha unica, [VB][IB][RTTri] — moravam
+        // AQUI ate a Fase 2 e passaram para a FGpuMeshTable. Nao e arrumacao: a decisao D12 do
+        // plano diz que o ray tracing e consumidor da cena e nao dono dela, e a enumeracao das
+        // malhas unicas que acompanhava esses descritores ja tinha divergido uma vez quando o
+        // FDDGI a reconstruia "com um criterio identico, palavra por palavra". Agora ela tem um
+        // dono so, e este Build le a lista de la (ver o laco dos BLAS acima).
 
         // Com folga (SceneCapacityFor): objeto criado no editor cabe sem realocar descritor nem
         // refazer o Build. So os [0, NumRenderables) sao preenchidos — FillInstanceGeo le a lista
@@ -639,7 +603,7 @@ namespace Smile {
             /*ForConstantBuffer*/ false);
         InstanceGeoBuf   = GeoUpload.Resource;
         InstanceGeoCount = GeoCapacity;
-        FillInstanceGeo(_Scene, _Materials, GeoUpload.Mapped, NumRenderables);
+        FillInstanceGeo(_Scene, _Materials, _Meshes, GeoUpload.Mapped, NumRenderables);
         std::memset(GeoUpload.Mapped + static_cast<size_t>(NumRenderables) * sizeof(FRTInstanceGeo),
                     0, static_cast<size_t>(GeoCapacity - NumRenderables) * sizeof(FRTInstanceGeo));
         InstanceGeoBuf->Unmap(0, nullptr);

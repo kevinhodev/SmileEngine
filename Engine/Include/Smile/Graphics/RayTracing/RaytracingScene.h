@@ -14,6 +14,7 @@ namespace Smile {
     class FScene;
     class FGpuMesh;
     class FGpuMaterialTable;
+    class FGpuMeshTable;
     struct FOpacityMicromapData;
 
     class FRaytracingScene {
@@ -23,7 +24,7 @@ namespace Smile {
         // um par {descritor da tabela, linha} por instancia.
         void Build(FD3D12Device& Device, FCommandQueue& Queue, FTextureSRVHeap& SRVHeap,
                    const FScene& Scene, const FGpuMaterialTable& Materials,
-                   const Vec3& TlasOrigin);
+                   const FGpuMeshTable& Meshes, const Vec3& TlasOrigin);
 
         // Rebuild SO da TLAS (BLAS/pool intactos) na command list do FRAME — p/ transform de
         // renderable mudado no editor (gizmo). Rebuild em vez de update (recomendacao
@@ -74,7 +75,8 @@ namespace Smile {
         // update do DDGI roda na COMPUTE e chega ao snapshot pela tabela de trace dele. Drenar so
         // a direta deixa passar exatamente esse leitor. Nao da para drenar aqui dentro: as filas
         // sao do Renderer.
-        void RefreshInstanceGeo(const FScene& Scene, const FGpuMaterialTable& Materials);
+        void RefreshInstanceGeo(const FScene& Scene, const FGpuMaterialTable& Materials,
+                                const FGpuMeshTable& Meshes);
         // Teto de instancias que os rebuilds por frame conseguem endereçar: TLAS, scratch e
         // uploads foram dimensionados para ele no Build. Passar disso exige Build de novo —
         // quem cria objeto com a cena carregada precisa consultar (Renderer::OnSceneStructureChanged).
@@ -90,7 +92,7 @@ namespace Smile {
                               std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& Out) const;
         // Definido no .cpp (FRTInstanceGeo e local daquele arquivo); _Mapped tem _Count entradas.
         void FillInstanceGeo(const FScene& Scene, const FGpuMaterialTable& Materials,
-                             u8* Mapped, u32 Count) const;
+                             const FGpuMeshTable& Meshes, u8* Mapped, u32 Count) const;
 
         bool   Built          = false;
         u32    TlasSRVSlot_    = 0xFFFFFFFFu;
@@ -122,13 +124,7 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
         u32                                    InstanceGeoCount    = 0; // capacidade, nao a cena
         u32                                    InstanceGeoSRVSlot_ = 0xFFFFFFFFu;
-        // SRVs bindless de VB/IB por malha unica (2 slots contiguos por malha: base+2i = VB,
-        // base+2i+1 = IB) — o InstanceGeo carrega os indices. A lista deduplica a geometria,
-        // independente das variantes de BLAS/OMM que uma mesma malha possua.
-        u32                                    MeshGeoSlotBase  = 0xFFFFFFFFu;
-        u32                                    MeshGeoSlotCount = 0;
-        // Malha -> slot bindless do VB (IB = +1). Membro, e nao local do Build, porque o
-        // RefreshInstanceGeo remonta o snapshot sem refazer a alocacao de descritores.
-        std::unordered_map<const FGpuMesh*, u32> MeshGeoSlot;
+        // Os SRVs bindless de geometria por malha unica ([VB][IB][RTTri]) e a enumeracao das
+        // malhas unicas saíram daqui na Fase 2 e vivem na FGpuMeshTable. Ver a nota no Build.
     };
 }

@@ -220,17 +220,33 @@ int main() try {
         Linhas.push_back(FGpuMaterialRecord::FromParts(C, /*TwoSided*/ false, /*Blend*/ true, 8192u));
     }
 
+    // Linhas de malha. A linha 0 e a malha AUSENTE (tudo zero), como a tabela real a reserva.
+    std::vector<FGpuMeshRecord> Malhas(3);
+    for (u32 I = 1; I < 3; ++I) {
+        const f32 S = static_cast<f32>(I);
+        Malhas[I].LocalAABBMin  = { -S, -S - 0.5f, -S - 0.25f };
+        Malhas[I].LocalAABBMax  = {  S,  S + 0.5f,  S + 0.25f };
+        Malhas[I].VertexSrv     = 100u + I * 3u;
+        Malhas[I].IndexSrv      = 101u + I * 3u;
+        Malhas[I].TriangleSrv   = 102u + I * 3u;
+        Malhas[I].VertexCount   = 1000u + I;
+        Malhas[I].IndexCount    = 2000u + I;
+        Malhas[I].TriangleCount = 3000u + I;
+    }
+
     std::vector<FGpuInstanceGeo> Instancias(4);
     for (u32 I = 0; I < 4; ++I) {
-        Instancias[I].VertexSrv   = 10u + I * 3u;
-        Instancias[I].IndexSrv    = 11u + I * 3u;
         Instancias[I].TriangleSrv = 12u + I * 3u;
         Instancias[I].MaterialSrv = 777u;
+        Instancias[I].MeshSrv     = 888u;
     }
-    Instancias[0].MaterialId = 0u;
-    Instancias[1].MaterialId = 1u;
-    Instancias[2].MaterialId = 2u;
-    Instancias[3].MaterialId = 2u;
+    Instancias[0].MaterialId = 0u; Instancias[0].MeshId = 0u; // sem material e sem malha
+    Instancias[1].MaterialId = 1u; Instancias[1].MeshId = 1u;
+    Instancias[2].MaterialId = 2u; Instancias[2].MeshId = 2u;
+    // As duas ultimas compartilham material E malha: e a situacao que a fase existe para permitir
+    // (N instancias, uma linha de cada), e ela prova que os ids enderecam as tabelas em vez de
+    // coincidirem com o indice da instancia.
+    Instancias[3].MaterialId = 2u; Instancias[3].MeshId = 2u;
     const u32 kInstancias = static_cast<u32>(Instancias.size());
 
     // ---- WARP --------------------------------------------------------------------------------
@@ -251,7 +267,7 @@ int main() try {
 
     D3D12_DESCRIPTOR_RANGE Ranges[2]{};
     Ranges[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    Ranges[0].NumDescriptors = 2;
+    Ranges[0].NumDescriptors = 3;
     Ranges[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     Ranges[1].NumDescriptors = 1;
 
@@ -279,14 +295,15 @@ int main() try {
 
     D3D12_DESCRIPTOR_HEAP_DESC HD{};
     HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    HD.NumDescriptors = 3;
+    HD.NumDescriptors = 4;
     HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     Hr(S.Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&S.Heap)), "CreateDescriptorHeap");
     S.Step = S.Device->GetDescriptorHandleIncrementSize(HD.Type);
 
     auto BufLinhas = S.Upload(Linhas.data(), Linhas.size() * sizeof(FGpuMaterialRecord));
     auto BufInst   = S.Upload(Instancias.data(), Instancias.size() * sizeof(FGpuInstanceGeo));
-    const u64 SaidaBytes = static_cast<u64>(kInstancias) * 6ull * 4ull * sizeof(u32);
+    auto BufMalhas = S.Upload(Malhas.data(), Malhas.size() * sizeof(FGpuMeshRecord));
+    const u64 SaidaBytes = static_cast<u64>(kInstancias) * 9ull * 4ull * sizeof(u32);
     auto BufSaida   = S.Buffer(D3D12_HEAP_TYPE_DEFAULT, SaidaBytes, true,
                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     auto BufLeitura = S.Buffer(D3D12_HEAP_TYPE_READBACK, SaidaBytes, false,
@@ -294,14 +311,15 @@ int main() try {
 
     S.SRV(BufLinhas.Get(), static_cast<u32>(Linhas.size()), sizeof(FGpuMaterialRecord), 0);
     S.SRV(BufInst.Get(), kInstancias, sizeof(FGpuInstanceGeo), 1);
+    S.SRV(BufMalhas.Get(), static_cast<u32>(Malhas.size()), sizeof(FGpuMeshRecord), 2);
     {
         D3D12_UNORDERED_ACCESS_VIEW_DESC UD{};
         UD.Format                     = DXGI_FORMAT_UNKNOWN;
         UD.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-        UD.Buffer.NumElements         = kInstancias * 6u;
+        UD.Buffer.NumElements         = kInstancias * 9u;
         UD.Buffer.StructureByteStride = sizeof(u32) * 4;
         auto H = S.Heap->GetCPUDescriptorHandleForHeapStart();
-        H.ptr += static_cast<SIZE_T>(2) * S.Step;
+        H.ptr += static_cast<SIZE_T>(3) * S.Step;
         S.Device->CreateUnorderedAccessView(BufSaida.Get(), nullptr, &UD, H);
     }
 
@@ -327,7 +345,7 @@ int main() try {
         return H;
     };
     S.List->SetComputeRootDescriptorTable(1, GpuAt(0));
-    S.List->SetComputeRootDescriptorTable(2, GpuAt(2));
+    S.List->SetComputeRootDescriptorTable(2, GpuAt(3));
     S.List->Dispatch(1, 1, 1);
     {
         D3D12_RESOURCE_BARRIER B{};
@@ -368,7 +386,8 @@ int main() try {
     for (u32 I = 0; I < kInstancias; ++I) {
         const FGpuInstanceGeo&    G = Instancias[I];
         const FGpuMaterialRecord& M = Linhas[G.MaterialId];
-        const u32* R = Saida + static_cast<size_t>(I) * 24u;
+        const FGpuMeshRecord&     H = Malhas[G.MeshId];
+        const u32* R = Saida + static_cast<size_t>(I) * 36u;
         const std::string Onde = "instancia " + std::to_string(I);
 
         Check(MesmoFloat(R[0], M.BaseColor.X) && MesmoFloat(R[1], M.BaseColor.Y) &&
@@ -385,9 +404,9 @@ int main() try {
         Check(R[14] == M.Flags,                     Onde + ": Flags no offset 56");
         Check(R[15] == M.TextureBase,               Onde + ": TextureBase no offset 60");
 
-        Check(R[16] == G.VertexSrv,   Onde + ": VertexSrv no offset 0");
-        Check(R[17] == G.IndexSrv,    Onde + ": IndexSrv no offset 4");
-        Check(R[18] == G.TriangleSrv, Onde + ": TriangleSrv no offset 8");
+        Check(R[16] == G.TriangleSrv, Onde + ": TriangleSrv no offset 0");
+        Check(R[17] == G.MeshSrv,     Onde + ": MeshSrv no offset 4");
+        Check(R[18] == G.MeshId,      Onde + ": MeshId no offset 8");
         Check(R[19] == G.MaterialSrv, Onde + ": MaterialSrv no offset 12");
         Check(R[20] == G.MaterialId,  Onde + ": MaterialId no offset 16");
 
@@ -399,11 +418,26 @@ int main() try {
               Onde + ": SMILE_MAT_FLAG_TWOSIDED casa com o C++");
         Check((R[23] != 0u) == ((M.Flags & kMaterialFlagAlbedoMap) != 0u),
               Onde + ": SMILE_MAT_FLAG_ALBEDOMAP casa com o C++");
+
+        // Linha da malha. float3 em StructuredBuffer ocupa 12 B e NAO e promovido a 16 — e o que
+        // faz LocalAABBMax cair no offset 12 e VertexSrv no 24. Se o DXC mudasse isso, os quatro
+        // primeiros campos ainda casariam e todo o resto andaria.
+        Check(MesmoFloat(R[24], H.LocalAABBMin.X) && MesmoFloat(R[25], H.LocalAABBMin.Y) &&
+              MesmoFloat(R[26], H.LocalAABBMin.Z), Onde + ": LocalAABBMin no offset 0");
+        Check(MesmoFloat(R[27], H.LocalAABBMax.X) && MesmoFloat(R[28], H.LocalAABBMax.Y) &&
+              MesmoFloat(R[29], H.LocalAABBMax.Z), Onde + ": LocalAABBMax no offset 12");
+        Check(R[30] == H.VertexSrv,     Onde + ": VertexSrv da malha no offset 24");
+        Check(R[31] == H.IndexSrv,      Onde + ": IndexSrv da malha no offset 28");
+        Check(R[32] == H.TriangleSrv,   Onde + ": TriangleSrv da malha no offset 32");
+        Check(R[33] == H.VertexCount,   Onde + ": VertexCount no offset 36");
+        Check(R[34] == H.IndexCount,    Onde + ": IndexCount no offset 40");
+        Check(R[35] == H.TriangleCount, Onde + ": TriangleCount no offset 44");
     }
     BufLeitura->Unmap(0, nullptr);
 
     if (Failures == 0) {
-        std::cout << "  " << kInstancias << " instancias x 3 linhas lidas em WARP, todas OK\n";
+        std::cout << "  " << kInstancias
+                  << " instancias x (linha de material + linha de malha) lidas em WARP, todas OK\n";
         return 0;
     }
     std::cerr << "  " << Failures << " falha(s)\n";

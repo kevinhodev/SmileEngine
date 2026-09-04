@@ -533,14 +533,19 @@ namespace SmileEditor {
                              ? QStringLiteral(", esgotados %1").arg(Cpu.GpuSlotsExhausted)
                              : QString());
 
-            // Tabela canonica de materiais. As linhas e os bytes residentes primeiro, porque sao
-            // o que a cena custa; o sujo aparece SO quando existe, e e essa a informacao — num
+            // Tabelas canonicas da cena. As linhas e os bytes residentes primeiro, porque sao o
+            // que a cena custa; o sujo aparece SO quando existe, e e essa a informacao — num
             // frame sem edicao ele tem de ser zero, e uma coluna de zeros permanente esconderia
             // justamente o frame em que deixou de ser.
+            //
+            // A de MALHAS nao tem contador de sujas: geometria nao e editavel em runtime, entao
+            // as linhas dela so mudam num Setup.
             Next.MaterialTableText =
-                QStringLiteral("%1 linhas / %2 KB%3")
+                QStringLiteral("mat %1 / %2 KB, malha %3 / %4 KB%5")
                     .arg(Cpu.MaterialTableRows)
                     .arg(QString::number(Cpu.MaterialTableBytes / 1024.0, 'f', 1))
+                    .arg(Cpu.MeshTableRows)
+                    .arg(QString::number(Cpu.MeshTableBytes / 1024.0, 'f', 1))
                     .arg(Cpu.MaterialRowsDirty
                              ? QStringLiteral("  (sujas %1 em %2 copias)")
                                    .arg(Cpu.MaterialRowsDirty).arg(Cpu.MaterialCopyRegions)

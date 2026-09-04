@@ -6,6 +6,7 @@
 //
 // Espelha, byte a byte:
 //   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 64 B)
+//   GpuMeshRecord     <- Smile::FGpuMeshRecord      (Graphics/Scene/GpuSceneTables.h, 56 B)
 //   InstanceGeo       <- Smile::FGpuInstanceGeo     (Graphics/Scene/GpuSceneTables.h, 20 B)
 //
 // A ABI e verificada em WARP por Tests/GpuSceneTablesWarpTests.cpp, que compila a sonda
@@ -62,17 +63,35 @@ uint MaterialTextureIndex(GpuMaterialRecord _M, uint _Offset) {
     return (_M.TextureBase == 0xFFFFFFFFu) ? 0xFFFFFFFFu : (_M.TextureBase + _Offset);
 }
 
+// Uma linha por MALHA UNICA. Espelha Smile::FGpuMeshRecord (56 B).
+struct GpuMeshRecord {
+    float3 LocalAABBMin; // espaco do OBJETO, como o cozido v7+ grava
+    float3 LocalAABBMax;
+    uint   VertexSrv;    // StructuredBuffer<DDGIVertex>
+    uint   IndexSrv;     // Buffer<uint>
+    uint   TriangleSrv;  // StructuredBuffer<RTTriangle>, payload por triangulo (cozido v8)
+    uint   VertexCount;
+    uint   IndexCount;
+    uint   TriangleCount;
+    uint   Flags;             // RESERVADO: 0 hoje
+    uint   VirtualGeometryId; // RESERVADO: 0 hoje, ate a trilha de virtual geometry existir
+};
+
 // Snapshot por INSTANCIA, indexado pelo InstanceID da TLAS. Depois da Fase 2 ele carrega apenas
-// endereco: tres descritores de geometria (a malha) e o par que localiza a linha do material.
+// endereco: o par que localiza a linha da malha, o par que localiza a linha do material, e o
+// payload por triangulo desnormalizado.
 //
 // Antes ele tinha 100 B e carregava treze campos de material COPIADOS por instancia. Era isso que
 // obrigava toda edicao de material a reescrever a cena inteira, num upload heap sem versao por
 // frame, com as duas filas drenadas.
 struct InstanceGeo {
-    uint VertexSrv;   // StructuredBuffer<DDGIVertex> da malha (MeshLightExtract ainda o percorre)
-    uint IndexSrv;    // Buffer<uint> da malha
-    uint TriangleSrv; // StructuredBuffer<RTTriangle>, payload por triangulo (cozido v8)
-    uint MaterialSrv; // StructuredBuffer<GpuMaterialRecord>: a tabela inteira da cena
+    // DESNORMALIZADO de proposito, e e a unica excecao: o AlphaTestPass roda por CANDIDATO de
+    // travessia, nao por hit comitado, entao em folhagem ele e chamado varias vezes por raio.
+    // Passar por instancia -> mesh -> payload acrescentaria uma leitura dependente exatamente ali.
+    uint TriangleSrv;
+    uint MeshSrv;     // StructuredBuffer<GpuMeshRecord>: a tabela inteira da cena
+    uint MeshId;      // linha dentro dela; 0 = malha ausente
+    uint MaterialSrv; // StructuredBuffer<GpuMaterialRecord>: idem
     uint MaterialId;  // linha dentro dela; 0 = material default (renderavel sem material)
 };
 
