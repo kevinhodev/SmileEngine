@@ -10,6 +10,7 @@
 #include "Smile/Graphics/RayTracing/RTMasks.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Resources/Material.h"
+#include "Smile/Graphics/Scene/GpuMaterialRecord.h"
 #include "Smile/Scene/Scene.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -218,69 +219,32 @@ namespace Smile {
     void FRaytracingScene::FillInstanceGeo(const FScene& _Scene, u8* _Mapped, u32 _Count) const {
         for (u32 i = 0; i < _Count; ++i) {
             const FRenderable& R = _Scene.Renderables()[i];
-            FRTInstanceGeo g{};
-            g.BaseColor = { 0.7f, 0.7f, 0.7f, 1.0f };
-            if (R.Material) {
-                const MaterialConstants& MC = R.Material->Constants;
-                g.BaseColor = MC.BaseColorFactor;
-                // Mesmo criterio da flag de culling da TLAS (ver FMaterial::IsTwoSidedForRT, e o
-                // CollectInstances logo acima): este campo e o que decide, no shader, se um hit
-                // pelo verso significa "dentro de solido" — tem que concordar com quem o raio
-                // consegue enxergar pelo verso.
-                g.TwoSidedRT = R.Material->IsTwoSidedForRT() ? 1u : 0u;
-                if (R.Material->IsFinalized() && R.Material->HasAlbedoTexture()) {
-                    g.AlbedoIndex = R.Material->AlbedoDescriptorIndex();
-                    g.HasAlbedo   = 1;
-                }
+            // A linha CANONICA do material (Graphics/Scene/GpuMaterialRecord.h) e a fonte; o
+            // snapshot por instancia so a espalha nos campos que o HLSL ainda le separados. Foi o
+            // primeiro passo da Fase 2: enquanto a derivacao morava aqui dentro, "o que o RT ve
+            // de um material" nao existia em lugar nenhum que pudesse ser testado sem GPU.
+            const FGpuMaterialRecord M = FGpuMaterialRecord::FromMaterial(R.Material);
 
-                g.AlphaCutoff     = MC.AlphaCutoff;
-                g.RoughnessFactor = MC.RoughnessFactor;
-                // Mesmo dado do G-buffer: tint RGB + intensidade em A. Folhagem importada recebe
-                // 0.6 no loader; materiais editados preservam o valor autorado no RT.
-                g.SubsurfaceColor = MC.SubsurfaceColor;
-                // O RTEmissiveScale entra SO aqui: este InstanceGeo e o que os hits de RT leem
-                // (DDGI, ReSTIR GI e reflexoes). O raster segue com o EmissiveStrength puro, entao
-                // baixar a escala tira a malha de iluminar o ambiente sem apagar o brilho dela na
-                // tela. Ver MaterialConstants::RTEmissiveScale.
-                const f32 EmiRT = MC.EmissiveStrength * MC.RTEmissiveScale;
-                g.EmissiveFactor  = { MC.EmissiveFactor.X * EmiRT,
-                                      MC.EmissiveFactor.Y * EmiRT,
-                                      MC.EmissiveFactor.Z * EmiRT,
-                                      MC.MetallicFactor };
-                if (MC.AlphaTest)        g.Flags |= 1u;
-                if (MC.ShadingModel == 1) g.Flags |= 4u; // Foliage
-                // Categoria da instancia na TLAS (kRTMaskTranslucent). Espelhada aqui porque a
-                // mask e propriedade do RAIO: um shader nao consegue perguntar a TLAS com que
-                // mask a instancia entrou. Consumida so pelo BvhDebug — os outros passes
-                // distinguem translucido pela mask que eles proprios tracam.
-                if (R.Material->Blend)   g.Flags |= 128u;
-                if (R.Material->IsFinalized()) {
-                    // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive.
-                    if (MC.HasEmissiveMap) {
-                        g.EmissiveMapIndex = R.Material->AlbedoDescriptorIndex() + 4;
-                        g.Flags |= 2u;
-                    }
-                    if (MC.HasMetallicRoughnessMap) {
-                        g.MrMapIndex = R.Material->AlbedoDescriptorIndex() + 2;
-                        g.Flags |= 8u;
-                        // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem
-                        // este bit o RT leria o canal errado e um material viraria metal (ou
-                        // dielétrico) por engano no bounce.
-                        if (MC.SpecularPacking) g.Flags |= 16u;
-                    }
-                    // Mapa Metalness SEPARADO (slot +6). Precisa existir aqui porque o loader
-                    // deixa MetallicFactor = 1 quando ha mapa — sem enxergar o mapa, o RT leria
-                    // "metal puro" e zeraria o difuso de um material que e quase todo dieletrico.
-                    if (MC.HasMetalnessMap) {
-                        g.MetalMapIndex = R.Material->AlbedoDescriptorIndex() + 6;
-                        g.Flags |= 32u;
-                    }
-                    if (MC.HasRoughnessMap) {
-                        g.RoughMapIndex = R.Material->AlbedoDescriptorIndex() + 7;
-                        g.Flags |= 64u;
-                    }
-                }
+            FRTInstanceGeo g{};
+            g.BaseColor       = M.BaseColor;
+            g.TwoSidedRT      = (M.Flags & kMaterialFlagTwoSided) ? 1u : 0u;
+            g.AlphaCutoff     = M.AlphaCutoff;
+            g.RoughnessFactor = M.RoughnessFactor;
+            g.SubsurfaceColor = M.SubsurfaceColor;
+            g.EmissiveFactor  = M.EmissiveFactor;
+            // Os dois bits que viraram campo inteiro no snapshot saem do Flags espalhado; o resto
+            // dos bits ja tem o mesmo valor numerico dos INSTGEO_FLAG_* do HLSL.
+            g.Flags = M.Flags & ~(kMaterialFlagAlbedoMap | kMaterialFlagTwoSided);
+            if (M.Flags & kMaterialFlagAlbedoMap) {
+                g.AlbedoIndex = M.TextureIndex(kMaterialTexAlbedo);
+                g.HasAlbedo   = 1;
             }
+            // Slots do material: 0=albedo, 1=normal, 2=metallic-roughness, 3=AO, 4=emissive,
+            // 5=height, 6=metalness, 7=roughness.
+            if (M.Flags & kMaterialFlagEmissiveMap) g.EmissiveMapIndex = M.TextureIndex(kMaterialTexEmissive);
+            if (M.Flags & kMaterialFlagMRMap)       g.MrMapIndex       = M.TextureIndex(kMaterialTexMR);
+            if (M.Flags & kMaterialFlagMetalMap)    g.MetalMapIndex    = M.TextureIndex(kMaterialTexMetal);
+            if (M.Flags & kMaterialFlagRoughMap)    g.RoughMapIndex    = M.TextureIndex(kMaterialTexRough);
             // Tres slots CONSECUTIVOS por malha unica: [VB][IB][RTTri]. O base vem do
             // MeshGeoSlot, que e indexado pela FGpuMesh — entao N instancias da mesma malha
             // recebem o MESMO TriangleSrv, que e o que torna o payload por malha e nao por

@@ -173,6 +173,33 @@ set_tests_properties(Smile.SceneIdentity PROPERTIES
     LABELS "scene;identity;editor"
 )
 
+# Linha canonica de material da Fase 2. CPU pura: o GpuMaterialRecord.cpp nao aloca recurso e o
+# que ele le do FMaterial e tudo inline no header, entao nao ha Material.cpp para linkar.
+add_executable(SmileGpuMaterialRecordTests
+    GpuMaterialRecordTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Scene/GpuMaterialRecord.cpp
+)
+
+target_compile_features(SmileGpuMaterialRecordTests PRIVATE cxx_std_20)
+target_include_directories(SmileGpuMaterialRecordTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+set_target_properties(SmileGpuMaterialRecordTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuMaterialRecord
+    COMMAND SmileGpuMaterialRecordTests
+)
+
+set_tests_properties(Smile.GpuMaterialRecord PROPERTIES
+    LABELS "scene;materials;gpu-driven;abi"
+)
+
 add_executable(SmileRenderPassRegistryTests
     RenderPassRegistryTests.cpp
 )
