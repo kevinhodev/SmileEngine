@@ -184,6 +184,22 @@ async function esperaErro(payload, trecho, rotulo) {
   });
 }
 
+// O par do esperaErro: prova que um valor LEGITIMO atravessa. Sem ele, um contrato apertado
+// demais -- exatamente o que deu errado com o rowsUploadedTotal, u64 recebendo teto de u32 --
+// ficaria verde, porque toda assercao do teste seria de rejeicao.
+async function esperaOk(payload, rotulo) {
+  await comEditorFalso(payload, async () => {
+    const bridge = new SmileEditorBridge(raizDoProjeto);
+    let erro = null;
+    try {
+      await bridge.profileSnapshot(3000);
+    } catch (e) {
+      erro = e;
+    }
+    check(erro === null, `${rotulo}: nao pode ser recusado`, erro ? String(erro.message) : "");
+  });
+}
+
 // 1. Caminho valido continua passando -- senao uma validacao que recusa tudo ficaria verde.
 await comEditorFalso(snapshotValido(), async () => {
   const bridge = new SmileEditorBridge(raizDoProjeto);
@@ -244,10 +260,20 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //    no RESUMO, que e o que a regua le com o includeSamples default. Enquanto a exigencia
 //    existisse so no numero da versao, um editor anterior a Fase 2 passaria e o relatorio sairia
 //    com null no lugar do numero do gate -- parecendo completo.
+//
+//    DOIS contratos. Contagem e u32 no produtor; bytes e acumulados sao u64 -- o
+//    rowsUploadedTotal soma desde o ultimo setup e nao volta a zero por frame. Exigir a
+//    rejeicao de 2^32 nele recusaria um editor que so ficou muito tempo aberto.
+const kU32Max = 4294967295;
+const kU64Max = Number.MAX_SAFE_INTEGER; // 2^53-1: o editor serializa como double
 for (const [bloco, campos] of [
-  ["materialTable",
-   ["rows", "residentBytes", "stagingBytes", "rowsDirty", "copyRegions", "rowsUploadedTotal"]],
-  ["meshTable", ["rows", "residentBytes", "stagingBytes"]],
+  ["materialTable", [
+    ["rows", kU32Max], ["residentBytes", kU64Max], ["stagingBytes", kU64Max],
+    ["rowsDirty", kU32Max], ["copyRegions", kU32Max], ["rowsUploadedTotal", kU64Max],
+  ]],
+  ["meshTable", [
+    ["rows", kU32Max], ["residentBytes", kU64Max], ["stagingBytes", kU64Max],
+  ]],
 ]) {
   {
     const p = snapshotValido();
@@ -259,12 +285,32 @@ for (const [bloco, campos] of [
     p.cpu[bloco] = valor;
     await esperaErro(p, bloco, `${bloco} como ${JSON.stringify(valor)}`);
   }
-  for (const campo of campos) {
-    for (const valor of [undefined, "8", null, true, -1, 1.5, 4294967296]) {
+  for (const [campo, teto] of campos) {
+    for (const valor of [undefined, "8", null, true, -1, 1.5]) {
       const p = snapshotValido();
       if (valor === undefined) delete p.cpu[bloco][campo];
       else p.cpu[bloco][campo] = valor;
       await esperaErro(p, campo, `${bloco}.${campo} = ${String(valor)}`);
+    }
+    // O teto do PROPRIO campo passa; um a mais e recusado. Sem o caso positivo, um contrato que
+    // recusasse tudo acima de zero ficaria verde; sem o negativo, um sem teto tambem.
+    {
+      const p = snapshotValido();
+      p.cpu[bloco][campo] = teto;
+      await esperaOk(p, `${bloco}.${campo} = ${teto} (teto do contrato) e aceito`);
+    }
+    {
+      const p = snapshotValido();
+      p.cpu[bloco][campo] = teto + 1;
+      await esperaErro(p, campo, `${bloco}.${campo} = ${teto + 1} (acima do teto)`);
+    }
+    // E o caso que motivou separar os contratos: 2^32 e invalido numa contagem e VALIDO num
+    // acumulado de u64.
+    {
+      const p = snapshotValido();
+      p.cpu[bloco][campo] = 4294967296;
+      if (teto === kU32Max) await esperaErro(p, campo, `${bloco}.${campo} = 2^32 numa contagem u32`);
+      else await esperaOk(p, `${bloco}.${campo} = 2^32 num acumulado u64 e aceito`);
     }
   }
 }

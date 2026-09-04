@@ -272,10 +272,11 @@ namespace SmileEditor {
                     { QStringLiteral("retired"),   static_cast<double>(_Cpu.GpuSlotsRetired) },
                     { QStringLiteral("exhausted"), static_cast<double>(_Cpu.GpuSlotsExhausted) },
                 } },
-                // Tabela canonica de materiais (Fase 2). ADITIVO: o cliente MCP nao exige este
-                // bloco, entao o kProtocolVersion NAO sobe — a regra da v4 e que a versao sobe
-                // quando o cliente passa a EXIGIR um campo, e nao quando o editor passa a
-                // publicar um. Um cliente antigo ignora; um novo le sem handshake novo.
+                // Tabela canonica de materiais (Fase 2). EXIGIDO pelo cliente desde o protocolo 5,
+                // e foi por isso que a versao subiu — a regra e a da v4: sobe quando o cliente
+                // passa a EXIGIR o campo, e nao quando o editor passa a publicar um. Enquanto era
+                // aditivo, o bloco existia so na amostra crua e nao entrava no resumo, que e o que
+                // a regua le com o includeSamples default.
                 //
                 // `rowsDirty` e o numero do gate: zero em todo frame sem edicao de material. Uma
                 // automacao que o veja diferente de zero em regime constante achou um caminho

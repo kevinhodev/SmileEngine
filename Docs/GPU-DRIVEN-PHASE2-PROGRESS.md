@@ -77,6 +77,9 @@ separadas (`residentBytes` = VRAM, `stagingBytes` = host), porque não saem do m
 painel mostra a soma. A conta virou função pura `FGpuTableStorage::FootprintFor`, testável sem
 device — sem isso o campo não tinha guarda nenhuma, que foi como ele nasceu errado.
 
+Os dois continuam sendo **bytes de conteúdo**, e não custo de alocação; a seção de telemetria
+explica onde o custo real, com alinhamento, já é medido.
+
 ### Cobertura dos consertos
 
 Dois têm teste; dois não, e é honesto dizer qual é qual:
@@ -170,7 +173,7 @@ todo hit de RT.
 | o caminho estável não chama `Flush`/`WaitIdle` por edição de material | **feito**: `NotifyMaterialRTStateChanged` perdeu os dois |
 | OMM invalidado quando suas ENTRADAS mudam | **parcial** — ver abaixo |
 | layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e instância; falta a de instâncias da Fase 4 |
-| cena grande reporta bytes persistentes por tabela e sujos por frame | **feito e medido** na sintética de 1M: `rowsDirty=0` e `copyRegions=0` em regime estável; `residentBytes` corrigido para incluir o staging |
+| cena grande reporta bytes persistentes por tabela e sujos por frame | **feito e medido** na sintética de 1M: `rowsDirty=0` e `copyRegions=0` em regime estável. VRAM e staging são campos separados; ver "o que os bytes medem" |
 | formato-base novo e deliberado | **decidido não bumpar** — ver a nota de estado da Fase 2 no plano |
 | raster CPU e RT mantêm paridade visual | **feito**: `scientific`, N=128, Bistro+Emerald, 8/8 capturas; MAE máximo 0,900, abaixo do piso de ruído de 1,08 já documentado na Fase 1 |
 
@@ -203,17 +206,44 @@ esse invariante; é uma extensão da política que já valia para duas das quatr
 
 ## Telemetria
 
-`FCpuFrameStats` ganhou cinco campos: bytes residentes, linhas em uso, linhas sujas neste frame,
-regiões de cópia e o acumulado de linhas subidas. Chegam ao painel (`Tabela de materiais`) e ao
-snapshot MCP (`cpu.materialTable`).
+`FCpuFrameStats` publica, por tabela: linhas em uso, bytes de conteúdo em VRAM, bytes de staging no
+host e — só para materiais — linhas sujas neste frame, regiões de cópia e o acumulado de linhas
+subidas. Chegam ao painel (`Tabelas da cena`) e ao snapshot MCP (`cpu.materialTable`,
+`cpu.meshTable`).
 
-O bloco MCP é **aditivo** e o `kProtocolVersion` não sobe: a regra da v4 é que a versão sobe quando
-o cliente passa a EXIGIR um campo, não quando o editor passa a publicar um. O cliente TypeScript
-ainda não agrega esse bloco.
+O protocolo está em **5**. Ele subiu porque o cliente TypeScript passou a **exigir** e a **resumir**
+os dois blocos — a regra da v4 vale aqui: a versão sobe quando o cliente exige, não quando o editor
+publica. Antes disso os blocos existiam só na amostra crua, e como o `includeSamples` default é
+`false`, a régua nunca os via.
+
+**Dois contratos de tipo, e não um.** Contagens (`rows`, `rowsDirty`, `copyRegions`) são `u32` no
+produtor. Bytes e `rowsUploadedTotal` são `u64` — o acumulado soma desde o último setup da tabela e
+não volta a zero por frame, então dar a ele o teto de `u32` recusaria um snapshot legítimo de um
+editor aberto há muito tempo. O teto do `u64` na borda é `Number.MAX_SAFE_INTEGER`, e não 2^64: o
+editor serializa como `double`, então acima de 2^53−1 o número já chega perdendo precisão.
 
 `rowsDirty` é o número do gate: zero em todo frame sem edição de material. O acumulado existe
 porque o instantâneo é quase sempre zero — um vazamento de um punhado de linhas por frame não
 aparece no instantâneo e aparece na soma.
+
+### O que os bytes medem, exatamente
+
+`residentBytes` e `stagingBytes` são **bytes de conteúdo**: capacidade × stride, e a capacidade ×
+stride × frames em voo. É a grandeza que responde "como a tabela escala com a cena", que é para o
+que o gate existe.
+
+Eles **não** são o custo de alocação. O D3D12 arredonda um committed resource para a granularidade
+de heap, então uma tabela de 3.136 B ocupa muito mais que isso na prática — e nas cenas atuais, em
+que as tabelas são de poucos KB, o arredondamento domina.
+
+Isso já é medido, em outro lugar: o `VramTracker` registra o **tamanho real com alinhamento**
+(`VramTracker.cpp`, "igual ao que o driver cobra") e as duas tabelas entram no breakdown por
+recurso com rótulo próprio, `GpuMaterialTable` e `GpuMeshTable`. O staging não aparece lá de
+propósito — é UPLOAD heap, que o tracker ignora por ser memória do host —, e é justamente por isso
+que ele precisa de campo próprio aqui.
+
+Ou seja: para "quanto a tabela custa de verdade", o breakdown de VRAM; para "como ela cresce com a
+cena", estes dois campos.
 
 ## Tabela de instâncias: layout escolhido e orçamento
 

@@ -182,6 +182,12 @@ namespace Smile {
     // mapeados o tempo todo, nao alocados por upload —, e foi exatamente por esquece-los que o
     // primeiro `residentBytes` publicado valia um TERCO do que a tabela custava.
     //
+    // ⚠️ Sao bytes de CONTEUDO (capacidade x stride), e nao custo de alocacao: o D3D12 arredonda
+    // committed resource para a granularidade de heap, e com tabelas de poucos KB o arredondamento
+    // domina. O custo real, com alinhamento, ja e medido pelo VramTracker, que registra o tamanho
+    // que o driver cobra e da rotulo proprio as duas tabelas no breakdown por recurso. O que
+    // ESTES numeros respondem e outra pergunta: como a tabela cresce com a cena.
+    //
     // Funcao pura e livre para poder ser testada sem device: o `Create` que aloca de verdade exige
     // ID3D12Device, e uma conta que so existe la dentro nao tem como ser conferida.
     struct FGpuTableFootprint {

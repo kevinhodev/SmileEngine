@@ -565,10 +565,32 @@ export class SmileEditorBridge {
     // no 4: a agregacao passa a exigi-los. Sem validar na borda, um editor anterior a Fase 2
     // atravessaria o cast e o resumo publicaria "null" onde deveria estar o numero do gate --
     // um relatorio que parece completo e nao e.
-    const tabelas: Array<[string, readonly string[]]> = [
-      ["materialTable",
-       ["rows", "residentBytes", "stagingBytes", "rowsDirty", "copyRegions", "rowsUploadedTotal"]],
-      ["meshTable", ["rows", "residentBytes", "stagingBytes"]],
+    //
+    // DOIS contratos, e a diferenca importa. CONTAGENS (linhas, sujas, regioes) sao u32 no
+    // produtor. BYTES e ACUMULADOS sao u64 -- rowsUploadedTotal soma desde o ultimo setup da
+    // tabela, e nao volta a zero por frame. Dar a todos o teto de u32 recusaria um snapshot
+    // legitimo de um editor rodando ha muito tempo, que e o unico momento em que o acumulado
+    // serve para alguma coisa.
+    //
+    // O teto do u64 aqui NAO e 2^64: o editor serializa como double (QJsonValue nao tem inteiro),
+    // entao acima de 2^53-1 o numero ja chega perdendo precisao. Number.isSafeInteger e
+    // exatamente essa fronteira, e recusar la e recusar onde o dado deixa de ser confiavel.
+    const kU32Max = 0xffffffff;
+    const kU64Max = Number.MAX_SAFE_INTEGER;
+    const tabelas: Array<[string, ReadonlyArray<readonly [string, number]>]> = [
+      ["materialTable", [
+        ["rows", kU32Max],
+        ["residentBytes", kU64Max],
+        ["stagingBytes", kU64Max],
+        ["rowsDirty", kU32Max],
+        ["copyRegions", kU32Max],
+        ["rowsUploadedTotal", kU64Max],
+      ]],
+      ["meshTable", [
+        ["rows", kU32Max],
+        ["residentBytes", kU64Max],
+        ["stagingBytes", kU64Max],
+      ]],
     ];
     for (const [nome, campos] of tabelas) {
       const bloco = (cpu as unknown as Record<string, unknown>)[nome] as
@@ -577,15 +599,15 @@ export class SmileEditorBridge {
       if (!bloco || typeof bloco !== "object") {
         throw new Error(`Snapshot de perfil sem o bloco cpu.${nome} (protocolo 5).`);
       }
-      for (const campo of campos) {
-        // Mesmo contrato do gpuSlots: u32, e "finito" nao e o contrato. Bytes cabem em u32 aqui
-        // porque as tabelas sao de dezenas de KB; se um dia passarem de 4 GB, este limite e o
-        // lugar certo para falhar em vez de truncar em silencio.
+      for (const [campo, teto] of campos) {
+        // isSafeInteger e nao isFinite: finito aceita negativo, fracao e o que estiver acima da
+        // faixa exata do double. Nenhum deles e produzivel pela origem, e tratar um como numero
+        // valido propagaria a mentira para dentro da agregacao.
         const valor = bloco[campo];
-        if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
+        if (!Number.isSafeInteger(valor) || (valor as number) < 0 || (valor as number) > teto) {
           throw new Error(
             `Snapshot de perfil com cpu.${nome}.${campo} invalido ` +
-              `(esperado inteiro em [0, 4294967295], veio ${typeof valor} ${String(valor)}).`,
+              `(esperado inteiro em [0, ${teto}], veio ${typeof valor} ${String(valor)}).`,
           );
         }
       }
