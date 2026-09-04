@@ -102,8 +102,16 @@ namespace Smile {
         if (!Out) return;
         for (u32 i = 0; i < SlotCapacity; ++i) Out[i] = FGpuSceneHandle::kInvalidSlot;
         for (u32 i = 0; i < Count; ++i) {
-            const u32 Slot = HandleAt(i).Slot;
-            if (Slot < SlotCapacity) Out[Slot] = i;
+            const FGpuSceneHandle H = HandleAt(i);
+            // Generation 0 nunca e alocada, entao um handle assim e lixo -- zerado por memset, ou
+            // nunca preenchido -- e nao designa ocupante nenhum.
+            //
+            // Descartar ANTES de escrever, e nao so na leitura: {0,0} cai no slot 0, que
+            // normalmente tem dono, e a escrita APAGA o mapeamento dele. A comparacao de
+            // generation no shader impede entregar o objeto errado, mas nao devolve o mapeamento
+            // perdido -- quem estava certo passa a cair no fallback.
+            if (H.Generation == 0 || H.Slot >= SlotCapacity) continue;
+            Out[H.Slot] = i;
         }
     }
 

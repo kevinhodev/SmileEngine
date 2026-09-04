@@ -701,7 +701,6 @@ target_link_libraries(SmileTemporalIdentityTableTests PRIVATE d3d12 dxgi)
 # Os dois fontes que o gate le. Executar HLSL exigiria GPU; o criterio que importa e que reverter
 # o leitor para indexar transform com id antigo deixe o gate vermelho.
 target_compile_definitions(SmileTemporalIdentityTableTests PRIVATE
-    SMILE_TEMPORAL_COMMON_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/TemporalMotionCommon.hlsli"
     SMILE_DUALMOTION_PATH="${PROJECT_SOURCE_DIR}/Shaders/Temporal/DualMotion.cs.hlsl"
     SMILE_RENDERERSCENE_PATH="${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/Renderer/RendererScene.cpp"
 )
@@ -718,4 +717,35 @@ add_test(
 set_tests_properties(Smile.TemporalIdentityTable PROPERTIES
     LABELS "scene;identity;gpu-driven"
     TIMEOUT 60
+)
+
+# Execucao real do resolvedor de identidade temporal, em WARP (software), substituindo o gate de
+# strings que nao pegava inversao de operador. Depende da sonda compilada pelo target Shaders.
+add_executable(SmileTemporalResolveWarpTests
+    TemporalResolveWarpTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/GpuSceneHandle.cpp
+)
+target_compile_features(SmileTemporalResolveWarpTests PRIVATE cxx_std_20)
+target_include_directories(SmileTemporalResolveWarpTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+target_compile_definitions(SmileTemporalResolveWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_RESOLVE_PROBE_CSO="${SMILE_SHADER_OUTPUT_DIR}/TemporalResolveProbe.cs_6_0.cso"
+)
+target_link_libraries(SmileTemporalResolveWarpTests PRIVATE d3d12 dxgi)
+add_dependencies(SmileTemporalResolveWarpTests Shaders)
+set_target_properties(SmileTemporalResolveWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+add_test(
+    NAME Smile.TemporalResolveWarp
+    COMMAND SmileTemporalResolveWarpTests
+)
+set_tests_properties(Smile.TemporalResolveWarp PROPERTIES
+    LABELS "scene;identity;gpu-driven;warp"
+    TIMEOUT 180
 )

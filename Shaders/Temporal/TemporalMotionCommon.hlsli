@@ -58,6 +58,11 @@ bool TemporalResolvePreviousIndex(uint previousId,
 
     // Generation 0 nunca e alocada (ver GpuSceneHandle.cpp), entao entrada zerada = vazia. E o
     // que a tabela guarda para as posicoes alem da contagem viva.
+    // A checagem de generation abaixo e REDUNDANTE com a comparacao de identidade la no fim:
+    // uma entrada {slot, 0} cai no ocupante legitimo daquele slot, cuja generation difere, e a
+    // identidade ja reprova. Ela fica por ser early-out barato (evita duas leituras) e por dizer
+    // a intencao. Medido: removê-la sozinha nao muda nenhum caso do teste em WARP -- entao nao
+    // procure um caso que ela salve, nao existe.
     const FGpuIdentityEntry was = previousTable[previousId];
     if (was.Generation == 0u || was.Slot >= slotCapacity) return false;
 

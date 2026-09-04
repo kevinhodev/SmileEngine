@@ -339,34 +339,42 @@ int main() {
         }
     }
 
+    // 10. HANDLE ZERADO NAO PODE APAGAR MAPEAMENTO VALIDO.
+    //
+    // Achado do review. O BuildSlotRemap olhava so o slot, entao um handle {0,0} -- zerado por
+    // memset, ou nunca preenchido -- escrevia em remap[0] e SOBRESCREVIA o ocupante legitimo
+    // daquele slot.
+    //
+    // A comparacao de generation no shader impede pegar o objeto ERRADO, mas nao devolve o
+    // mapeamento perdido: quem estava certo passa a cair no fallback. Por isso a assercao aqui e
+    // que a entrada valida SOBREVIVE, e nao que o invalido e rejeitado depois.
+    {
+        FGpuSceneSlots Slots;
+        const FGpuSceneHandle Valido = Slots.Allocate();
+        Check(Valido.Slot == 0 && Valido.Generation != 0,
+              "o primeiro alocado ocupa o slot 0 com generation valida");
+
+        // {0,0} colide no slot 0 com o ocupante legitimo -- e o caso que o GpuSceneHandle.h ja
+        // chama de "handle zerado por memset".
+        const std::vector<FGpuSceneHandle> Lista{ Valido, FGpuSceneHandle{ 0u, 0u } };
+        const auto R = RemapDe(Lista, kSlots);
+
+        Check(R[0] == 0,
+              "o slot 0 continua apontando para o ocupante valido, e nao para o handle zerado");
+    }
+
     // 10. GATE DE FONTE: O SHADER TEM DE FAZER O QUE ESTA ESPECIFICADO ACIMA.
     //
     // Guarda de FONTE, e nao de comportamento -- e o criterio pratico que importa: reverter o
     // leitor para indexar transform com id do frame passado deixa isto vermelho.
     {
+        // As INTERNAS do resolvedor saiam daqui: elas agora sao executadas de verdade em WARP
+        // (TemporalResolveWarpTests). O gate de string nao dava conta -- trocar "||" por "&&"
+        // mantinha as duas substrings e passava verde com o shader aceitando slot reciclado.
+        //
+        // O que sobra aqui e o CALL SITE, que a sonda nao cobre: ela chama o resolvedor direto,
+        // sem passar pelo DualMotion.
         bool Abriu = false;
-        const std::string Comum = LerArquivo(SMILE_TEMPORAL_COMMON_PATH, Abriu);
-        Check(Abriu, "o header comum dos shaders foi encontrado");
-        if (Abriu) {
-            const size_t Inicio = Comum.find("bool TemporalResolvePreviousIndex");
-            Check(Inicio != std::string::npos, "o resolvedor existe no HLSL");
-            if (Inicio != std::string::npos) {
-                const size_t Fim = Comum.find("\n}", Inicio);
-                const std::string Corpo = Comum.substr(Inicio, Fim - Inicio);
-
-                Check(Corpo.find("was.Generation == 0u") != std::string::npos,
-                      "o resolvedor rejeita entrada vazia pela generation");
-                Check(Corpo.find("was.Slot >= slotCapacity") != std::string::npos,
-                      "e rejeita slot alem da capacidade do remap");
-                Check(Corpo.find("candidate >= currentCount") != std::string::npos,
-                      "e rejeita indice fora da lista de agora");
-                Check(Corpo.find("now.Slot != was.Slot") != std::string::npos &&
-                          Corpo.find("now.Generation != was.Generation") != std::string::npos,
-                      "e confirma slot E generation contra a tabela atual -- so o slot aceitaria "
-                      "o ocupante reciclado");
-            }
-        }
-
         // A regra so serve se alguem a CHAMAR. O teste acima pina o predicado; este pedaco
         // pina que o renderer o consulta -- que e a regressao realista aqui, apagar a condicao.
         const std::string Renderer = LerArquivo(SMILE_RENDERERSCENE_PATH, Abriu);
