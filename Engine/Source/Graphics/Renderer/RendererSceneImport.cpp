@@ -347,6 +347,16 @@ namespace Smile {
                 if (It == ommJobByMeshMaterial.end() || It->second >= ommResults.size())
                     throw std::runtime_error("Job OMM ausente para renderable alpha-tested");
                 out.OpacityMicromap = ommResults[It->second];
+                // Carimba as ENTRADAS do bake na forma que o runtime reconhece. Aqui, e nao no
+                // baker: e este ponto que conhece a malha de GPU e o material, e o baker so viu o
+                // FMesh de CPU e os pixels. O carimbo e idempotente — o mesmo micro-map e
+                // compartilhado por todas as instancias do par (mesh, material), e as duas
+                // entradas de identidade sao exatamente as que o par fixa.
+                //
+                // Sem ele, os consumidores recusariam o micro-map: chave vazia nao casa com chave
+                // viva nenhuma. E deliberado — um caminho de criacao novo que esqueca de carimbar
+                // falha alto em vez de rodar com micro-map de procedencia desconhecida.
+                out.OpacityMicromap->BakedInputs = FOmmInputKey::From(out.Mesh, out.Material);
             }
             out.Transform.Position      = Vec3{ r.Position[0], r.Position[1], r.Position[2] };
             out.Transform.RotationEuler = Vec3{ r.RotationEuler[0], r.RotationEuler[1],

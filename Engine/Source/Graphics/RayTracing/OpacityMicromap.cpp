@@ -1,4 +1,5 @@
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
+#include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Resources/Texture.h"
 #include "Smile/Core/Logger.h"
@@ -15,6 +16,19 @@
 #include <string>
 
 namespace Smile {
+    FOmmInputKey FOmmInputKey::From(const FGpuMesh* _Mesh, const FMaterial* _Material) {
+        FOmmInputKey K{};
+        if (!_Mesh || !_Material) return K;
+        K.Mesh = _Mesh;
+        // O plano de alpha do bake sai do BaseColor do material, que em runtime e o slot 0. Se o
+        // material nao tem albedo, o bake usou uma textura branca — e o nulo representa isso.
+        K.AlphaTexture = _Material->Albedo;
+        K.BaseAlpha    = _Material->Constants.BaseColorFactor.W;
+        K.AlphaCutoff  = _Material->Constants.AlphaCutoff;
+        K.AlphaTest    = _Material->Constants.AlphaTest;
+        return K;
+    }
+
     namespace {
         struct FAlphaPlane {
             std::vector<float> Pixels;

@@ -120,10 +120,12 @@ namespace Smile {
             const FOpacityMicromapData* Omm = AlphaTest ? R.OpacityMicromap.get() : nullptr;
             if (AlphaTest && (!Omm || !Omm->Valid()))
                 throw std::runtime_error("Material alpha-tested sem OMM valido; nao existe fallback DXR");
-            if (AlphaTest && !Omm->Matches(R.Material->Constants.BaseColorFactor.W,
-                                           R.Material->Constants.AlphaCutoff))
+            // TODAS as quatro entradas do bake, e nao so alpha/cutoff: ver FOmmInputKey. Um
+            // micro-map obsoleto nao produz excecao no DXR — produz recorte errado em folhagem.
+            if (AlphaTest && !Omm->MatchesInputs(FOmmInputKey::From(R.Mesh, R.Material)))
                 throw std::runtime_error(
-                    "OMM desatualizado apos editar alpha/cutoff; recarregue a cena para rebake");
+                    "OMM desatualizado: uma entrada do bake (malha, textura de alpha, alpha ou "
+                    "cutoff) mudou depois dele; recarregue a cena para rebake");
             auto MeshIt = BlasByMesh.find(R.Mesh);
             if (MeshIt == BlasByMesh.end())
                 throw std::runtime_error("BLAS ausente para mesh da TLAS");
@@ -286,10 +288,12 @@ namespace Smile {
             const FOpacityMicromapData* Omm = AlphaTest ? R.OpacityMicromap.get() : nullptr;
             if (AlphaTest && (!Omm || !Omm->Valid()))
                 throw std::runtime_error("Material alpha-tested sem OMM valido; nao existe fallback DXR");
-            if (AlphaTest && !Omm->Matches(R.Material->Constants.BaseColorFactor.W,
-                                           R.Material->Constants.AlphaCutoff))
+            // TODAS as quatro entradas do bake, e nao so alpha/cutoff: ver FOmmInputKey. Um
+            // micro-map obsoleto nao produz excecao no DXR — produz recorte errado em folhagem.
+            if (AlphaTest && !Omm->MatchesInputs(FOmmInputKey::From(R.Mesh, R.Material)))
                 throw std::runtime_error(
-                    "OMM desatualizado apos editar alpha/cutoff; recarregue a cena para rebake");
+                    "OMM desatualizado: uma entrada do bake (malha, textura de alpha, alpha ou "
+                    "cutoff) mudou depois dele; recarregue a cena para rebake");
 
             auto& Variants = BlasByMesh[R.Mesh];
             if (Variants.find(Omm) != Variants.end()) continue;

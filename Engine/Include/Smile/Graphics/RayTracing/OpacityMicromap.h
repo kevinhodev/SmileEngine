@@ -8,6 +8,43 @@
 namespace Smile {
     struct FMesh;
     struct FTextureCPUData;
+    class  FGpuMesh;
+    class  FMaterial;
+    class  FTexture;
+
+    // As ENTRADAS do bake, na forma em que o runtime consegue reconhece-las.
+    //
+    // Por que existe: o micro-map e derivado de malha + textura de alpha + fator de alpha +
+    // cutoff, e o unico guarda que havia comparava DOIS desses quatro (BakedBaseAlpha e
+    // BakedAlphaCutoff). Trocar a textura de albedo de um material alpha-tested no editor
+    // — ApplySlotTexture, slot 0 — passava por baixo desse guarda e deixava o micro-map
+    // classificando microtriangulos pelo alpha da textura ANTIGA. Nao ha excecao, nao ha erro:
+    // ha folhagem com recorte errado, que e quase invisivel numa comparacao estatica.
+    //
+    // Os campos sao a IDENTIDADE das entradas, e nao o conteudo delas: o runtime nao guarda os
+    // vertices da malha nem os pixels da textura depois do load, entao "a mesma malha" e "a mesma
+    // textura" so podem ser afirmadas por ponteiro. Isso e suficiente para o que muda em runtime
+    // — trocar de textura troca o ponteiro — e nao pretende cobrir edicao do ASSET em disco.
+    struct FOmmInputKey {
+        const FGpuMesh* Mesh         = nullptr;
+        const FTexture* AlphaTexture = nullptr;
+        f32             BaseAlpha    = 1.0f;
+        f32             AlphaCutoff  = 0.5f;
+        // Se o material AINDA e alpha-tested. Desligar o alpha test tambem invalida: o BLAS
+        // exigido deixa de ser o de micro-map e passa a ser o opaco.
+        u32             AlphaTest    = 0;
+
+        // Chave viva de um par malha/material. Devolve a chave vazia para argumentos nulos, que
+        // nunca casa com a de um bake real.
+        static FOmmInputKey From(const FGpuMesh* Mesh, const FMaterial* Material);
+
+        friend bool operator==(const FOmmInputKey& A, const FOmmInputKey& B) {
+            return A.Mesh == B.Mesh && A.AlphaTexture == B.AlphaTexture &&
+                   A.BaseAlpha == B.BaseAlpha && A.AlphaCutoff == B.AlphaCutoff &&
+                   A.AlphaTest == B.AlphaTest;
+        }
+        friend bool operator!=(const FOmmInputKey& A, const FOmmInputKey& B) { return !(A == B); }
+    };
 
     // Resultado independente do baker: os ponteiros devolvidos pelo OMM SDK deixam de ser
     // validos ao destruir o BakeResult, entao tudo que o D3D12 consumira e copiado para ca.
@@ -31,9 +68,17 @@ namespace Smile {
                     (!ArrayData.empty() && !Descs.empty() && !Histogram.empty()));
         }
 
-        bool Matches(f32 BaseAlpha, f32 AlphaCutoff) const {
-            return BakedBaseAlpha == BaseAlpha && BakedAlphaCutoff == AlphaCutoff;
-        }
+        // As entradas com que ESTE bake foi feito. Carimbada pelo importador, que e quem conhece
+        // a malha e o material de GPU; o baker nao os conhece. Uma chave vazia (nunca carimbada)
+        // nao casa com nenhuma chave viva, e o consumidor recusa — falhar alto e a direcao certa
+        // para um caminho de criacao novo que esqueca de carimbar.
+        FOmmInputKey BakedInputs;
+
+        // Este micro-map ainda descreve o par malha/material de agora?
+        //
+        // Substituiu um Matches(BaseAlpha, AlphaCutoff) que comparava DOIS dos quatro inputs. Ver
+        // FOmmInputKey.
+        bool MatchesInputs(const FOmmInputKey& Live) const { return BakedInputs == Live; }
     };
 
     class FOpacityMicromapBaker {

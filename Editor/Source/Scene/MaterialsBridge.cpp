@@ -924,6 +924,22 @@ namespace SmileEditor {
         Smile::FTexture** Ptr = SlotPointer(_M, _Slot);
         Smile::u32*      Flag = SlotHasFlag(_M, _Slot);
         if (!Ptr || !Flag || !Renderer) return;
+        // O slot 0 e o BaseColor, e o alpha dele e uma das quatro ENTRADAS do bake do micro-map
+        // (ver FOmmInputKey). Num material alpha-tested, trocar a textura deixava o OMM
+        // classificando microtriangulos pelo alpha da textura ANTIGA: sem excecao, sem erro, so
+        // folhagem com recorte errado — e o recorte errado do RT nao aparece no raster, entao
+        // uma comparacao estatica pode nem mostrar.
+        //
+        // Recusa, como o toggle de Alpha Test e o Alpha Cutoff ja recusavam. Rebake em runtime
+        // exigiria os vertices da malha e os pixels da textura, e o runtime nao guarda nem um nem
+        // outro depois do load; enquanto nao guardar, a saida honesta e nao deixar a entrada
+        // mudar. Ver Docs/GPU-DRIVEN-PHASE2-PROGRESS.md.
+        if (_Slot == 0 && _M.Constants.AlphaTest) {
+            Smile::LogWarning(
+                "Materiais: troca de BaseColor rejeitada em material Alpha Test; o OMM foi "
+                "bakeado com o alpha da textura atual e exige recarregar/rebake da cena");
+            return;
+        }
         const bool Valid = _T && _T->IsValid();
         *Ptr  = Valid ? _T : nullptr;
         *Flag = Valid ? 1 : 0;
@@ -1396,8 +1412,29 @@ namespace SmileEditor {
         Num("parallaxMaxSteps", C.ParallaxMaxSteps);
         Flag("parallaxSelfShadow", C.ParallaxSelfShadow);
         Flag("parallaxRefine", C.ParallaxRefine);
-        Flag("alphaTest", C.AlphaTest);
-        Num("alphaCutoff", C.AlphaCutoff);
+        // alphaTest e alphaCutoff sao ENTRADAS do bake do micro-map (ver FOmmInputKey), e este
+        // caminho roda DEPOIS do bake — o sidecar e aplicado sobre a cena ja carregada. Escrever
+        // qualquer um dos dois num material masked deixava o OMM obsoleto e derrubava a render
+        // thread no proximo rebuild da TLAS ("OMM desatualizado..."), o que so nao acontecia
+        // porque os setters da UI ja recusavam essas duas edicoes. O sidecar e arquivo editavel a
+        // mao e nao passa pelos setters.
+        //
+        // Material OPACO nao tem micro-map nenhum, entao ali o cutoff continua livre — e o mesmo
+        // criterio do SetAlphaCutoff.
+        {
+            Smile::u32 WantAlphaTest = C.AlphaTest;
+            float      WantCutoff    = C.AlphaCutoff;
+            Flag("alphaTest", WantAlphaTest);
+            Num("alphaCutoff", WantCutoff);
+            const bool TocaOmm = C.AlphaTest != 0 || WantAlphaTest != 0;
+            if (!TocaOmm) {
+                C.AlphaCutoff = WantCutoff;
+            } else if (WantAlphaTest != C.AlphaTest || WantCutoff != C.AlphaCutoff) {
+                Smile::LogWarning(
+                    "Materiais: override de alphaTest/alphaCutoff ignorado em '" + _M.Name +
+                    "'; sao entradas do bake do OMM e exigem recozinhar/recarregar a cena");
+            }
+        }
         if (_O.contains(QStringLiteral("shadingModel")))
             C.ShadingModel = Smile::u32(_O.value(QStringLiteral("shadingModel")).toInt(int(C.ShadingModel)));
         {
