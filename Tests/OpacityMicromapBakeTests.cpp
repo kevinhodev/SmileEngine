@@ -77,7 +77,31 @@ static int TestarChaveDeEntradas() {
     Check(!Omm.MatchesInputs(FOmmInputKey::From(nullptr, &Material)),
           "chave viva incompleta nao valida um bake");
 
-    if (Falhas == 0) std::printf("[OMM TEST] chave de entradas do bake: 8 casos OK\n");
+    // O DESTINO DA REVERSAO. Quando o rebake nao pode acontecer, a pergunta e se o micro-map que
+    // ainda esta publicado serve de destino — material volta a MASCARADO — ou se o alpha test tem
+    // de ser desligado, e nesse caso o BLAS OPACO daquelas malhas passa a ser exigido.
+    //
+    // A resposta e consultada duas vezes, em momentos diferentes: antes da reconstrucao dos BLAS
+    // (para montar o conjunto exigido) e depois dela (para aplicar). Errar para "mantem" quando o
+    // certo era "opaco" nao pede o BLAS opaco, e o CollectInstances derruba a render thread no
+    // rebuild seguinte — com o dirty flag ja consumido, sem segunda chance.
+    Check(Omm.CanRestoreAlphaTestFor(&TexturaA),
+          "micro-map da textura atual serve de destino para a reversao");
+    Check(!Omm.CanRestoreAlphaTestFor(&TexturaB),
+          "micro-map de OUTRA textura nao serve: a reversao tem de ir para opaco");
+    Check(!Omm.CanRestoreAlphaTestFor(nullptr),
+          "material sem albedo nao tem micro-map que o sirva");
+    // Um micro-map bakeado de um material OPACO (alpha test ligado depois) nao restaura nada.
+    FOpacityMicromapData OmmOpaco;
+    OmmOpaco.BakedInputs              = FOmmInputKey::From(&MalhaA, &Material);
+    OmmOpaco.BakedInputs.AlphaTest    = 0;
+    Check(!OmmOpaco.CanRestoreAlphaTestFor(&TexturaA),
+          "micro-map sem alpha test bakeado nao restaura alpha test");
+    // E o nunca carimbado, pelo mesmo motivo: a chave vazia tem AlphaTest 0.
+    Check(!SemCarimbo.CanRestoreAlphaTestFor(&TexturaA),
+          "micro-map sem carimbo nao serve de destino para a reversao");
+
+    if (Falhas == 0) std::printf("[OMM TEST] chave de entradas do bake: 13 casos OK\n");
     return Falhas;
 }
 

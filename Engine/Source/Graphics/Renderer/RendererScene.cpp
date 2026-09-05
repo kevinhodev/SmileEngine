@@ -29,6 +29,19 @@
 #include <unordered_set>
 
 namespace Smile {
+    namespace {
+        // O que a reversao de entradas de bake FARA com o material, decidido sem mutar nada.
+        //
+        // Existe separado porque as duas metades acontecem em momentos diferentes: o conjunto de
+        // BLAS exigido depende do estado FINAL do material (um que volta a opaco passa a precisar
+        // do BLAS opaco), mas a mutacao so pode acontecer depois do passo falivel. A regra em si
+        // mora no FOpacityMicromapData, para as duas consultas nao poderem divergir.
+        bool OmmRevertKeepsAlphaTest(const FMaterial& _Material,
+                                     const FOpacityMicromapData* _Existing) {
+            return _Existing && _Existing->CanRestoreAlphaTestFor(_Material.Albedo);
+        }
+    }
+
     FScene& Renderer::GetScene() { return SceneState->Scene; }
 
     u32 Renderer::GetSceneRenderableCount() const {
@@ -143,6 +156,9 @@ namespace Smile {
         // Pares stale, na ordem em que aparecem. Nada e escrito no renderavel nesta fase.
         std::vector<std::pair<u32, FPairKey>> Stale;   // (indice do renderavel, par)
         std::vector<u32> DroppedMasked;                // renderaveis que deixaram de ser masked
+        // Todo material que esta reconciliacao toca. E a lista do rollback: se a reconstrucao dos
+        // BLAS falhar, TODOS voltam, e nao so os que falharam no bake.
+        std::unordered_set<FMaterial*> Touched;
 
         auto& Renderables = SceneState->Scene.Renderables();
 
@@ -156,13 +172,17 @@ namespace Smile {
                 // Deixou de ser masked. So na TRANSICAO: empilhar o par opaco para todo renderavel
                 // opaco da cena faria a saida antecipada nunca acontecer, e toda chamada pagaria o
                 // dreno — numa cena de 1M, um milhao de pares para conferir e descartar.
-                if (R.OpacityMicromap) DroppedMasked.push_back(I);
+                if (R.OpacityMicromap) {
+                    DroppedMasked.push_back(I);
+                    if (R.Material) Touched.insert(R.Material);
+                }
                 continue;
             }
             if (R.OpacityMicromap &&
                 R.OpacityMicromap->MatchesInputs(FOmmInputKey::From(R.Mesh, R.Material)))
                 continue;
             Stale.push_back({ I, FPairKey{ R.Mesh, R.Material } });
+            Touched.insert(R.Material);
         }
         if (Stale.empty() && DroppedMasked.empty()) return 0;
 
@@ -179,18 +199,28 @@ namespace Smile {
             for (auto It = Rebaked.begin(); It != Rebaked.end();)
                 It = Failed.contains(It->first.Material) ? Rebaked.erase(It) : std::next(It);
 
-        // --- Fase 3a: reverter os materiais que falharam --------------------------------------
-        // Antes de montar o conjunto de BLAS, porque a reversao MUDA o que sera exigido: um
-        // material revertido para opaco passa a precisar do BLAS opaco das malhas dele.
-        for (FMaterial* M : Failed) {
-            const FOpacityMicromapData* Existing = nullptr;
+        // --- Fase 3a: o que a reversao FARA, decidido sem fazer -------------------------------
+        // A decisao precisa vir antes do conjunto de BLAS, porque a reversao MUDA o que sera
+        // exigido: um material revertido para opaco passa a precisar do BLAS opaco das malhas
+        // dele. A MUTACAO, essa, pertence a publicacao — mutar aqui deixava o material ja
+        // revertido enquanto o micro-map antigo continuava publicado no renderavel, se o
+        // EnsureBlasFor lancasse. Esse e o estado hibrido que o CollectInstances aborta, e com o
+        // dirty flag ja consumido ninguem tentaria de novo.
+        //
+        // O micro-map de referencia e o do primeiro renderavel daquele material que tenha um: os
+        // renderaveis de um material compartilham as entradas de bake, entao qualquer um serve.
+        auto ExistingOmmOf = [&](const FMaterial* _M) -> const FOpacityMicromapData* {
             for (const auto& [Index, Key] : Stale)
-                if (Key.Material == M && Renderables[Index].OpacityMicromap) {
-                    Existing = Renderables[Index].OpacityMicromap.get();
-                    break;
-                }
-            RevertOmmInputs(*M, Existing);
-        }
+                if (Key.Material == _M && Renderables[Index].OpacityMicromap)
+                    return Renderables[Index].OpacityMicromap.get();
+            for (u32 I : DroppedMasked)
+                if (Renderables[I].Material == _M && Renderables[I].OpacityMicromap)
+                    return Renderables[I].OpacityMicromap.get();
+            return nullptr;
+        };
+        std::unordered_set<const FMaterial*> RevertsToOpaque;
+        for (FMaterial* M : Failed)
+            if (!OmmRevertKeepsAlphaTest(*M, ExistingOmmOf(M))) RevertsToOpaque.insert(M);
 
         // --- Fase 3b: o conjunto de BLAS exigido pelo estado FINAL ----------------------------
         std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>> Required;
@@ -216,11 +246,11 @@ namespace Smile {
                 }
                 continue;
             }
-            // Material revertido. Se a reversao o deixou opaco, este renderavel larga o micro-map
-            // e passa a exigir o BLAS opaco — sem isso o CollectInstances cairia em "BLAS opaco
-            // ausente" no proximo rebuild, e o dirty flag ja foi consumido: ninguem tentaria de
-            // novo.
-            if (R.Material && R.Material->Constants.AlphaTest == 0 && R.OpacityMicromap) {
+            // Material que sera revertido. Se a reversao o deixar opaco, este renderavel larga o
+            // micro-map e passa a exigir o BLAS opaco — sem isso o CollectInstances cairia em
+            // "BLAS opaco ausente" no proximo rebuild, e o dirty flag ja foi consumido: ninguem
+            // tentaria de novo.
+            if (RevertsToOpaque.contains(R.Material) && R.OpacityMicromap) {
                 Required.push_back({ R.Mesh, nullptr });
                 Forget.push_back({ R.Mesh, R.OpacityMicromap.get() });
                 Retired.push_back(R.OpacityMicromap);
@@ -231,16 +261,40 @@ namespace Smile {
         Backend->DirectQueue.Flush();
         Backend->ComputeQueue.WaitIdle();
 
-        const u32 BuiltBlas = RaytracingScene.EnsureBlasFor(Backend->Device, Backend->DirectQueue,
-                                                            Required);
+        // Os recursos aposentados pela reconciliacao ANTERIOR voltam agora. As duas filas acabaram
+        // de ser drenadas, e o flag limpo diz que a TLAS ja foi refeita desde entao — ou seja, nem
+        // trabalho em voo nem trabalho futuro referencia aqueles enderecos. Sujo, espera mais uma
+        // rodada: segurar VRAM por engano custa memoria, solta-la por engano custa a GPU.
+        if (!SceneState->TlasFlagsDirty) RaytracingScene.ReclaimRetiredBlas();
+
+        u32 BuiltBlas = 0;
+        try {
+            BuiltBlas = RaytracingScene.EnsureBlasFor(Backend->Device, Backend->DirectQueue,
+                                                      Required);
+        } catch (const std::exception& Erro) {
+            // NADA foi publicado: o EnsureBlasFor so toca os mapas depois de a fila sincronizar.
+            // O estado da GPU e o de antes da edicao, e o unico estado de material consistente com
+            // ele e tambem o de antes — inclusive para os materiais cujo bake DEU CERTO, porque um
+            // bake sem BLAS descreve um micro-map que nao existe.
+            LogError(std::string("[OMM] Rebake: a reconstrucao dos BLAS falhou (") + Erro.what() +
+                     "); a edicao inteira foi desfeita");
+            for (FMaterial* M : Touched) RevertOmmInputs(*M, ExistingOmmOf(M));
+            SceneState->TlasFlagsDirty = true;
+            Settings().NotifyMaterialRTStateChanged();
+            return 0;
+        }
 
         // --- Fase 4: publicar. Daqui em diante nada mais pode falhar --------------------------
+        // A reversao dos materiais que falharam no bake acontece AQUI, e nao na preparacao: ate a
+        // linha acima o estado ainda podia voltar atras inteiro. Antes dos renderaveis, porque o
+        // ExistingOmmOf le o micro-map que ainda esta publicado neles.
+        for (FMaterial* M : Failed) RevertOmmInputs(*M, ExistingOmmOf(M));
         for (u32 I : DroppedMasked) Renderables[I].OpacityMicromap.reset();
         for (const auto& [Index, Key] : Stale) {
             FRenderable& R = Renderables[Index];
             const auto It = Rebaked.find(Key);
             if (It != Rebaked.end()) R.OpacityMicromap = It->second;
-            else if (R.Material && R.Material->Constants.AlphaTest == 0) R.OpacityMicromap.reset();
+            else if (RevertsToOpaque.contains(R.Material)) R.OpacityMicromap.reset();
         }
         // So DEPOIS de os BLAS novos existirem: enquanto a chave antiga estiver no mapa ela
         // continua sendo um destino valido, e remove-la antes abriria uma janela em que o
@@ -268,8 +322,7 @@ namespace Smile {
     // de reconciliacao. O que se faz e desligar o alpha test — o material perde o recorte, o que
     // e VISIVEL e reversivel pelo usuario, em vez de silenciosamente errado.
     void Renderer::RevertOmmInputs(FMaterial& _Material, const FOpacityMicromapData* _Existing) {
-        if (_Existing && _Existing->BakedInputs.AlphaTest != 0 &&
-            _Existing->BakedInputs.AlphaTexture == _Material.Albedo) {
+        if (OmmRevertKeepsAlphaTest(_Material, _Existing)) {
             _Material.Constants.AlphaTest         = _Existing->BakedInputs.AlphaTest;
             _Material.Constants.AlphaCutoff       = _Existing->BakedInputs.AlphaCutoff;
             _Material.Constants.BaseColorFactor.W = _Existing->BakedInputs.BaseAlpha;

@@ -252,9 +252,31 @@ arraste e não sobrevive ao commit.
 **Os BLAS afetados.** `EnsureBlasFor` reconstrói apenas os pares `{malha, micro-map}` que passam a
 ser exigidos, cada um num recurso próprio, e o `BlasByMesh` passa a apontar para lá. O espaço
 antigo fica órfão dentro do `BlasPool` — e isso **não custa memória**: o pool já estava alocado no
-tamanho dele. O que cresce são as alocações laterais, e é isso que `RebuiltBlasBytes` mede.
-Compactar o pool moveria todos os BLAS de endereço e obrigaria a refazer a TLAS inteira: mais risco
-do que o desperdício justifica.
+tamanho dele. O que cresce são as alocações laterais, e é isso que `RebuiltBlasBytes` mede: o BLAS
+**e o OMM Array que ele referencia**, porque os dois são acceleration structures alocadas por
+rebake e contar só o primeiro subestimava justamente a metade que cresce com folhagem — que é onde
+micro-map existe. Compactar o pool moveria todos os BLAS de endereço e obrigaria a refazer a TLAS
+inteira: mais risco do que o desperdício justifica.
+
+**`EnsureBlasFor` é transacional.** Nada é publicado — nem endereço no `BlasByMesh`, nem recurso,
+nem contador — antes de a fila sincronizar. O invariante é *endereço registrado implica build
+executada*, e publicar dentro do laço o quebrava: um par seguinte que lançasse (o driver recusa um
+prebuild, uma alocação falha) deixava o primeiro endereço registrado com a command list **nunca
+executada**, e o filtro do próximo `EnsureBlasFor` dava aquele par por pronto — a TLAS passaria a
+apontar para memória de AS que ninguém construiu. `Close` e `ExecuteAndSync` também podem lançar, e
+ficam do lado de fora da publicação pelo mesmo motivo.
+
+**Os recursos substituídos são reclamados.** `ForgetBlas` tira a chave do `BlasByMesh` e move o
+recurso do par para a lista de **aposentados**; a reconciliação seguinte os solta. A espera não é
+por frames em voo — o chamador já drenou as duas filas —, é pela **TLAS**: ela guarda o endereço do
+BLAS antigo até ser refeita, e o `RecordTlasRebuild` pode não ter acontecido (ele é condicional).
+Por isso a reclamação exige o flag de rebuild já consumido; sujo, espera mais uma rodada. Segurar
+VRAM por engano custa memória; soltá-la por engano custa a GPU. Aposentado ainda ocupa VRAM e por
+isso continua somando em `RebuiltBlasBytes` até ser reclamado.
+
+Isso fecha um crescimento que era permanente: antes, cada edição acrescentava um BLAS e um OMM
+Array que só sumiam no próximo load, porque o vetor plano de recursos não tinha caminho de volta do
+par para o recurso. Agora o registro é **por par**.
 
 Uma travessia cobre as três transições que uma edição produz: micro-map rebakeado, alpha test
 ligado (bake do zero) e alpha test desligado (passa a exigir o BLAS opaco daquela malha, que pode
@@ -308,11 +330,24 @@ porque sem OMM não há BLAS que sirva um material masked. Os dois casos avisam 
 alpha test: visível e reversível pelo usuário, em vez de silenciosamente errado.
 
 **A unidade de atomicidade é o MATERIAL, e a reconciliação roda em fases.** Levantar os pares stale
-sem mutar nada, bakear todos, reverter os materiais que falharam, montar o conjunto de BLAS exigido
-pelo estado **final** e só então publicar. Publicar dentro do laço de bake — como a primeira versão
-fazia — deixava um material de duas malhas com a primeira já publicada e o material revertido por
-baixo dela. Um material que falha em qualquer par não publica par nenhum: os bakes que deram certo
-são descartados.
+sem mutar nada, bakear todos, **decidir** o que a reversão fará sem fazê-la, montar o conjunto de
+BLAS exigido pelo estado **final**, reconstruir, e só então publicar. Publicar dentro do laço de
+bake — como a primeira versão fazia — deixava um material de duas malhas com a primeira já
+publicada e o material revertido por baixo dela. Um material que falha em qualquer par não publica
+par nenhum: os bakes que deram certo são descartados.
+
+A reversão é **decisão** numa fase e **mutação** em outra, e a separação não é estilo. O conjunto de
+BLAS exigido depende do estado final do material, então a decisão tem de vir antes da reconstrução;
+mas mutar o `FMaterial` antes dela deixava o material já revertido com o micro-map antigo ainda
+publicado no renderável, caso o `EnsureBlasFor` lançasse — o estado híbrido que o `CollectInstances`
+aborta, com o dirty flag já consumido e ninguém para tentar de novo. A regra em si
+(`FOpacityMicromapData::CanRestoreAlphaTestFor`) mora num lugar só, porque duas cópias divergem no
+dia em que uma ganhar um caso a mais.
+
+**Se a reconstrução dos BLAS falhar, a edição inteira é desfeita** — inclusive para os materiais
+cujo bake deu certo. Como o `EnsureBlasFor` é transacional, o estado da GPU nesse ponto é o de antes
+da edição, e o único estado de material consistente com ele é também o de antes: um bake pronto mas
+sem BLAS descreve um micro-map que não existe.
 
 Um caso que só aparece depois da reversão: material revertido **para opaco** larga o micro-map e
 passa a exigir o BLAS opaco daquelas malhas — que pode nunca ter sido construído. Como esse par só

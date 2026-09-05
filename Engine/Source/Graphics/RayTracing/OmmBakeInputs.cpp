@@ -36,14 +36,14 @@ namespace Smile {
         const FMipData& Mip = _Data.Mips.front();
         if (Mip.Pixels.empty()) return kOmmNoContentHash;
 
-        FOmmContentHash H = 1469598103934665603ull;
+        FOmmContentHash H = kOmmHashSeed;
         // Dimensoes, formato e IsNormalMap entram junto com os pixels: os tres mudam o alpha que o
         // baker extrai destes mesmos bytes.
         const u32 Meta[4] = { Mip.Width, Mip.Height, static_cast<u32>(_Data.Format),
                               _Data.IsNormalMap ? 1u : 0u };
         H = OmmHashAppend(H, Meta, sizeof(Meta));
         H = OmmHashAppend(H, Mip.Pixels.data(), Mip.Pixels.size());
-        return H == kOmmNoContentHash ? 1ull : H;
+        return OmmHashFinish(H);
     }
 
     void FOmmBakeInputStore::RetainMeshSource(const FGpuMesh* _Mesh,

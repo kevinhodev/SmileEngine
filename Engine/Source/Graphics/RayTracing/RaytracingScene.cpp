@@ -76,7 +76,9 @@ namespace Smile {
         InstanceGeoCount = 0;
         BlasPool.Reset();
         RebuiltBlas.clear();
+        RetiredBlas_.clear();
         RebuiltBlasBytes_ = 0;
+        RetiredBlasBytes_ = 0;
         BlasByMesh.clear();
         OmmArrays.clear();
         Tlas.Reset();
@@ -95,19 +97,50 @@ namespace Smile {
     void FRaytracingScene::ForgetBlas(const FGpuMesh* _Mesh, const FOpacityMicromapData* _Omm) {
         const auto MeshIt = BlasByMesh.find(_Mesh);
         if (MeshIt == BlasByMesh.end()) return;
-        MeshIt->second.erase(_Omm);
-        // O BLAS em si NAO e liberado: ele mora no pool (ou num recurso proprio guardado em
-        // RebuiltBlas) e frames em voo ainda podem referencia-lo pela TLAS do frame anterior.
-        // O que se remove aqui e a CHAVE — o ponteiro do micro-map morto —, que sem isto ficaria
-        // pendurada e um bake futuro poderia reusar o mesmo endereco de heap.
+        const auto AddressIt = MeshIt->second.find(_Omm);
+        if (AddressIt == MeshIt->second.end()) return;
+
+        // A partir do erase abaixo a operacao nao pode mais falhar: se a reserva lancar, a chave,
+        // os contadores e o recurso continuam exatamente como estavam. A versao anterior apagava
+        // a chave primeiro e fazia o push depois; um bad_alloc deixaria um BLAS vivo sem caminho
+        // para encontra-lo nem aposenta-lo.
+        auto RebuiltIt = std::find_if(RebuiltBlas.begin(), RebuiltBlas.end(),
+            [&](const FRebuiltBlas& R) { return R.Mesh == _Mesh && R.Omm == _Omm; });
+        if (RebuiltIt != RebuiltBlas.end())
+            RetiredBlas_.reserve(RetiredBlas_.size() + 1);
+
+        MeshIt->second.erase(AddressIt);
+        // A CHAVE sai daqui — o ponteiro do micro-map morto —, que sem isto ficaria pendurada e um
+        // bake futuro poderia reusar o mesmo endereco de heap.
+        //
+        // O RECURSO, quando o par tinha um proprio, sai do vivo e vai para o aposentado. Nao e
+        // solto agora: a TLAS do frame anterior ainda guarda o endereco dele, e so para de guardar
+        // quando for refeita. Ver ReclaimRetiredBlas. Um BLAS do POOL nao aparece aqui e nao tem o
+        // que soltar — o pool e liberado inteiro na proxima carga.
+        if (RebuiltIt != RebuiltBlas.end()) {
+            RebuiltBlasBytes_ -= RebuiltIt->Bytes;
+            RetiredBlasBytes_ += RebuiltIt->Bytes;
+            RetiredBlas_.push_back(std::move(*RebuiltIt));
+            RebuiltBlas.erase(RebuiltIt);
+        }
+    }
+
+    u64 FRaytracingScene::ReclaimRetiredBlas() {
+        const u64 Freed = RetiredBlasBytes_;
+        RetiredBlas_.clear();
+        RetiredBlasBytes_ = 0;
+        return Freed;
     }
 
     u32 FRaytracingScene::EnsureBlasFor(
         FD3D12Device& _Device, FCommandQueue& _Queue,
         const std::vector<std::pair<const FGpuMesh*, const FOpacityMicromapData*>>& _Required) {
-        if (!Built || _Required.empty()) return 0;
+        if (_Required.empty()) return 0;
+        if (!Built)
+            throw std::runtime_error("Cena de ray tracing nao construida no rebake de BLAS");
         ID3D12Device5* Dev5 = _Device.Device5();
-        if (!Dev5) return 0;
+        if (!Dev5)
+            throw std::runtime_error("ID3D12Device5 indisponivel no rebake de BLAS");
 
         // So o que ainda nao existe, e UMA VEZ por par.
         //
@@ -148,18 +181,28 @@ namespace Smile {
         }
         if (Missing.empty()) return 0;
 
-        // Mesmo protocolo do Build: reabre a list da fila e pega a interface 4 (DXR/OMM).
-        _Queue.ResetForRecording();
+        // Command list e allocator PROPRIOS. Alem de este ser um caminho sincrono e raro, o
+        // isolamento e parte da recuperacao: qualquer alocacao/prebuild abaixo pode lancar. Se a
+        // list compartilhada da fila ficasse aberta no meio, o frame seguinte tentaria reseta-la
+        // num estado que nao controla. A list local simplesmente morre sem ser submetida.
+        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> Allocator;
+        SMILE_HR(Dev5->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                               IID_PPV_ARGS(&Allocator)));
         ComPtr<ID3D12GraphicsCommandList4> CL4;
-        if (FAILED(_Queue.List()->QueryInterface(IID_PPV_ARGS(&CL4))))
-            throw std::runtime_error(
-                "ID3D12GraphicsCommandList4 indisponivel no rebake; nao existe caminho sem OMM");
+        SMILE_HR(Dev5->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Allocator.Get(),
+                                         nullptr, IID_PPV_ARGS(&CL4)));
         ID3D12GraphicsCommandList4* CL = CL4.Get();
 
         // Um scratch e um resultado POR PAR, e nao um pool suballocado como no Build: sao poucos
         // (o que uma edicao de material toca), e o pool existe para amortizar milhares.
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> Scratches;
-        u32 BuiltCount = 0;
+        // O que sera publicado DEPOIS de a fila sincronizar. Enquanto este laco roda, nada em
+        // BlasByMesh, RebuiltBlas, OmmArrays ou nos contadores muda: qualquer par pode lancar (o
+        // driver recusa um prebuild, uma alocacao falha), e o Close/ExecuteAndSync no fim tambem.
+        // Publicar cedo registrava um endereco cuja build nunca foi executada, e o filtro la em
+        // cima daria o par por pronto na tentativa seguinte.
+        std::vector<FRebuiltBlas> Pending;
+        Pending.reserve(Missing.size());
         for (const auto& [Mesh, Omm] : Missing) {
             D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC Tri{};
             Tri.VertexBuffer.StartAddress  = Mesh->VertexBufferGPUVA();
@@ -176,6 +219,7 @@ namespace Smile {
             GpuResources::FUploadBuffer OmmIndexInput, OmmArrayInput, OmmDescInput;
             D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_DESC ArrayDesc{};
             Microsoft::WRL::ComPtr<ID3D12Resource> OmmArray;
+            u64 OmmArrayBytes = 0;
 
             if (Omm) {
                 OmmIndexInput = GpuResources::CreateUploadBuffer(
@@ -211,6 +255,7 @@ namespace Smile {
 
                     OmmArray = CreateUAVBuffer(Dev5, OmmInfo.ResultDataMaxSizeInBytes,
                         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+                    OmmArrayBytes = OmmInfo.ResultDataMaxSizeInBytes;
                     auto OmmScratch = CreateUAVBuffer(Dev5, OmmInfo.ScratchDataSizeInBytes,
                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC OmmBuild{};
@@ -220,7 +265,6 @@ namespace Smile {
                     CL->BuildRaytracingAccelerationStructure(&OmmBuild, 0, nullptr);
                     GlobalUAVBarrier(CL);
                     Scratches.push_back(OmmScratch);
-                    OmmArrays.push_back(OmmArray);
                 }
 
                 Linkage.OpacityMicromapIndexBuffer  = { OmmIndexInput.Address(0), Omm->IndexStride };
@@ -264,11 +308,22 @@ namespace Smile {
             CL->BuildRaytracingAccelerationStructure(&BuildDesc, 0, nullptr);
             GlobalUAVBarrier(CL);
 
-            BlasByMesh[Mesh][Omm] = Result->GetGPUVirtualAddress();
-            RebuiltBlasBytes_ += Info.ResultDataMaxSizeInBytes;
-            RebuiltBlas.push_back(Result);
+            Pending.push_back(FRebuiltBlas{ Mesh, Omm, Result, OmmArray,
+                                            Info.ResultDataMaxSizeInBytes + OmmArrayBytes });
             Scratches.push_back(Scratch);
-            ++BuiltCount;
+        }
+
+        // Monte o estado FINAL ainda antes da submissao. Copiar pode alocar e lancar; fazendo-o
+        // com a list local e antes do Execute, a falha descarta tudo sem tocar o estado publicado.
+        // Depois da espera so restam swaps noexcept e os contadores.
+        auto PublishedBlasByMesh = BlasByMesh;
+        auto PublishedRebuiltBlas = RebuiltBlas;
+        PublishedRebuiltBlas.reserve(PublishedRebuiltBlas.size() + Pending.size());
+        u64 PublishedBytes = RebuiltBlasBytes_;
+        for (auto& P : Pending) {
+            PublishedBlasByMesh[P.Mesh][P.Omm] = P.Blas->GetGPUVirtualAddress();
+            PublishedBytes += P.Bytes;
+            PublishedRebuiltBlas.push_back(std::move(P));
         }
 
         SMILE_HR(CL->Close());
@@ -277,7 +332,14 @@ namespace Smile {
         // referenciar os enderecos novos. Isto e caminho de edicao manual, ja drenado pelo
         // chamador — nao ha frame em voo para atrapalhar.
         _Queue.ExecuteAndSync(Lists, 1);
-        _Queue.ResetForRecording();
+
+        // A PUBLICACAO, e so agora. As tres trocas sao noexcept: ou o estado anterior inteiro
+        // continua visivel, ou o novo inteiro passa a ser. O invariante "endereco registrado
+        // implica build executada" vale inclusive sob excecao de alocacao.
+        const u32 BuiltCount = static_cast<u32>(Pending.size());
+        BlasByMesh.swap(PublishedBlasByMesh);
+        RebuiltBlas.swap(PublishedRebuiltBlas);
+        RebuiltBlasBytes_ = PublishedBytes;
 
         BlasCount_ += BuiltCount;
         return BuiltCount;

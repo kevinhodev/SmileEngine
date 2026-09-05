@@ -79,6 +79,20 @@ namespace Smile {
         // Substituiu um Matches(BaseAlpha, AlphaCutoff) que comparava DOIS dos quatro inputs. Ver
         // FOmmInputKey.
         bool MatchesInputs(const FOmmInputKey& Live) const { return BakedInputs == Live; }
+
+        // Este micro-map serve de destino para uma REVERSAO do material que aponta para
+        // `CurrentAlbedo`? Ou seja: desfazer a edicao devolve um material MASCARADO (as entradas
+        // que este bake descreve), ou o alpha test tem de ser desligado por nao haver micro-map
+        // que sirva?
+        //
+        // Mora aqui, e nao no chamador, porque a resposta e consultada em dois momentos que nao
+        // podem divergir: antes da reconstrucao dos BLAS, para saber se o BLAS OPACO daquelas
+        // malhas passa a ser exigido, e depois dela, para aplicar a reversao. Duas copias da regra
+        // divergem no dia em que uma das duas ganhar um caso a mais, e a divergencia apareceria
+        // como "BLAS opaco ausente" derrubando a render thread.
+        bool CanRestoreAlphaTestFor(const FTexture* CurrentAlbedo) const {
+            return BakedInputs.AlphaTest != 0 && BakedInputs.AlphaTexture == CurrentAlbedo;
+        }
     };
 
     // A GEOMETRIA que o bake consome, e nada alem dela.

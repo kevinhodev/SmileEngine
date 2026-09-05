@@ -49,14 +49,30 @@ namespace Smile {
         //
         // ⚠️ CONTRATO: grava e submete numa command list propria, e espera a fila. O chamador ja
         // drenou (e edicao manual de material). Devolve quantos BLAS foram construidos.
+        //
+        // TRANSACIONAL: nada e publicado — nem endereco no BlasByMesh, nem recurso, nem contador —
+        // antes de a fila sincronizar. Publicar dentro do laco deixava um endereco registrado cuja
+        // command list nunca chegou a ser executada quando um par seguinte lancava, e o filtro do
+        // proximo EnsureBlasFor considerava aquele par pronto: a TLAS passaria a apontar para
+        // memoria de AS nunca construida. Ou tudo entra, ou nada entra e a excecao sobe.
         u32 EnsureBlasFor(FD3D12Device& Device, FCommandQueue& Queue,
                           const std::vector<std::pair<const FGpuMesh*,
                                                       const FOpacityMicromapData*>>& Required);
 
         // Um par {malha, micro-map} que ninguem mais usa. Some do mapa para o ponteiro do
-        // micro-map morto nao virar chave pendurada; o BLAS em si continua vivo no pool ou no
-        // recurso proprio, porque frames em voo ainda podem referencia-lo.
+        // micro-map morto nao virar chave pendurada, e o recurso vai para a lista de APOSENTADOS
+        // — nao e solto aqui, ver ReclaimRetiredBlas.
         void ForgetBlas(const FGpuMesh* Mesh, const FOpacityMicromapData* Omm);
+
+        // Solta os recursos aposentados pelo ForgetBlas e devolve quantos bytes voltaram.
+        //
+        // O tempo de vida nao termina no ForgetBlas: a TLAS do frame anterior ainda guarda o
+        // endereco do BLAS antigo, e ela so deixa de guardar quando e REFEITA. O dreno do chamador
+        // garante que nada esta em voo; o que falta e a garantia de que nada FUTURO referencia o
+        // recurso, e essa e a TLAS ja reconstruida. Por isso quem chama tem de conferir que o
+        // pedido de rebuild da TLAS foi consumido — caso contrario a reclamacao espera mais uma
+        // rodada, que e o lado seguro de errar.
+        u64 ReclaimRetiredBlas();
 
         void Release(FTextureSRVHeap& SRVHeap);
 
@@ -148,22 +164,43 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> InstanceGeoBuf;
         u32                                    InstanceGeoCount    = 0; // capacidade, nao a cena
         u32                                    InstanceGeoSRVSlot_ = 0xFFFFFFFFu;
-        // BLAS reconstruidos fora do pool pelo EnsureBlasFor. Cada um e um recurso proprio, e o
-        // vetor existe para mante-los vivos: o BlasByMesh guarda GPUVA, que nao segura nada.
-        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> RebuiltBlas;
+        // Um BLAS reconstruido fora do pool pelo EnsureBlasFor, com tudo o que precisa viver junto
+        // dele: o BlasByMesh guarda GPUVA, que nao segura nada, e o OMM Array e uma acceleration
+        // structure referenciada pelo BLAS, com exatamente o mesmo tempo de vida.
+        //
+        // Guardado POR PAR, e nao num vetor plano, para o ForgetBlas conseguir achar o recurso do
+        // par que morreu. Com o vetor plano nao havia caminho de volta do par para o recurso, e
+        // toda edicao acrescentava um BLAS e um OMM Array que so sumiam no proximo load.
+        struct FRebuiltBlas {
+            const FGpuMesh*                        Mesh = nullptr;
+            const FOpacityMicromapData*            Omm  = nullptr;
+            Microsoft::WRL::ComPtr<ID3D12Resource> Blas;
+            Microsoft::WRL::ComPtr<ID3D12Resource> OmmArray; // nulo no par opaco
+            u64                                    Bytes = 0; // BLAS + OMM Array
+        };
+        std::vector<FRebuiltBlas> RebuiltBlas;
+        // Pares que sairam do BlasByMesh e cujo recurso ainda nao pode ser solto. Ver
+        // ReclaimRetiredBlas: eles continuam custando VRAM ate la, e por isso entram na conta.
+        std::vector<FRebuiltBlas> RetiredBlas_;
         u64 RebuiltBlasBytes_ = 0;
+        u64 RetiredBlasBytes_ = 0;
 
         // Os SRVs bindless de geometria por malha unica ([VB][IB][RTTri]) e a enumeracao das
         // malhas unicas saíram daqui na Fase 2 e vivem na FGpuMeshTable. Ver a nota no Build.
     public:
-        // VRAM que os rebakes acrescentaram: os BLAS construidos FORA do pool.
+        // VRAM que os rebakes acrescentaram: os BLAS construidos FORA do pool E os OMM Arrays que
+        // eles referenciam. Os dois, porque os dois sao acceleration structures alocadas por
+        // rebake — contar so o BLAS subestimava justamente a metade que cresce com folhagem, que e
+        // onde micro-map existe.
         //
-        // E esta a grandeza que cresce, e nao o espaco que sobra orfao dentro do pool — o pool ja
-        // estava alocado no tamanho dele, entao tornar um pedaco inalcancavel nao custa um byte a
-        // mais. Publicado porque o modo de falha e crescimento silencioso: uma sessao longa de
-        // edicao de cutoff acumula um BLAS por rebake, e sem numero isso so apareceria como VRAM
-        // a mais muito depois. Zera na proxima carga de cena, que refaz o pool.
-        u64 RebuiltBlasBytes() const { return RebuiltBlasBytes_; }
-        u32 RebuiltBlasCount() const { return static_cast<u32>(RebuiltBlas.size()); }
+        // Soma o que ja saiu do BlasByMesh mas ainda nao foi reclamado: aposentado nao e liberado,
+        // e enquanto o recurso existe ele ocupa VRAM. Esta e a grandeza que cresce, e nao o espaco
+        // que sobra orfao dentro do pool — o pool ja estava alocado no tamanho dele, entao tornar
+        // um pedaco inalcancavel nao custa um byte a mais. Publicado porque o modo de falha e
+        // crescimento silencioso.
+        u64 RebuiltBlasBytes() const { return RebuiltBlasBytes_ + RetiredBlasBytes_; }
+        u32 RebuiltBlasCount() const {
+            return static_cast<u32>(RebuiltBlas.size() + RetiredBlas_.size());
+        }
     };
 }

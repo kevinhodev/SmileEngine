@@ -37,7 +37,7 @@ namespace Smile {
     class FGpuMesh;
     class FTexture;
 
-    // IDENTIDADE das entradas de bake: um hash do CONTEUDO que o loader carregou.
+    // IDENTIDADE das entradas de bake: um hash proprio do CONTEUDO que o loader carregou.
     //
     // Caminho sozinho nao e procedencia — um recook mantem magic e versao e pode trocar UVs,
     // indices ou a ORDEM das malhas. Carimbo de arquivo {tamanho, hora} tambem nao serve, e a
@@ -55,8 +55,18 @@ namespace Smile {
     using FOmmContentHash = u64;
     inline constexpr FOmmContentHash kOmmNoContentHash = 0;
 
-    // FNV-1a por PALAVRA. Nao e criptografico e nao precisa ser: o que ele detecta e recook e
-    // troca de asset, nao adversario.
+    // MISTURA ESTILO FNV-1a, por PALAVRA — e NAO o FNV-1a canonico, que multiplica por BYTE.
+    //
+    // A diferenca e deliberada e vale nomear: isto passa por megabytes de pixel a cada load de
+    // cena, e multiplicar por byte custaria oito vezes mais. Emprestados do FNV-1a estao o primo e
+    // o offset basis, nada mais. Chamar o resultado de "FNV-1a" seria errado, e nome errado e o
+    // que faz alguem depois assumir propriedades que a funcao nao tem.
+    //
+    // Nao e criptografico e nao precisa ser: o que ele detecta e recook e troca de asset, nao
+    // adversario.
+    inline constexpr FOmmContentHash kOmmHashSeed  = 14695981039346656037ull;
+    inline constexpr FOmmContentHash kOmmHashPrime = 1099511628211ull;
+
     inline FOmmContentHash OmmHashAppend(FOmmContentHash H, const void* Data, size_t Bytes) {
         const auto* B = static_cast<const u8*>(Data);
         size_t I = 0;
@@ -64,13 +74,24 @@ namespace Smile {
             u64 Word;
             std::memcpy(&Word, B + I, sizeof(Word));
             H ^= Word;
-            H *= 1099511628211ull;
+            H *= kOmmHashPrime;
         }
         for (; I < Bytes; ++I) {
             H ^= B[I];
-            H *= 1099511628211ull;
+            H *= kOmmHashPrime;
         }
         return H;
+    }
+
+    // Finalizador fmix64 do MurmurHash3. Multiplicar por palavra deixa os bits altos pouco
+    // misturados quando a entrada e curta — e a comparacao usa o valor inteiro, nao um recorte.
+    inline FOmmContentHash OmmHashFinish(FOmmContentHash H) {
+        H ^= H >> 33; H *= 0xff51afd7ed558ccdull;
+        H ^= H >> 33; H *= 0xc4ceb9fe1a85ec53ull;
+        H ^= H >> 33;
+        // Um hash que caia em zero por acidente viraria "sem fingerprint"; deslocar preserva a
+        // distincao sem enfraquecer nada.
+        return H == kOmmNoContentHash ? 1ull : H;
     }
 
     // Fingerprint da GEOMETRIA de bake. Percorre as UVs POR ELEMENTO e nao por bytes crus, porque
@@ -84,7 +105,7 @@ namespace Smile {
                                            const u32* Indices, u32 IndexCount) {
         if (!TexCoords || !Indices || VertexCount == 0 || IndexCount == 0)
             return kOmmNoContentHash;
-        FOmmContentHash H = 1469598103934665603ull;
+        FOmmContentHash H = kOmmHashSeed;
         H = OmmHashAppend(H, &VertexCount, sizeof(VertexCount));
         H = OmmHashAppend(H, &IndexCount, sizeof(IndexCount));
         const auto* Base = reinterpret_cast<const u8*>(TexCoords);
@@ -94,9 +115,7 @@ namespace Smile {
             H = OmmHashAppend(H, Bits, sizeof(Bits));
         }
         H = OmmHashAppend(H, Indices, static_cast<size_t>(IndexCount) * sizeof(u32));
-        // Um hash que caia em zero por acidente viraria "sem fingerprint"; deslocar preserva a
-        // distincao sem enfraquecer nada.
-        return H == kOmmNoContentHash ? 1ull : H;
+        return OmmHashFinish(H);
     }
 
     // Fingerprint da TEXTURA de alpha: tudo o que o baker consome dela, e nada mais — os pixels do
