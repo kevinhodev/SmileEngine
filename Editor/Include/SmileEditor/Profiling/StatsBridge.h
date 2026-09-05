@@ -42,6 +42,10 @@ namespace SmileEditor {
         Q_PROPERTY(QVariantList submitPasses READ GetSubmitPasses NOTIFY Updated)
         Q_PROPERTY(int sceneMeshDraws READ GetSceneMeshDraws NOTIFY Updated)
         Q_PROPERTY(int materialBinds READ GetMaterialBinds NOTIFY Updated)
+        // Draws de malha de cena FORA do caminho bindless (Fase 3). Mesmo escopo do
+        // sceneMeshDraws, e por isso o terreno entra: ele e fallback de verdade. Igual a
+        // sceneMeshDraws enquanto o caminho novo esta desligado.
+        Q_PROPERTY(int fallbackDraws READ GetFallbackDraws NOTIFY Updated)
         Q_PROPERTY(QString objectConstantsText READ GetObjectConstantsText NOTIFY Updated)
         Q_PROPERTY(QString srvHeapText READ GetSrvHeapText NOTIFY Updated)
         Q_PROPERTY(double srvHeapFrac READ GetSrvHeapFrac NOTIFY Updated)
@@ -83,6 +87,7 @@ namespace SmileEditor {
         QVariantList GetSubmitPasses() const;
         int          GetSceneMeshDraws() const;
         int          GetMaterialBinds() const;
+        int          GetFallbackDraws() const;
         QString      GetObjectConstantsText() const;
         QString      GetSrvHeapText() const;
         QString      GetGpuSlotsText() const;
@@ -122,6 +127,7 @@ namespace SmileEditor {
             QVariantList SubmitPasses;
             int          SceneMeshDraws = 0;
             int          MaterialBinds  = 0;
+            int          FallbackDraws  = 0;
             QString      ObjectConstantsText = QStringLiteral("—");
             QString      SrvHeapText  = QStringLiteral("—");
             QString      GpuSlotsText = QStringLiteral("—");

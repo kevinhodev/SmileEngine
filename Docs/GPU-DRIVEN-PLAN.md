@@ -1355,6 +1355,22 @@ alterar ainda a submissão raster.
 
 ## Fase 3 — Raster bindless sem indirect
 
+> **Estado em 2026-09-05 — IMPLEMENTADA, NÃO VALIDADA EM GPU.** As cinco slices estão na árvore,
+> Release fecha 60/60 e o cliente TypeScript compila; o default continua no caminho clássico
+> (regra 3). O que falta é o que exige placa: ligar o toggle na Bistro e na Emerald e provar
+> paridade. **A fase não fecha antes disso.** Detalhe, evidência, decisões reversíveis e a fila do
+> que falta em [GPU-DRIVEN-PHASE3-PROGRESS.md](GPU-DRIVEN-PHASE3-PROGRESS.md).
+>
+> A primeira tarefa — confirmar capability e contrato antes de qualquer desenho — achou duas
+> lacunas reais: `ResourceBindingTier` nunca era consultado (os passes de compute que já usam
+> `ResourceDescriptorHeap` rodavam por sorte de hardware), e a ordem heap → root signature, que a
+> spec de Dynamic Resources exige, era satisfeita por acidente. As duas estão fechadas. A versão
+> da root signature confirmou-se não ser a questão, como o texto abaixo antecipava.
+>
+> **Fora desta rodada, de propósito:** sombras opacas do sol e locais. São duas root signatures
+> próprias e um segundo par de permutações; entram na continuação, para o diff da migração
+> principal caber numa revisão. Translúcidos ficam no clássico por decisão D9.
+
 ### Objetivo
 
 Remover bindings por material/draw mantendo as mesmas listas CPU e as mesmas draws. Essa separação

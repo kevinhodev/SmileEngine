@@ -716,6 +716,7 @@ Rectangle {
                                     { label: "Ocultados (HZB)", value: root.statsModel.occludedDrawCount },
                                     { label: "Draws de cena", value: root.statsModel.sceneMeshDraws },
                                     { label: "Binds de material", value: root.statsModel.materialBinds },
+                                    { label: "Draws fora do bindless", value: root.statsModel.fallbackDraws },
                                     { label: "SRV heap", value: root.statsModel.srvHeapText },
                                     { label: "Slots de cena", value: root.statsModel.gpuSlotsText },
                                     { label: "Tabelas da cena", value: root.statsModel.materialTableText },

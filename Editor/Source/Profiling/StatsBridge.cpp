@@ -210,6 +210,7 @@ namespace SmileEditor {
     QVariantList StatsBridge::GetSubmitPasses() const { return Snapshot.SubmitPasses; }
     int          StatsBridge::GetSceneMeshDraws() const { return Snapshot.SceneMeshDraws; }
     int          StatsBridge::GetMaterialBinds() const { return Snapshot.MaterialBinds; }
+    int          StatsBridge::GetFallbackDraws() const { return Snapshot.FallbackDraws; }
     QString      StatsBridge::GetObjectConstantsText() const { return Snapshot.ObjectConstantsText; }
     QString      StatsBridge::GetSrvHeapText() const { return Snapshot.SrvHeapText; }
     QString      StatsBridge::GetGpuSlotsText() const { return Snapshot.GpuSlotsText; }
@@ -517,6 +518,7 @@ namespace SmileEditor {
 
             Next.SceneMeshDraws = static_cast<int>(Cpu.InstrumentedSceneMeshDraws());
             Next.MaterialBinds  = static_cast<int>(Cpu.InstrumentedMaterialBinds());
+            Next.FallbackDraws  = static_cast<int>(Cpu.InstrumentedFallbackDraws());
             Next.ObjectConstantsText =
                 QStringLiteral("%1 KiB").arg(Loc.toString(Cpu.ObjectConstantBytes / 1024.0, 'f', 1));
             // Aposentados e overflows so aparecem quando existem: em uso normal sao zero, e uma

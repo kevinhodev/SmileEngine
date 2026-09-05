@@ -505,14 +505,29 @@ Cada `FMaterial` aloca **8 slots contíguos** no SRV heap (`SRVTableStart`) + um
 (`MaterialConstants`, de um pool paginado). `Finalize()` preenche a tabela; `Bind()` seta o
 root CBV b1 e a tabela t0..t7. Flags `HasXMap` no CB dizem ao shader quais usar.
 
-`SRVTableStart` **não é privado do raster**: o snapshot `InstanceGeo` do ray tracing publica
-`SRVTableStart + {0,2,4}` como índices bindless (albedo / metal-rough / emissivo) lidos via
-`ResourceDescriptorHeap`. Por isso um re-`Finalize()` **reusa** o range em vez de realocar —
-trocá-lo faria os raios amostrarem a textura de outro material.
+`SRVTableStart` **não é privado do raster**: ele é o `TextureBase` da linha canônica do material
+(`FGpuMaterialRecord`), de onde os shaders de RT tiram os índices bindless. Um re-`Finalize()`
+**reusa** o range e reescreve no lugar, o que é seguro porque os três chamadores dele rodam com
+as duas filas drenadas.
+
+O caminho que **não** tem essa garantia — troca de textura no editor — usa
+`RepublishTextureTable`: aloca outro range, escreve as oito posições (incluindo descritor **nulo**
+para slot sem textura) e devolve a base antiga, que fica em `FTextureSRVHeap::FreeDeferred` até
+as **duas** filas passarem. Descritor não é dado: reescrever um slot que uma command list já
+submetida referencia é comportamento indefinido, e a defesa anterior era drenar as duas filas a
+cada troca. A base nova suja a linha do material, e é assim que o RT acompanha.
 
 O layout do `MaterialConstants` em HLSL vive num único lugar, `Shaders/MaterialCB.hlsli`,
 incluído pelos shaders que consomem material (G-buffer, forward blend, os dois depth masked,
 shadow depth e o preview). Campo novo no struct C++ = editar esse header, e só ele.
+
+Esse header tem **dois ramos que expõem os mesmos nomes**. O clássico é o `cbuffer` b1 acima; o
+outro (`SMILE_MATERIAL_BINDLESS`) lê a linha canônica do material pelo heap diretamente
+indexado, com uma constante de root de 4 B por draw carregando a linha e nenhum bind por item.
+Os nomes serem os mesmos é o ponto: o corpo dos shaders não muda entre os dois, então uma
+diferença visual no A/B só pode vir do acesso aos dados. Hoje o G-buffer e o z-prepass mascarado
+têm permutação `*Bindless` em `ps_6_6`; o toggle está em Configurações → Renderização e nasce
+desligado. Ver Fase 3 do GPU-DRIVEN-PLAN.
 
 ### Convenção de descriptors
 Tabelas contíguas são montadas com `FTextureSRVHeap::CopyTable`, que copia slots dispersos do
@@ -851,7 +866,7 @@ Mapeamento de conceitos de outras engines para onde encaixam na Smile.
 | Cascaded Shadow Maps | `FSunShadows` | `Graphics/Lighting/SunShadows.*` (§15) |
 | Post Process Volume | `FPostProcessor` (bloom + ACES) | `Graphics/PostProcess/PostProcess.*` |
 | TAA / TSR / DLSS | `FTemporalAA` + `IUpscaler` (FSR/DLSS/RR) | `Graphics/PostProcess/Upscaler.h` e implementações |
-| Bindless / descriptor heap | `FTextureSRVHeap` (16384 slots) + `InstanceGeo` no RT | `Graphics/Backend/D3D12/TextureSRVHeap.*`, `Graphics/RayTracing/RaytracingScene.*` |
+| Bindless / descriptor heap | `FTextureSRVHeap` (16384 slots, free deferred por fence) + `InstanceGeo` no RT + material do raster | `Graphics/Backend/D3D12/TextureSRVHeap.*`, `Graphics/RayTracing/RaytracingScene.*`, `Shaders/Scene/MaterialAccess.hlsli` |
 | `SCENE_VIEW` / view uniforms | `FrameConstants` (b0) | `Graphics/Renderer/Renderer.h` |
 | `r.ShowRenderTarget` / debug views | `DebugTargets` + `FDebugView` | `Graphics/Debug/DebugTargets.*` |
 
