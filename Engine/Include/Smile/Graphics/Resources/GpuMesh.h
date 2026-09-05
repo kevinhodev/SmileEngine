@@ -105,6 +105,17 @@ namespace Smile {
         bool Bindless          = false;
         u32  MaterialRootIndex = 0;
         u32  LastRow           = 0xFFFFFFFFu;
+        // Material da ULTIMA consulta de linha. `FGpuMaterialTable::RowOf` e um
+        // unordered_map, e chama-lo por item poria uma busca por hash no laco de submissao —
+        // custo de CPU novo, no caminho que a fase existe para deixar mais barato, e ele
+        // apareceria na medicao como se fosse do bindless. As listas ja vem agrupadas por
+        // material, entao este ponteiro acerta quase sempre.
+        //
+        // Separado do LastMat de proposito: aquele descreve o que esta AMARRADO no caminho
+        // classico, e os dois caminhos nunca rodam juntos no mesmo passe — reusar o campo
+        // faria um significar duas coisas.
+        const FMaterial* LastRowMat    = nullptr;
+        u32              LastRowLookup = 0;
 
         // Balde de telemetria do passe (opcional; nullptr = sem instrumentacao). Contar AQUI e
         // deliberado: este e o unico ponto por onde a geometria de cena e submetida, entao o
@@ -116,6 +127,8 @@ namespace Smile {
             LastMesh = nullptr;
             LastMat  = nullptr;
             LastRow  = 0xFFFFFFFFu;
+            LastRowMat    = nullptr;
+            LastRowLookup = 0;
             // Stats NAO e zerado: o Reset existe para invalidar o cache ao trocar root
             // signature/PSO no MEIO de um passe, e o balde e do passe inteiro.
         }

@@ -1467,8 +1467,17 @@ namespace Smile {
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    if (MaskedBindless) Submit.BindMaterialRow(CommandList, V.Mat, MaterialTable.RowOf(V.Mat));
-                    else                Submit.BindMaterial(CommandList, Backend->SRVHeap, V.Mat);
+                    if (MaskedBindless) {
+                        // A consulta da linha e memoizada: RowOf e um unordered_map e a lista
+                        // ja vem agrupada por material.
+                        if (V.Mat != Submit.LastRowMat) {
+                            Submit.LastRowMat = V.Mat;
+                            Submit.LastRowLookup = MaterialTable.RowOf(V.Mat);
+                        }
+                        Submit.BindMaterialRow(CommandList, V.Mat, Submit.LastRowLookup);
+                    } else {
+                        Submit.BindMaterial(CommandList, Backend->SRVHeap, V.Mat);
+                    }
                     Submit.DrawMesh(CommandList, V.R->Mesh);
                 }
             }
@@ -1631,8 +1640,15 @@ namespace Smile {
                     if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V->Slot) * sizeof(ObjectConstants));
-                    if (GBufferBindless) Submit.BindMaterialRow(CommandList, Mat, MaterialTable.RowOf(Mat));
-                    else                 Submit.BindMaterial(CommandList, Backend->SRVHeap, Mat);
+                    if (GBufferBindless) {
+                        if (Mat != Submit.LastRowMat) {
+                            Submit.LastRowMat = Mat;
+                            Submit.LastRowLookup = MaterialTable.RowOf(Mat);
+                        }
+                        Submit.BindMaterialRow(CommandList, Mat, Submit.LastRowLookup);
+                    } else {
+                        Submit.BindMaterial(CommandList, Backend->SRVHeap, Mat);
+                    }
                     Submit.DrawMesh(CommandList, V->R->Mesh);
                 }
             }
