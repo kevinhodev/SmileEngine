@@ -37,6 +37,7 @@ Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 | `2877d82` | procedência que identifica bytes; recusa em vez de meia aplicação |
 | `04bf69a` | fingerprint de conteúdo, atomicidade por material, ranges antes das alocações |
 | `5aabcef` | publicação transacional dos BLAS, rollback total e reclamação dos recursos substituídos |
+| `752cf3d` | uploads do rebake retidos até a submissão terminar |
 
 ## Findings da revisão (2026-09-04)
 
@@ -266,6 +267,14 @@ prebuild, uma alocação falha) deixava o primeiro endereço registrado com a co
 executada**, e o filtro do próximo `EnsureBlasFor` dava aquele par por pronto — a TLAS passaria a
 apontar para memória de AS que ninguém construiu. `Close` e `ExecuteAndSync` também podem lançar, e
 ficam do lado de fora da publicação pelo mesmo motivo.
+
+A primeira validação interativa em Debug encontrou uma segunda obrigação, independente da
+publicação: os três buffers UPLOAD de cada par (`OmmIndexInput`, `OmmArrayInput` e `OmmDescInput`)
+eram locais do laço e morriam antes de a command list ser executada. A list guarda apenas os
+endereços GPU; ela não retém os recursos. A debug layer acusou `D3D12 #921` e a GPU terminou em
+`DXGI_ERROR_DEVICE_HUNG`. Eles agora sobrevivem ao lado dos scratches até `ExecuteAndSync`. Release
+e Debug compilam e passam 59/59; a repetição interativa na Bistro continua pendente, porque só ela
+prova que a debug layer deixou de acusar o lifetime real.
 
 **Os recursos substituídos são reclamados.** `ForgetBlas` tira a chave do `BlasByMesh` e move o
 recurso do par para a lista de **aposentados**; a reconciliação seguinte os solta. A espera não é
