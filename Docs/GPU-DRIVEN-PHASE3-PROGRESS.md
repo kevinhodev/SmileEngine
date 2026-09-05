@@ -2,8 +2,8 @@
 
 Data: 2026-09-05
 
-Estado: **implementada, NÃO validada em GPU.** As cinco slices estão na árvore, Release fecha
-60/60 e o cliente TypeScript compila. O que falta é exatamente o que exige placa: ligar o toggle
+Estado: **implementada e revisada, NÃO validada em GPU.** As slices estão na árvore, Release fecha
+61/61 e o cliente TypeScript compila. O que falta é exatamente o que exige placa: ligar o toggle
 na Bistro e na Emerald e provar paridade visual. Enquanto isso não acontece, a fase **não fecha**.
 
 Base: Fase 2 fechada em `7382f21`. Nada da Fase 2 foi reaberto.
@@ -20,6 +20,53 @@ O default **não** mudou: `UseBindlessMaterials = false` (regra 3 do plano).
 | `c7fc69d` | G-buffer e z-prepass mascarado lendo material bindless |
 | `c6e926a` | o A/B exposto no editor e a telemetria dele |
 | `62a96fc` | memoização da consulta de linha nos passes migrados |
+| `95721c8` | os quatro findings da revisão |
+
+## Findings da revisão (2026-09-05)
+
+Revisão do proprietário, sem subagente: 1 P1 e 3 P2. Os quatro estão corrigidos, e os quatro
+eram defeitos de verdade — nenhum é cosmético.
+
+### P1 — a troca de textura não era atômica
+
+`ApplySlotTexture` trocava ponteiro e flag **antes** de publicar, e a publicação chamava
+`Allocate`, que **lança** quando o heap acaba. A exceção pulava `UpdateConstants`, as dirty
+flags e o commit do OMM, deixando o material CPU descrevendo uma textura que a tabela GPU e o
+CBV não conhecem — sem erro visível, até o próximo load — além de subir por um callback do Qt.
+
+O conserto separa as duas alocações por quem chama: `TryAllocate` **recusa** e serve o caminho
+de edição, que tem estado CPU para desfazer; `Allocate` continua lançando e serve o de load,
+onde ficar sem descritor é fatal e não há o que desfazer. `RepublishTextureTable` virou
+transacional — devolve `false` sem tocar em nada — e o bridge restaura ponteiro e flag na
+recusa.
+
+### P2 — o reset republicava a tabela até oito vezes
+
+Uma publicação por textura válida: oito tabelas alocadas, sete aposentadas que ninguém lê, e as
+intermediárias descrevendo um material meio revertido. Perto do teto, a falha cairia no meio.
+Agora os oito ponteiros são aplicados primeiro e há **uma** publicação — e as constantes só são
+revertidas depois dela, senão uma recusa deixaria os fatores novos com as texturas antigas.
+
+### P2 — o reload não coletava descritores já liberáveis
+
+Depois de `Flush` + `WaitIdle`, `Required` cobre todos os ranges aposentados, mas o reload só
+coletava `GpuSlots`. A cena nova começa a alocar antes do próximo `RenderFrame`, então podia
+receber capacity exceeded com ranges liberáveis presos. Uma linha, no mesmo ponto e com o mesmo
+`Required`.
+
+### P2 — o contador de fallback incluía draws sem material
+
+Este é o mais sério dos três P2, porque **o número que julga o A/B era o que estava errado**.
+
+`Draws - BindlessDraws` supõe dois estados por draw e existem **três**: o z-prepass opaco
+desenha a cena sólida sem tocar em material e nunca pode incrementar `BindlessDraws`, então
+todo opaco aparecia como fallback. E não é propriedade do *passe*: nas sombras e na chuva só os
+casters alpha-tested amarram material, no mesmo laço dos que não amarram.
+
+`MaterialFallbackDraws` passou a ser contado por **item**, no ponto da submissão, e só quando
+aquele item pediu material. A borda do MCP valida
+`bindlessDraws + materialFallbackDraws <= draws` — sem exigir que **feche**, porque o terceiro
+estado existe e é maioria em passes inteiros.
 
 ## A primeira tarefa: o que a verificação achou
 
@@ -205,15 +252,19 @@ que a Fase 4 faz quando o raster passa a ler a tabela de instâncias.
 
 ## Telemetria
 
-Por passe: `bindlessDraws`, `materialRowSets` (par de `materialBinds` — no A/B um zera e o outro
-assume o mesmo N) e `materialRowMisses`. Agregado: "Draws fora do bindless" no painel.
+Por passe: `bindlessDraws`, `materialFallbackDraws`, `materialRowSets` (par de `materialBinds` —
+no A/B um zera e o outro assume o mesmo N) e `materialRowMisses`. Agregado: "Draws com material
+fora do bindless" no painel.
+
+Os dois primeiros são **exclusivos e não fecham com `draws`**, e isso é deliberado: draw que não
+consome material — o z-prepass opaco inteiro — não é fallback de material. Ver o P2 acima.
 
 Heap de descritores: `retired` (presos esperando as duas fences) e `overflows` (alocações
 recusadas). O `Allocate` continua lançando, mas agora conta e **loga** antes: quanto foi pedido,
 quanto está em uso, quanto está aposentado. "Acabou o heap" nunca dizia se a saída é subir o teto
 ou caçar um consumidor que não devolve descritor.
 
-Protocolo MCP em **7**, pela regra da v4: sobe quando o **cliente** passa a exigir o campo. A
+Protocolo MCP em **8**, pela regra da v4: sobe quando o **cliente** passa a exigir o campo. A
 borda passou a validar os contadores por passe — os três novos e os três antigos, que eram lidos
 sem checagem — e o bloco `srvHeap` inteiro, mais duas coerências que uma checagem campo a campo
 não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
@@ -225,7 +276,9 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 | aposentadoria de descritor | `Smile.DescriptorLifetime` (WARP): fence parcial das duas filas, coleta fora de ordem, coalescência e o ciclo real de republicação |
 | derivação do bloco de raster | `Smile.GpuMaterialRecord`: oráculo do `MaterialCB` transcrito à mão — os valores **efetivos** que o shader computava — em 128 casos exaustivos |
 | ABI C++ ↔ HLSL | `Smile.GpuSceneTablesWarp`: os nove campos novos e as oito constantes novas, lidos pelo espelho de produção com o DXC do jogo |
-| contrato do MCP | `Smile.EditorBridgeValidation`: campo a campo mais as duas coerências |
+| contrato do MCP | `Smile.EditorBridgeValidation`: campo a campo mais as coerências dos três estados |
+| contagem de submissão | `Smile.SubmitStats` (WARP, command list gravada e nunca executada): draw sem material, clássico, bindless, laço misto e o pedido que não vaza por malha inválida |
+| recusa com o heap cheio | `Smile.DescriptorLifetime`: enche o heap e exige base, ocupação e contador de falha intactos |
 
 ### Casos negativos rodados
 
@@ -238,10 +291,13 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 | tirar os três campos da Fase 3 da validação do MCP | 21 asserções vermelhas |
 | remover a coerência `bindlessDraws <= draws` | 1 asserção vermelha |
 | aceitar `undefined` no bloco `srvHeap` | 5 asserções vermelhas |
+| voltar a `Allocate` que lança na republicação | o processo do teste TERMINA (exit 127) |
+| voltar à conta antiga do fallback (`Draws - BindlessDraws`) | 3 asserções vermelhas |
+| exigir que bindless + fallback FECHE com draws | recusa o passe sem material |
 
 ### Build e suíte
 
-- **Release:** 60/60;
+- **Release:** 61/61;
 - **MCP/TypeScript:** `npm run build` limpo;
 - **shaders:** as três permutações bindless compilam em `ps_6_6` sem warning.
 

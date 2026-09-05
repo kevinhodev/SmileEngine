@@ -1355,11 +1355,14 @@ alterar ainda a submissão raster.
 
 ## Fase 3 — Raster bindless sem indirect
 
-> **Estado em 2026-09-05 — IMPLEMENTADA, NÃO VALIDADA EM GPU.** As cinco slices estão na árvore,
-> Release fecha 60/60 e o cliente TypeScript compila; o default continua no caminho clássico
-> (regra 3). O que falta é o que exige placa: ligar o toggle na Bistro e na Emerald e provar
-> paridade. **A fase não fecha antes disso.** Detalhe, evidência, decisões reversíveis e a fila do
-> que falta em [GPU-DRIVEN-PHASE3-PROGRESS.md](GPU-DRIVEN-PHASE3-PROGRESS.md).
+> **Estado em 2026-09-05 — IMPLEMENTADA E REVISADA, NÃO VALIDADA EM GPU.** As slices estão na
+> árvore, Release fecha 61/61 e o cliente TypeScript compila; o default continua no caminho
+> clássico (regra 3). A revisão do proprietário achou 1 P1 e 3 P2, todos corrigidos — entre eles
+> um em que **o próprio contador usado para julgar o A/B mentia**, contando como fallback de
+> material todo draw que nunca consumiu material. O que falta é o que exige placa: ligar o
+> toggle na Bistro e na Emerald e provar paridade. **A fase não fecha antes disso.** Detalhe,
+> evidência, decisões reversíveis e a fila do que falta em
+> [GPU-DRIVEN-PHASE3-PROGRESS.md](GPU-DRIVEN-PHASE3-PROGRESS.md).
 >
 > A primeira tarefa — confirmar capability e contrato antes de qualquer desenho — achou duas
 > lacunas reais: `ResourceBindingTier` nunca era consultado (os passes de compute que já usam
