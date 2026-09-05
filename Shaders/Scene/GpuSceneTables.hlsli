@@ -7,6 +7,9 @@
 // Espelha, byte a byte:
 //   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 64 B)
 //   GpuMeshRecord     <- Smile::FGpuMeshRecord      (Graphics/Scene/GpuSceneTables.h, 56 B)
+//   GpuInstanceMeta   <- Smile::FGpuSceneInstanceMeta (20 B)
+//   GpuInstanceBounds <- Smile::FGpuSceneInstanceBounds (32 B)
+//   GpuInstanceTransform <- Smile::FGpuSceneInstanceTransform (64 B)
 //   InstanceGeo       <- Smile::FGpuInstanceGeo     (Graphics/Scene/GpuSceneTables.h, 20 B)
 //
 // A ABI e verificada em WARP por Tests/GpuSceneTablesWarpTests.cpp, que compila a sonda
@@ -75,6 +78,29 @@ struct GpuMeshRecord {
     uint   TriangleCount;
     uint   Flags;             // RESERVADO: 0 hoje
     uint   VirtualGeometryId; // RESERVADO: 0 hoje, ate a trilha de virtual geometry existir
+};
+
+#define SMILE_INSTANCE_FLAG_VISIBLE        1u
+#define SMILE_INSTANCE_FLAG_RT_ONLY        2u
+#define SMILE_INSTANCE_FLAG_DYNAMIC        4u
+
+// Colunas SoA da tabela canonica de instancias, indexadas por slot de residencia. Generation 0
+// marca linha vazia; todo leitor de dado persistente valida a generation capturada.
+struct GpuInstanceMeta {
+    uint MeshId;
+    uint MaterialId;
+    uint CellId;
+    uint Flags;
+    uint Generation;
+};
+
+struct GpuInstanceBounds {
+    float4 Center;
+    float4 Extent;
+};
+
+struct GpuInstanceTransform {
+    row_major float4x4 Value;
 };
 
 // Snapshot por INSTANCIA, indexado pelo InstanceID da TLAS. Depois da Fase 2 ele carrega apenas

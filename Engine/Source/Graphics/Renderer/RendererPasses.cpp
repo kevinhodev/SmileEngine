@@ -235,7 +235,8 @@ namespace Smile {
         DDGI.SetSkyIntensity(Lt.RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
 
         if (Modes.ReliableMotionActive) {
-            TemporalMotion.UpdatePerFrame(FrameSlot, SceneState->Scene, Vw.InvViewProjFull,
+            TemporalMotion.UpdatePerFrame(FrameSlot, SceneState->Scene, InstanceTable,
+                                          Vw.InvViewProjFull,
                                           Vw.ViewProjUnjittered, FrameState->PrevViewProj,
                                           Vw.CameraPosition);
         } else {
@@ -1966,27 +1967,24 @@ namespace Smile {
         {
             const std::vector<FRenderable>& RList = SceneState->Scene.Renderables();
             AllItems.reserve(RList.size());
-            // Dimensionado pela capacidade de SLOTS, e nao pelo tamanho da lista: o indice
-            // agora e o slot, que pode passar da contagem de renderaveis quando ha buracos.
-            SceneState->PreviousModels.EnsureCapacity(SceneState->Scene.GpuSlots().Capacity());
             const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
             if (WriteOcclusionBounds) HiZ.BeginFrame(FrameSlot, SceneState->Scene.GpuSlots());
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
                 if (!R.Visible || R.RaytracingOnly || !R.Mesh || !R.Mesh->IsValid()) {
-                    SceneState->PreviousModels.Forget(R.GpuHandle);
                     continue;
                 }
                 if (WriteOcclusionBounds)
-                    HiZ.WriteBounds(FrameSlot, R.GpuHandle, R.AABBMin, R.AABBMax);
+                    HiZ.WriteCandidate(FrameSlot, R.GpuHandle);
                 if (AllItems.size() >= MaxObjects) break;
                 FMaterial* Mat = (R.Material && R.Material->IsFinalized()) ? R.Material : ActiveMaterial;
                 const u32 Slot = FrameObjectBase + static_cast<u32>(AllItems.size());
-                const Mat44 Model = R.Transform.Matrix();
+                Mat44 Model = R.Transform.Matrix();
                 // Sem historico DAQUELE objeto, PrevModel = Model: motion vector zero, que e o
                 // desfecho certo para quem acabou de nascer ou cujo slot foi reciclado --
                 // herdar o Model do ocupante anterior produziria um smear vindo do nada.
-                const Mat44 PrevModel = SceneState->PreviousModels.PreviousOr(R.GpuHandle, Model);
+                Mat44 PrevModel = Model;
+                InstanceTable.TransformsFor(R.GpuHandle, Model, PrevModel);
                 ObjectConstants OC;
                 OC.MVP            = Model * Vw.ViewProjection;
                 OC.ModelMatrix    = Model;
@@ -1999,7 +1997,6 @@ namespace Smile {
                     SelectedModel = Model;
                 }
                 AllItems.push_back({ &R, Mat, Slot, static_cast<u32>(si) });
-                SceneState->PreviousModels.Store(R.GpuHandle, Model);
             }
         }
         // A selecao entra no contexto AQUI, no unico laco que ja varre a cena: o contorno a

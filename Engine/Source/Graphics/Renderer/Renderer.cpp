@@ -650,6 +650,7 @@ namespace Smile {
         GIFallback.Release(Backend->SRVHeap);       // 3 slots + os recursos neutros do fallback indireto
         MaterialTable.Release(Backend->SRVHeap);    // 1 slot + o buffer da tabela canonica
         MeshTable.Release(Backend->SRVHeap);        // 1 slot + 3 descritores por malha unica
+        InstanceTable.Release(Backend->SRVHeap);    // 4 slots + colunas SoA canonicas
         FShaderTimer::ShutdownApi();       // libera o slot falso da extensao + o buffer dummy
         if (ConstantBuffer && MappedFrameBase) {
             ConstantBuffer->Unmap(0, nullptr);

@@ -9,10 +9,7 @@
 //  - retangulo cabe em <=4x4 texels do mip escolhido; farthest = MIN da regiao
 //    (reverse-Z: far = 0); visivel sse nearest da caixa >= farthest do HZB.
 
-struct FBounds {
-    float4 Center; // .xyz centro world-space
-    float4 Extent; // .xyz meia-extensao; tudo 0 = entrada nula (sempre visivel)
-};
+#include "../Scene/GpuSceneTables.hlsli"
 
 cbuffer TestCB : register(b0) {
     row_major float4x4 ViewProj; // world -> clip, sem jitter (convencao row-vector)
@@ -20,11 +17,13 @@ cbuffer TestCB : register(b0) {
     uint     ObjectCount;
     uint     NumMips;
     float    DepthBias;  // folga em NDC reverse-Z (0 = teste exato)
-    float3   _Pad;
+    uint     InstanceCapacity;
+    float2   _Pad;
 };
 
-StructuredBuffer<FBounds> Bounds     : register(t0);
-Texture2D<float>          HZB        : register(t1);
+StructuredBuffer<uint>              CandidateSlots : register(t0);
+StructuredBuffer<GpuInstanceBounds> Bounds         : register(t1);
+Texture2D<float>                    HZB            : register(t2);
 RWStructuredBuffer<uint>  VisibleOut : register(u0);
 
 [numthreads(64, 1, 1)]
@@ -32,8 +31,10 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     const uint i = DTid.x;
     if (i >= ObjectCount) return;
 
-    const float3 C = Bounds[i].Center.xyz;
-    const float3 E = Bounds[i].Extent.xyz;
+    const uint slot = CandidateSlots[i];
+    if (slot >= InstanceCapacity) { VisibleOut[i] = 1u; return; }
+    const float3 C = Bounds[slot].Center.xyz;
+    const float3 E = Bounds[slot].Extent.xyz;
     if (all(E <= 0.0)) { VisibleOut[i] = 1u; return; }
 
     float3 NdcMin = 1e9;

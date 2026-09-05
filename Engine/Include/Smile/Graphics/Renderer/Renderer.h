@@ -936,6 +936,9 @@ namespace Smile {
         // enumeradora das malhas unicas da cena — as duas coisas moravam no FRaytracingScene, e
         // a segunda ja tinha divergido uma vez quando o FDDGI reconstruia a mesma lista.
         FGpuMeshTable     MeshTable;
+        // Tabela canonica por slot: meta, bounds e current/previous transform. O ObjectCB ainda e
+        // a visao raster CPU-driven; HiZ e os historicos CPU ja derivam desta fonte na Fase 2.
+        FGpuSceneInstanceTable InstanceTable;
 
         FRaytracingScene RaytracingScene;
         // Recursos neutros quando nao existe volume DDGI.

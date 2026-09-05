@@ -13,7 +13,8 @@ import path from "node:path";
 // 5: os blocos cpu.materialTable e cpu.meshTable (tabelas canonicas da Fase 2). Mesma regra: eles
 // entraram no RESUMO, que e o que a regua le com o includeSamples default (false). Enquanto
 // estavam so na amostra crua, existiam no editor e nao chegavam a quem mede.
-const PROTOCOL_VERSION = 5;
+// 6: cpu.instanceTable, com footprint e sujeira das quatro colunas canonicas por slot.
+const PROTOCOL_VERSION = 6;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -134,6 +135,15 @@ export interface CpuProfileStats {
   };
   // Sem rowsDirty: geometria nao e editavel em runtime, entao as linhas so mudam num Setup.
   meshTable: { rows: number; residentBytes: number; stagingBytes: number };
+  instanceTable: {
+    rows: number;
+    residentBytes: number;
+    stagingBytes: number;
+    rowsDirty: number;
+    bytesDirty: number;
+    copyRegions: number;
+    bytesUploadedTotal: number;
+  };
   passes: CpuSubmitPass[];
 }
 
@@ -561,8 +571,8 @@ export class SmileEditorBridge {
           `acima de capacity ${capacity}.`,
       );
     }
-    // materialTable/meshTable sao OBRIGATORIOS no protocolo 5, pela mesma razao que gpuSlots foi
-    // no 4: a agregacao passa a exigi-los. Sem validar na borda, um editor anterior a Fase 2
+    // materialTable/meshTable sao OBRIGATORIOS no protocolo 5 e instanceTable no 6, pela mesma
+    // razao que gpuSlots foi no 4. Sem validar na borda, um editor anterior a Fase 2
     // atravessaria o cast e o resumo publicaria "null" onde deveria estar o numero do gate --
     // um relatorio que parece completo e nao e.
     //
@@ -591,13 +601,22 @@ export class SmileEditorBridge {
         ["residentBytes", kU64Max],
         ["stagingBytes", kU64Max],
       ]],
+      ["instanceTable", [
+        ["rows", kU32Max],
+        ["residentBytes", kU64Max],
+        ["stagingBytes", kU64Max],
+        ["rowsDirty", kU32Max],
+        ["bytesDirty", kU64Max],
+        ["copyRegions", kU32Max],
+        ["bytesUploadedTotal", kU64Max],
+      ]],
     ];
     for (const [nome, campos] of tabelas) {
       const bloco = (cpu as unknown as Record<string, unknown>)[nome] as
         | Record<string, unknown>
         | undefined;
       if (!bloco || typeof bloco !== "object") {
-        throw new Error(`Snapshot de perfil sem o bloco cpu.${nome} (protocolo 5).`);
+        throw new Error(`Snapshot de perfil sem o bloco cpu.${nome} (protocolo 6).`);
       }
       for (const [campo, teto] of campos) {
         // isSafeInteger e nao isFinite: finito aceita negativo, fracao e o que estiver acima da

@@ -213,6 +213,30 @@ namespace {
         // Tabela vazia nao inventa bytes.
         const auto Z = FGpuTableStorage::FootprintFor(0, kRow);
         Check(Z.Resident == 0 && Z.Staging == 0 && Z.Total() == 0, "capacidade zero custa zero");
+
+        Check(FGpuSceneInstanceTable::kResidentBytesPerSlot == 180u,
+              "instancia canonica ocupa 20+32+64+64 = 180 B residentes por slot");
+    }
+
+    void TestarDiffInstancias() {
+        std::vector<FGpuSceneInstanceMeta> Fresh(4);
+        for (u32 I = 0; I < 4; ++I) {
+            Fresh[I].MeshId = I + 10u;
+            Fresh[I].MaterialId = I + 20u;
+            Fresh[I].CellId = I + 30u;
+            Fresh[I].Flags = GpuSceneInstanceVisible;
+            Fresh[I].Generation = I + 1u;
+        }
+        std::vector<FGpuSceneInstanceMeta> Shadow;
+        std::vector<u32> Changed;
+        Check(DiffTableRows<FGpuSceneInstanceMeta>(Fresh, Shadow, Changed) == 4u,
+              "primeira publicacao da tabela de instancias sobe todas as linhas");
+        Check(DiffTableRows<FGpuSceneInstanceMeta>(Fresh, Shadow, Changed) == 0u,
+              "instancias estaveis nao sujam a tabela");
+        Fresh[2].Generation += 1u;
+        Check(DiffTableRows<FGpuSceneInstanceMeta>(Fresh, Shadow, Changed) == 1u &&
+                  Changed.size() == 1u && Changed[0] == 2u,
+              "reciclar um slot toca somente sua linha canonica");
     }
 }
 
@@ -221,6 +245,7 @@ int main() try {
 
     TestarDiff();
     TestarFootprint();
+    TestarDiffInstancias();
 
     // ---- dados: quatro instancias apontando para tres linhas de material ---------------------
     // A terceira e a quarta compartilham a linha 2 de proposito: e a situacao que a fase existe
@@ -269,6 +294,28 @@ int main() try {
     Instancias[3].MaterialId = 2u; Instancias[3].MeshId = 2u;
     const u32 kInstancias = static_cast<u32>(Instancias.size());
 
+    std::vector<FGpuSceneInstanceMeta> Meta(kInstancias);
+    std::vector<FGpuSceneInstanceBounds> Bounds(kInstancias);
+    std::vector<FGpuSceneInstanceTransform> Current(kInstancias), Previous(kInstancias);
+    for (u32 I = 0; I < kInstancias; ++I) {
+        Meta[I].MeshId     = 30u + I;
+        Meta[I].MaterialId = 40u + I;
+        Meta[I].CellId     = 50u + I;
+        Meta[I].Generation = 60u + I;
+        Meta[I].Flags = GpuSceneInstanceVisible |
+                        (I & 1u ? GpuSceneInstanceRaytracingOnly : 0u) |
+                        (I & 2u ? GpuSceneInstanceDynamic : 0u);
+        const f32 S = static_cast<f32>(I) * 10.0f;
+        Bounds[I].Center = { S + 0.1f, S + 0.2f, S + 0.3f, S + 0.4f };
+        Bounds[I].Extent = { S + 1.1f, S + 1.2f, S + 1.3f, S + 1.4f };
+        for (u32 Row = 0; Row < 4; ++Row) {
+            for (u32 Col = 0; Col < 4; ++Col) {
+                Current[I].Value.M[Row][Col] = S + 10.0f + static_cast<f32>(Row * 4u + Col);
+                Previous[I].Value.M[Row][Col] = S + 100.0f + static_cast<f32>(Row * 4u + Col);
+            }
+        }
+    }
+
     // ---- WARP --------------------------------------------------------------------------------
     FSonda S;
     wrl::ComPtr<IDXGIFactory4> Factory;
@@ -287,7 +334,7 @@ int main() try {
 
     D3D12_DESCRIPTOR_RANGE Ranges[2]{};
     Ranges[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    Ranges[0].NumDescriptors = 3;
+    Ranges[0].NumDescriptors = 7;
     Ranges[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     Ranges[1].NumDescriptors = 1;
 
@@ -315,7 +362,7 @@ int main() try {
 
     D3D12_DESCRIPTOR_HEAP_DESC HD{};
     HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    HD.NumDescriptors = 4;
+    HD.NumDescriptors = 8;
     HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     Hr(S.Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&S.Heap)), "CreateDescriptorHeap");
     S.Step = S.Device->GetDescriptorHandleIncrementSize(HD.Type);
@@ -323,7 +370,13 @@ int main() try {
     auto BufLinhas = S.Upload(Linhas.data(), Linhas.size() * sizeof(FGpuMaterialRecord));
     auto BufInst   = S.Upload(Instancias.data(), Instancias.size() * sizeof(FGpuInstanceGeo));
     auto BufMalhas = S.Upload(Malhas.data(), Malhas.size() * sizeof(FGpuMeshRecord));
-    const u64 SaidaBytes = static_cast<u64>(kInstancias) * 9ull * 4ull * sizeof(u32);
+    auto BufMeta = S.Upload(Meta.data(), Meta.size() * sizeof(FGpuSceneInstanceMeta));
+    auto BufBounds = S.Upload(Bounds.data(), Bounds.size() * sizeof(FGpuSceneInstanceBounds));
+    auto BufCurrent = S.Upload(Current.data(), Current.size() * sizeof(FGpuSceneInstanceTransform));
+    auto BufPrevious = S.Upload(Previous.data(), Previous.size() * sizeof(FGpuSceneInstanceTransform));
+    constexpr u32 kResultRows = 21u;
+    constexpr u32 kResultStride = kResultRows * 4u;
+    const u64 SaidaBytes = static_cast<u64>(kInstancias) * kResultStride * sizeof(u32);
     auto BufSaida   = S.Buffer(D3D12_HEAP_TYPE_DEFAULT, SaidaBytes, true,
                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     auto BufLeitura = S.Buffer(D3D12_HEAP_TYPE_READBACK, SaidaBytes, false,
@@ -332,14 +385,18 @@ int main() try {
     S.SRV(BufLinhas.Get(), static_cast<u32>(Linhas.size()), sizeof(FGpuMaterialRecord), 0);
     S.SRV(BufInst.Get(), kInstancias, sizeof(FGpuInstanceGeo), 1);
     S.SRV(BufMalhas.Get(), static_cast<u32>(Malhas.size()), sizeof(FGpuMeshRecord), 2);
+    S.SRV(BufMeta.Get(), kInstancias, sizeof(FGpuSceneInstanceMeta), 3);
+    S.SRV(BufBounds.Get(), kInstancias, sizeof(FGpuSceneInstanceBounds), 4);
+    S.SRV(BufCurrent.Get(), kInstancias, sizeof(FGpuSceneInstanceTransform), 5);
+    S.SRV(BufPrevious.Get(), kInstancias, sizeof(FGpuSceneInstanceTransform), 6);
     {
         D3D12_UNORDERED_ACCESS_VIEW_DESC UD{};
         UD.Format                     = DXGI_FORMAT_UNKNOWN;
         UD.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-        UD.Buffer.NumElements         = kInstancias * 9u;
+        UD.Buffer.NumElements         = kInstancias * kResultRows;
         UD.Buffer.StructureByteStride = sizeof(u32) * 4;
         auto H = S.Heap->GetCPUDescriptorHandleForHeapStart();
-        H.ptr += static_cast<SIZE_T>(3) * S.Step;
+        H.ptr += static_cast<SIZE_T>(7) * S.Step;
         S.Device->CreateUnorderedAccessView(BufSaida.Get(), nullptr, &UD, H);
     }
 
@@ -365,7 +422,7 @@ int main() try {
         return H;
     };
     S.List->SetComputeRootDescriptorTable(1, GpuAt(0));
-    S.List->SetComputeRootDescriptorTable(2, GpuAt(3));
+    S.List->SetComputeRootDescriptorTable(2, GpuAt(7));
     S.List->Dispatch(1, 1, 1);
     {
         D3D12_RESOURCE_BARRIER B{};
@@ -407,7 +464,9 @@ int main() try {
         const FGpuInstanceGeo&    G = Instancias[I];
         const FGpuMaterialRecord& M = Linhas[G.MaterialId];
         const FGpuMeshRecord&     H = Malhas[G.MeshId];
-        const u32* R = Saida + static_cast<size_t>(I) * 36u;
+        const FGpuSceneInstanceMeta& IM = Meta[I];
+        const FGpuSceneInstanceBounds& IB = Bounds[I];
+        const u32* R = Saida + static_cast<size_t>(I) * kResultStride;
         const std::string Onde = "instancia " + std::to_string(I);
 
         Check(MesmoFloat(R[0], M.BaseColor.X) && MesmoFloat(R[1], M.BaseColor.Y) &&
@@ -452,12 +511,35 @@ int main() try {
         Check(R[33] == H.VertexCount,   Onde + ": VertexCount no offset 36");
         Check(R[34] == H.IndexCount,    Onde + ": IndexCount no offset 40");
         Check(R[35] == H.TriangleCount, Onde + ": TriangleCount no offset 44");
+
+        Check(R[36] == IM.MeshId && R[37] == IM.MaterialId && R[38] == IM.CellId &&
+                  R[39] == IM.Flags,
+              Onde + ": linha meta nos offsets 0..12");
+        Check(R[40] == IM.Generation, Onde + ": generation da instancia no offset 16");
+        Check((R[41] != 0u) == ((IM.Flags & GpuSceneInstanceVisible) != 0u),
+              Onde + ": SMILE_INSTANCE_FLAG_VISIBLE casa com o C++");
+        Check((R[42] != 0u) == ((IM.Flags & GpuSceneInstanceRaytracingOnly) != 0u),
+              Onde + ": SMILE_INSTANCE_FLAG_RT_ONLY casa com o C++");
+        Check((R[43] != 0u) == ((IM.Flags & GpuSceneInstanceDynamic) != 0u),
+              Onde + ": SMILE_INSTANCE_FLAG_DYNAMIC casa com o C++");
+        Check(MesmoFloat(R[44], IB.Center.X) && MesmoFloat(R[45], IB.Center.Y) &&
+                  MesmoFloat(R[46], IB.Center.Z) && MesmoFloat(R[47], IB.Center.W),
+              Onde + ": bounds center no offset 0");
+        Check(MesmoFloat(R[48], IB.Extent.X) && MesmoFloat(R[49], IB.Extent.Y) &&
+                  MesmoFloat(R[50], IB.Extent.Z) && MesmoFloat(R[51], IB.Extent.W),
+              Onde + ": bounds extent no offset 16");
+        for (u32 K = 0; K < 16; ++K) {
+            Check(MesmoFloat(R[52 + K], Current[I].Value.M[K / 4u][K % 4u]),
+                  Onde + ": matriz atual no indice " + std::to_string(K));
+            Check(MesmoFloat(R[68 + K], Previous[I].Value.M[K / 4u][K % 4u]),
+                  Onde + ": matriz anterior no indice " + std::to_string(K));
+        }
     }
     BufLeitura->Unmap(0, nullptr);
 
     if (Failures == 0) {
         std::cout << "  " << kInstancias
-                  << " instancias x (linha de material + linha de malha) lidas em WARP, todas OK\n";
+                  << " instancias x (material + malha + colunas de instancia) lidas em WARP, todas OK\n";
         return 0;
     }
     std::cerr << "  " << Failures << " falha(s)\n";

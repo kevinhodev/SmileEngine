@@ -34,7 +34,9 @@ namespace SmileEditor {
         // 5: cpu.materialTable e cpu.meshTable (tabelas canonicas da Fase 2). Entraram no RESUMO
         // do cliente, que e o que a regua le por padrao — e a regra de bump e essa: a versao sobe
         // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
-        constexpr int kProtocolVersion = 5;
+        // 6: cpu.instanceTable. A tabela canônica de instâncias entrou no resumo que a régua
+        // consome; sem bump, um editor v5 pareceria compatível e só falharia na agregação.
+        constexpr int kProtocolVersion = 6;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -300,6 +302,16 @@ namespace SmileEditor {
                     { QStringLiteral("rows"),          static_cast<double>(_Cpu.MeshTableRows) },
                     { QStringLiteral("residentBytes"), static_cast<double>(_Cpu.MeshTableBytes) },
                     { QStringLiteral("stagingBytes"),  static_cast<double>(_Cpu.MeshStagingBytes) },
+                } },
+                { QStringLiteral("instanceTable"), QJsonObject{
+                    { QStringLiteral("rows"),              static_cast<double>(_Cpu.InstanceTableRows) },
+                    { QStringLiteral("residentBytes"),     static_cast<double>(_Cpu.InstanceTableBytes) },
+                    { QStringLiteral("stagingBytes"),      static_cast<double>(_Cpu.InstanceStagingBytes) },
+                    { QStringLiteral("rowsDirty"),         static_cast<double>(_Cpu.InstanceRowsDirty) },
+                    { QStringLiteral("bytesDirty"),        static_cast<double>(_Cpu.InstanceBytesDirty) },
+                    { QStringLiteral("copyRegions"),       static_cast<double>(_Cpu.InstanceCopyRegions) },
+                    { QStringLiteral("bytesUploadedTotal"),
+                      static_cast<double>(_Cpu.InstanceBytesUploadedTotal) },
                 } },
                 { QStringLiteral("passes"), Passes },
             };

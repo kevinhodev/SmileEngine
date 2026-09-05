@@ -7,6 +7,7 @@
 #include "Smile/Graphics/Resources/Mesh.h" // sizeof(Vertex): stride do SRV bindless de VB
 #include "Smile/Scene/Scene.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace Smile {
@@ -321,5 +322,224 @@ namespace Smile {
         if (DiffTableRows<FGpuMeshRecord>(Fresh_, Shadow_, Changed_) == 0) return;
         if (Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_) == 0) return;
         LastDirtyRows_ = static_cast<u32>(Changed_.size());
+    }
+
+    // ================================================================================================
+    // Instancias
+    // ================================================================================================
+    void FGpuSceneInstanceTable::SetupForScene(ID3D12Device* _Device,
+                                               FTextureSRVHeap& _SRVHeap,
+                                               const FScene& _Scene) {
+        const u32 Required = std::max(1u, _Scene.GpuSlots().Capacity());
+        const u32 Capacity = TableCapacityFor(Required);
+        MetaStorage_.Create(_Device, _SRVHeap, kMetaBytes, Capacity, "GpuSceneInstanceMeta");
+        BoundsStorage_.Create(_Device, _SRVHeap, kBoundsBytes, Capacity,
+                              "GpuSceneInstanceBounds");
+        TransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
+                                 "GpuSceneInstanceTransform");
+        PrevTransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
+                                     "GpuSceneInstancePrevTransform");
+
+        MetaRows_.assign(Capacity, {});
+        BoundsRows_.assign(Capacity, {});
+        TransformRows_.assign(Capacity, {});
+        PrevTransformRows_.assign(Capacity, {});
+        MetaShadow_.clear();
+        BoundsShadow_.clear();
+        TransformShadow_.clear();
+        PrevTransformShadow_.clear();
+        LiveSlots_.clear();
+        NextLiveSlots_.clear();
+        SeenEpoch_.assign(Capacity, 0u);
+        DirtyMarks_.assign(Capacity, 0u);
+        PrepareEpoch_ = 0;
+        PreparedStructureVersion_ = ~0ull;
+        PreparedTransformVersion_ = ~0ull;
+        PreparedStaticCastersVersion_ = ~0ull;
+        LiveRows_ = 0;
+        NeedsSettle_ = false;
+        Dirty_ = false;
+        LastDirtyRows_ = 0;
+        LastDirtyBytes_ = 0;
+        LastCopyRegions_ = 0;
+        TotalBytesUploaded_ = 0;
+    }
+
+    void FGpuSceneInstanceTable::Release(FTextureSRVHeap& _SRVHeap) {
+        MetaStorage_.Release(_SRVHeap);
+        BoundsStorage_.Release(_SRVHeap);
+        TransformStorage_.Release(_SRVHeap);
+        PrevTransformStorage_.Release(_SRVHeap);
+        MetaRows_.clear();
+        BoundsRows_.clear();
+        TransformRows_.clear();
+        PrevTransformRows_.clear();
+        MetaShadow_.clear();
+        BoundsShadow_.clear();
+        TransformShadow_.clear();
+        PrevTransformShadow_.clear();
+        MetaChanged_.clear();
+        BoundsChanged_.clear();
+        TransformChanged_.clear();
+        PrevTransformChanged_.clear();
+        LiveSlots_.clear();
+        NextLiveSlots_.clear();
+        SeenEpoch_.clear();
+        DirtyMarks_.clear();
+        PreparedStructureVersion_ = ~0ull;
+        PreparedTransformVersion_ = ~0ull;
+        PreparedStaticCastersVersion_ = ~0ull;
+        PrepareEpoch_ = 0;
+        LiveRows_ = 0;
+        NeedsSettle_ = false;
+        Dirty_ = false;
+        LastDirtyRows_ = 0;
+        LastDirtyBytes_ = 0;
+        LastCopyRegions_ = 0;
+        TotalBytesUploaded_ = 0;
+    }
+
+    void FGpuSceneInstanceTable::PrepareFrame(const FScene& _Scene,
+                                              const FGpuMeshTable& _Meshes,
+                                              const FGpuMaterialTable& _Materials) {
+        if (!IsBuilt() || _Scene.GpuSlots().Capacity() > Capacity()) return;
+
+        const u64 StructureVersion = _Scene.StructureVersion();
+        const u64 TransformVersion = _Scene.TransformsVersion();
+        // Visibilidade e mobilidade mudam o conteudo do mapa estatico e, portanto, esta versao.
+        // Mobilidade nao e transform nem estrutura; observar so as duas anteriores deixava o bit
+        // GpuSceneInstanceDynamic congelado depois de uma edicao no Outliner.
+        const u64 StaticCastersVersion = _Scene.StaticCastersVersion();
+        if (StructureVersion == PreparedStructureVersion_ &&
+            TransformVersion == PreparedTransformVersion_ &&
+            StaticCastersVersion == PreparedStaticCastersVersion_ && !NeedsSettle_) return;
+
+        if (++PrepareEpoch_ == 0) {
+            std::fill(SeenEpoch_.begin(), SeenEpoch_.end(), 0u);
+            PrepareEpoch_ = 1;
+        }
+        const u32 Epoch = PrepareEpoch_;
+        NextLiveSlots_.clear();
+        NextLiveSlots_.reserve(_Scene.Renderables().size());
+        bool SettleNextFrame = false;
+
+        for (const FRenderable& R : _Scene.Renderables()) {
+            const FGpuSceneHandle Handle = R.GpuHandle;
+            if (!_Scene.GpuSlots().IsAlive(Handle) || Handle.Slot >= Capacity()) continue;
+
+            const u32 Slot = Handle.Slot;
+            const FGpuSceneInstanceMeta OldMeta = MetaRows_[Slot];
+            const Mat44 Current = R.Transform.Matrix();
+            const Mat44 Previous = OldMeta.Generation == Handle.Generation
+                                 ? TransformRows_[Slot].Value : Current;
+
+            u32 Flags = 0;
+            if (R.Visible)        Flags |= GpuSceneInstanceVisible;
+            if (R.RaytracingOnly) Flags |= GpuSceneInstanceRaytracingOnly;
+            if (R.Mobility == EMobility::Dynamic) Flags |= GpuSceneInstanceDynamic;
+            MetaRows_[Slot] = {
+                _Meshes.RowOf(R.Mesh), _Materials.RowOf(R.Material), 0u, Flags, Handle.Generation
+            };
+
+            FGpuSceneInstanceBounds Bounds{};
+            Bounds.Center = { (R.AABBMin.X + R.AABBMax.X) * 0.5f,
+                              (R.AABBMin.Y + R.AABBMax.Y) * 0.5f,
+                              (R.AABBMin.Z + R.AABBMax.Z) * 0.5f, 0.0f };
+            Bounds.Extent = { (R.AABBMax.X - R.AABBMin.X) * 0.5f,
+                              (R.AABBMax.Y - R.AABBMin.Y) * 0.5f,
+                              (R.AABBMax.Z - R.AABBMin.Z) * 0.5f, 0.0f };
+            BoundsRows_[Slot] = Bounds;
+            TransformRows_[Slot].Value = Current;
+            PrevTransformRows_[Slot].Value = Previous;
+            if (TransformRows_[Slot] != PrevTransformRows_[Slot]) SettleNextFrame = true;
+
+            SeenEpoch_[Slot] = Epoch;
+            NextLiveSlots_.push_back(Slot);
+        }
+
+        // Limpa apenas quem estava vivo na imagem anterior. Nao varre a capacidade: remover um
+        // objeto deve tocar a linha dele, nao um milhao de slots vazios.
+        for (u32 Slot : LiveSlots_) {
+            if (Slot >= SeenEpoch_.size() || SeenEpoch_[Slot] == Epoch) continue;
+            MetaRows_[Slot] = {};
+            BoundsRows_[Slot] = {};
+            TransformRows_[Slot] = {};
+            PrevTransformRows_[Slot] = {};
+        }
+
+        LiveSlots_.swap(NextLiveSlots_);
+        LiveRows_ = static_cast<u32>(LiveSlots_.size());
+        PreparedStructureVersion_ = StructureVersion;
+        PreparedTransformVersion_ = TransformVersion;
+        PreparedStaticCastersVersion_ = StaticCastersVersion;
+        NeedsSettle_ = SettleNextFrame;
+        Dirty_ = true;
+    }
+
+    void FGpuSceneInstanceTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList,
+                                              u32 _FrameSlot) {
+        LastDirtyRows_ = 0;
+        LastDirtyBytes_ = 0;
+        LastCopyRegions_ = 0;
+        if (!Dirty_ || !IsBuilt()) return;
+        Dirty_ = false;
+
+        DiffTableRows<FGpuSceneInstanceMeta>(MetaRows_, MetaShadow_, MetaChanged_);
+        DiffTableRows<FGpuSceneInstanceBounds>(BoundsRows_, BoundsShadow_, BoundsChanged_);
+        DiffTableRows<FGpuSceneInstanceTransform>(TransformRows_, TransformShadow_,
+                                                   TransformChanged_);
+        DiffTableRows<FGpuSceneInstanceTransform>(PrevTransformRows_, PrevTransformShadow_,
+                                                   PrevTransformChanged_);
+
+        auto Upload = [&](FGpuTableStorage& Storage, const auto& Rows,
+                          const std::vector<u32>& Changed, u32 RowBytes) {
+            if (Changed.empty()) return;
+            const u32 Regions = Storage.RecordUpload(_CommandList, _FrameSlot,
+                                                     Rows.data(), Changed);
+            if (Regions == 0) return;
+            LastCopyRegions_ += Regions;
+            const u64 Bytes = static_cast<u64>(Changed.size()) * RowBytes;
+            LastDirtyBytes_ += Bytes;
+            TotalBytesUploaded_ += Bytes;
+            for (u32 Slot : Changed) {
+                if (!DirtyMarks_[Slot]) { DirtyMarks_[Slot] = 1; ++LastDirtyRows_; }
+            }
+        };
+        Upload(MetaStorage_, MetaRows_, MetaChanged_, kMetaBytes);
+        Upload(BoundsStorage_, BoundsRows_, BoundsChanged_, kBoundsBytes);
+        Upload(TransformStorage_, TransformRows_, TransformChanged_, kTransformBytes);
+        Upload(PrevTransformStorage_, PrevTransformRows_, PrevTransformChanged_, kTransformBytes);
+        for (u32 Slot : MetaChanged_)          DirtyMarks_[Slot] = 0;
+        for (u32 Slot : BoundsChanged_)        DirtyMarks_[Slot] = 0;
+        for (u32 Slot : TransformChanged_)     DirtyMarks_[Slot] = 0;
+        for (u32 Slot : PrevTransformChanged_) DirtyMarks_[Slot] = 0;
+    }
+
+    bool FGpuSceneInstanceTable::TransformsFor(FGpuSceneHandle _Handle, Mat44& _Current,
+                                               Mat44& _Previous) const {
+        if (_Handle.Generation == 0 || _Handle.Slot >= MetaRows_.size()) return false;
+        if (MetaRows_[_Handle.Slot].Generation != _Handle.Generation) return false;
+        _Current  = TransformRows_[_Handle.Slot].Value;
+        _Previous = PrevTransformRows_[_Handle.Slot].Value;
+        return true;
+    }
+
+    bool FGpuSceneInstanceTable::MetaFor(FGpuSceneHandle _Handle,
+                                         FGpuSceneInstanceMeta& _Meta) const {
+        if (_Handle.Generation == 0 || _Handle.Slot >= MetaRows_.size()) return false;
+        const FGpuSceneInstanceMeta& Row = MetaRows_[_Handle.Slot];
+        if (Row.Generation != _Handle.Generation) return false;
+        _Meta = Row;
+        return true;
+    }
+
+    u64 FGpuSceneInstanceTable::ResidentBytes() const {
+        return MetaStorage_.ResidentBytes() + BoundsStorage_.ResidentBytes() +
+               TransformStorage_.ResidentBytes() + PrevTransformStorage_.ResidentBytes();
+    }
+
+    u64 FGpuSceneInstanceTable::StagingBytes() const {
+        return MetaStorage_.StagingBytes() + BoundsStorage_.StagingBytes() +
+               TransformStorage_.StagingBytes() + PrevTransformStorage_.StagingBytes();
     }
 }

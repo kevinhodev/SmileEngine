@@ -2,6 +2,7 @@
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Debug/GpuProfiler.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
+#include "Smile/Graphics/Scene/GpuSceneTables.h"
 #include "Smile/Scene/Scene.h"
 #include <algorithm>
 #include <array>
@@ -83,7 +84,6 @@ namespace Smile {
         SlotRemapState   = D3D12_RESOURCE_STATE_COPY_DEST;
         SlotCapacity_    = 0;
         PreviousCount_   = 0;
-        PreviousModels.Invalidate();
         InstanceCount_ = 0;
         TlasSRVSlot = InstanceGeoSRVSlot = kInvalidSlot;
         SceneReady = false;
@@ -101,9 +101,8 @@ namespace Smile {
         // criado no editor cabe sem refazer buffer e SRVs. InstanceCount_ passa a ser a
         // CAPACIDADE, e e ele que o UpdatePerFrame usa como stride do slice por frame.
         //
-        // O PreviousModels ja nao depende dessa contagem: ele e indexado por SLOT DE RESIDENCIA e
-        // dimensionado pela capacidade do pool. O gate antigo comparava os dois tamanhos, e sumiu
-        // junto com o enderecamento posicional.
+        // O historico CPU agora pertence a FGpuSceneInstanceTable; este passe guarda apenas a
+        // visao DERIVADA CurrentToPrevious/PreviousToCurrent que evita inversao por pixel.
         const u32 Capacity = SceneCapacityFor(Count);
         InstanceCount_ = Capacity;
         TlasSRVSlot = TlasSlot;
@@ -181,16 +180,6 @@ namespace Smile {
             SRVHeap.CreateSRV(Device, TransformBuffer.Get(), S, TransformSRVSlot[f]);
         }
 
-        // Dimensionado pela CAPACIDADE (ver acima); so os [0, Count) existem na cena, o resto
-        // fica identidade ate um objeto novo ocupar o slot.
-        // Dimensionado pela capacidade de SLOTS, e nao de instancias: o indice agora e o slot,
-        // e ele pode passar da contagem de renderaveis quando ha buracos no pool.
-        PreviousModels.Invalidate();
-        PreviousModels.EnsureCapacity(std::max(Capacity, Scene.GpuSlots().Capacity()));
-        for (u32 i = 0; i < Count; ++i) {
-            const FRenderable& R = Scene.Renderables()[i];
-            PreviousModels.Store(R.GpuHandle, R.Transform.Matrix());
-        }
         SceneReady = true;
     }
 
@@ -268,6 +257,7 @@ namespace Smile {
     }
 
     void FTemporalMotionVectors::UpdatePerFrame(u32 NewFrameSlot, const FScene& Scene,
+                                                 const FGpuSceneInstanceTable& Instances,
                                                  const Mat44& InvViewProj,
                                                  const Mat44& ViewProj,
                                                  const Mat44& PrevViewProj,
@@ -286,13 +276,11 @@ namespace Smile {
         // IDs antigos sao resolvidos pela tabela anterior + remap atual + generation,
         // compartilhados por DualMotion, ReflectionMotion e ReSTIRDI. A posicao abaixo
         // continua sendo so o endereco dos transforms DESTE frame.
-        PreviousModels.EnsureCapacity(Scene.GpuSlots().Capacity());
-
         for (u32 i = 0; i < Count; ++i) {
             const FRenderable& R       = Scene.Renderables()[i];
-            const Mat44        Current = R.Transform.Matrix();
+            Mat44 Current = R.Transform.Matrix();
+            Mat44 Previous = Current;
             if (!Scene.GpuSlots().IsAlive(R.RaytracingHandle())) {
-                PreviousModels.Forget(R.GpuHandle);
                 Dst[i].CurrentToPrevious = Mat44::Identity();
                 Dst[i].PreviousToCurrent = Mat44::Identity();
                 continue;
@@ -302,12 +290,10 @@ namespace Smile {
             // OBJETO -- nao o motion vector de tela, que continua carregando o movimento da
             // camera. E o desfecho certo para quem acabou de nascer ou cujo slot foi
             // reciclado: herdar o transform do ocupante anterior inventaria um passado.
-            const Mat44 Previous =
-                HistoryValid ? PreviousModels.PreviousOr(R.GpuHandle, Current) : Current;
+            if (HistoryValid) Instances.TransformsFor(R.GpuHandle, Current, Previous);
 
             Dst[i].CurrentToPrevious = Current.Inverse() * Previous;
             Dst[i].PreviousToCurrent = Previous.Inverse() * Current;
-            PreviousModels.Store(R.GpuHandle, Current);
         }
 
         // Tabela de identidades DESTE frame, no staging. A CPU escreve aqui e nunca na memoria

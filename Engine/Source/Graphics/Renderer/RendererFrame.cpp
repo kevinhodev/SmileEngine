@@ -812,14 +812,19 @@ namespace Smile {
                                            FrameState->FrameIndex);
         Backend->DirectProfiler.Begin(Backend->DirectQueue.List(), "Frame (GPU)");
 
-        // Linhas sujas da tabela canonica de materiais, AQUI e nao mais perto do primeiro leitor.
+        // Linhas sujas das tabelas canonicas, AQUI e nao mais perto do primeiro leitor.
         // Aqui nada foi gravado ainda nesta command list, o que torna a precedencia sobre TODO
         // consumidor uma propriedade da posicao e nao um detalhe a reconferir quando alguem
         // acrescentar um passe. Vale tambem para a fila de COMPUTE: o update async do DDGI le a
-        // tabela pela mesma indirecao e e submetido com SubmitAfter sobre um segmento posterior
-        // desta lista. No caso comum nao emite nada — nenhuma linha suja, nenhuma barreira.
+        // tabela de materiais pela mesma indirecao e e submetido com SubmitAfter sobre um segmento
+        // posterior desta lista. Antes do EndFrame a fila direta espera o fence desse compute;
+        // portanto o fence do frame so conclui depois de TODOS os leitores, e o BeginFrame pode
+        // reutilizar com seguranca os slices do slot. No caso comum nao emite nada — nenhuma linha
+        // suja, nenhuma barreira.
+        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
         MaterialTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
         MeshTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
+        InstanceTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
 
         ObjectPicker.Tick();
 
@@ -1026,6 +1031,13 @@ namespace Smile {
         CpuStatsBuilding.MeshTableBytes            = MeshTable.ResidentBytes();
         CpuStatsBuilding.MeshStagingBytes          = MeshTable.StagingBytes();
         CpuStatsBuilding.MeshTableRows             = MeshTable.RowCount();
+        CpuStatsBuilding.InstanceTableBytes         = InstanceTable.ResidentBytes();
+        CpuStatsBuilding.InstanceStagingBytes       = InstanceTable.StagingBytes();
+        CpuStatsBuilding.InstanceTableRows          = InstanceTable.LiveRows();
+        CpuStatsBuilding.InstanceRowsDirty          = InstanceTable.LastDirtyRows();
+        CpuStatsBuilding.InstanceBytesDirty         = InstanceTable.LastDirtyBytes();
+        CpuStatsBuilding.InstanceCopyRegions        = InstanceTable.LastCopyRegions();
+        CpuStatsBuilding.InstanceBytesUploadedTotal = InstanceTable.TotalBytesUploaded();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.
         CpuStatsBuilding.SourceFrameIndex = FrameState->FrameIndex;

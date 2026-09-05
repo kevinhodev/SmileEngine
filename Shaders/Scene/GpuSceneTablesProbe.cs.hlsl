@@ -22,9 +22,13 @@ cbuffer ProbeCB : register(b0) {
 StructuredBuffer<GpuMaterialRecord> Materials : register(t0);
 StructuredBuffer<InstanceGeo>       Instances : register(t1);
 StructuredBuffer<GpuMeshRecord>     Meshes    : register(t2);
+StructuredBuffer<GpuInstanceMeta>   InstanceMeta      : register(t3);
+StructuredBuffer<GpuInstanceBounds> InstanceBounds    : register(t4);
+StructuredBuffer<GpuInstanceTransform> InstanceCurrent  : register(t5);
+StructuredBuffer<GpuInstanceTransform> InstancePrevious : register(t6);
 
-// Nove uint4 por instancia: todos os campos das tres structs mais os tres derivados que provam
-// que as CONSTANTES tambem casam (deslocamento de textura e dois bits de flag).
+// Vinte e um uint4 por instancia: todos os campos das sete structs mais os derivados que provam
+// que as CONSTANTES tambem casam (deslocamento de textura e bits de flag).
 RWStructuredBuffer<uint4> Results : register(u0);
 
 [numthreads(64, 1, 1)]
@@ -37,8 +41,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const InstanceGeo       g = Instances[i];
     const GpuMaterialRecord m = Materials[g.MaterialId];
     const GpuMeshRecord     h = Meshes[g.MeshId];
+    const GpuInstanceMeta   im = InstanceMeta[i];
+    const GpuInstanceBounds ib = InstanceBounds[i];
+    const GpuInstanceTransform ic = InstanceCurrent[i];
+    const GpuInstanceTransform ip = InstancePrevious[i];
 
-    const uint b = i * 9u;
+    const uint b = i * 21u;
     Results[b + 0u] = asuint(m.BaseColor);
     Results[b + 1u] = asuint(m.EmissiveFactor);
     Results[b + 2u] = asuint(m.SubsurfaceColor);
@@ -52,6 +60,21 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     Results[b + 6u] = uint4(asuint(h.LocalAABBMin), asuint(h.LocalAABBMax.x));
     Results[b + 7u] = uint4(asuint(h.LocalAABBMax.yz), h.VertexSrv, h.IndexSrv);
     Results[b + 8u] = uint4(h.TriangleSrv, h.VertexCount, h.IndexCount, h.TriangleCount);
+    Results[b + 9u] = uint4(im.MeshId, im.MaterialId, im.CellId, im.Flags);
+    Results[b + 10u] = uint4(im.Generation,
+                             (im.Flags & SMILE_INSTANCE_FLAG_VISIBLE) != 0u ? 1u : 0u,
+                             (im.Flags & SMILE_INSTANCE_FLAG_RT_ONLY) != 0u ? 1u : 0u,
+                             (im.Flags & SMILE_INSTANCE_FLAG_DYNAMIC) != 0u ? 1u : 0u);
+    Results[b + 11u] = asuint(ib.Center);
+    Results[b + 12u] = asuint(ib.Extent);
+    Results[b + 13u] = asuint(ic.Value[0]);
+    Results[b + 14u] = asuint(ic.Value[1]);
+    Results[b + 15u] = asuint(ic.Value[2]);
+    Results[b + 16u] = asuint(ic.Value[3]);
+    Results[b + 17u] = asuint(ip.Value[0]);
+    Results[b + 18u] = asuint(ip.Value[1]);
+    Results[b + 19u] = asuint(ip.Value[2]);
+    Results[b + 20u] = asuint(ip.Value[3]);
     // Flags e VirtualGeometryId sao reservados e valem 0; conferi-los no C++ exigiria dois uint4
     // so para dois zeros. O static_assert do offset ja fixa a posicao deles, e o dia em que
     // ganharem valor este teste ganha a leitura junto.

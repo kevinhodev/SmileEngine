@@ -13,7 +13,11 @@ namespace Smile {
     struct FRendererIdentityTestAccess {
         static bool History(const Renderer& R) { return R.TemporalMotion.HasHistory(); }
         static Mat44 Previous(Renderer& R, FGpuSceneHandle H, const Mat44& Fallback) {
-            return R.SceneState->PreviousModels.PreviousOr(H, Fallback);
+            Mat44 Current{}, Previous{};
+            return R.InstanceTable.TransformsFor(H, Current, Previous) ? Previous : Fallback;
+        }
+        static bool Meta(Renderer& R, FGpuSceneHandle H, FGpuSceneInstanceMeta& Out) {
+            return R.InstanceTable.MetaFor(H, Out);
         }
         static void CheckDevice(Renderer& R) {
             if (FAILED(R.Backend->Device.Native()->GetDeviceRemovedReason()))
@@ -127,11 +131,33 @@ int wmain(int Argc, wchar_t** Argv) try {
     Require(Scene.FindRenderable(Reused)->RaytracingHandle().Generation == 0,
             "hidden object still enters temporal RT table");
     Mat44 Sentinel = Mat44::Identity(); Sentinel.M[3][0] = 123456;
-    Require(Same(FRendererIdentityTestAccess::Previous(R, NewHandle, Sentinel), Sentinel),
-            "hidden object retained stale raster model history");
+    Require(!Same(FRendererIdentityTestAccess::Previous(R, NewHandle, Sentinel), Sentinel),
+            "hidden object disappeared from the canonical instance table");
     ChangeVisibility(true);
     Require(!Same(FRendererIdentityTestAccess::Previous(R, NewHandle, Sentinel), Sentinel),
             "visible object did not rebuild model history");
+
+    // Mobilidade possui versao propria: nao muda transform nem estrutura. A tabela canonica tem
+    // de observar esse canal, ou o bit Dynamic fica congelado enquanto o Outliner mostra outro
+    // estado. Este caso nao bumpa TransformsVersion de proposito.
+    {
+        FRenderable* Object = Scene.FindRenderable(Reused);
+        Require(Object != nullptr, "reused object disappeared before mobility check");
+        Object->Mobility = EMobility::Dynamic;
+        Scene.BumpStaticCastersVersion();
+        Frames(R, 2);
+        FGpuSceneInstanceMeta Meta{};
+        Require(FRendererIdentityTestAccess::Meta(R, NewHandle, Meta),
+                "canonical instance meta did not resolve after mobility edit");
+        Require((Meta.Flags & GpuSceneInstanceDynamic) != 0,
+                "canonical instance meta ignored mobility-only version change");
+        Object->Mobility = EMobility::Static;
+        Scene.BumpStaticCastersVersion();
+        Frames(R, 2);
+        Require(FRendererIdentityTestAccess::Meta(R, NewHandle, Meta) &&
+                    (Meta.Flags & GpuSceneInstanceDynamic) == 0,
+                "canonical instance meta kept stale dynamic flag");
+    }
 
     for (unsigned Position = 0; Position != 3; ++Position) {
         const auto Count = static_cast<u32>(Scene.Renderables().size());

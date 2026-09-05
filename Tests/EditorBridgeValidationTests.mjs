@@ -1,7 +1,7 @@
 // Validacao de borda do snapshot de perfil (Tools/SmileMCP/src/editor-bridge.ts).
 //
-// Existe porque o protocolo 4 subiu para EXIGIR o bloco cpu.gpuSlots — e o 5, as tabelas
-// canonicas da Fase 2 (cpu.materialTable, cpu.meshTable). Exigencia que nao e
+// Existe porque o protocolo 4 subiu para EXIGIR o bloco cpu.gpuSlots — o 5, material/mesh — e
+// o 6, a tabela canonica de instancias. Exigencia que nao e
 // validada existe so no numero da versao: um payload sem o bloco, ou com um campo string/undefined,
 // atravessava o cast do TypeScript e quebrava la adiante no summarizeProfile com um TypeError.
 //
@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 5.
+// Snapshot minimo VALIDO, no formato do protocolo 6.
 function snapshotValido() {
   return {
     direct: [],
@@ -98,6 +98,9 @@ function snapshotValido() {
       materialTable: { rows: 3, residentBytes: 2240, stagingBytes: 4480, rowsDirty: 0,
                        copyRegions: 0, rowsUploadedTotal: 3 },
       meshTable: { rows: 2, residentBytes: 1848, stagingBytes: 3696 },
+      instanceTable: { rows: 8, residentBytes: 23040, stagingBytes: 46080,
+                       rowsDirty: 0, bytesDirty: 0, copyRegions: 0,
+                       bytesUploadedTotal: 1440 },
     },
   };
 }
@@ -133,7 +136,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 5,
+                version: 6,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -237,7 +240,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":5,"id":__ID__,"ok":true,"result":' +
+    '{"version":6,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");
@@ -273,6 +276,11 @@ for (const [bloco, campos] of [
   ]],
   ["meshTable", [
     ["rows", kU32Max], ["residentBytes", kU64Max], ["stagingBytes", kU64Max],
+  ]],
+  ["instanceTable", [
+    ["rows", kU32Max], ["residentBytes", kU64Max], ["stagingBytes", kU64Max],
+    ["rowsDirty", kU32Max], ["bytesDirty", kU64Max], ["copyRegions", kU32Max],
+    ["bytesUploadedTotal", kU64Max],
   ]],
 ]) {
   {
@@ -321,5 +329,5 @@ if (failures > 0) {
   console.error(`[BRIDGE] ${failures} falha(s)`);
   process.exit(1);
 }
-console.log("[BRIDGE] ok - cpu.gpuSlots, cpu.materialTable e cpu.meshTable exigidos, " +
+console.log("[BRIDGE] ok - cpu.gpuSlots e as tres tabelas canonicas exigidos, " +
             "validados no contrato u32 e coerentes");

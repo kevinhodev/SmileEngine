@@ -91,13 +91,15 @@ namespace Smile {
 
     void FHiZOcclusion::ReleaseObjectResources(FTextureSRVHeap& _SRVHeap) {
         for (u32 s = 0; s < kSlots; ++s) {
-            if (TestTableSlot[s] != kInvalidSlot) { _SRVHeap.Free(TestTableSlot[s], 2); TestTableSlot[s] = kInvalidSlot; }
+            if (TestTableSlot[s] != kInvalidSlot) { _SRVHeap.Free(TestTableSlot[s], 3); TestTableSlot[s] = kInvalidSlot; }
         }
         if (ResultUAVSlot != kInvalidSlot) { _SRVHeap.Free(ResultUAVSlot); ResultUAVSlot = kInvalidSlot; }
-        if (BoundsBuffer && MappedBounds)     { BoundsBuffer->Unmap(0, nullptr);   MappedBounds = nullptr; }
+        if (CandidateBuffer && MappedCandidates) {
+            CandidateBuffer->Unmap(0, nullptr); MappedCandidates = nullptr;
+        }
         if (ReadbackBuffer && MappedReadback) { ReadbackBuffer->Unmap(0, nullptr); MappedReadback = nullptr; }
         if (TestCB && MappedTestCB)           { TestCB->Unmap(0, nullptr);         MappedTestCB = nullptr; }
-        BoundsBuffer.Reset();
+        CandidateBuffer.Reset();
         ResultBuffer.Reset();
         ReadbackBuffer.Reset();
         TestCB.Reset();
@@ -111,13 +113,13 @@ namespace Smile {
         ReleaseObjectResources(_SRVHeap);
         ObjectCapacity = _MaxObjects;
 
-        const u64 BoundsSize = static_cast<u64>(kSlots) * ObjectCapacity * sizeof(FBoundsEntry);
-        const GpuResources::FUploadBuffer Bounds =
-            GpuResources::CreateUploadBuffer(_Device, BoundsSize, 1, false);
-        BoundsBuffer = Bounds.Resource;
-        MappedBounds = Bounds.Mapped;
+        const u64 CandidateBytes = static_cast<u64>(kSlots) * ObjectCapacity * sizeof(u32);
+        const GpuResources::FUploadBuffer Candidates =
+            GpuResources::CreateUploadBuffer(_Device, CandidateBytes, 1, false);
+        CandidateBuffer = Candidates.Resource;
+        MappedCandidates = reinterpret_cast<u32*>(Candidates.Mapped);
         void* P = nullptr;
-        std::memset(MappedBounds, 0, BoundsSize); // Extent 0 = sempre visivel
+        std::memset(MappedCandidates, 0, CandidateBytes);
 
         ResultBuffer = GpuResources::CreateBuffer(
             _Device, static_cast<u64>(ObjectCapacity) * sizeof(u32),
@@ -148,15 +150,23 @@ namespace Smile {
         _SRVHeap.CreateUAV(_Device, ResultBuffer.Get(), Uav, ResultUAVSlot);
 
         for (u32 s = 0; s < kSlots; ++s)
-            TestTableSlot[s] = _SRVHeap.Allocate(2);
+            TestTableSlot[s] = _SRVHeap.Allocate(3);
 
         RefreshTestTables(_Device, _SRVHeap);
     }
 
-    // Tabela do teste = 2 descritores contiguos [bounds do slot, cadeia HZB]; depende
-    // das duas metades (SetupObjects e SetupForResize), entao e refeita nas duas.
+    void FHiZOcclusion::SetInstanceBounds(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                          u32 _BoundsSRV, u32 _BoundsCapacity) {
+        InstanceBoundsSRV_ = _BoundsSRV;
+        InstanceBoundsCapacity_ = _BoundsCapacity;
+        RefreshTestTables(_Device, _SRVHeap);
+    }
+
+    // Tabela do teste = [slots compactos, bounds canonicos por slot, cadeia HZB]. Depende das
+    // tres metades e e refeita sempre que resize, capacidade ou tabela de instancia mudar.
     void FHiZOcclusion::RefreshTestTables(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        if (!Ready || ObjectCapacity == 0) return;
+        if (!Ready || ObjectCapacity == 0 || InstanceBoundsSRV_ == kInvalidSlot ||
+            InstanceBoundsCapacity_ == 0) return;
         for (u32 s = 0; s < kSlots; ++s) {
             D3D12_SHADER_RESOURCE_VIEW_DESC Srv{};
             Srv.Format                     = DXGI_FORMAT_UNKNOWN;
@@ -164,16 +174,10 @@ namespace Smile {
             Srv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
             Srv.Buffer.FirstElement        = static_cast<u64>(s) * ObjectCapacity;
             Srv.Buffer.NumElements         = ObjectCapacity;
-            Srv.Buffer.StructureByteStride = sizeof(FBoundsEntry);
-            _SRVHeap.CreateSRV(_Device, BoundsBuffer.Get(), Srv, TestTableSlot[s]);
-
-            D3D12_SHADER_RESOURCE_VIEW_DESC Chain{};
-            Chain.Format                    = DXGI_FORMAT_R32_FLOAT;
-            Chain.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            Chain.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
-            Chain.Texture2D.MostDetailedMip = 0;
-            Chain.Texture2D.MipLevels       = NumMips;
-            _SRVHeap.CreateSRV(_Device, HZB.Get(), Chain, TestTableSlot[s] + 1);
+            Srv.Buffer.StructureByteStride = sizeof(u32);
+            _SRVHeap.CreateSRV(_Device, CandidateBuffer.Get(), Srv, TestTableSlot[s]);
+            const u32 Sources[2] = { InstanceBoundsSRV_, FullSRVSlot };
+            _SRVHeap.CopyTable(_Device, TestTableSlot[s] + 1, Sources);
         }
     }
 
@@ -213,24 +217,15 @@ namespace Smile {
         }
     }
 
-    void FHiZOcclusion::WriteBounds(u32 _FrameSlot, FGpuSceneHandle Handle, const Vec3& _AABBMin,
-                                    const Vec3& _AABBMax) {
+    void FHiZOcclusion::WriteCandidate(u32 _FrameSlot, FGpuSceneHandle Handle) {
         auto& Handles = SlotMeta[_FrameSlot].Handles;
-        if (!MappedBounds || Handles.size() >= ObjectCapacity || Handle.Generation == 0 ||
-            Handle.Slot == FGpuSceneHandle::kInvalidSlot) return;
-        const u32 _SceneIndex = static_cast<u32>(Handles.size());
+        if (!MappedCandidates || Handles.size() >= ObjectCapacity || Handle.Generation == 0 ||
+            Handle.Slot == FGpuSceneHandle::kInvalidSlot ||
+            Handle.Slot >= InstanceBoundsCapacity_) return;
+        const u32 SceneIndex = static_cast<u32>(Handles.size());
         Handles.push_back(Handle);
-        FBoundsEntry E{};
-        E.Center[0] = (_AABBMin.X + _AABBMax.X) * 0.5f;
-        E.Center[1] = (_AABBMin.Y + _AABBMax.Y) * 0.5f;
-        E.Center[2] = (_AABBMin.Z + _AABBMax.Z) * 0.5f;
-        E.Extent[0] = (_AABBMax.X - _AABBMin.X) * 0.5f;
-        E.Extent[1] = (_AABBMax.Y - _AABBMin.Y) * 0.5f;
-        E.Extent[2] = (_AABBMax.Z - _AABBMin.Z) * 0.5f;
-        std::memcpy(MappedBounds +
-                    (static_cast<size_t>(_FrameSlot) * ObjectCapacity + _SceneIndex) *
-                        sizeof(FBoundsEntry),
-                    &E, sizeof(E));
+        MappedCandidates[static_cast<size_t>(_FrameSlot) * ObjectCapacity + SceneIndex] =
+            Handle.Slot;
     }
 
     void FHiZOcclusion::RecordTest(ID3D12GraphicsCommandList* _Cmd, FTextureSRVHeap& _SRVHeap,
@@ -247,6 +242,7 @@ namespace Smile {
         TC.ObjectCount = Count;
         TC.NumMips     = NumMips;
         TC.DepthBias   = 0.0f;
+        TC.InstanceCapacity = InstanceBoundsCapacity_;
         std::memcpy(MappedTestCB + static_cast<size_t>(_FrameSlot) * 256, &TC, sizeof(TC));
 
         {
@@ -298,7 +294,7 @@ namespace Smile {
 
     void FHiZOcclusion::CreatePipelines(ID3D12Device* _Device) {
         BuildPSO.Initialize(_Device, "HZBBuild.cs_6_0.cso", false);
-        TestPSO.Initialize(_Device, "HZBTest.cs_6_0.cso", 2, 1);
+        TestPSO.Initialize(_Device, "HZBTest.cs_6_0.cso", 3, 1);
     }
 
 

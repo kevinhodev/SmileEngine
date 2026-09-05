@@ -321,6 +321,13 @@ namespace SmileEditor {
         Out.MeshTableBytes            = S.MeshTableBytes;
         Out.MeshStagingBytes          = S.MeshStagingBytes;
         Out.MeshTableRows             = S.MeshTableRows;
+        Out.InstanceTableBytes         = S.InstanceTableBytes;
+        Out.InstanceStagingBytes       = S.InstanceStagingBytes;
+        Out.InstanceTableRows          = S.InstanceTableRows;
+        Out.InstanceRowsDirty          = S.InstanceRowsDirty;
+        Out.InstanceBytesDirty         = S.InstanceBytesDirty;
+        Out.InstanceCopyRegions        = S.InstanceCopyRegions;
+        Out.InstanceBytesUploadedTotal = S.InstanceBytesUploadedTotal;
         // TODOS os passes, inclusive os zerados: uma serie temporal com conjunto de chaves
         // variavel obrigaria o agente a tratar ausencia como zero, e ausencia tambem poderia
         // significar "passe removido". Zero explicito nao tem essa ambiguidade.

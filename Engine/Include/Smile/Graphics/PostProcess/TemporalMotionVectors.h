@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Smile/Scene/CapturedIdentity.h"
-#include "Smile/Scene/SlotKeyedHistory.h"
 
 #include "Smile/Core/Types.h"
 #include "Smile/Math/Math.h"
@@ -17,6 +16,7 @@ namespace Smile {
     class FScene;
     class FGpuProfiler;
     class FTextureSRVHeap;
+    class FGpuSceneInstanceTable;
 
     // Dados compartilhados pelos vetores temporais especificos do cap. 25 de Ray Tracing Gems II.
     // O buffer e indexado pelo InstanceID da TLAS (que, na Smile, e o indice do FRenderable).
@@ -87,6 +87,7 @@ namespace Smile {
         }
 
         void UpdatePerFrame(u32 FrameSlot, const FScene& Scene,
+                            const FGpuSceneInstanceTable& Instances,
                             const Mat44& InvViewProj, const Mat44& ViewProj,
                             const Mat44& PrevViewProj, const Vec3& CameraPos);
         void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
@@ -133,20 +134,6 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12Resource> TransformBuffer;
         u8* MappedTransforms = nullptr;
         u32 TransformSRVSlot[kFrames] = { kInvalidSlot, kInvalidSlot };
-        // Historico do frame anterior, indexado por SLOT DE RESIDENCIA e nao por posicao na
-        // lista.
-        //
-        // Com indice de lista, remover um objeto deslocava a cauda e cada sobrevivente herdava
-        // o transform anterior do ex-vizinho -- motion vector de outro objeto, que aparece como
-        // smear. Nao era bug vivo porque toda mudanca estrutural derrubava o historico inteiro
-        // (dominio SceneStructure + o clear explicito no OnSceneStructureChanged); o preco era
-        // jogar fora a convergencia de TODOS a cada edicao. Por slot, quem nao se mexeu
-        // mantem o historico.
-        //
-        // O handle vai junto porque slot sozinho nao basta: um slot reciclado apontaria para o
-        // transform do ocupante anterior, e a generation e o que distingue os dois.
-        TSlotKeyedHistory<Mat44> PreviousModels;
-
         // Tabela de identidades: id de instancia -> {slot, generation}.
         //
         // DEFAULT em ping-pong, e nao UPLOAD com dois slices. A tabela de F e lida por F+1, e o

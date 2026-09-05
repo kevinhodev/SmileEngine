@@ -166,6 +166,18 @@ namespace Smile {
         u64 MeshStagingBytes  = 0;
         u32 MeshTableRows     = 0;
 
+        // Tabela canonica de instancias, indexada por slot estavel. Diferente da tabela de
+        // materiais, uma transformacao legitima suja uma linha; num frame estavel os tres
+        // contadores instantaneos abaixo tem de ser zero. BytesDirty soma as quatro colunas,
+        // enquanto RowsDirty conta cada slot no maximo uma vez.
+        u64 InstanceTableBytes        = 0;
+        u64 InstanceStagingBytes      = 0;
+        u32 InstanceTableRows         = 0;
+        u32 InstanceRowsDirty         = 0;
+        u64 InstanceBytesDirty        = 0;
+        u32 InstanceCopyRegions       = 0;
+        u64 InstanceBytesUploadedTotal = 0;
+
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
         // e GPU de frames diferentes sem perceber.

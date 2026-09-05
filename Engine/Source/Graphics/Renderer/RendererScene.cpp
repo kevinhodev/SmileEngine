@@ -407,6 +407,10 @@ namespace Smile {
         for (const auto& M : ImportedMaterials) Raw.push_back(M.get());
         MaterialTable.SetupForMaterials(Backend->Device.Native(), Backend->SRVHeap, Raw);
         MeshTable.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene);
+        InstanceTable.SetupForScene(Backend->Device.Native(), Backend->SRVHeap,
+                                    SceneState->Scene);
+        HiZ.SetInstanceBounds(Backend->Device.Native(), Backend->SRVHeap,
+                              InstanceTable.BoundsSrv(), InstanceTable.Capacity());
     }
 
     void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg,
@@ -551,8 +555,9 @@ namespace Smile {
                               // SEM mapeamento e o dual motion morre calado ate a proxima
                               // troca de cena. Nenhuma condicao acima pega isso, porque todas
                               // olham a contagem de renderables.
-                              || SlotRemapNeedsGrowth(SceneState->Scene.GpuSlots().Capacity(),
-                                                      TemporalMotion.SlotCapacity());
+                               || SlotRemapNeedsGrowth(SceneState->Scene.GpuSlots().Capacity(),
+                                                       TemporalMotion.SlotCapacity())
+                               || InstanceTable.NeedsCapacity(SceneState->Scene.GpuSlots().Capacity());
 
         if (NeedsResize) {
             if (Count > MaxObjects) {

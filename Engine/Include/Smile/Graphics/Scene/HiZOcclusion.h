@@ -54,6 +54,11 @@ namespace Smile {
         // as duas metades existem.
         void SetupObjects(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 MaxObjects);
 
+        // Liga a coluna canonica de bounds por slot. O descritor e copiado para as tabelas do
+        // passe; nenhum bound volta a ser duplicado no upload do HiZ.
+        void SetInstanceBounds(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                               u32 BoundsSRV, u32 BoundsCapacity);
+
         // Grava a construcao da cadeia. Contrato: DepthBuffer ja em
         // NON_PIXEL_SHADER_RESOURCE; ao final o HZB inteiro fica em
         // NON_PIXEL_SHADER_RESOURCE (pronto pro teste/leitura).
@@ -63,8 +68,7 @@ namespace Smile {
         // Depois da fence do frame slot: consome o remap antigo ANTES de reutiliza-lo.
         void BeginFrame(u32 FrameSlot, const FGpuSceneSlots& Slots);
         // Dispatch compacto: a ordem desta captura pertence ao teste, nunca a cena.
-        void WriteBounds(u32 FrameSlot, FGpuSceneHandle Handle, const Vec3& AABBMin,
-                         const Vec3& AABBMax);
+        void WriteCandidate(u32 FrameSlot, FGpuSceneHandle Handle);
 
         // Teste + copia pro readback do slot. Chamar DEPOIS do RecordBuild do mesmo
         // frame; ViewProj SEM jitter. Marca o slot como valido p/ o resolve futuro.
@@ -96,7 +100,7 @@ namespace Smile {
         static constexpr u32 kSlots       = FCommandQueue::kFramesInFlight;
 
         FComputePipeline    BuildPSO;
-        FComputePipeline TestPSO; // b0 CB + t0 bounds/t1 HZB + u0 visibilidade
+        FComputePipeline TestPSO; // b0 CB + t0 slots/t1 bounds/t2 HZB + u0 visibilidade
         Microsoft::WRL::ComPtr<ID3D12Resource> HZB;
 
         u32 HZBWidth  = 0;   // dimensoes do mip 0 (po2)
@@ -110,13 +114,13 @@ namespace Smile {
         u32 FullSRVSlot = kInvalidSlot;
 
         // --- teste + readback ---
-        struct FBoundsEntry { f32 Center[4]; f32 Extent[4]; };
         struct FTestConstants {
             Mat44 ViewProj;
             f32   RenderW, RenderH;
             u32   ObjectCount, NumMips;
             f32   DepthBias;
-            f32   Pad[3];
+            u32   InstanceCapacity;
+            f32   Pad[2];
         };
         struct FSlotMeta {
             std::vector<FGpuSceneHandle> Handles;
@@ -125,21 +129,24 @@ namespace Smile {
         };
         FCapturedVisibility Visibility;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> BoundsBuffer;   // upload ring kSlots
+        Microsoft::WRL::ComPtr<ID3D12Resource> CandidateBuffer; // u32 slot, upload ring kSlots
         Microsoft::WRL::ComPtr<ID3D12Resource> ResultBuffer;   // default, UAV
         Microsoft::WRL::ComPtr<ID3D12Resource> ReadbackBuffer; // readback ring kSlots
         Microsoft::WRL::ComPtr<ID3D12Resource> TestCB;         // upload ring kSlots
 
-        u8*        MappedBounds   = nullptr;
+        u32*       MappedCandidates = nullptr;
         const u32* MappedReadback = nullptr;
         u8*        MappedTestCB   = nullptr;
 
         u32 ObjectCapacity = 0;
-        u32 TestTableSlot[kSlots]; // 2 descritores: [bounds do slot, cadeia HZB]
+        u32 TestTableSlot[kSlots]; // 3 descritores: [slots, bounds canonicos, cadeia HZB]
         u32 ResultUAVSlot = kInvalidSlot;
         D3D12_RESOURCE_STATES ResultState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
         FSlotMeta SlotMeta[kSlots];
+
+        u32 InstanceBoundsSRV_      = kInvalidSlot;
+        u32 InstanceBoundsCapacity_ = 0;
 
         bool Initialized = false;
         bool Ready       = false;

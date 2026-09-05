@@ -181,6 +181,15 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           residentBytes: cpuStats.at(-1)?.meshTable.residentBytes ?? null,
           stagingBytes: cpuStats.at(-1)?.meshTable.stagingBytes ?? null,
         },
+        instanceTable: {
+          rows: cpuStats.at(-1)?.instanceTable.rows ?? null,
+          residentBytes: cpuStats.at(-1)?.instanceTable.residentBytes ?? null,
+          stagingBytes: cpuStats.at(-1)?.instanceTable.stagingBytes ?? null,
+          rowsDirty: summarize(cpuStats.map((c) => c.instanceTable.rowsDirty)),
+          bytesDirty: summarize(cpuStats.map((c) => c.instanceTable.bytesDirty)),
+          copyRegions: summarize(cpuStats.map((c) => c.instanceTable.copyRegions)),
+          bytesUploadedTotal: cpuStats.at(-1)?.instanceTable.bytesUploadedTotal ?? null,
+        },
         passes: [...passKeys].map((key) => {
           const rows = cpuStats
             .map((cpu) => cpu.passes.find((pass) => pass.key === key))

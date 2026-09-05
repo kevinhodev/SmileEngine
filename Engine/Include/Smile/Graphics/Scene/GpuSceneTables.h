@@ -2,8 +2,8 @@
 
 // Tabelas CANONICAS residentes na GPU (Fase 2 do GPU-DRIVEN-PLAN).
 //
-// Duas hoje: materiais e meshes. A de instancias vem na Fase 4, quando houver culling na GPU para
-// consumi-la; este header e a casa dela tambem.
+// Tres: materiais, meshes e instancias. A tabela de instancias nasce na Fase 2 como fonte
+// canonica; as fases seguintes migram os consumidores raster/indirect sem mudar sua ABI.
 //
 // O que a de MATERIAIS resolve, em uma frase: editar um material passa a tocar UMA linha de 64 B
 // em vez de reescrever o snapshot inteiro da cena (2.479 registros de 100 B na Emerald) com as
@@ -11,8 +11,8 @@
 //
 // O que a de MESHES resolve e diferente, e vale ser honesto: ela NAO economiza byte nenhum no
 // snapshot por instancia — VB/IB saem, MeshSrv/MeshId entram. O ganho e ter uma casa unica para
-// bounds locais, contagens e os descritores bindless de geometria, que e o que o culling da Fase 6
-// e a tabela de instancias da Fase 4 vao ler. E ela toma a posse dos descritores de geometria, que
+// bounds locais, contagens e os descritores bindless de geometria, que os consumidores raster e o
+// culling das fases seguintes vao ler. E ela toma a posse dos descritores de geometria, que
 // moravam no FRaytracingScene: decisao D12 do plano — o ray tracing e consumidor da cena, nao dono
 // dela. Junto vem a enumeracao das malhas unicas, que passa a existir num lugar so (o
 // FRaytracingScene le a lista daqui para dimensionar os BLAS).
@@ -41,7 +41,8 @@
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Scene/GpuMaterialRecord.h"
-#include "Smile/Math/Vec3.h"
+#include "Smile/Math/Math.h"
+#include "Smile/Scene/CapturedIdentity.h"
 
 #include <d3d12.h>
 #include <span>
@@ -61,8 +62,8 @@ namespace Smile {
     struct FGpuMeshRecord {
         // Bounds em espaco do OBJETO, como o cozido v7+ os grava. Sao propriedade da MALHA, e hoje
         // vivem duplicados em cada FRenderable que a usa (FRenderable::LocalAABBMin/Max, copiados
-        // do SMeshEntry no load). Aqui e a casa certa; a duplicacao no renderavel sai quando a
-        // tabela de instancias existir, na Fase 4.
+        // do SMeshEntry no load). Aqui e a casa certa; a duplicacao no renderavel sai na Fase 4,
+        // quando os consumidores deixam de consulta-lo diretamente.
         Vec3 LocalAABBMin{ 0.0f, 0.0f, 0.0f };
         Vec3 LocalAABBMax{ 0.0f, 0.0f, 0.0f };
 
@@ -106,6 +107,72 @@ namespace Smile {
                A.Flags == B.Flags && A.VirtualGeometryId == B.VirtualGeometryId;
     }
     inline bool operator!=(const FGpuMeshRecord& A, const FGpuMeshRecord& B) { return !(A == B); }
+
+    // === Colunas de instancia ==================================================================
+    //
+    // SoA por SLOT DE RESIDENCIA, nao pela posicao autoral na RenderableList. O slot torna a linha
+    // estavel quando a lista compacta; Generation impede que um leitor aceite o ocupante seguinte.
+    enum EGpuSceneInstanceFlags : u32 {
+        GpuSceneInstanceVisible        = 1u << 0,
+        GpuSceneInstanceRaytracingOnly = 1u << 1,
+        GpuSceneInstanceDynamic        = 1u << 2,
+    };
+
+    struct FGpuSceneInstanceMeta {
+        u32 MeshId     = 0;
+        u32 MaterialId = 0;
+        u32 CellId     = 0; // reservado para a grade/ranges das fases seguintes
+        u32 Flags      = 0;
+        u32 Generation = 0; // 0 = linha vazia
+    };
+    static_assert(sizeof(FGpuSceneInstanceMeta) == 20);
+    static_assert(offsetof(FGpuSceneInstanceMeta, MeshId)     ==  0);
+    static_assert(offsetof(FGpuSceneInstanceMeta, MaterialId) ==  4);
+    static_assert(offsetof(FGpuSceneInstanceMeta, CellId)     ==  8);
+    static_assert(offsetof(FGpuSceneInstanceMeta, Flags)      == 12);
+    static_assert(offsetof(FGpuSceneInstanceMeta, Generation) == 16);
+
+    inline bool operator==(const FGpuSceneInstanceMeta& A, const FGpuSceneInstanceMeta& B) {
+        return A.MeshId == B.MeshId && A.MaterialId == B.MaterialId && A.CellId == B.CellId &&
+               A.Flags == B.Flags && A.Generation == B.Generation;
+    }
+    inline bool operator!=(const FGpuSceneInstanceMeta& A, const FGpuSceneInstanceMeta& B) {
+        return !(A == B);
+    }
+
+    struct FGpuSceneInstanceBounds {
+        Vec4 Center{}; // xyz world-space; w reservado
+        Vec4 Extent{}; // xyz meia-extensao; w reservado
+    };
+    static_assert(sizeof(FGpuSceneInstanceBounds) == 32);
+    static_assert(offsetof(FGpuSceneInstanceBounds, Center) ==  0);
+    static_assert(offsetof(FGpuSceneInstanceBounds, Extent) == 16);
+
+    inline bool operator==(const FGpuSceneInstanceBounds& A,
+                           const FGpuSceneInstanceBounds& B) {
+        return A.Center.X == B.Center.X && A.Center.Y == B.Center.Y &&
+               A.Center.Z == B.Center.Z && A.Center.W == B.Center.W &&
+               A.Extent.X == B.Extent.X && A.Extent.Y == B.Extent.Y &&
+               A.Extent.Z == B.Extent.Z && A.Extent.W == B.Extent.W;
+    }
+    inline bool operator!=(const FGpuSceneInstanceBounds& A,
+                           const FGpuSceneInstanceBounds& B) { return !(A == B); }
+
+    struct FGpuSceneInstanceTransform {
+        Mat44 Value{};
+    };
+    static_assert(sizeof(FGpuSceneInstanceTransform) == 64);
+    static_assert(offsetof(FGpuSceneInstanceTransform, Value) == 0);
+
+    inline bool operator==(const FGpuSceneInstanceTransform& A,
+                           const FGpuSceneInstanceTransform& B) {
+        for (u32 Row = 0; Row < 4; ++Row)
+            for (u32 Col = 0; Col < 4; ++Col)
+                if (A.Value.M[Row][Col] != B.Value.M[Row][Col]) return false;
+        return true;
+    }
+    inline bool operator!=(const FGpuSceneInstanceTransform& A,
+                           const FGpuSceneInstanceTransform& B) { return !(A == B); }
 
     // === Snapshot por instancia =================================================================
     //
@@ -185,7 +252,7 @@ namespace Smile {
     // ⚠️ Sao bytes de CONTEUDO (capacidade x stride), e nao custo de alocacao: o D3D12 arredonda
     // committed resource para a granularidade de heap, e com tabelas de poucos KB o arredondamento
     // domina. O custo real, com alinhamento, ja e medido pelo VramTracker, que registra o tamanho
-    // que o driver cobra e da rotulo proprio as duas tabelas no breakdown por recurso. O que
+    // que o driver cobra e da rotulo proprio as tres tabelas no breakdown por recurso. O que
     // ESTES numeros respondem e outra pergunta: como a tabela cresce com a cena.
     //
     // Funcao pura e livre para poder ser testada sem device: o `Create` que aloca de verdade exige
@@ -369,5 +436,96 @@ namespace Smile {
         u32 DescriptorCount_ = 0;
         bool Dirty_          = false;
         u32  LastDirtyRows_  = 0;
+    };
+
+    // === Tabela de instancias ==================================================================
+    //
+    // Quatro buffers DEFAULT independentes. Separar meta/bounds/matrizes evita que o culling leia
+    // 128 B de transform para testar uma caixa. O estado CPU abaixo e a fonte unica do historico:
+    // raster e temporal derivam suas visoes especializadas daqui, em vez de manter dois mapas de
+    // previous model que podiam divergir.
+    class FGpuSceneInstanceTable {
+    public:
+        static constexpr u32 kMetaBytes      = sizeof(FGpuSceneInstanceMeta);
+        static constexpr u32 kBoundsBytes    = sizeof(FGpuSceneInstanceBounds);
+        static constexpr u32 kTransformBytes = sizeof(FGpuSceneInstanceTransform);
+        static constexpr u32 kResidentBytesPerSlot =
+            kMetaBytes + kBoundsBytes + 2u * kTransformBytes; // 180 B
+
+        void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
+        void Release(FTextureSRVHeap& SRVHeap);
+
+        // Atualiza a imagem CPU apenas quando estrutura/transform/static-casters mudaram ou quando
+        // o previous transform precisa assentar em current no frame seguinte. Nesses eventos a
+        // Fase 2 ainda percorre os renderaveis e o diff por conteudo decide as linhas realmente
+        // copiadas; no frame estavel nao ha varredura nem upload. Dirty ranges incrementais no
+        // produtor sao trabalho explicito da Fase 4.
+        void PrepareFrame(const FScene& Scene, const FGpuMeshTable& Meshes,
+                          const FGpuMaterialTable& Materials);
+        void RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+
+        bool IsBuilt() const { return MetaStorage_.IsBuilt(); }
+        bool NeedsCapacity(u32 RequiredSlots) const {
+            return !IsBuilt() || RequiredSlots > Capacity();
+        }
+        u32 Capacity() const { return MetaStorage_.Capacity(); }
+        u32 LiveRows() const { return LiveRows_; }
+
+        u32 MetaSrv()          const { return MetaStorage_.Srv(); }
+        u32 BoundsSrv()        const { return BoundsStorage_.Srv(); }
+        u32 TransformSrv()     const { return TransformStorage_.Srv(); }
+        u32 PrevTransformSrv() const { return PrevTransformStorage_.Srv(); }
+
+        // CPU canonical: valida slot+generation antes de devolver o par. Consumido hoje pelo
+        // ObjectCB e pela visao temporal derivada; shaders passam a ler as colunas nas fases 3/4.
+        bool TransformsFor(FGpuSceneHandle Handle, Mat44& Current, Mat44& Previous) const;
+        // A consulta CPU existe para diagnostico/teste do mesmo contrato de identidade. Os
+        // consumidores de frame leem o SRV; nenhum deles deve contornar a tabela por este atalho.
+        bool MetaFor(FGpuSceneHandle Handle, FGpuSceneInstanceMeta& Meta) const;
+
+        u64 ResidentBytes() const;
+        u64 StagingBytes() const;
+        u32 LastDirtyRows() const { return LastDirtyRows_; }
+        u64 LastDirtyBytes() const { return LastDirtyBytes_; }
+        u32 LastCopyRegions() const { return LastCopyRegions_; }
+        u64 TotalBytesUploaded() const { return TotalBytesUploaded_; }
+
+    private:
+        FGpuTableStorage MetaStorage_;
+        FGpuTableStorage BoundsStorage_;
+        FGpuTableStorage TransformStorage_;
+        FGpuTableStorage PrevTransformStorage_;
+
+        std::vector<FGpuSceneInstanceMeta>      MetaRows_;
+        std::vector<FGpuSceneInstanceBounds>    BoundsRows_;
+        std::vector<FGpuSceneInstanceTransform> TransformRows_;
+        std::vector<FGpuSceneInstanceTransform> PrevTransformRows_;
+
+        std::vector<FGpuSceneInstanceMeta>      MetaShadow_;
+        std::vector<FGpuSceneInstanceBounds>    BoundsShadow_;
+        std::vector<FGpuSceneInstanceTransform> TransformShadow_;
+        std::vector<FGpuSceneInstanceTransform> PrevTransformShadow_;
+
+        std::vector<u32> MetaChanged_;
+        std::vector<u32> BoundsChanged_;
+        std::vector<u32> TransformChanged_;
+        std::vector<u32> PrevTransformChanged_;
+        std::vector<u32> LiveSlots_;
+        std::vector<u32> NextLiveSlots_;
+        std::vector<u32> SeenEpoch_;
+        std::vector<u8>  DirtyMarks_;
+
+        u64 PreparedStructureVersion_ = ~0ull;
+        u64 PreparedTransformVersion_ = ~0ull;
+        u64 PreparedStaticCastersVersion_ = ~0ull;
+        u32 PrepareEpoch_              = 0;
+        u32 LiveRows_                  = 0;
+        bool NeedsSettle_              = false;
+        bool Dirty_                    = false;
+
+        u32 LastDirtyRows_       = 0;
+        u64 LastDirtyBytes_      = 0;
+        u32 LastCopyRegions_     = 0;
+        u64 TotalBytesUploaded_  = 0;
     };
 }

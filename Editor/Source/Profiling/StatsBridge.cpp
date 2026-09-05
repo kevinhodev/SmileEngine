@@ -545,14 +545,22 @@ namespace SmileEditor {
             // Create e mapeados o tempo todo), entao mostrar so o DEFAULT publicava um terco do
             // que a tabela custa.
             Next.MaterialTableText =
-                QStringLiteral("mat %1 / %2 KB, malha %3 / %4 KB%5")
+                QStringLiteral("inst %1 / %2 KB, mat %3 / %4 KB, malha %5 / %6 KB%7%8")
+                    .arg(Cpu.InstanceTableRows)
+                    .arg(QString::number((Cpu.InstanceTableBytes + Cpu.InstanceStagingBytes) / 1024.0, 'f', 1))
                     .arg(Cpu.MaterialTableRows)
                     .arg(QString::number((Cpu.MaterialTableBytes + Cpu.MaterialStagingBytes) / 1024.0, 'f', 1))
                     .arg(Cpu.MeshTableRows)
                     .arg(QString::number((Cpu.MeshTableBytes + Cpu.MeshStagingBytes) / 1024.0, 'f', 1))
                     .arg(Cpu.MaterialRowsDirty
-                             ? QStringLiteral("  (sujas %1 em %2 copias)")
+                             ? QStringLiteral("  (mat sujas %1 em %2 copias)")
                                    .arg(Cpu.MaterialRowsDirty).arg(Cpu.MaterialCopyRegions)
+                             : QString())
+                    .arg(Cpu.InstanceRowsDirty
+                             ? QStringLiteral("  (inst sujas %1 / %2 B em %3 copias)")
+                                   .arg(Cpu.InstanceRowsDirty)
+                                   .arg(Cpu.InstanceBytesDirty)
+                                   .arg(Cpu.InstanceCopyRegions)
                              : QString());
 
             // Rebake de micro-map. Os BLAS refeitos aparecem SO quando existem: em uso normal sao
