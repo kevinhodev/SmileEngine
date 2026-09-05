@@ -66,35 +66,22 @@ namespace Smile {
     }
 
     void FMaterial::Finalize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        // Re-finalize REUSA o range (so reescreve os descritores abaixo). Free+Allocate mudava o
-        // SRVTableStart, e esse indice nao e privado do raster: o snapshot InstanceGeo do RT o
-        // cacheia como AlbedoIndex/MrMapIndex/EmissiveMapIndex (DDGI.cpp) e le via
-        // ResourceDescriptorHeap. Realocar sem re-subir o snapshot fazia os raios amostrarem a
-        // textura de OUTRO material, silenciosamente. Como o free list e first-fit com reuso, o
-        // range nem sequer voltava para o mesmo lugar de forma confiavel.
+        // Re-finalize REUSA o range e reescreve os descritores no lugar. Isso e seguro AQUI e so
+        // aqui: os tres chamadores do Finalize (default, import de cena e proxy do terreno) rodam
+        // com as duas filas ja drenadas, entao nao ha command list em voo referenciando o range.
+        //
+        // O caminho que NAO tem essa garantia — troca de textura no editor — nao passa por aqui:
+        // ele usa o RepublishTextureTable, que aloca outro range e devolve este para o chamador
+        // aposentar atras das fences.
+        //
+        // A base tambem nao e privada do raster: ela e o `TextureBase` da linha canonica do
+        // material, de onde os shaders de RT tiram os indices bindless. Reusar o range mantem a
+        // linha inalterada; mudar a base suja a linha, que e como o RepublishTextureTable
+        // propaga.
         if (SRVTableStart == kInvalidTable)
             SRVTableStart = _SRVHeap.Allocate(kMaterialTextureSlots);
 
-        auto WriteSRV = [&](FTexture* _Texture, u32 _LocalSlot) {
-            if (!_Texture || !_Texture->IsValid()) return;
-            D3D12_SHADER_RESOURCE_VIEW_DESC ResourceDesc{};
-            ResourceDesc.Format                        = _Texture->Format();
-            ResourceDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
-            ResourceDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            ResourceDesc.Texture2D.MipLevels           = _Texture->MipCount();
-            ResourceDesc.Texture2D.MostDetailedMip     = 0;
-            ResourceDesc.Texture2D.ResourceMinLODClamp = 0.0f;
-            _SRVHeap.CreateSRV(_Device, _Texture->Resource(), ResourceDesc, SRVTableStart + _LocalSlot);
-        };
-
-        WriteSRV(Albedo,            0);
-        WriteSRV(Normal,            1);
-        WriteSRV(MetallicRoughness, 2);
-        WriteSRV(AO,                3);
-        WriteSRV(Emissive,          4);
-        WriteSRV(Height,            5);
-        WriteSRV(Metalness,         6);
-        WriteSRV(Roughness,         7);
+        WriteTextureTable(_Device, _SRVHeap, SRVTableStart);
 
         Constants.HasAlbedoMap            = (Albedo            && Albedo->IsValid())            ? 1 : 0;
         Constants.HasNormalMap            = (Normal            && Normal->IsValid())            ? 1 : 0;
@@ -132,17 +119,51 @@ namespace Smile {
             memcpy(MappedCBV, &Constants, sizeof(MaterialConstants));
     }
 
-    void FMaterial::UpdateTextureSlot(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
-                                       u32 _LocalSlot, FTexture* _Texture) {
-        if (!_Texture || !_Texture->IsValid() || _LocalSlot >= kMaterialTextureSlots) return;
-        D3D12_SHADER_RESOURCE_VIEW_DESC Desc{};
-        Desc.Format                        = _Texture->Format();
-        Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
-        Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        Desc.Texture2D.MipLevels           = _Texture->MipCount();
-        Desc.Texture2D.MostDetailedMip     = 0;
-        Desc.Texture2D.ResourceMinLODClamp = 0.0f;
-        _SRVHeap.CreateSRV(_Device, _Texture->Resource(), Desc, SRVTableStart + _LocalSlot);
+    // As oito posicoes, SEMPRE. Slot sem textura recebe um descritor NULO (recurso nulo com desc
+    // valida), que e leitura definida devolvendo zero — e nao um slot deixado como estava.
+    //
+    // Antes o slot vazio simplesmente nao era escrito. Passava porque o range nunca se movia e o
+    // shader consultava o bit `HasXMap` antes de amostrar; nao passa mais: o
+    // RepublishTextureTable aloca range NOVO, e ali "como estava" e lixo de quem usou aqueles
+    // slots por ultimo. O preview de material, alem disso, copia os oito descritores do staging
+    // sem consultar flag nenhuma (MaterialPreview.cpp).
+    void FMaterial::WriteTextureTable(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                      u32 _Base) const {
+        FTexture* const Slots[kMaterialTextureSlots] = {
+            Albedo, Normal, MetallicRoughness, AO, Emissive, Height, Metalness, Roughness
+        };
+
+        for (u32 i = 0; i < kMaterialTextureSlots; ++i) {
+            FTexture* Texture = Slots[i];
+            const bool Valid  = Texture && Texture->IsValid();
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC Desc{};
+            // Formato do descritor nulo: uma forma qualquer VALIDA e obrigatoria (typeless nao
+            // serve). RGBA8 unorm porque nao ha recurso por tras — o formato so descreve como a
+            // leitura seria decodificada, e ela devolve zero.
+            Desc.Format                        = Valid ? Texture->Format()
+                                                       : DXGI_FORMAT_R8G8B8A8_UNORM;
+            Desc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+            Desc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            Desc.Texture2D.MipLevels           = Valid ? Texture->MipCount() : 1;
+            Desc.Texture2D.MostDetailedMip     = 0;
+            Desc.Texture2D.ResourceMinLODClamp = 0.0f;
+            _SRVHeap.CreateSRV(_Device, Valid ? Texture->Resource() : nullptr, Desc, _Base + i);
+        }
+    }
+
+    u32 FMaterial::RepublishTextureTable(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+        if (SRVTableStart == kInvalidTable) return kInvalidDescriptorTable;
+
+        // Aloca ANTES de soltar qualquer coisa: sem range novo o material continua valido com o
+        // antigo, e uma falha aqui nao pode deixa-lo sem tabela nenhuma. O Allocate lanca quando
+        // o heap esgota, e nesse caso nada foi publicado.
+        const u32 NewBase = _SRVHeap.Allocate(kMaterialTextureSlots);
+        WriteTextureTable(_Device, _SRVHeap, NewBase);
+
+        const u32 OldBase = SRVTableStart;
+        SRVTableStart     = NewBase;
+        return OldBase;
     }
 
     void FMaterial::Bind(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap) const {

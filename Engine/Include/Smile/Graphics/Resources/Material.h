@@ -127,16 +127,38 @@ namespace Smile {
 
         void UpdateConstants();
 
-        void UpdateTextureSlot(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                               u32 LocalSlot, FTexture* Texture);
+        // Publica uma tabela NOVA de descritores a partir dos ponteiros de textura atuais e
+        // devolve a base ANTIGA, para o chamador aposentar atras das fences. Devolve
+        // kInvalidDescriptorTable quando nao havia tabela (material nao finalizado) ou quando o
+        // heap nao pode mais alocar — nesses dois casos nada e publicado e a base atual continua
+        // valendo.
+        //
+        // Substitui a reescrita NO LUGAR que existia aqui. O descritor mora no heap
+        // shader-visible; reescrever um slot que uma command list ja submetida referencia e
+        // comportamento indefinido, e a unica defesa era drenar as duas filas a cada troca de
+        // textura no editor. Publicar noutro range e aposentar o antigo troca o stall por oito
+        // descritores em espera.
+        //
+        // As oito posicoes sao SEMPRE escritas, inclusive as sem textura (descritor nulo). Sem
+        // isso, rotacionar deixaria slots nao inicializados dentro de um range recem-alocado —
+        // e o `CopyTable` do preview de material le os oito sem consultar flag.
+        u32 RepublishTextureTable(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
 
         bool IsFinalized() const { return MappedCBV != nullptr; }
 
         u32  AlbedoDescriptorIndex() const { return SRVTableStart; }
+        // Espelha o kInvalidTable privado: quem recebe a base antiga do RepublishTextureTable
+        // precisa saber comparar contra ela.
+        static constexpr u32 kInvalidDescriptorTable = 0xFFFFFFFFu;
         bool HasAlbedoTexture()      const { return Constants.HasAlbedoMap != 0; }
 
     private:
-        static constexpr u32 kInvalidTable = 0xFFFFFFFFu;
+        static constexpr u32 kInvalidTable = kInvalidDescriptorTable;
+
+        // Escreve os kMaterialTextureSlots descritores a partir de Base, nos dois heaps
+        // (shader-visible e staging). Slot sem textura recebe descritor NULO — leitura definida
+        // que devolve zero — em vez de ficar como estava.
+        void WriteTextureTable(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Base) const;
 
         // CBV vem de um POOL paginado compartilhado (Material.cpp): paginas upload de 64KB com
         // slots de 256B. Antes cada material criava um committed buffer proprio de 256B — que o

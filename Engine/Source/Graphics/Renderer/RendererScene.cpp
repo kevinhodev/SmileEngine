@@ -76,27 +76,29 @@ namespace Smile {
     void Renderer::UpdateMaterialTextureSlot(FMaterial& _Material, u32 _LocalSlot,
                                              FTexture* _Texture) {
         if (!Initialized || !_Texture || !_Texture->IsValid() || !_Material.IsFinalized()) return;
+        if (_LocalSlot >= kMaterialTextureSlots) return;
 
-        // DRENO ANTES DA ESCRITA, e o "antes" e a coisa toda.
+        // SEM DRENO — e essa e a mudanca da Fase 3.
         //
-        // O descritor mora no heap SHADER-VISIBLE e e reescrito NO LUGAR (FTextureSRVHeap::CreateSRV
-        // escreve no heap visivel, nao so no staging). Nao ha versao por frame em voo: uma command
-        // list ja submetida que referencie este slot ainda vai le-lo quando a GPU chegar la, e
-        // reescreve-lo enquanto isso e modificar descritor em uso — comportamento indefinido, nao
-        // "textura errada por um frame".
+        // O descritor mora no heap SHADER-VISIBLE. Ate aqui a troca de textura o reescrevia NO
+        // LUGAR, e a unica defesa possivel era drenar as duas filas antes: uma command list ja
+        // submetida que referencie o slot ainda vai le-lo quando a GPU chegar la, e reescreve-lo
+        // enquanto isso e modificar descritor em uso — comportamento indefinido, nao "textura
+        // errada por um frame". Custava um stall completo por troca de textura.
         //
-        // Isto NAO e regressao da Fase 2: o dreno que existia antes morava no
-        // NotifyMaterialRTStateChanged, consumido no TOPO DO FRAME SEGUINTE — ou seja, depois desta
-        // escrita. Ele protegia o snapshot InstanceGeo, que e outro recurso; este slot nunca esteve
-        // coberto. A Fase 2 apenas tirou aquele dreno de um lugar onde ele nao resolvia isto.
+        // Agora o material PUBLICA outro range com os oito descritores e devolve o antigo, que
+        // fica aposentado ate as duas filas passarem. Ninguem reescreve nada em uso; o custo vira
+        // oito descritores em espera. A base nova suja a linha canonica do material (o
+        // `TextureBase` faz parte dela), e o MarkMaterialRTStateDirty que o editor ja levanta
+        // nesta mesma edicao a sobe no proximo frame.
         //
-        // Custa um stall, e so acontece em troca manual de textura no editor. O conserto
-        // ESTRUTURAL e versionar/aposentar slot de descritor pelas duas fences, como o
-        // FGpuSceneSlots ja faz para residencia de cena — trabalho da Fase 3, que torna o raster
-        // bindless e passa a rotacionar descritor de material de verdade.
-        Backend->DirectQueue.Flush();
-        Backend->ComputeQueue.WaitIdle();
-        _Material.UpdateTextureSlot(Backend->Device.Native(), Backend->SRVHeap, _LocalSlot, _Texture);
+        // O `CurrentFenceSet` — ultimos valores SUBMETIDOS — e a captura certa porque edicao de
+        // editor acontece entre frames, com a command list fechada; e a mesma fronteira que o
+        // RemoveRenderable ja usa para aposentar slot de cena.
+        const u32 OldTable =
+            _Material.RepublishTextureTable(Backend->Device.Native(), Backend->SRVHeap);
+        if (OldTable != FMaterial::kInvalidDescriptorTable)
+            Backend->SRVHeap.FreeDeferred(OldTable, kMaterialTextureSlots, CurrentFenceSet());
     }
 
     // O build libera recursos ainda usados por ambas as filas; drene direta antes da compute

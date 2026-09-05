@@ -39,10 +39,10 @@ namespace Smile {
         throw std::runtime_error("TextureSRVHeap capacity exceeded");
     }
 
-    void FTextureSRVHeap::Free(u32 _Slot, u32 _Count) {
-        if (_Count == 0) return;
-        UsedSlots_ -= (_Count <= UsedSlots_) ? _Count : UsedSlots_;
-
+    // So o free list. Separado do Free porque o CollectRetired tambem devolve range, e la o slot
+    // ja saiu de UsedSlots_ quando foi aposentado — descontar de novo faria a ocupacao cair
+    // abaixo do real e acabaria em zero com o heap cheio.
+    void FTextureSRVHeap::InsertFreeRange(u32 _Slot, u32 _Count) {
         size_t i = 0;
         while (i < FreeList.size() && FreeList[i].Offset < _Slot) ++i;
         FreeList.insert(FreeList.begin() + i, { _Slot, _Count });
@@ -57,6 +57,39 @@ namespace Smile {
             FreeList[i - 1].Count += FreeList[i].Count;
             FreeList.erase(FreeList.begin() + i);
         }
+    }
+
+    void FTextureSRVHeap::Free(u32 _Slot, u32 _Count) {
+        if (_Count == 0) return;
+        UsedSlots_ -= (_Count <= UsedSlots_) ? _Count : UsedSlots_;
+        InsertFreeRange(_Slot, _Count);
+    }
+
+    void FTextureSRVHeap::FreeDeferred(u32 _Slot, u32 _Count, const FGpuFenceSet& _Required) {
+        if (_Count == 0 || _Slot == kInvalidSlot) return;
+        // Sai de UsedSlots_ AGORA e entra em RetiredSlots_: as duas grandezas nao se sobrepoem, e
+        // "quanto do heap esta indisponivel" e a soma das duas. Contar o aposentado como usado
+        // esconderia a fila de espera exatamente quando ela e o problema.
+        UsedSlots_ -= (_Count <= UsedSlots_) ? _Count : UsedSlots_;
+        RetiredSlots_ += _Count;
+        RetiredList.push_back({ _Slot, _Count, _Required });
+    }
+
+    u32 FTextureSRVHeap::CollectRetired(const FGpuFenceSet& _Completed) {
+        u32 Collected = 0;
+        for (size_t i = 0; i < RetiredList.size();) {
+            if (!_Completed.Covers(RetiredList[i].Required)) { ++i; continue; }
+            const FRetiredRange Range = RetiredList[i];
+            // swap-and-pop: a ordem da lista de aposentados nao significa nada — cada entrada
+            // carrega a propria fence exigida —, e assim o custo continua O(aposentados) mesmo
+            // quando os que vencem estao no meio.
+            RetiredList[i] = RetiredList.back();
+            RetiredList.pop_back();
+            RetiredSlots_ -= (Range.Count <= RetiredSlots_) ? Range.Count : RetiredSlots_;
+            InsertFreeRange(Range.Offset, Range.Count);
+            ++Collected;
+        }
+        return Collected;
     }
 
     void FTextureSRVHeap::Release(u32& _Slot, u32 _Count) {

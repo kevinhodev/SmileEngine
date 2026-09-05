@@ -233,6 +233,31 @@ set_tests_properties(Smile.GpuSceneTablesWarp PROPERTIES
     TIMEOUT 180
 )
 
+# Ciclo de vida dos descritores de SRV (Fase 3). Linka a engine porque o FTextureSRVHeap cria
+# heaps de descritor de verdade; o device e WARP, nada aqui depende de GPU real.
+add_executable(SmileDescriptorLifetimeTests
+    DescriptorLifetimeTests.cpp
+)
+
+target_compile_features(SmileDescriptorLifetimeTests PRIVATE cxx_std_20)
+target_link_libraries(SmileDescriptorLifetimeTests PRIVATE SmileEngine d3d12 dxgi)
+set_target_properties(SmileDescriptorLifetimeTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.DescriptorLifetime
+    COMMAND SmileDescriptorLifetimeTests
+)
+
+set_tests_properties(Smile.DescriptorLifetime PROPERTIES
+    LABELS "graphics;materials;gpu-driven;lifetime;warp"
+    TIMEOUT 120
+)
+
 add_executable(SmileRenderPassRegistryTests
     RenderPassRegistryTests.cpp
 )

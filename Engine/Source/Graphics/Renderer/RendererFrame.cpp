@@ -743,6 +743,11 @@ namespace Smile {
         // vai remover aquele dreno: uma coleta que dependesse dele morreria junto.
         SceneState->Scene.GpuSlots().Collect(CompletedFenceSet());
 
+        // Mesma coleta, outro recurso: ranges de DESCRITOR aposentados quando o editor rotaciona
+        // a tabela de texturas de um material (Fase 3). Anda junto de proposito — as duas usam a
+        // mesma fronteira de fence, e separa-las daria duas chances de uma parar de rodar.
+        Backend->SRVHeap.CollectRetired(CompletedFenceSet());
+
         // Dirty flags da UI sao coalescidas por dominio antes de abrir o command list.
         // ANTES do MaterialRTStateDirty: o rebake muda micro-map e BLAS e ele proprio pede o
         // refresh de estado de RT no fim, entao consumir na outra ordem faria o trabalho duas
