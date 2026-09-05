@@ -19,6 +19,7 @@ O default **não** mudou: `UseBindlessMaterials = false` (regra 3 do plano).
 | `3ce6316` | bloco de raster na linha canônica de material |
 | `c7fc69d` | G-buffer e z-prepass mascarado lendo material bindless |
 | `c6e926a` | o A/B exposto no editor e a telemetria dele |
+| `62a96fc` | memoização da consulta de linha nos passes migrados |
 
 ## A primeira tarefa: o que a verificação achou
 
@@ -191,6 +192,16 @@ disponibilidade, então o toggle aparece desabilitado em vez de mentir.
 | picking, contorno de seleção, preview de material | caminho de editor; o plano autoriza |
 
 Nenhum deles é acidente, e todos aparecem como `Draws - BindlessDraws`.
+
+### O custo de CPU que o A/B não pode carregar
+
+`FGpuMaterialTable::RowOf` é um `unordered_map`. Chamá-lo por item poria uma busca por hash
+dentro do laço de submissão — custo de CPU **novo**, no caminho que a fase existe para
+deixar mais barato, e ele apareceria na medição como se fosse do bindless. Os dois passes
+memoizam por ponteiro de material, e as listas já vêm agrupadas por material.
+
+O jeito certo é a instância **carregar** o `MaterialId` em vez de o passe consultar, e é o
+que a Fase 4 faz quando o raster passa a ler a tabela de instâncias.
 
 ## Telemetria
 
