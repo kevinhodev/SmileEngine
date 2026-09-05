@@ -5,6 +5,7 @@
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
 #include "Smile/Graphics/Backend/D3D12/SwapChain.h"
+#include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include <d3d12.h>
 #include <fstream>
 #include <vector>
@@ -479,6 +480,14 @@ namespace Smile {
                                               "DepthNormal.ps", "ForwardBlend.ps",
                                               "DepthMasked.ps", "DepthNormalMasked.ps" };
         return { kStems, static_cast<u32>(std::size(kStems)) };
+    }
+
+    // Ver a nota de contrato em PipelineState.h: heap ANTES da root signature.
+    void FPipelineState::BindGraphicsRoot(ID3D12GraphicsCommandList* _Cmd,
+                                          FTextureSRVHeap& _Heap) const {
+        ID3D12DescriptorHeap* Heaps[] = { _Heap.Native() };
+        _Cmd->SetDescriptorHeaps(_countof(Heaps), Heaps);
+        _Cmd->SetGraphicsRootSignature(RootSignature.Get());
     }
 
     void FPipelineState::OnRecreatePipelines(const FPassInitContext& _Ctx) {

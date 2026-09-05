@@ -42,6 +42,26 @@ namespace Smile {
         // aparece no log do boot para nao ter de ser adivinhado num relatorio de bug.
         D3D12_RESOURCE_HEAP_TIER HeapTier() const { return ResourceHeapTier; }
 
+        // Tier de BINDING — campo irmao do HeapTier no MESMO struct, e outro eixo: ele limita
+        // quantos descritores uma tabela alcanca e, no Tier 3, torna o heap inteiro enderecavel
+        // por indice. E o gate documentado de `ResourceDescriptorHeap` (Fase 3 do
+        // GPU-DRIVEN-PLAN), junto com Shader Model 6.6.
+        //
+        // Ficou sem query ate aqui: o Initialize lia `Options.ResourceHeapTier` e ignorava o
+        // vizinho no mesmo struct. Os passes de compute que ja usam heap diretamente indexado
+        // (DDGI, ReSTIR, SHaRC) funcionam por sorte de hardware, nao por capability conferida.
+        D3D12_RESOURCE_BINDING_TIER BindingTier() const { return ResourceBindingTier; }
+
+        // "O `ResourceDescriptorHeap` do HLSL pode ser usado neste device?"
+        //
+        // Duas condicoes, as duas da spec de Dynamic Resources: Resource Binding Tier 3 e Shader
+        // Model 6.6. A segunda ja e requisito DURO do boot (SM 6.9, exigido pelos Opacity
+        // Micromaps), entao o unico grau de liberdade que sobra e o tier — que e exatamente o que
+        // esta funcao consulta.
+        bool SupportsDirectHeapIndexing() const {
+            return ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3;
+        }
+
         const std::wstring& GetAdapterDescription() const { return AdapterDescription; }
         u64 GetAdapterDedicatedVideoMemory() const { return AdapterDedicatedVideoMemory; }
 
@@ -65,6 +85,10 @@ namespace Smile {
         bool                  IsTearingSupported    = false;
         bool                  IsRaytracingSupported = false;
         D3D12_RESOURCE_HEAP_TIER ResourceHeapTier   = D3D12_RESOURCE_HEAP_TIER_1;
+        // Tier 1 e o default CONSERVADOR: se a query falhar, `SupportsDirectHeapIndexing` diz nao
+        // e o raster fica no caminho classico, em vez de serializar uma root signature que o
+        // device recusaria.
+        D3D12_RESOURCE_BINDING_TIER ResourceBindingTier = D3D12_RESOURCE_BINDING_TIER_1;
         DWORD                 DebugCallbackCookie   = 0;
         bool                  DebugCallbackRegistered = false;
     };

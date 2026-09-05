@@ -55,6 +55,10 @@ namespace Smile {
         CommandList->RSSetViewports(1, &_Ctx.Viewport);
         CommandList->RSSetScissorRects(1, &_Ctx.Scissor);
 
+        // Primeiro amarra do frame. Todo SetGraphicsRootSignature do raster cai depois deste
+        // ponto ou depois de um dos dois recomeços de segmento, que reamarram o heap logo em
+        // seguida — ordem exigida pela spec de HLSL Dynamic Resources (ver
+        // FPipelineState::BindGraphicsRoot).
         ID3D12DescriptorHeap* DescriptorHeaps[] = { Backend->SRVHeap.Native() };
         CommandList->SetDescriptorHeaps(_countof(DescriptorHeaps), DescriptorHeaps);
     }
@@ -809,7 +813,7 @@ namespace Smile {
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, nullptr);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
             CommandList->SetGraphicsRootDescriptorTable(2, Backend->SRVHeap.GpuHandle(GBuffer.SRVTableStart()));
@@ -902,7 +906,7 @@ namespace Smile {
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
                 CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
@@ -993,7 +997,7 @@ namespace Smile {
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
@@ -1187,7 +1191,7 @@ namespace Smile {
                 CommandList->OMSetRenderTargets(_countof(BlendRTVs), BlendRTVs, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
                 CommandList->SetGraphicsRootDescriptorTable(3, Backend->SRVHeap.GpuHandle(IBLTableStart));
@@ -1321,7 +1325,7 @@ namespace Smile {
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
                 CommandList->RSSetViewports(1, &Viewport);
                 CommandList->RSSetScissorRects(1, &ScissorRect);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
             } else {
@@ -1388,7 +1392,7 @@ namespace Smile {
             CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
             CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
@@ -1520,7 +1524,7 @@ namespace Smile {
 
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);
-                CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+                PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
                 CommandList->SetGraphicsRootConstantBufferView(
                     0, Ctx.FrameCB);
                 CommandList->SetGraphicsRootConstantBufferView(5, SunShadows.ConstantsAddress());
@@ -1567,7 +1571,7 @@ namespace Smile {
             CommandList->ClearRenderTargetView(Targets.VelocityRTVHeap.CpuHandle(0), VelClear, 0, nullptr);
             CommandList->RSSetViewports(1, &Viewport);
             CommandList->RSSetScissorRects(1, &ScissorRect);
-            CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+            PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
             CommandList->SetGraphicsRootConstantBufferView(
                 0, Ctx.FrameCB);
 

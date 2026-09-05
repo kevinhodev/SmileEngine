@@ -177,17 +177,29 @@ namespace Smile {
                 "atualize o driver ou use uma GPU compativel");
         LogDebug("[D3D12] - DXR Tier 1.2 + SM 6.9 disponiveis (OMM obrigatorio)");
 
-        // ResourceHeapTier e capability SEPARADA do DXR (OPTIONS x OPTIONS5): na pratica toda
-        // GPU com DXR e Tier 2, mas a spec trata as duas como independentes, e assumir uma pela
-        // outra so daria errado no relatorio de bug de alguem. Tier 1 exige heap separado para
-        // buffer, textura comum e textura RT/DS — restricao que qualquer politica de placed
-        // resource ou pool teria de respeitar, entao o valor fica registrado desde ja.
+        // Duas capabilities do MESMO struct, separadas do DXR (OPTIONS x OPTIONS5).
+        //
+        // ResourceHeapTier: Tier 1 exige heap separado para buffer, textura comum e textura
+        // RT/DS — restricao que qualquer politica de placed resource ou pool teria de respeitar.
+        //
+        // ResourceBindingTier: no Tier 3 o heap inteiro e enderecavel por indice, que e o gate
+        // documentado do `ResourceDescriptorHeap` do HLSL (com Shader Model 6.6, ja garantido
+        // pelo requisito duro de SM 6.9 acima). Ate a Fase 3 do GPU-DRIVEN-PLAN ele nunca foi
+        // consultado: os passes de compute que ja usam heap diretamente indexado passavam por
+        // sorte de hardware. Os dois valores ficam no log do boot para nao serem adivinhados num
+        // relatorio de bug.
         D3D12_FEATURE_DATA_D3D12_OPTIONS Options{};
         if (SUCCEEDED(Device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,
                                                   &Options, sizeof(Options)))) {
-            ResourceHeapTier = Options.ResourceHeapTier;
+            ResourceHeapTier    = Options.ResourceHeapTier;
+            ResourceBindingTier = Options.ResourceBindingTier;
             LogDebug("[D3D12] - Resource Heap Tier: " +
                      std::to_string(static_cast<int>(Options.ResourceHeapTier)));
+            LogDebug("[D3D12] - Resource Binding Tier: " +
+                     std::to_string(static_cast<int>(Options.ResourceBindingTier)) +
+                     (SupportsDirectHeapIndexing()
+                          ? " (ResourceDescriptorHeap disponivel)"
+                          : " (< 3: ResourceDescriptorHeap INDISPONIVEL)"));
         }
 
         GpuResources::InitializeDefaultAllocator(

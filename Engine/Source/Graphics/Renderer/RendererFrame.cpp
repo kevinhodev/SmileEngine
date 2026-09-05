@@ -886,7 +886,7 @@ namespace Smile {
 
         // Root signature + constantes do frame: os passes de compute acima trocaram o estado,
         // e tudo que grava raster daqui pra frente conta com estes dois amarrados.
-        CommandList->SetGraphicsRootSignature(PipelineState.GetRootSignature());
+        PipelineState.BindGraphicsRoot(CommandList, Backend->SRVHeap);
         CommandList->SetGraphicsRootConstantBufferView(0, Ctx.FrameCB);
 
         const FLocalShadowJobs ShadowJobs = PackDirectLights(Ctx, MappedCB);

@@ -5,6 +5,8 @@
 #include "Smile/Graphics/Renderer/RenderPass.h"
 
 namespace Smile {
+    class FTextureSRVHeap;
+
     class FPipelineState : public FPipelineOwner {
     public:
         // --- Dono de pipeline (RenderPass.h): tem shader, mas NAO grava frame ---
@@ -17,6 +19,26 @@ namespace Smile {
         void RecreatePSO(ID3D12Device* Device);
 
         ID3D12RootSignature* GetRootSignature() const { return RootSignature.Get(); }
+
+        // Amarra o heap de descritores e a root signature do raster, NESTA ORDEM.
+        //
+        // A ordem e contrato da spec de HLSL Dynamic Resources, e nao estilo:
+        //
+        //   "SetDescriptorHeaps must be called, passing the corresponding heaps, before a call to
+        //    SetGraphicsRootSignature or SetComputeRootSignature that uses either
+        //    CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED or SAMPLER_HEAP_DIRECTLY_INDEXED flags."
+        //
+        // Hoje o raster satisfaz isso por ACIDENTE: o heap e amarrado uma vez no
+        // BeginSceneRecording e reamarrado depois de cada corte de segmento, e os nove
+        // SetGraphicsRootSignature dos passes caem todos depois de um desses pontos. Nada
+        // impede que o proximo corte de segmento — ou um passe novo — inverta a ordem, e o
+        // sintoma nao seria erro de API: seria `ResourceDescriptorHeap` lendo de um heap que a
+        // GPU nao tem amarrado.
+        //
+        // Reamarrar o MESMO ponteiro de heap e explicitamente permitido (a proibicao da spec e
+        // chamar SetDescriptorHeaps com ponteiros DIFERENTES depois da root signature e antes do
+        // draw), e sao nove chamadas por frame.
+        void BindGraphicsRoot(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& Heap) const;
         ID3D12PipelineState* PSODepthOnly()  const { return PipelineStateDepthOnly.Get(); }
         ID3D12PipelineState* PSODepthNormal() const { return PipelineStateDepthNormal.Get(); }
         // Variantes masked/two-sided do prepass (cull none + PS com alpha-clip): folhagem e
