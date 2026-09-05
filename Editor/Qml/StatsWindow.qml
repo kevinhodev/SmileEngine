@@ -832,9 +832,17 @@ Rectangle {
                                     Text {
                                         anchors.right: parent.right
                                         anchors.verticalCenter: parent.verticalCenter
+                                        // "mat" e o bind por item; com o caminho bindless
+                                        // ligado ele zera e a coluna passa a mostrar quantos
+                                        // draws leram a tabela e quantas linhas foram
+                                        // escritas. Sem os dois, o A/B so apareceria como
+                                        // um numero sumindo.
                                         text: submitPassRow.modelData.draws + " draws  ·  " +
                                               submitPassRow.modelData.considered + " vistos  ·  " +
-                                              submitPassRow.modelData.matBinds + " mat"
+                                              (submitPassRow.modelData.bindless > 0
+                                                  ? submitPassRow.modelData.bindless + " bindless  ·  " +
+                                                    submitPassRow.modelData.matRows + " linhas"
+                                                  : submitPassRow.modelData.matBinds + " mat")
                                         color: root.textNormal
                                         font.family: C.Theme.fontMono
                                         font.pixelSize: 9

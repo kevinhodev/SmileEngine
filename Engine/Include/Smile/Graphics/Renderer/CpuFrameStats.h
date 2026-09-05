@@ -142,6 +142,11 @@ namespace Smile {
         u32 SrvHeapUsed      = 0;
         u32 SrvHeapHighWater = 0;
         u32 SrvHeapCapacity  = 0;
+        // Presos em ranges aposentados esperando as duas fences (Fase 3), e alocacoes
+        // RECUSADAS por falta de espaco. `Used + Retired` e o que de fato nao esta disponivel;
+        // os dois separados porque so um deles cresce por vazamento de coleta.
+        u32 SrvHeapRetired   = 0;
+        u32 SrvHeapOverflows = 0;
 
         // Pool de residencia GPU (FGpuSceneSlots). Publicado porque o modo de falha dele e
         // CRESCIMENTO SILENCIOSO: um Collect que deixasse de rodar faria o pool subir a cada

@@ -1015,6 +1015,8 @@ namespace Smile {
         CpuStatsBuilding.SrvHeapUsed      = Backend->SRVHeap.UsedSlots();
         CpuStatsBuilding.SrvHeapHighWater = Backend->SRVHeap.HighWaterSlots();
         CpuStatsBuilding.SrvHeapCapacity  = Backend->SRVHeap.CapacitySlots();
+        CpuStatsBuilding.SrvHeapRetired   = Backend->SRVHeap.RetiredSlots();
+        CpuStatsBuilding.SrvHeapOverflows = Backend->SRVHeap.AllocationFailures();
 
         const FGpuSceneSlots& Slots = SceneState->Scene.GpuSlots();
         CpuStatsBuilding.GpuSlotsCapacity  = Slots.Capacity();

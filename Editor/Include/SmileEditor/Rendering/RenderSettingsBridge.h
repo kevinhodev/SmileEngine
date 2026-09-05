@@ -132,6 +132,11 @@ namespace SmileEditor {
         Q_PROPERTY(double renderScale READ GetRenderScale NOTIFY RenderSettingsChanged)
         Q_PROPERTY(bool frustumCullingEnabled READ IsFrustumCullingEnabled NOTIFY RenderSettingsChanged)
         Q_PROPERTY(bool occlusionCullingEnabled READ IsOcclusionCullingEnabled NOTIFY RenderSettingsChanged)
+        // Material bindless no raster (Fase 3 do GPU-DRIVEN-PLAN). DUAS propriedades: o estado
+        // EFETIVO e a disponibilidade. Sem a segunda, a UI mostraria um toggle que o engine
+        // recusa em silencio num device sem Resource Binding Tier 3.
+        Q_PROPERTY(bool bindlessMaterialsEnabled READ IsBindlessMaterialsEnabled NOTIFY RenderSettingsChanged)
+        Q_PROPERTY(bool bindlessMaterialsAvailable READ IsBindlessMaterialsAvailable NOTIFY RenderSettingsChanged)
         Q_PROPERTY(bool depthPrepassEnabled READ IsDepthPrepassEnabled NOTIFY RenderSettingsChanged)
 
     public:
@@ -302,6 +307,8 @@ namespace SmileEditor {
         bool              IsTAAEnabled() const;
         bool              IsFrustumCullingEnabled() const;
         bool              IsOcclusionCullingEnabled() const;
+        bool              IsBindlessMaterialsEnabled() const;
+        bool              IsBindlessMaterialsAvailable() const;
         bool              IsDepthPrepassEnabled() const;
 
         Q_INVOKABLE void ToggleGTAO();
@@ -315,6 +322,7 @@ namespace SmileEditor {
         Q_INVOKABLE void SetTAAEnabled(bool enabled);
         Q_INVOKABLE void SetFrustumCullingEnabled(bool enabled);
         Q_INVOKABLE void SetOcclusionCullingEnabled(bool enabled);
+        Q_INVOKABLE void SetBindlessMaterialsEnabled(bool enabled);
         Q_INVOKABLE void SetDepthPrepassEnabled(bool enabled);
         Q_INVOKABLE void ResetRenderSettings();
         Q_INVOKABLE void SetVolFogTemporal(bool enabled);

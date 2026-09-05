@@ -14,7 +14,7 @@ import path from "node:path";
 // entraram no RESUMO, que e o que a regua le com o includeSamples default (false). Enquanto
 // estavam so na amostra crua, existiam no editor e nao chegavam a quem mede.
 // 6: cpu.instanceTable, com footprint e sujeira das quatro colunas canonicas por slot.
-const PROTOCOL_VERSION = 6;
+const PROTOCOL_VERSION = 7;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -93,6 +93,15 @@ export interface CpuSubmitPass {
   materialBinds: number;
   meshBinds: number;
   skippedInvalid: number;
+  /**
+   * Fase 3 do GPU-DRIVEN-PLAN. `bindlessDraws` e quanto do passe leu material da tabela
+   * canonica; o FALLBACK e `draws - bindlessDraws`. `materialRowSets` e o par de
+   * `materialBinds`: no A/B um zera e o outro assume o mesmo N. `materialRowMisses` tem de
+   * ser zero — material fora da tabela desenha como o cinza da linha 0 sem erro nenhum.
+   */
+  bindlessDraws: number;
+  materialRowSets: number;
+  materialRowMisses: number;
 }
 
 export interface CpuProfileStats {
@@ -118,7 +127,9 @@ export interface CpuProfileStats {
     meshes: number;
   };
   objectConstantBytes: number;
-  srvHeap: { used: number; highWater: number; capacity: number };
+  /** `retired` e `overflows` entraram no protocolo 7 (Fase 3). */
+  srvHeap: { used: number; highWater: number; capacity: number; retired: number;
+             overflows: number };
   // Pool de residencia GPU. Retired parado com capacity acima de live e o sintoma de um Collect
   // que deixou de rodar -- crescimento que nao quebra nada e so aparece como memoria a mais.
   gpuSlots: { capacity: number; live: number; retired: number; exhausted: number };
@@ -629,6 +640,61 @@ export class SmileEditorBridge {
               `(esperado inteiro em [0, ${teto}], veio ${typeof valor} ${String(valor)}).`,
           );
         }
+      }
+    }
+    // Heap de descritores: `retired` e `overflows` entraram no protocolo 7 pela mesma razao dos
+    // contadores por passe — o resumo os le, e um editor anterior a Fase 3 os traria ausentes.
+    const heap = cpu.srvHeap as Partial<CpuProfileStats["srvHeap"]> | undefined;
+    if (!heap || typeof heap !== "object") {
+      throw new Error("Snapshot de perfil sem o bloco cpu.srvHeap (protocolo 7).");
+    }
+    for (const campo of ["used", "highWater", "capacity", "retired", "overflows"] as const) {
+      const valor = heap[campo];
+      if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
+        throw new Error(
+          `Snapshot de perfil com cpu.srvHeap.${campo} invalido ` +
+            `(esperado inteiro em [0, 4294967295], veio ${typeof valor} ${String(valor)}).`,
+        );
+      }
+    }
+    // Usados e aposentados PARTICIONAM o que esta indisponivel: um slot esta num estado ou no
+    // outro. A soma acima da capacidade descreve um heap que o allocator nao produz.
+    if ((heap.used as number) + (heap.retired as number) > (heap.capacity as number)) {
+      throw new Error(
+        `Snapshot incoerente: cpu.srvHeap com used+retired = ` +
+          `${(heap.used as number) + (heap.retired as number)} acima de capacity ${heap.capacity}.`,
+      );
+    }
+
+    // Contadores POR PASSE. Obrigatorios no protocolo 7, e a versao subiu por aqui: os tres da
+    // Fase 3 (`bindlessDraws`, `materialRowSets`, `materialRowMisses`) sao lidos pelo
+    // summarizeProfile, entao um editor anterior a fase os traria ausentes e o resumo publicaria
+    // agregado de `undefined` — a mesma falha que fez o gpuSlots virar exigencia na v4.
+    //
+    // Os tres antigos entram no mesmo laco de proposito: validar so os novos e continuar lendo
+    // os velhos sem checar seria duas politicas para o mesmo bloco.
+    for (let i = 0; i < cpu.passes.length; ++i) {
+      const passe = cpu.passes[i] as unknown as Record<string, unknown>;
+      if (!passe || typeof passe !== "object" || typeof passe.key !== "string") {
+        throw new Error(`Snapshot de perfil com cpu.passes[${i}] sem chave de passe.`);
+      }
+      for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
+                           "bindlessDraws", "materialRowSets", "materialRowMisses"] as const) {
+        const valor = passe[campo];
+        if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
+          throw new Error(
+            `Snapshot de perfil com cpu.passes[${i}].${campo} invalido ` +
+              `(esperado inteiro em [0, 4294967295], veio ${typeof valor} ${String(valor)}).`,
+          );
+        }
+      }
+      // Os dois se somam por construcao: todo draw do passe leu material pela tabela canonica ou
+      // pelo bind por item. Mais bindless que draws descreve um passe que o produtor nao produz.
+      if ((passe.bindlessDraws as number) > (passe.draws as number)) {
+        throw new Error(
+          `Snapshot incoerente: cpu.passes[${i}] com bindlessDraws ${passe.bindlessDraws} ` +
+            `acima de draws ${passe.draws}.`,
+        );
       }
     }
     if (typeof snapshot.directGpuSourceFrameIndex !== "number") {

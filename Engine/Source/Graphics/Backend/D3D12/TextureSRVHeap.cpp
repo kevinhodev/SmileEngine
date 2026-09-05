@@ -1,5 +1,7 @@
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Core/HResultCheck.h"
+#include "Smile/Core/Logger.h"
+#include <string>
 #include <stdexcept>
 
 namespace Smile {
@@ -36,6 +38,14 @@ namespace Smile {
                 return Slot;
             }
         }
+        // Conta e DIZ antes de lancar. O throw sobe por um caminho de load e a excecao so
+        // carrega a frase; sem isto, "acabou o heap" nunca dizia quanto faltava nem quanto
+        // estava preso esperando fence — que e a diferenca entre subir o teto e caçar um
+        // consumidor que nao devolve descritor.
+        ++AllocationFailures_;
+        LogError("TextureSRVHeap sem espaco: pedido de " + std::to_string(_Count) +
+                 " descritor(es); em uso " + std::to_string(UsedSlots_) + ", aposentados " +
+                 std::to_string(RetiredSlots_) + ", capacidade " + std::to_string(kCapacity));
         throw std::runtime_error("TextureSRVHeap capacity exceeded");
     }
 

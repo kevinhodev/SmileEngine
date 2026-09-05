@@ -507,6 +507,11 @@ namespace SmileEditor {
                 M[QStringLiteral("draws")]      = static_cast<int>(S.Draws);
                 M[QStringLiteral("matBinds")]   = static_cast<int>(S.MaterialBinds);
                 M[QStringLiteral("meshBinds")]  = static_cast<int>(S.MeshBinds);
+                // Fase 3: quanto do passe leu material pela tabela canonica, e quantas vezes a
+                // constante de root com a linha mudou. No A/B, `matBinds` e `matRows` trocam de
+                // lugar mantendo o mesmo total.
+                M[QStringLiteral("bindless")]   = static_cast<int>(S.BindlessDraws);
+                M[QStringLiteral("matRows")]    = static_cast<int>(S.MaterialRowSets);
                 Next.SubmitPasses.append(M);
             }
 
@@ -514,10 +519,18 @@ namespace SmileEditor {
             Next.MaterialBinds  = static_cast<int>(Cpu.InstrumentedMaterialBinds());
             Next.ObjectConstantsText =
                 QStringLiteral("%1 KiB").arg(Loc.toString(Cpu.ObjectConstantBytes / 1024.0, 'f', 1));
-            Next.SrvHeapText = QStringLiteral("%1 / %2  (pico %3)")
+            // Aposentados e overflows so aparecem quando existem: em uso normal sao zero, e uma
+            // coluna de zeros vira ruido. Mesma politica dos esgotados do pool de slots.
+            Next.SrvHeapText = QStringLiteral("%1 / %2  (pico %3%4%5)")
                                    .arg(Cpu.SrvHeapUsed)
                                    .arg(Cpu.SrvHeapCapacity)
-                                   .arg(Cpu.SrvHeapHighWater);
+                                   .arg(Cpu.SrvHeapHighWater)
+                                   .arg(Cpu.SrvHeapRetired
+                                            ? QStringLiteral(", aposentados %1").arg(Cpu.SrvHeapRetired)
+                                            : QString())
+                                   .arg(Cpu.SrvHeapOverflows
+                                            ? QStringLiteral(", OVERFLOW %1").arg(Cpu.SrvHeapOverflows)
+                                            : QString());
             Next.SrvHeapFrac = Cpu.SrvHeapCapacity
                                    ? static_cast<double>(Cpu.SrvHeapHighWater) / Cpu.SrvHeapCapacity
                                    : 0.0;

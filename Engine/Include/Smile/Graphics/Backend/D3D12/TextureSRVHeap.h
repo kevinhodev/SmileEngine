@@ -68,6 +68,11 @@ namespace Smile {
         // Slots presos em ranges aposentados esperando fence. Modo de falha e crescimento
         // silencioso: um Collect que deixasse de rodar consumiria o heap sem nada quebrar.
         u32 RetiredSlots()   const { return RetiredSlots_; }
+        // Alocacoes RECUSADAS por falta de espaco. O Allocate lanca — e continua lancando —,
+        // mas lancar de dentro de um load nao deixa numero nenhum para trás. O contador e o log
+        // dizem QUANTO faltava, que e a informacao que decide se o teto sobe ou se um consumidor
+        // esta vazando descritor.
+        u32 AllocationFailures() const { return AllocationFailures_; }
 
     private:
         struct FFreeRange { u32 Offset; u32 Count; };
@@ -87,5 +92,6 @@ namespace Smile {
         u32 UsedSlots_      = 0;
         u32 HighWaterSlots_ = 0;
         u32 RetiredSlots_   = 0;
+        u32 AllocationFailures_ = 0;
     };
 } 

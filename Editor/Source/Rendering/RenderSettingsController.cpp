@@ -308,6 +308,8 @@ namespace SmileEditor {
         Out.SrvHeapUsed      = S.SrvHeapUsed;
         Out.SrvHeapHighWater = S.SrvHeapHighWater;
         Out.SrvHeapCapacity  = S.SrvHeapCapacity;
+        Out.SrvHeapRetired   = S.SrvHeapRetired;
+        Out.SrvHeapOverflows = S.SrvHeapOverflows;
         Out.GpuSlotsCapacity  = S.GpuSlotsCapacity;
         Out.GpuSlotsLive      = S.GpuSlotsLive;
         Out.GpuSlotsRetired   = S.GpuSlotsRetired;
@@ -342,6 +344,9 @@ namespace SmileEditor {
             Row.MaterialBinds  = B.MaterialBinds;
             Row.MeshBinds      = B.MeshBinds;
             Row.SkippedInvalid = B.SkippedInvalid;
+            Row.BindlessDraws     = B.BindlessDraws;
+            Row.MaterialRowSets   = B.MaterialRowSets;
+            Row.MaterialRowMisses = B.MaterialRowMisses;
             Out.Passes.push_back(Row);
         }
         return Out;

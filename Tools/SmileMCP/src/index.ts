@@ -153,6 +153,10 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           used: summarize(cpuStats.map((c) => c.srvHeap.used)),
           highWater: cpuStats.at(-1)?.srvHeap.highWater ?? null,
           capacity: cpuStats[0]?.srvHeap.capacity ?? null,
+          // retired e distribuicao (sobe e desce com a coleta); overflows so cresce, entao
+          // vai como ULTIMO valor — a mediana de uma serie monotonica esconde o crescimento.
+          retired: summarize(cpuStats.map((c) => c.srvHeap.retired)),
+          overflows: cpuStats.at(-1)?.srvHeap.overflows ?? null,
         },
         // capacity e exhausted como ULTIMO valor, e nao mediana: os dois so crescem, e a mediana
         // de uma serie monotonica esconde justamente o crescimento que interessa. live e retired
@@ -201,6 +205,9 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
             materialBinds: summarize(rows.map((row) => row.materialBinds)),
             meshBinds: summarize(rows.map((row) => row.meshBinds)),
             skippedInvalid: summarize(rows.map((row) => row.skippedInvalid)),
+            bindlessDraws: summarize(rows.map((row) => row.bindlessDraws)),
+            materialRowSets: summarize(rows.map((row) => row.materialRowSets)),
+            materialRowMisses: summarize(rows.map((row) => row.materialRowMisses)),
           };
         }),
       }

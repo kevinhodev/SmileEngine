@@ -1121,6 +1121,14 @@ namespace SmileEditor {
         return Renderer && Renderer->Settings().GetOcclusionCulling();
     }
 
+    bool RenderSettingsBridge::IsBindlessMaterialsEnabled() const {
+        return Renderer && Renderer->Settings().GetBindlessMaterials();
+    }
+
+    bool RenderSettingsBridge::IsBindlessMaterialsAvailable() const {
+        return Renderer && Renderer->Settings().BindlessMaterialsAvailable();
+    }
+
     bool RenderSettingsBridge::IsDepthPrepassEnabled() const {
         return Renderer && Renderer->Settings().GetDepthPrepass();
     }
@@ -1245,6 +1253,14 @@ namespace SmileEditor {
     void RenderSettingsBridge::SetOcclusionCullingEnabled(bool _Enabled) {
         if (!Renderer) return;
         Renderer->Settings().SetOcclusionCulling(_Enabled);
+        emit RenderSettingsChanged();
+    }
+
+    // O engine RECUSA quando o device ou as PSOs nao suportam, e o sinal faz a UI reler o
+    // estado efetivo — o toggle volta sozinho para desligado em vez de mentir.
+    void RenderSettingsBridge::SetBindlessMaterialsEnabled(bool _Enabled) {
+        if (!Renderer) return;
+        Renderer->Settings().SetBindlessMaterials(_Enabled);
         emit RenderSettingsChanged();
     }
 

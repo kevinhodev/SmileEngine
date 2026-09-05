@@ -1453,6 +1453,45 @@ Rectangle {
                 }
             }
 
+            // Fase 3 do GPU-DRIVEN-PLAN. Card PROPRIO, e nao uma linha no de "Diagnostico":
+            // aquele diz "ligados por padrao" e este nasce desligado. Aqui o toggle e o A/B do
+            // plano — mesmas listas de CPU, mesmas draws, so o caminho pelo qual o pixel shader
+            // alcanca o material muda.
+            Card {
+                width: parent.width
+                height: 130
+                title: "GPU-driven"
+
+                Text {
+                    x: 20; y: 50
+                    width: parent.width - 40
+                    text: root.renderModel.bindlessMaterialsAvailable
+                          ? "Experimental. O material vai para o shader por uma tabela global em " +
+                            "vez de um bind por objeto. A imagem deve ficar idêntica."
+                          : "Indisponível: esta GPU não tem Resource Binding Tier 3."
+                    wrapMode: Text.WordWrap
+                    color: root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 11
+                }
+
+                Text {
+                    x: 20; y: 96
+                    text: "Materiais bindless"
+                    color: root.renderModel.bindlessMaterialsAvailable ? root.textNormal
+                                                                       : root.textMuted
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Toggle {
+                    id: bindlessMaterialsToggle
+                    anchors.right: parent.right; anchors.rightMargin: 20; y: 90
+                    interactive: root.renderModel.bindlessMaterialsAvailable
+                    checked: root.renderModel.bindlessMaterialsEnabled
+                    onToggled: root.renderModel.SetBindlessMaterialsEnabled(!checked)
+                }
+            }
+
             } // renderingLeftCol
 
             Column {

@@ -36,7 +36,7 @@ namespace SmileEditor {
         // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
         // 6: cpu.instanceTable. A tabela canônica de instâncias entrou no resumo que a régua
         // consome; sem bump, um editor v5 pareceria compatível e só falharia na agregação.
-        constexpr int kProtocolVersion = 6;
+        constexpr int kProtocolVersion = 7;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -235,6 +235,12 @@ namespace SmileEditor {
                     { QStringLiteral("materialBinds"), static_cast<double>(P.MaterialBinds) },
                     { QStringLiteral("meshBinds"), static_cast<double>(P.MeshBinds) },
                     { QStringLiteral("skippedInvalid"), static_cast<double>(P.SkippedInvalid) },
+                    // Fase 3. O fallback do passe e `draws - bindlessDraws`; `materialRowSets`
+                    // e o par de `materialBinds` (no A/B um zera e o outro assume o mesmo N) e
+                    // `materialRowMisses` tem de ser zero sempre.
+                    { QStringLiteral("bindlessDraws"), static_cast<double>(P.BindlessDraws) },
+                    { QStringLiteral("materialRowSets"), static_cast<double>(P.MaterialRowSets) },
+                    { QStringLiteral("materialRowMisses"), static_cast<double>(P.MaterialRowMisses) },
                 });
             }
             return QJsonObject{
@@ -265,6 +271,8 @@ namespace SmileEditor {
                     { QStringLiteral("used"),      static_cast<double>(_Cpu.SrvHeapUsed) },
                     { QStringLiteral("highWater"), static_cast<double>(_Cpu.SrvHeapHighWater) },
                     { QStringLiteral("capacity"),  static_cast<double>(_Cpu.SrvHeapCapacity) },
+                    { QStringLiteral("retired"),   static_cast<double>(_Cpu.SrvHeapRetired) },
+                    { QStringLiteral("overflows"), static_cast<double>(_Cpu.SrvHeapOverflows) },
                 } },
                 // Pool de residencia GPU. Serializado porque o modo de falha e crescimento
                 // silencioso: sem chegar a um consumidor, "esta visivel" seria mentira.
