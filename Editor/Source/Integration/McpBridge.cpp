@@ -235,9 +235,9 @@ namespace SmileEditor {
                     { QStringLiteral("materialBinds"), static_cast<double>(P.MaterialBinds) },
                     { QStringLiteral("meshBinds"), static_cast<double>(P.MeshBinds) },
                     { QStringLiteral("skippedInvalid"), static_cast<double>(P.SkippedInvalid) },
-                    // Fase 3. O fallback do passe e `draws - bindlessDraws`; `materialRowSets`
-                    // e o par de `materialBinds` (no A/B um zera e o outro assume o mesmo N) e
-                    // `materialRowMisses` tem de ser zero sempre.
+                    // Fase 3. Bindless e fallback sao contados diretamente por item. `draws`
+                    // tambem inclui itens que nao consomem material, portanto subtrair um do
+                    // outro nao produz nenhum destes contadores. Misses tem de ser zero.
                     { QStringLiteral("bindlessDraws"), static_cast<double>(P.BindlessDraws) },
                     { QStringLiteral("materialFallbackDraws"),
                       static_cast<double>(P.MaterialFallbackDraws) },

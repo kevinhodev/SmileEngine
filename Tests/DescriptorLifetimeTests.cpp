@@ -22,7 +22,9 @@
 #include <wrl/client.h>
 
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
+#include "Smile/Graphics/Backend/D3D12/UploadQueue.h"
 #include "Smile/Graphics/Resources/Material.h"
+#include "Smile/Graphics/Resources/Texture.h"
 
 // `ComPtr` sem qualificar seria ambiguo: o namespace Smile ja tem o proprio alias.
 using namespace Smile;
@@ -171,6 +173,42 @@ namespace {
         CheckEq(Segunda, Base, "e aposenta a base que estava publicada antes da recusa");
     }
 
+    // A troca interativa precisa criar a PROPRIA textura antes de republicar a tabela do
+    // material. Heap cheio deve ser decidido antes de abrir a fila COPY: testar apenas a
+    // republicacao com uma textura ja pronta deixaria o caminho real ainda capaz de lancar por
+    // dentro do callback Qt e abandonar uma command list parcialmente gravada.
+    void TestarImportacaoRecusadaAntesDoUpload(ID3D12Device* _Device) {
+        std::cout << "[descritores] importacao recusada antes do upload\n";
+        FTextureSRVHeap Heap;
+        Heap.Initialize(_Device);
+        Heap.Allocate(FTextureSRVHeap::kCapacity);
+
+        FUploadQueue Upload;
+        Upload.Initialize(_Device);
+
+        FTextureCPUData Data;
+        Data.Width  = 1;
+        Data.Height = 1;
+        Data.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        FMipData Mip;
+        Mip.Width  = 1;
+        Mip.Height = 1;
+        Mip.Pixels = { 255, 0, 255, 255 };
+        Data.Mips.push_back(std::move(Mip));
+
+        const u32 FalhasAntes = Heap.AllocationFailures();
+        FTexture Texture = FTexture::TryCreateFromCPU(_Device, Upload, Heap, Data);
+        Check(!Texture.IsValid(), "heap cheio recusa a textura sem lancar");
+        CheckEq(Heap.UsedSlots(), FTextureSRVHeap::kCapacity,
+                "a recusa nao consome nem devolve descritor alheio");
+        CheckEq(Heap.AllocationFailures(), FalhasAntes + 1u,
+                "a recusa da textura fica observavel");
+        CheckEq(Upload.RingChunkCount(), 0u,
+                "nenhum staging nasceu: a fila nao foi aberta antes da recusa");
+
+        Upload.Shutdown();
+    }
+
     // O caminho real: o editor troca uma textura, o material publica outro range e devolve o
     // antigo. A base MUDA — e por isso a linha canonica do material fica suja — e a antiga so
     // volta a ser alocavel depois da coleta.
@@ -226,6 +264,7 @@ int main() {
     TestarCoalescencia(Device.Get());
     TestarRepublicacaoDoMaterial(Device.Get());
     TestarRecusaComHeapCheio(Device.Get());
+    TestarImportacaoRecusadaAntesDoUpload(Device.Get());
 
     if (Failures != 0) {
         std::cerr << "\n" << Failures << " verificacao(oes) falharam\n";

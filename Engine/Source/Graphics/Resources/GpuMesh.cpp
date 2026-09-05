@@ -147,8 +147,10 @@ namespace Smile {
             // Contado no ponto da SUBMISSAO, como todo o resto deste balde. Os dois sao
             // exclusivos e nenhum cobre o draw SEM material — recompor por subtracao daria um
             // numero plausivel e errado.
-            if (Bindless)               ++Stats->BindlessDraws;
-            else if (NeededMaterial)    ++Stats->MaterialFallbackDraws;
+            if (NeededMaterial) {
+                if (Bindless) ++Stats->BindlessDraws;
+                else          ++Stats->MaterialFallbackDraws;
+            }
         }
     }
 }

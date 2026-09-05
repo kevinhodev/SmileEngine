@@ -103,10 +103,10 @@ namespace SmileEditor {
         quint32 MaterialBinds  = 0;
         quint32 MeshBinds      = 0;
         quint32 SkippedInvalid = 0;
-        // Fase 3. `BindlessDraws` diz quanto do passe leu material da tabela canonica; o
-        // FALLBACK e `Draws - BindlessDraws`, publicado como diferenca porque os dois se somam
-        // por construcao. `MaterialRowMisses` TEM de ser zero: material fora da tabela desenha
-        // como o cinza da linha 0 sem erro nenhum.
+        // Fase 3. `BindlessDraws` e `MaterialFallbackDraws` contam apenas draws que consomem
+        // material; `Draws` inclui ainda o terceiro estado, sem material. Por isso nenhum dos
+        // dois se deriva por subtracao. `MaterialRowMisses` TEM de ser zero: material fora da
+        // tabela desenha como o cinza da linha 0 sem erro nenhum.
         quint32 BindlessDraws         = 0;
         quint32 MaterialFallbackDraws = 0;
         quint32 MaterialRowSets   = 0;

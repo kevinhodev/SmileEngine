@@ -143,6 +143,11 @@ namespace Smile {
         void RetainTexturePath(const FTexture* Texture, std::wstring Path,
                                const FTextureCPUData& Data);
 
+        // Remove a procedencia de uma textura de edicao cuja publicacao foi recusada. A textura
+        // nunca chegou a um material; manter a entrada prenderia tanto o ponteiro morto quanto
+        // bytes de telemetria.
+        void ForgetTexture(const FTexture* Texture);
+
         void Clear();
 
         // Geometria de bake carregada sob demanda. Os vetores sao do CHAMADOR: a view aponta para

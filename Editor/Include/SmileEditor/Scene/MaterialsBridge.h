@@ -259,8 +259,10 @@ namespace SmileEditor {
         // Slot helpers (0..7 na ordem Albedo/Normal/MR/AO/Emissivo/Height/Metal/Rough).
         Smile::FTexture** SlotPointer(Smile::FMaterial& M, int Slot) const;
         Smile::u32*       SlotHasFlag(Smile::FMaterial& M, int Slot) const;
-        void   ApplySlotTexture(Smile::FMaterial& M, int Slot, Smile::FTexture* T);
-        Smile::FTexture* LoadTextureCached(const QString& Path, int Slot);
+        bool   ApplySlotTexture(Smile::FMaterial& M, int Slot, Smile::FTexture* T);
+        Smile::FTexture* LoadTextureCached(const QString& Path, int Slot,
+                                           bool* OutCreated = nullptr);
+        void   DiscardFreshTexture(Smile::FTexture* T);
         void   ApplyIsolation();         // Visible = (Material == selecionado)
         // Desliga o isolar RESTAURANDO o Visible salvo (prefixo comum, p/ o caso de carga
         // aditiva ter crescido o vetor de renderables). Usar sempre que a cena continuar viva —

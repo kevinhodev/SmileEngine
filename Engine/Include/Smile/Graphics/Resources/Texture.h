@@ -58,6 +58,15 @@ namespace Smile {
                                       const FTextureCPUData& Data,
                                       EVramCategory Category = EVramCategory::SceneTextures);
 
+        // Versao para EDICAO com a cena viva: falta de descritor e uma recusa recuperavel, nao
+        // uma excecao. A reserva acontece ANTES de abrir/gravar a fila de upload; assim um heap
+        // cheio nao deixa uma command list aberta referenciando um recurso local que ja morreu.
+        // Outras falhas de device continuam sendo fatais e podem lancar.
+        static FTexture TryCreateFromCPU(
+            ID3D12Device* Device, FUploadQueue& UploadQueue, FTextureSRVHeap& SRVHeap,
+            const FTextureCPUData& Data,
+            EVramCategory Category = EVramCategory::SceneTextures);
+
         // Gera a mip chain a partir da mip 0 ja preenchida (RGBA8, 4 bytes por texel), descartando
         // o que houver depois dela. Mesmo box 2x2 do LoadCPU — com SrgbSpace a media acontece em
         // LINEAR (media de bytes gama escurece a mip). Para texturas geradas em runtime, que nao
@@ -101,8 +110,14 @@ namespace Smile {
         static FTexture RecordUpload(ID3D12Device* Device, ID3D12GraphicsCommandList* CommandList,
                                      FTextureSRVHeap& SRVHeap,
                                      const std::vector<FMipData>& Mips, DXGI_FORMAT Format,
-                                     FUploadQueue& UploadQueue,
+                                     FUploadQueue& UploadQueue, u32 ReservedSrvSlot,
                                      EVramCategory Category = EVramCategory::SceneTextures);
+
+        static FTexture UploadReserved(ID3D12Device* Device, FUploadQueue& UploadQueue,
+                                       FTextureSRVHeap& SRVHeap,
+                                       const std::vector<FMipData>& Mips, DXGI_FORMAT Format,
+                                       u32 ReservedSrvSlot,
+                                       EVramCategory Category = EVramCategory::SceneTextures);
 
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 

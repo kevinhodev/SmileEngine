@@ -186,6 +186,27 @@ namespace {
         CheckEq(Stats.MaterialRowMisses, 0u, "a linha 7 nao e a linha default");
     }
 
+    // `Bindless` descreve o modo do PASSE, nao afirma que cada item le material. Quando sombras
+    // opacas migrarem para a root bindless, os casters opacos continuarao sem BindMaterialRow.
+    // Contar todo draw do passe inflaria o A/B exatamente como a formula antiga inflava o
+    // fallback, apenas do outro lado.
+    void TestarBindlessSemMaterial(FRig& _Rig) {
+        std::cout << "[submissao] passe bindless, draw sem material\n";
+        FDrawSubmitStats Stats;
+        FDrawSubmitCache Submit;
+        Submit.Stats             = &Stats;
+        Submit.Bindless          = true;
+        Submit.MaterialRootIndex = FRig::kMaterialRootIndex;
+
+        for (int i = 0; i < 5; ++i) Submit.DrawMesh(_Rig.List.Get(), &_Rig.Mesh);
+
+        CheckEq(Stats.Draws, 5u, "os cinco draws foram contados");
+        CheckEq(Stats.BindlessDraws, 0u,
+                "modo bindless sem pedido de material nao vira consumo bindless");
+        CheckEq(Stats.MaterialFallbackDraws, 0u,
+                "e tambem nao vira fallback de material");
+    }
+
     // O laco MISTO, que e a forma real das sombras e da chuva: no mesmo passe, casters
     // alpha-tested pedem material e os opacos nao. O pedido nao pode vazar de um item para o
     // seguinte.
@@ -236,6 +257,7 @@ int main() {
     TestarDrawSemMaterial(Rig);
     TestarFallbackClassico(Rig);
     TestarBindless(Rig);
+    TestarBindlessSemMaterial(Rig);
     TestarLacoMisto(Rig);
     TestarPedidoNaoVaza(Rig);
 

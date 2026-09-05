@@ -69,6 +69,14 @@ namespace Smile {
         if (Inserted) RetainedBytes_ += Bytes;
     }
 
+    void FOmmBakeInputStore::ForgetTexture(const FTexture* _Texture) {
+        const auto It = _Texture ? Textures_.find(_Texture) : Textures_.end();
+        if (It == Textures_.end()) return;
+        const u64 Bytes = sizeof(FTextureSource) + It->second.Path.size() * sizeof(wchar_t);
+        RetainedBytes_ = RetainedBytes_ >= Bytes ? RetainedBytes_ - Bytes : 0;
+        Textures_.erase(It);
+    }
+
     void FOmmBakeInputStore::Clear() {
         Meshes_.clear();
         Textures_.clear();

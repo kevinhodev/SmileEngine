@@ -95,9 +95,10 @@ export interface CpuSubmitPass {
   skippedInvalid: number;
   /**
    * Fase 3 do GPU-DRIVEN-PLAN. `bindlessDraws` e quanto do passe leu material da tabela
-   * canonica; o FALLBACK e `draws - bindlessDraws`. `materialRowSets` e o par de
-   * `materialBinds`: no A/B um zera e o outro assume o mesmo N. `materialRowMisses` tem de
-   * ser zero — material fora da tabela desenha como o cinza da linha 0 sem erro nenhum.
+   * canonica. Nao se deriva fallback por subtracao: draws que nao consomem material pertencem
+   * a um terceiro estado. `materialRowSets` mede escritas efetivas da linha;
+   * `materialRowMisses` tem de ser zero — material fora da tabela desenha como o cinza da
+   * linha 0 sem erro nenhum.
    */
   bindlessDraws: number;
   /**

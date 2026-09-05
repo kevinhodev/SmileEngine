@@ -359,18 +359,22 @@ namespace SmileEditor {
                 if (TexOverrides.value(M.get()).contains(Slot)) continue; // ja aplicado
                 const QString Path = T.value().toString();
                 if (Path.isEmpty()) {
-                    ApplySlotTexture(*M, Slot, nullptr);
-                    TexOverrides[M.get()][Slot] = QString();
+                    if (ApplySlotTexture(*M, Slot, nullptr))
+                        TexOverrides[M.get()][Slot] = QString();
                     continue;
                 }
-                Smile::FTexture* Loaded = LoadTextureCached(Path, Slot);
+                bool Created = false;
+                Smile::FTexture* Loaded = LoadTextureCached(Path, Slot, &Created);
                 if (!Loaded) {
                     Smile::LogWarning("Materiais: textura do sidecar sumiu, mantendo a cozida: "
                                       + Path.toStdString());
                     continue;
                 }
-                ApplySlotTexture(*M, Slot, Loaded);
-                TexOverrides[M.get()][Slot] = Path;
+                if (ApplySlotTexture(*M, Slot, Loaded)) {
+                    TexOverrides[M.get()][Slot] = Path;
+                } else if (Created) {
+                    DiscardFreshTexture(Loaded);
+                }
             }
         }
     }
@@ -986,11 +990,11 @@ namespace SmileEditor {
         return nullptr;
     }
 
-    void MaterialsBridge::ApplySlotTexture(Smile::FMaterial& _M, int _Slot,
+    bool MaterialsBridge::ApplySlotTexture(Smile::FMaterial& _M, int _Slot,
                                            Smile::FTexture* _T) {
         Smile::FTexture** Ptr = SlotPointer(_M, _Slot);
         Smile::u32*      Flag = SlotHasFlag(_M, _Slot);
-        if (!Ptr || !Flag || !Renderer) return;
+        if (!Ptr || !Flag || !Renderer) return false;
         const bool Valid = _T && _T->IsValid();
 
         // TRANSACIONAL: o ponteiro e a flag mudam antes da publicacao — a republicacao le os
@@ -1009,7 +1013,7 @@ namespace SmileEditor {
             *Flag = PrevFlag;
             Smile::LogError("Troca de textura recusada: o heap de descritores nao tem espaco. "
                             "O material continua como estava.");
-            return;
+            return false;
         }
         _M.UpdateConstants();
         // Os slots viram indices bindless na linha do material (base + deslocamento) e o bit de
@@ -1021,6 +1025,7 @@ namespace SmileEditor {
         // um material masked invalida o bake. Troca de textura e edicao DISCRETA (um dialogo de
         // arquivo), entao o commit e imediato.
         if (_Slot == 0 && _M.Constants.AlphaTest) CommitOmmInputs();
+        return true;
     }
 
     // Publica que uma ENTRADA do bake de micro-map mudou. Separado do TouchSelectedRT porque o
@@ -1033,7 +1038,9 @@ namespace SmileEditor {
     // Chamado pelo QML quando o controle e SOLTO. Ver SliderRow::committed.
     void MaterialsBridge::commitOmmInputs() { CommitOmmInputs(); }
 
-    Smile::FTexture* MaterialsBridge::LoadTextureCached(const QString& _Path, int _Slot) {
+    Smile::FTexture* MaterialsBridge::LoadTextureCached(const QString& _Path, int _Slot,
+                                                        bool* _OutCreated) {
+        if (_OutCreated) *_OutCreated = false;
         if (!Renderer) return nullptr;
         // Semantica por slot: normal map tem mip chain propria (Toksvig), albedo/emissivo
         // sao sRGB (a view lineariza no sample); o resto e dado linear.
@@ -1045,8 +1052,20 @@ namespace SmileEditor {
             return Cached;
         Smile::FTexture* T =
             Renderer->ImportRuntimeTexture(_Path.toStdWString(), IsNormal, sRGB);
-        if (T) PathTexCache.insert(Key, T);
+        if (T) {
+            PathTexCache.insert(Key, T);
+            if (_OutCreated) *_OutCreated = true;
+        }
         return T;
+    }
+
+    void MaterialsBridge::DiscardFreshTexture(Smile::FTexture* _T) {
+        if (!_T || !Renderer) return;
+        for (auto It = PathTexCache.begin(); It != PathTexCache.end();) {
+            if (It.value() == _T) It = PathTexCache.erase(It);
+            else                 ++It;
+        }
+        Renderer->DiscardUnpublishedRuntimeTexture(_T);
     }
 
     void MaterialsBridge::browseSlotTexture(int _Slot) {
@@ -1067,12 +1086,16 @@ namespace SmileEditor {
         if (File.isEmpty()) return;
         LastTexDir = QFileInfo(File).path();
 
-        Smile::FTexture* T = LoadTextureCached(File, _Slot);
+        bool Created = false;
+        Smile::FTexture* T = LoadTextureCached(File, _Slot, &Created);
         if (!T) {
             Smile::LogError("Materiais: falha ao carregar textura " + File.toStdString());
             return;
         }
-        ApplySlotTexture(*M, _Slot, T);
+        if (!ApplySlotTexture(*M, _Slot, T)) {
+            if (Created) DiscardFreshTexture(T);
+            return;
+        }
         TexOverrides[M][_Slot] = File;
         TouchSelected(EChangeDomain::Textures);
     }
@@ -1080,7 +1103,7 @@ namespace SmileEditor {
     void MaterialsBridge::clearSlot(int _Slot) {
         auto M = SelMat();
         if (!M || _Slot < 0 || _Slot >= int(Smile::kMaterialTextureSlots)) return;
-        ApplySlotTexture(*M, _Slot, nullptr);
+        if (!ApplySlotTexture(*M, _Slot, nullptr)) return;
         // "" no override = slot explicitamente limpo (sobrevive ao save/load).
         TexOverrides[M][_Slot] = QString();
         TouchSelected(EChangeDomain::Textures);

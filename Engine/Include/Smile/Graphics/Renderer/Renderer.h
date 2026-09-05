@@ -246,6 +246,11 @@ namespace Smile {
         // view (albedo/emissivo). Dona da textura: ImportedTextures. nullptr em falha.
         FTexture* ImportRuntimeTexture(const std::wstring& Path, bool IsNormalMap, bool sRGB);
 
+        // Desfaz uma importacao de EDICAO que ainda nao foi publicada por material nenhum.
+        // ImportRuntimeTexture espera a fila de upload; portanto o recurso e o seu descritor
+        // podem ser soltos imediatamente enquanto essa pre-condicao continuar verdadeira.
+        bool DiscardUnpublishedRuntimeTexture(FTexture* Texture);
+
         // Preview offscreen do Editor de Materiais (FMaterialPreview: HDRI proprio, nao
         // interfere no IBL da cena). Submit nunca espera a GPU; Consume so retorna slots prontos.
         FMaterialPreview::ESubmitResult SubmitMaterialPreview(

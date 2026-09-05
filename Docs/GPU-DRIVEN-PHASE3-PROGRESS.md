@@ -40,6 +40,13 @@ onde ficar sem descritor é fatal e não há o que desfazer. `RepublishTextureTa
 transacional — devolve `false` sem tocar em nada — e o bridge restaura ponteiro e flag na
 recusa.
 
+A revisão seguinte fechou a metade anterior da mesma transação: a textura importada ainda
+reservava o seu descritor por `Allocate` **depois** de abrir e gravar a fila COPY. Heap cheio
+continuava podendo lançar pelo callback Qt antes de alcançar a republicação segura. A importação
+interativa agora reserva por `TryAllocate` antes de `Begin`; se a tabela do material recusar depois,
+o bridge não persiste o override e descarta textura, procedência OMM e descritor recém-criados.
+O caminho de load continua fatal.
+
 ### P2 — o reset republicava a tabela até oito vezes
 
 Uma publicação por textura válida: oito tabelas alocadas, sete aposentadas que ninguém lê, e as
@@ -67,6 +74,10 @@ casters alpha-tested amarram material, no mesmo laço dos que não amarram.
 aquele item pediu material. A borda do MCP valida
 `bindlessDraws + materialFallbackDraws <= draws` — sem exigir que **feche**, porque o terceiro
 estado existe e é maioria em passes inteiros.
+
+A guarda é simétrica: `Bindless` descreve o modo do passe, mas `BindlessDraws` só sobe quando o
+item também pediu material. Isso é pré-requisito para migrar sombras opacas — elas podem viver
+numa root bindless sem que cada caster leia uma linha de material.
 
 ## A primeira tarefa: o que a verificação achou
 
@@ -238,7 +249,9 @@ disponibilidade, então o toggle aparece desabilitado em vez de mentir.
 | chuva (occlusion map) | root do próprio subsistema |
 | picking, contorno de seleção, preview de material | caminho de editor; o plano autoriza |
 
-Nenhum deles é acidente, e todos aparecem como `Draws - BindlessDraws`.
+Nenhum deles é acidente. Os que ainda consomem material clássico aparecem em
+`MaterialFallbackDraws`; caminhos sem material e subsistemas com telemetria própria não podem ser
+reconstruídos como `Draws - BindlessDraws`, porque existe um terceiro estado por draw.
 
 ### O custo de CPU que o A/B não pode carregar
 
@@ -277,8 +290,8 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 | derivação do bloco de raster | `Smile.GpuMaterialRecord`: oráculo do `MaterialCB` transcrito à mão — os valores **efetivos** que o shader computava — em 128 casos exaustivos |
 | ABI C++ ↔ HLSL | `Smile.GpuSceneTablesWarp`: os nove campos novos e as oito constantes novas, lidos pelo espelho de produção com o DXC do jogo |
 | contrato do MCP | `Smile.EditorBridgeValidation`: campo a campo mais as coerências dos três estados |
-| contagem de submissão | `Smile.SubmitStats` (WARP, command list gravada e nunca executada): draw sem material, clássico, bindless, laço misto e o pedido que não vaza por malha inválida |
-| recusa com o heap cheio | `Smile.DescriptorLifetime`: enche o heap e exige base, ocupação e contador de falha intactos |
+| contagem de submissão | `Smile.SubmitStats` (WARP, command list gravada e nunca executada): draw sem material nos modos clássico **e bindless**, clássico, bindless, laço misto e o pedido que não vaza por malha inválida |
+| recusa com o heap cheio | `Smile.DescriptorLifetime`: enche o heap e exige base, ocupação e contador de falha intactos; a importação interativa recusa antes de abrir a fila COPY |
 
 ### Casos negativos rodados
 
@@ -292,7 +305,9 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 | remover a coerência `bindlessDraws <= draws` | 1 asserção vermelha |
 | aceitar `undefined` no bloco `srvHeap` | 5 asserções vermelhas |
 | voltar a `Allocate` que lança na republicação | o processo do teste TERMINA (exit 127) |
+| voltar a `Allocate` na criação interativa da textura | o processo termina com `0xC0000409`, antes das asserções |
 | voltar à conta antiga do fallback (`Draws - BindlessDraws`) | 3 asserções vermelhas |
+| contar todo draw de um passe bindless | 5 falsos `BindlessDraws`, pegos pelo caso sem material |
 | exigir que bindless + fallback FECHE com draws | recusa o passe sem material |
 
 ### Build e suíte

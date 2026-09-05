@@ -1006,8 +1006,11 @@ namespace Smile {
         const FTextureCPUData Cpu = EndsWith(L".dds")
             ? FTexture::LoadDDSCPU(_Path, _sRGB)
             : FTexture::LoadCPU(_Path, _IsNormalMap, _sRGB);
-        FTexture Tex = FTexture::CreateFromCPU(Backend->Device.Native(), Backend->UploadQueue,
-                                               Backend->SRVHeap, Cpu);
+        // Edicao e uma transacao recuperavel. Reserva o descritor ANTES de abrir a fila de
+        // upload; heap cheio devolve textura invalida em vez de lancar por dentro do callback
+        // Qt com uma command list parcialmente gravada.
+        FTexture Tex = FTexture::TryCreateFromCPU(Backend->Device.Native(), Backend->UploadQueue,
+                                                  Backend->SRVHeap, Cpu);
         if (!Tex.IsValid()) return nullptr;
 
         ImportedTextures.push_back(std::make_unique<FTexture>(std::move(Tex)));
@@ -1021,6 +1024,23 @@ namespace Smile {
         // o rebake vai reler com exatamente a mesma receita.
         OmmBakeInputs.RetainTexturePath(Out, _Path, Cpu);
         return Out;
+    }
+
+    bool Renderer::DiscardUnpublishedRuntimeTexture(FTexture* _Texture) {
+        if (!_Texture || !Backend) return false;
+        const auto It = std::find_if(
+            ImportedTextures.begin(), ImportedTextures.end(),
+            [_Texture](const std::unique_ptr<FTexture>& Candidate) {
+                return Candidate.get() == _Texture;
+            });
+        if (It == ImportedTextures.end()) return false;
+
+        // A chamada so e valida antes de o ponteiro entrar num material. O upload avulso ja
+        // esperou a fila COPY e nenhuma command list da fila direta conhece este descritor.
+        OmmBakeInputs.ForgetTexture(_Texture);
+        (*It)->Release(Backend->SRVHeap);
+        ImportedTextures.erase(It);
+        return true;
     }
 
     FMaterialPreview::ESubmitResult Renderer::SubmitMaterialPreview(

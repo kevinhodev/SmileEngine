@@ -153,7 +153,7 @@ namespace Smile {
     FTexture FTexture::RecordUpload(ID3D12Device* _Device, ID3D12GraphicsCommandList* _CommandList,
                                     FTextureSRVHeap& _SRVHeap,
                                     const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
-                                    FUploadQueue& _UploadQueue,
+                                    FUploadQueue& _UploadQueue, u32 _ReservedSrvSlot,
                                     EVramCategory _Category) {
         const u32 MipCount = static_cast<u32>(_Mips.size());
         const u32 Width    = _Mips[0].Width;
@@ -215,7 +215,6 @@ namespace Smile {
         // estado de shader) — a textura decai pra COMMON no fim do batch e promove pra
         // SRV implicitamente no primeiro read da fila direta.
 
-        u32 Slot = _SRVHeap.Allocate(1);
         D3D12_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
         SRVDesc.Format                        = _Format;
         SRVDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -223,11 +222,11 @@ namespace Smile {
         SRVDesc.Texture2D.MipLevels           = MipCount;
         SRVDesc.Texture2D.MostDetailedMip     = 0;
         SRVDesc.Texture2D.ResourceMinLODClamp = 0.0f;
-        _SRVHeap.CreateSRV(_Device, GPUTexture.Get(), SRVDesc, Slot);
+        _SRVHeap.CreateSRV(_Device, GPUTexture.Get(), SRVDesc, _ReservedSrvSlot);
 
         FTexture Result;
         Result.GpuResource = GPUTexture;
-        Result.Slot        = Slot;
+        Result.Slot        = _ReservedSrvSlot;
         Result.TexWidth    = Width;
         Result.TexHeight   = Height;
         Result.TexMipCount = MipCount;
@@ -251,8 +250,17 @@ namespace Smile {
 
             for (; i < _Data.size(); ++i) {
                 if (!_Data[i].Valid()) continue;
-                Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
-                                      _Data[i].Mips, _Data[i].Format, _UploadQueue);
+                // O load em batch continua fatal por falta de heap, mas a reserva vem ANTES de
+                // gravar as copias desta textura. O caminho recuperavel do editor usa
+                // TryCreateFromCPU abaixo e reserva antes ate de abrir a command list.
+                const u32 Slot = _SRVHeap.Allocate(1);
+                try {
+                    Out[i] = RecordUpload(_Device, CommandList, _SRVHeap,
+                                          _Data[i].Mips, _Data[i].Format, _UploadQueue, Slot);
+                } catch (...) {
+                    _SRVHeap.Free(Slot, 1);
+                    throw;
+                }
                 for (const auto& m : _Data[i].Mips) BatchBytes += m.Pixels.size();
                 if (BatchBytes >= kStagingBudget) { ++i; break; }
             }
@@ -266,14 +274,46 @@ namespace Smile {
                                FTextureSRVHeap& _SRVHeap,
                                const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
                                EVramCategory _Category) {
+        // Capacidade e decidida ANTES de Begin. No caminho antigo, Allocate vinha depois dos
+        // CopyTextureRegion; uma recusa deixava a fila aberta apontando para GPUTexture local.
+        const u32 Slot = _SRVHeap.Allocate(1);
+        try {
+            return UploadReserved(_Device, _UploadQueue, _SRVHeap, _Mips, _Format, Slot,
+                                  _Category);
+        } catch (...) {
+            _SRVHeap.Free(Slot, 1);
+            throw;
+        }
+    }
+
+    FTexture FTexture::UploadReserved(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
+                                      FTextureSRVHeap& _SRVHeap,
+                                      const std::vector<FMipData>& _Mips, DXGI_FORMAT _Format,
+                                      u32 _ReservedSrvSlot, EVramCategory _Category) {
         ID3D12GraphicsCommandList* CommandList = _UploadQueue.Begin();
         FTexture Result = RecordUpload(_Device, CommandList, _SRVHeap, _Mips, _Format,
-                                       _UploadQueue, _Category);
+                                       _UploadQueue, _ReservedSrvSlot, _Category);
         _UploadQueue.Submit();
         // Carga avulsa (default/lua/weather map): o chamador usa a textura em seguida,
         // entao espera aqui mesmo — o ganho de overlap e do caminho em batch.
         _UploadQueue.WaitIdle();
         return Result;
+    }
+
+    FTexture FTexture::TryCreateFromCPU(ID3D12Device* _Device, FUploadQueue& _UploadQueue,
+                                        FTextureSRVHeap& _SRVHeap,
+                                        const FTextureCPUData& _Data,
+                                        EVramCategory _Category) {
+        if (!_Data.Valid()) return FTexture{};
+        const u32 Slot = _SRVHeap.TryAllocate(1);
+        if (Slot == FTextureSRVHeap::kInvalidSlot) return FTexture{};
+        try {
+            return UploadReserved(_Device, _UploadQueue, _SRVHeap, _Data.Mips, _Data.Format, Slot,
+                                  _Category);
+        } catch (...) {
+            _SRVHeap.Free(Slot, 1);
+            throw;
+        }
     }
 
     void FTexture::Release(FTextureSRVHeap& _SRVHeap) {
