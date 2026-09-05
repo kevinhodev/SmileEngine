@@ -1281,9 +1281,10 @@ explícita do proprietário; este fechamento não a inicia automaticamente.
 
 ## Fase 2 — Tabelas canônicas e formato-base deliberado
 
-> **Estado em 2026-09-05 — EM ANDAMENTO.** Materiais e meshes entregues; comparação visual e
-> validação interativa concluídas. Resta a tabela canônica de instâncias. Detalhe, evidência e o que
-> cada gate fechou (e o que não fechou) em
+> **Estado em 2026-09-05 — FECHADA.** Materiais, meshes e instâncias estão integrados; comparação
+> visual, validação interativa, ABI em WARP, Release/Debug 59/59 e a medição da instância canônica
+> na sintética de 1M estão concluídos. Detalhe, evidência e as fronteiras que permanecem para as
+> fases seguintes em
 > [GPU-DRIVEN-PHASE2-PROGRESS.md](GPU-DRIVEN-PHASE2-PROGRESS.md).
 >
 > **Decisão do proprietário, 2026-09-04 — o formato-base NÃO é bumpado nesta fase.** A verificação
@@ -1307,11 +1308,16 @@ alterar ainda a submissão raster.
 
 - escolher layouts paginados/SoA por consumidor e orçar bytes por instância residente;
 - criar espelhos C++/HLSL com ABI testada;
+- publicar `FGpuSceneInstanceTable` por slot estável em quatro colunas SoA (meta, bounds,
+  transform atual e anterior), com dirty rows e telemetria;
+- fazer o HiZ consumir os bounds canônicos e os históricos CPU de raster/temporal derivarem da
+  mesma fonte; os buffers GPU especializados só são aposentados na Fase 4;
 - separar material do snapshot por instância do RT;
 - fazer `FRTInstanceGeo` consumir/derivar da tabela canônica, sem virar tabela universal;
 - implementar dirty rows/pages para transform, material e estrutura;
-- definir um novo formato-base deliberado; como v9 já identificou o experimento descartado, usar uma
-  versão nova e documentada em vez de reaproveitar semanticamente o número;
+- tomar uma decisão deliberada sobre o formato-base; nesta fase a decisão foi **não** persistir
+  campos sem consumidor. Quando houver byte novo real, usar v10 documentada em vez de reaproveitar
+  semanticamente a v9 do experimento descartado;
 - não incluir hierarquia de clusters nessa versão;
 - declarar `VirtualGeometryId` opcional/reservado sem serializar consumidor imaginário.
 
@@ -1412,7 +1418,8 @@ culling.
 
 ### Trabalho
 
-- criar buffers persistentes por frame safety, allocator e high-water mark;
+- evoluir a `FGpuSceneInstanceTable` criada na Fase 2 para páginas/ranges sujos, allocator e
+  high-water mark; não criar uma segunda GPU scene paralela;
 - upload inicial por páginas e updates incrementais por dirty ranges;
 - produzir um range único para cena plana;
 - **excluir a classe `RaytracingOnly` do conjunto candidato de raster.** `FRenderable::RaytracingOnly`

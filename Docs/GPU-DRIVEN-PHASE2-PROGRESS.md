@@ -2,9 +2,9 @@
 
 Data: 2026-09-05
 
-Estado: **em andamento, não promovível.** As tabelas de materiais e de meshes estão entregues, e a
-validação interativa dos caminhos de edição foi concluída em Debug. Resta implementar a
-**`FGpuSceneInstance`**, já desenhada e orçada; é a única pendência do objetivo declarado da fase.
+Estado: **FECHADA.** As três tabelas canônicas (material, mesh e instância) estão integradas; os
+caminhos de edição/OMM foram validados em Debug, a ABI foi exercitada em WARP e a sintética de 1M
+confirmou zero varredura/upload da tabela no regime estável. Release e Debug fecham 59/59.
 
 O gate do OMM deixou de ser pendência: **decidido pela reconstrução** e implementado.
 
@@ -29,6 +29,7 @@ Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 | `04bf69a` | fingerprint de conteúdo, atomicidade por material, ranges antes das alocações |
 | `5aabcef` | publicação transacional dos BLAS, rollback total e reclamação dos recursos substituídos |
 | `752cf3d` | uploads do rebake retidos até a submissão terminar |
+| `7ff5e9f` | `FGpuSceneInstanceTable`, migração de HiZ/histórico CPU, ABI e telemetria |
 
 ## Findings da revisão (2026-09-04)
 
@@ -131,8 +132,9 @@ Vale ser honesto sobre o que ela **não** dá: zero byte de economia no snapshot
 estrutural, e são três coisas concretas:
 
 1. **Uma casa para o que é da malha.** Bounds locais, contagens e os descritores bindless de
-   geometria. Os bounds ainda vivem duplicados em cada `FRenderable` que usa a malha (copiados do
-   `SMeshEntry` no load); a duplicação sai quando a tabela de instâncias existir, na Fase 4.
+   geometria. Os bounds locais ainda vivem duplicados em cada `FRenderable` que usa a malha
+   (copiados do `SMeshEntry` no load); a duplicação sai na Fase 4, quando os consumidores deixam
+   de consultar o renderável diretamente.
 2. **A posse dos descritores de geometria saiu do `FRaytracingScene`** — decisão D12: o ray tracing
    é consumidor da cena, não dono dela. Junto veio a enumeração das malhas únicas, que agora tem um
    dono só; o `Build` lê a lista de lá para dimensionar os BLAS. Isso não é arrumação: aquela
@@ -176,7 +178,7 @@ todo hit de RT.
 | atualização de material toca uma linha, não todos os `FRTInstanceGeo` | **feito**, testado em `DiffMaterialRows` |
 | o caminho estável não chama `Flush`/`WaitIdle` por edição de material | **feito**: `NotifyMaterialRTStateChanged` perdeu os dois |
 | OMM invalidado quando suas ENTRADAS mudam | **feito**: chaveado pelas quatro entradas, rebakeado no commit da edição, BLAS afetados reconstruídos e caminhos positivo/negativo validados em Debug |
-| layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e instância; falta a de instâncias da Fase 4 |
+| layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e as quatro colunas de instância, incluindo sonda C++/HLSL em WARP |
 | cena grande reporta bytes persistentes por tabela e sujos por frame | **feito e medido** na sintética de 1M: `rowsDirty=0` e `copyRegions=0` em regime estável. VRAM e staging são campos separados; ver "o que os bytes medem" |
 | formato-base novo e deliberado | **decidido não bumpar** — ver a nota de estado da Fase 2 no plano |
 | raster CPU e RT mantêm paridade visual | **feito**: `scientific`, N=128, Bistro+Emerald, 8/8 capturas; MAE máximo 0,900, abaixo do piso de ruído de 1,08 já documentado na Fase 1 |
@@ -442,24 +444,25 @@ de heap, então uma tabela de 3.136 B ocupa muito mais que isso na prática — 
 que as tabelas são de poucos KB, o arredondamento domina.
 
 Isso já é medido, em outro lugar: o `VramTracker` registra o **tamanho real com alinhamento**
-(`VramTracker.cpp`, "igual ao que o driver cobra") e as duas tabelas entram no breakdown por
-recurso com rótulo próprio, `GpuMaterialTable` e `GpuMeshTable`. O staging não aparece lá de
+(`VramTracker.cpp`, "igual ao que o driver cobra") e as três tabelas entram no breakdown por
+recurso com rótulo próprio: `GpuMaterialTable`, `GpuMeshTable` e as quatro colunas
+`GpuSceneInstance*`. O staging não aparece lá de
 propósito — é UPLOAD heap, que o tracker ignora por ser memória do host —, e é justamente por isso
 que ele precisa de campo próprio aqui.
 
 Ou seja: para "quanto a tabela custa de verdade", o breakdown de VRAM; para "como ela cresce com a
 cena", estes dois campos.
 
-## Tabela de instâncias: layout escolhido e orçamento
+## Tabela de instâncias: implementação e orçamento
 
 Primeiro item do trabalho da fase — "escolher layouts paginados/SoA por consumidor e orçar bytes
-por instância residente". O layout está escolhido e orçado aqui; a implementação depende de uma
-decisão registrada logo abaixo.
+por instância residente". O layout abaixo está implementado em `FGpuSceneInstanceTable`, indexado
+por `FGpuSceneHandle::Slot`, com a `Generation` na linha de meta para impedir ABA no reuso.
 
 **O que existe hoje.** A mesma instância é subida em **quatro formas diferentes**, e nenhuma delas
 é residente — todas são reescritas por frame ou por evento:
 
-| produtor | struct | bytes/instância | quando |
+| produtor anterior | struct | bytes/instância | quando |
 |---|---|---:|---|
 | raster | `ObjectConstants` (4 × `Mat44`) | 256 (×2 frames) | por renderável VISÍVEL, todo frame |
 | temporal | `FTemporalInstanceTransformGPU` | 128 (×2 frames) | por instância da TLAS, todo frame |
@@ -471,7 +474,7 @@ São 480 B por instância reescritos por frame, contra 20 B que só mudam quando
 estrutura. Esse é o número que a tabela de instâncias existe para atacar: uma instância parada não
 deveria custar upload nenhum.
 
-**Colunas propostas** (SoA, por padrão de acesso, seguindo §5.2 do plano):
+**Colunas implementadas** (SoA, por padrão de acesso, seguindo §5.2 do plano):
 
 | coluna | conteúdo | bytes | quem lê |
 |---|---|---:|---|
@@ -486,23 +489,73 @@ testar uma esfera. `PrevTransform` fica em coluna própria porque só o temporal
 a única que muda quando um objeto **estático** não se move — nesse caso não muda nada, que é
 exatamente o dirty-row que interessa.
 
-Na Emerald (2.479 renderáveis) isso dá **436 KB residentes**, contra os ~1,2 MB/frame que as quatro
-formas atuais reescrevem.
+Na Emerald (2.479 renderáveis) isso dá **436 KB de conteúdo residente** antes da folga de
+capacidade. O HiZ deixou de subir 32 B de bounds por candidato: sobe apenas o slot estável (4 B) e
+o shader lê `InstanceBounds[slot]`. Os dois históricos CPU posicionais de modelo também saíram;
+`ObjectCB` e o buffer GPU especializado do TemporalMotion são derivados da mesma fonte canônica.
 
-**Por que não foi implementada nesta fase.** As colunas `Transform` e `Bounds` são as mesmas que o
-`FTemporalMotionVectors` e o `FHiZOcclusion` já mantêm, cada um com o seu buffer e a sua indexação.
-Criar a tabela sem migrar os dois produz uma **terceira** cópia dos mesmos dados — o oposto do que
-a fase existe para fazer. Migrar os dois é mais do que a Fase 2 pede, e o consumidor que justifica
-a tabela (culling na GPU) só nasce na Fase 6.
+Essa última frase é uma fronteira, não uma alegação de economia já realizada. O raster ainda exige
+o `ObjectCB`, e o temporal ainda exige as matrizes `CurrentToPrevious`/`PreviousToCurrent` no layout
+que seus shaders consomem. Ambos só deixam de ser alocados na Fase 4, depois que a Fase 3 der ao
+raster acesso bindless à tabela. A Fase 2 elimina fontes CPU divergentes e o upload duplicado de
+bounds do HiZ; ela **ainda soma** a residência canônica aos dois buffers especializados.
 
-Decisão pendente do proprietário, com o mesmo peso da que resolveu o formato: implementar agora
-absorvendo os dois sistemas, ou deixar a tabela nascer na Fase 4 já com o consumidor.
+### O orçamento completo da tabela de instâncias
+
+Os 180 B/slot são apenas o conteúdo dos quatro buffers DEFAULT:
+
+- **180 B/slot de VRAM**: meta 20 + bounds 32 + transform atual 64 + anterior 64;
+- **360 B/slot de staging persistente**: um slice por cada um dos dois frames em voo;
+- **360 B/slot de imagem CPU**: linhas canônicas mais shadows usados pelo diff;
+- vetores auxiliares de slots/epochs/dirty marks, além da capacidade ociosa deliberada.
+
+Logo o custo transitório desta implementação é aproximadamente **900 B/slot** somando VRAM e
+host antes dos vetores auxiliares, e não 180 B. Isso é deliberadamente visível na telemetria:
+`residentBytes` e `stagingBytes` mostram o conteúdo GPU/UPLOAD; o `VramTracker` mostra a alocação
+real alinhada. A Fase 4 tem gate explícito de remover `ObjectCB` e o transform especializado para
+que o custo por instância finalmente caia em vez de apenas mudar de dono.
+
+Há outra fronteira importante: em um frame estável `PrepareFrame` retorna pelas versões e não
+percorre a cena. Quando estrutura, transform, visibilidade ou mobilidade mudam, a Fase 2 ainda
+percorre os renderáveis e compara as quatro colunas para descobrir as linhas alteradas. O upload é
+incremental — uma edição toca só as linhas diferentes —, mas a **descoberta CPU ainda é O(N)** no
+frame editado. Dirty pages/ranges mantidos no produtor são o primeiro trabalho da Fase 4; não se
+declara esse custo removido antes dela.
+
+O staging por frame é seguro também diante da fila assíncrona: o trabalho de compute espera um
+segmento posterior aos uploads na fila direta, e a fila direta espera a fence desse compute antes
+do `EndFrame`. Portanto a fence do frame só conclui depois dos leitores das duas filas;
+`BeginFrame` espera essa fence antes de reutilizar o slice.
+
+### Consumidores e validação
+
+- `FHiZOcclusion` consome bounds canônicos por slot e mantém no ring apenas os handles capturados;
+- raster e TemporalMotion consultam o mesmo par current/previous na imagem CPU canônica;
+- a sonda `Smile.GpuSceneTablesWarp` lê material, `InstanceGeo`, mesh e as quatro colunas com o
+  espelho HLSL de produção;
+- `Smile.RendererIdentity` cobre remoção, reuso, visibilidade, mobilidade sem mudança de transform
+  e reload, sem trocar histórico entre objetos;
+- painel e MCP (protocolo 6) publicam linhas, bytes residentes/staging, dirty rows/bytes/regiões e
+  o total acumulado enviado.
+
+### Validação final
+
+- **Release:** 59/59 (`ctest --test-dir build -C Release --output-on-failure`, 78,82 s);
+- **Debug:** 59/59 (307,38 s; OMM 244,33 s);
+- **MCP/TypeScript:** `npm run build` concluído;
+- **1M em runtime, quatro poses:** 1.000.000 linhas vivas, capacidade 1.125.000,
+  `residentBytes=202.500.000`, `stagingBytes=405.000.000`, `rowsDirty=0`, `bytesDirty=0` e
+  `copyRegions=0` em todas as amostras estáveis. O upload inicial acumulado foi 202.500.000 B;
+- relatório de shakedown:
+  `build/bin/Release/Captures/Benchmarks/gpu-driven-baseline-2026-09-05T15-58-59-394Z.json`.
+
+Essa rodada usou `--allow-dirty` porque validava a implementação antes do commit; ela **não é uma
+nova baseline promovida**. Sua função é provar capacidade, telemetria e ausência de trabalho no
+regime estável. A baseline oficial da Fase 0 permanece intacta.
 
 ## Falta na fase
 
-- `FGpuSceneInstance`: layout e orçamento **feitos** (seção acima); falta implementar sem criar uma
-  terceira cópia incoerente de transforms/bounds. A validação de cena grande, a comparação visual e
-  os fluxos interativos de materiais/OMM já estão fechados.
+- nada. Qualquer redução adicional de custo ou mudança de submissão pertence às fases seguintes.
 
 ## Risco anotado, ainda não medido
 
