@@ -1445,13 +1445,21 @@ namespace Smile {
                 }
             }
 
-            CommandList->SetPipelineState(Modes.GeometricNormalWillRun
-                                              ? PipelineState.PSODepthNormalMasked()
-                                              : PipelineState.PSODepthOnlyMasked());
+            // Unico passe do prepass que le material (alpha-clip); o opaco acima nao amarra
+            // material nenhum e por isso nao tem caminho bindless.
+            const bool MaskedBindless = BeginBindlessMaterials(CommandList);
+            CommandList->SetPipelineState(
+                MaskedBindless
+                    ? (Modes.GeometricNormalWillRun ? PipelineState.PSODepthNormalMaskedBindless()
+                                                    : PipelineState.PSODepthOnlyMaskedBindless())
+                    : (Modes.GeometricNormalWillRun ? PipelineState.PSODepthNormalMasked()
+                                                    : PipelineState.PSODepthOnlyMasked()));
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - mascarados");
                 FDrawSubmitCache Submit;
-                Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassMasked);
+                Submit.Stats             = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassMasked);
+                Submit.Bindless          = MaskedBindless;
+                Submit.MaterialRootIndex = FPipelineState::kMaterialRootIndex;
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem& V : VisibleScratch) {
                     ++Submit.Stats->Considered;
@@ -1459,7 +1467,8 @@ namespace Smile {
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
-                    Submit.BindMaterial(CommandList, Backend->SRVHeap, V.Mat);
+                    if (MaskedBindless) Submit.BindMaterialRow(CommandList, V.Mat, MaterialTable.RowOf(V.Mat));
+                    else                Submit.BindMaterial(CommandList, Backend->SRVHeap, V.Mat);
                     Submit.DrawMesh(CommandList, V.R->Mesh);
                 }
             }
@@ -1600,20 +1609,30 @@ namespace Smile {
                 } // fim do escopo do sort de lote
 
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                const bool GBufferBindless = BeginBindlessMaterials(CommandList);
                 ID3D12PipelineState* CurGeomPSO = nullptr;
                 FDrawSubmitCache Submit;
-                Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::GBuffer);
+                Submit.Stats             = &CpuStatsBuilding.Pass(ESubmitPass::GBuffer);
+                Submit.Bindless          = GBufferBindless;
+                Submit.MaterialRootIndex = FPipelineState::kMaterialRootIndex;
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem* V : GBufferOrder) {
                     ++Submit.Stats->Considered;
                     FMaterial* Mat = V->Mat;
                     const bool TwoSided = Mat->IsTwoSidedForRT();
-                    ID3D12PipelineState* Want = TwoSided ? PipelineState.PSOGBufferTwoSided()
-                                                         : PipelineState.PSOGBuffer();
+                    // A classe de PSO nao muda com o caminho: two-sided continua sendo estado de
+                    // pipeline (D6 do plano). O que muda e so de qual familia a PSO sai.
+                    ID3D12PipelineState* Want =
+                        GBufferBindless
+                            ? (TwoSided ? PipelineState.PSOGBufferTwoSidedBindless()
+                                        : PipelineState.PSOGBufferBindless())
+                            : (TwoSided ? PipelineState.PSOGBufferTwoSided()
+                                        : PipelineState.PSOGBuffer());
                     if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
                     CommandList->SetGraphicsRootConstantBufferView(
                         4, ObjectCBBase + static_cast<u64>(V->Slot) * sizeof(ObjectConstants));
-                    Submit.BindMaterial(CommandList, Backend->SRVHeap, Mat);
+                    if (GBufferBindless) Submit.BindMaterialRow(CommandList, Mat, MaterialTable.RowOf(Mat));
+                    else                 Submit.BindMaterial(CommandList, Backend->SRVHeap, Mat);
                     Submit.DrawMesh(CommandList, V->R->Mesh);
                 }
             }

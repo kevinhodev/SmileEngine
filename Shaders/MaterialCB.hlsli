@@ -1,6 +1,92 @@
 #ifndef SMILE_MATERIALCB_HLSLI
 #define SMILE_MATERIALCB_HLSLI
 
+// Material do raster, em DOIS caminhos que expoem os MESMOS NOMES.
+//
+//   classico (default)  — cbuffer b1 + texturas numa tabela de descritores, os dois amarrados
+//                         POR DRAW (FMaterial::Bind).
+//   SMILE_MATERIAL_BINDLESS — uma linha da tabela canonica (FGpuMaterialRecord) lida por indice
+//                         no heap; por draw so muda uma constante de root de 4 B.
+//
+// Os nomes serem os mesmos e o ponto da Fase 3: o corpo dos shaders nao muda entre os dois, entao
+// qualquer diferenca visual no A/B so pode vir do ACESSO AOS DADOS. Um `#define` por campo, e nao
+// uma reescrita por caminho.
+//
+// Quem migra um shader faz duas coisas: chama `SMILE_MATERIAL_LOAD()` como primeira instrucao do
+// `main` (no-op no classico) e poe as proprias declaracoes de `Texture2D` sob
+// `#ifndef SMILE_MATERIAL_BINDLESS` — no caminho bindless as oito vem daqui.
+
+#ifdef SMILE_MATERIAL_BINDLESS
+
+#include "Scene/MaterialAccess.hlsli"
+
+// Globais ESTATICOS, e nao locais do main: os helpers de raster (ApplyNormalMap,
+// ParallaxOcclusionMapping, ParallaxFade, MaterialAlphaClip) sao funcoes livres que leem os campos
+// do material. Passa-los por parametro mudaria a assinatura de todas elas e faria o A/B comparar
+// dois corpos de codigo diferentes, que e exatamente o que esta fase quer evitar.
+static GpuMaterialRecord SmileMaterial;
+
+static Texture2D AlbedoMap;
+static Texture2D NormalMap;
+static Texture2D MetallicRoughnessMap;
+static Texture2D AOMap;
+static Texture2D EmissiveMap;
+static Texture2D HeightMap;
+static Texture2D MetalnessMap;
+static Texture2D RoughnessMap;
+
+#define SMILE_MATERIAL_LOAD()                                                                   \
+    SmileMaterial        = Smile_LoadRasterMaterial();                                          \
+    AlbedoMap            = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_ALBEDO)];   \
+    NormalMap            = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_NORMAL)];   \
+    MetallicRoughnessMap = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_MR)];       \
+    AOMap                = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_AO)];       \
+    EmissiveMap          = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_EMISSIVE)]; \
+    HeightMap            = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_HEIGHT)];   \
+    MetalnessMap         = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_METAL)];    \
+    RoughnessMap         = ResourceDescriptorHeap[Smile_RasterTextureSlot(SmileMaterial, SMILE_MAT_TEX_ROUGH)]
+
+// Campos escalares: alias direto para a linha.
+#define BaseColorFactor      SmileMaterial.BaseColor
+#define MetallicFactor       SmileMaterial.EmissiveFactor.w
+#define RoughnessFactor      SmileMaterial.RoughnessFactor
+#define AOStrength           SmileMaterial.RasterEmissive.w
+#define SubsurfaceColor      SmileMaterial.SubsurfaceColor
+#define AlphaCutoff          SmileMaterial.AlphaCutoff
+#define NormalStrength       SmileMaterial.NormalStrength
+#define HeightScale          SmileMaterial.HeightScale
+#define ParallaxMinSteps     SmileMaterial.ParallaxMinSteps
+#define ParallaxMaxSteps     SmileMaterial.ParallaxMaxSteps
+#define ParallaxFadeStart    SmileMaterial.ParallaxFadeStart
+#define ParallaxFadeRange    SmileMaterial.ParallaxFadeRange
+#define ParallaxRefineSteps  SmileMaterial.ParallaxRefineSteps
+#define ShadingModel         SmileMaterial.ShadingModel
+
+// Os `uint` que viraram bits. Rendem `uint` 0/1, e nao `bool`, para que a PARIDADE de tipo com o
+// cbuffer seja exata: o GBuffer.ps escreve `if (NormalFlipY == 0)`, e comparar bool com inteiro
+// depende de promocao — funciona, mas por um caminho diferente do original.
+#define HasAlbedoMap            ((SmileMaterial.Flags & SMILE_MAT_FLAG_ALBEDOMAP) != 0u ? 1u : 0u)
+#define HasNormalMap            ((SmileMaterial.Flags & SMILE_MAT_FLAG_NORMALMAP) != 0u ? 1u : 0u)
+#define HasMetallicRoughnessMap ((SmileMaterial.Flags & SMILE_MAT_FLAG_MRMAP) != 0u ? 1u : 0u)
+#define HasAOMap                ((SmileMaterial.Flags & SMILE_MAT_FLAG_AOMAP) != 0u ? 1u : 0u)
+#define HasEmissiveMap          ((SmileMaterial.Flags & SMILE_MAT_FLAG_EMISSIVEMAP) != 0u ? 1u : 0u)
+#define HasHeightMap            ((SmileMaterial.Flags & SMILE_MAT_FLAG_HEIGHTMAP) != 0u ? 1u : 0u)
+#define HasMetalnessMap         ((SmileMaterial.Flags & SMILE_MAT_FLAG_METALMAP) != 0u ? 1u : 0u)
+#define HasRoughnessMap         ((SmileMaterial.Flags & SMILE_MAT_FLAG_ROUGHMAP) != 0u ? 1u : 0u)
+#define SpecularPacking         ((SmileMaterial.Flags & SMILE_MAT_FLAG_SPECPACK) != 0u ? 1u : 0u)
+#define AlphaTest               ((SmileMaterial.Flags & SMILE_MAT_FLAG_ALPHATEST) != 0u ? 1u : 0u)
+#define NormalFlipY             ((SmileMaterial.Flags & SMILE_MAT_FLAG_NORMALFLIPY) != 0u ? 1u : 0u)
+#define NormalReconstructZ      ((SmileMaterial.Flags & SMILE_MAT_FLAG_NORMALRECONZ) != 0u ? 1u : 0u)
+#define ParallaxRefine          ((SmileMaterial.Flags & SMILE_MAT_FLAG_PARALLAXREFINE) != 0u ? 1u : 0u)
+
+// O emissivo do raster e o unico campo que NAO e alias: no CBV ele vinha como fator e forca
+// separados e o shader multiplicava por pixel; na linha ele ja chega multiplicado (e sem o
+// RTEmissiveScale, que so vale para o mundo indireto). Um macro nomeado deixa a divergencia
+// visivel no shader em vez de escondida atras de um alias que mentiria sobre o que ele contem.
+#define SMILE_MATERIAL_EMISSIVE (SmileMaterial.RasterEmissive.rgb)
+
+#else // caminho classico: cbuffer + tabela de descritores por draw
+
 // Constant buffer do material (b1) — ESPELHO de Smile::MaterialConstants (Material.h).
 //
 // Antes este bloco era transcrito a mao em 6 shaders (GBuffer, ForwardBlend, DepthMasked,
@@ -58,6 +144,14 @@ cbuffer MaterialCB : register(b1) {
     // espelho e exatamente como os offsets divergem em silencio.
     float  RTEmissiveScale;
 };
+
+// No caminho classico nao ha nada a carregar: o CBV e a tabela ja vieram amarrados pelo draw.
+#define SMILE_MATERIAL_LOAD()
+
+// Aqui o produto e feito por pixel, como sempre foi. Ver a versao bindless acima.
+#define SMILE_MATERIAL_EMISSIVE (EmissiveFactor.rgb * EmissiveStrength)
+
+#endif // SMILE_MATERIAL_BINDLESS
 
 // Recorte do cutout. Era a MESMA expressao escrita cinco vezes (GBuffer.ps, ShadowDepth.ps,
 // DepthMasked.ps, DepthNormalMasked.ps, MaterialPreview.ps); o RT tem a sua propria copia em

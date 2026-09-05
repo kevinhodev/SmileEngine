@@ -15,7 +15,10 @@ namespace Smile {
         FPassShaderStems ShaderStems() const override;
         void OnRecreatePipelines(const FPassInitContext& Ctx) override;
 
-        void Initialize(ID3D12Device* Device);
+        // `DirectHeapIndexing` vem do device (FD3D12Device::SupportsDirectHeapIndexing) e decide
+        // duas coisas: se a root signature recebe CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED e se as PSOs
+        // bindless chegam a existir. Sem ele o raster fica no caminho classico inteiro.
+        void Initialize(ID3D12Device* Device, bool DirectHeapIndexing);
         void RecreatePSO(ID3D12Device* Device);
 
         ID3D12RootSignature* GetRootSignature() const { return RootSignature.Get(); }
@@ -49,6 +52,41 @@ namespace Smile {
         // estabelecido). TwoSided = cull none p/ folhagem/alpha-test.
         ID3D12PipelineState* PSOGBuffer()         const { return PipelineStateGBuffer.Get(); }
         ID3D12PipelineState* PSOGBufferTwoSided() const { return PipelineStateGBufferTwoSided.Get(); }
+
+        // --- Material BINDLESS (Fase 3) -------------------------------------------------------
+        //
+        // Mesmas PSOs, mesmo vertex shader, mesmo estado: so o pixel shader troca pela permutacao
+        // que le a linha canonica do material pelo heap em vez do CBV + tabela amarrados por
+        // draw. As duas familias coexistem no MESMO executavel porque a regra 2 do plano exige o
+        // A/B enquanto o fallback existir — e porque atribuir uma diferenca visual ao "novo
+        // acesso a dados" exige poder alternar sem trocar de build.
+        //
+        // Todas devolvem nullptr quando o device nao tem Resource Binding Tier 3.
+        bool SupportsBindless() const { return SupportsBindlessMaterials; }
+        // "As quatro PSOs existem?" — a pergunta que o passe faz antes de escolher o caminho.
+        // Conferir a capability sozinha nao basta: um .cso ausente daria PSO nula com a
+        // capability ligada.
+        bool BindlessMaterialsReady() const {
+            return SupportsBindlessMaterials && PipelineStateGBufferBindless &&
+                   PipelineStateGBufferTwoSidedBindless && PipelineStateDepthOnlyMaskedBindless &&
+                   PipelineStateDepthNormalMaskedBindless;
+        }
+        ID3D12PipelineState* PSOGBufferBindless() const {
+            return PipelineStateGBufferBindless.Get();
+        }
+        ID3D12PipelineState* PSOGBufferTwoSidedBindless() const {
+            return PipelineStateGBufferTwoSidedBindless.Get();
+        }
+        ID3D12PipelineState* PSODepthOnlyMaskedBindless() const {
+            return PipelineStateDepthOnlyMaskedBindless.Get();
+        }
+        ID3D12PipelineState* PSODepthNormalMaskedBindless() const {
+            return PipelineStateDepthNormalMaskedBindless.Get();
+        }
+
+        // Indice do parametro de root das duas constantes de material (b4): [0] descritor da
+        // tabela, [1] linha. Publico porque quem escreve por draw e o passe, nao esta classe.
+        static constexpr u32 kMaterialRootIndex = 14;
         // Deferred lighting fullscreen (le o G-buffer -> HDR), na root signature principal.
         // Aditivo: soma a luz sobre o emissivo que o geometry pass escreveu no SceneColor.
         // Debug: variante opaca p/ as views de SSAO/GI (o shader substitui a tela inteira).
@@ -66,6 +104,11 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> PipelineStateDepthNormalMasked;
         ComPtr<ID3D12PipelineState> PipelineStateGBuffer;
         ComPtr<ID3D12PipelineState> PipelineStateGBufferTwoSided;
+        ComPtr<ID3D12PipelineState> PipelineStateGBufferBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateGBufferTwoSidedBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthOnlyMaskedBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthNormalMaskedBindless;
+        bool                        SupportsBindlessMaterials = false;
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLighting;
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLightingDebug;
         ComPtr<ID3D12PipelineState> PipelineStateForwardBlend;

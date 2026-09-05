@@ -111,6 +111,16 @@ namespace Smile {
     }
     bool FRenderSettings::GetOcclusionCulling() const { return R.UseOcclusionCulling; }
 
+    void FRenderSettings::SetBindlessMaterials(bool _Use) {
+        // Recusa em vez de aceitar e ignorar: um knob que aceita e nao faz nada e como uma
+        // medicao de A/B sai errada sem ninguem notar. O getter devolve o estado EFETIVO.
+        R.UseBindlessMaterials = _Use && R.PipelineState.BindlessMaterialsReady();
+    }
+    bool FRenderSettings::GetBindlessMaterials() const { return R.UseBindlessMaterials; }
+    bool FRenderSettings::BindlessMaterialsAvailable() const {
+        return R.PipelineState.BindlessMaterialsReady();
+    }
+
     void FRenderSettings::SetDepthPrepass(bool _Use) { R.UseDepthPrepass = _Use; }
     bool FRenderSettings::GetDepthPrepass() const    { return R.UseDepthPrepass; }
 

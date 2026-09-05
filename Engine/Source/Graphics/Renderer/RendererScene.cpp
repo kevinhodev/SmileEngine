@@ -73,6 +73,19 @@ namespace Smile {
         return Terrain.Load(Backend->Device.Native(), Backend->UploadQueue, Backend->SRVHeap, _Desc);
     }
 
+    bool Renderer::BeginBindlessMaterials(ID3D12GraphicsCommandList* _CommandList) const {
+        if (!UseBindlessMaterials || !PipelineState.BindlessMaterialsReady()) return false;
+        // A tabela pode nao existir ainda: cena vazia, ou o primeiro frame depois de um load em
+        // que o RebuildSceneTables nao rodou. Sem ela nao ha descritor para publicar, e um
+        // 0xFFFFFFFF na constante de root viraria ResourceDescriptorHeap invalido no shader.
+        if (!MaterialTable.IsBuilt()) return false;
+
+        // Uma escrita por PASSE. A linha (offset 1) e o unico estado por draw que sobra.
+        _CommandList->SetGraphicsRoot32BitConstant(FPipelineState::kMaterialRootIndex,
+                                                   MaterialTable.Srv(), 0);
+        return true;
+    }
+
     void Renderer::UpdateMaterialTextureSlot(FMaterial& _Material, u32 _LocalSlot,
                                              FTexture* _Texture) {
         if (!Initialized || !_Texture || !_Texture->IsValid() || !_Material.IsFinalized()) return;
@@ -405,7 +418,16 @@ namespace Smile {
     // EDICAO de material: aquele e MarkDirty + RecordUpload, sem dreno.
     void Renderer::RebuildSceneTables() {
         std::vector<FMaterial*> Raw;
-        Raw.reserve(ImportedMaterials.size());
+        Raw.reserve(ImportedMaterials.size() + 1);
+        // O material DEFAULT entra na tabela, e nao e detalhe: o `BuildDrawLists` substitui
+        // material nulo ou nao finalizado por ele (`ActiveMaterial`), entao ele chega ao raster
+        // como material de verdade. Sem linha propria, `RowOf` o mandaria para a linha 0 — que e
+        // "renderavel SEM material", cinza 0,7 e sem tabela de textura — e o caminho bindless
+        // desenharia esses objetos diferente do classico, que amarra o CBV e as texturas dele.
+        //
+        // Ele NAO ocupa a linha 0: aquela e reservada e tem defaults proprios, que o ray tracing
+        // consome. Sao duas coisas distintas com o mesmo apelido.
+        Raw.push_back(&DefaultMaterial);
         for (const auto& M : ImportedMaterials) Raw.push_back(M.get());
         MaterialTable.SetupForMaterials(Backend->Device.Native(), Backend->SRVHeap, Raw);
         MeshTable.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene);

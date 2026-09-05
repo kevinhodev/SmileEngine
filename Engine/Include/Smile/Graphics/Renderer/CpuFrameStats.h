@@ -22,6 +22,25 @@ namespace Smile {
         u32 MeshBinds     = 0; // IASetVertexBuffers/IASetIndexBuffer que o cache NAO pulou
         u32 SkippedInvalid = 0; // mesh nulo ou sem indices (nao vira draw nem bind)
 
+        // --- Material bindless (Fase 3) -------------------------------------------------------
+        //
+        // `BindlessDraws` conta os draws cujo pixel shader leu o material da tabela canonica.
+        // O FALLBACK, que o gate da fase manda tornar explicito e contado, e a diferenca:
+        // `Draws - BindlessDraws`. Publicado como diferenca em vez de um terceiro contador porque
+        // os dois se somam por construcao — um contador proprio poderia divergir dos outros dois.
+        //
+        // `MaterialRowSets` e o par de `MaterialBinds`: quantas vezes a constante de root com a
+        // linha do material foi REESCRITA, depois do filtro do cache. No A/B a leitura e direta —
+        // classico deixa MaterialBinds=N e MaterialRowSets=0; bindless inverte, com o mesmo N.
+        u32 BindlessDraws   = 0;
+        u32 MaterialRowSets = 0;
+        // Material que chegou ao draw sem linha na tabela canonica. TEM de ser zero: `RowOf`
+        // devolve a linha 0 para desconhecido, e a linha 0 e "renderavel sem material" — cinza
+        // 0,7, sem textura. Sem este contador, um material fora da tabela nao daria erro nenhum:
+        // daria um objeto cinza no caminho bindless e correto no classico, que e a diferenca
+        // exatamente do tipo que a Fase 3 existe para nao produzir.
+        u32 MaterialRowMisses = 0;
+
         void Reset() { *this = FDrawSubmitStats{}; }
     };
 
@@ -208,6 +227,15 @@ namespace Smile {
         u32 InstrumentedMaterialBinds() const {
             u32 Sum = 0;
             for (u32 i = 0; i < kPassCount; ++i) Sum += Passes[i].MaterialBinds;
+            return Sum;
+        }
+        // Draws de malha de cena que NAO passaram pelo caminho bindless. Mesmo escopo do
+        // InstrumentedSceneMeshDraws (so os baldes instrumentados), e por isso o terreno entra:
+        // ele e fallback de verdade e o balde dele nunca tem BindlessDraws.
+        u32 InstrumentedFallbackDraws() const {
+            u32 Sum = 0;
+            for (u32 i = 0; i < kPassCount; ++i)
+                Sum += Passes[i].Draws - Passes[i].BindlessDraws;
             return Sum;
         }
     };

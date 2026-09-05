@@ -25,6 +25,17 @@ smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
+
+# Permutacoes BINDLESS do material (Fase 3 do GPU-DRIVEN-PLAN). Mesmo corpo de shader lendo a
+# linha canonica pelo heap diretamente indexado em vez do CBV + tabela amarrados por draw; o A/B
+# entre as duas vive no MESMO executavel, que e o que a regra 2 do plano exige enquanto o
+# fallback existir.
+#
+# ps_6_6 e nao 6_0: `ResourceDescriptorHeap` e do Shader Model 6.6. O vertex shader nao le
+# material e continua em 6_0 — estagios de uma mesma PSO nao precisam do mesmo modelo.
+set(SMILE_MATERIAL_BINDLESS_FLAGS -D SMILE_MATERIAL_BINDLESS=1)
+smile_compile_shader(GBuffer.ps.hlsl ps_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME GBufferBindless ${SMILE_MATERIAL_BINDLESS_FLAGS})
 # Visualizador generico de render targets (absorve o GBufferDebug via DECODE_GBUFFER_FIELD)
 smile_compile_shader(DebugView.ps.hlsl        ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(DeferredLighting.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
@@ -43,6 +54,10 @@ smile_compile_shader(DepthNormal.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 # Variantes masked/two-sided do prepass (alpha-clip, estilo UE masked prepass)
 smile_compile_shader(DepthNormalMasked.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(DepthMasked.ps.hlsl       ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(DepthNormalMasked.ps.hlsl ps_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME DepthNormalMaskedBindless ${SMILE_MATERIAL_BINDLESS_FLAGS})
+smile_compile_shader(DepthMasked.ps.hlsl       ps_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME DepthMaskedBindless ${SMILE_MATERIAL_BINDLESS_FLAGS})
 
 # Cascaded Shadow Maps (sol direcional) — depth pass das cascatas
 smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)

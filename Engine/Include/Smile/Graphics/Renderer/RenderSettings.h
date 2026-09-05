@@ -79,6 +79,15 @@ namespace Smile {
         bool GetFrustumCulling() const;
         void SetOcclusionCulling(bool Use);
         bool GetOcclusionCulling() const;
+
+        // Material bindless no raster (Fase 3). O A/B do plano: mesmo executavel, mesmas listas
+        // de CPU, mesmas draws — so o caminho pelo qual o pixel shader alcanca o material muda.
+        // O setter RECUSA quando o device ou as PSOs nao suportam, e o getter devolve o estado
+        // efetivo, entao ligar num device sem Tier 3 nao mente para a UI.
+        void SetBindlessMaterials(bool Use);
+        bool GetBindlessMaterials() const;
+        // "Da para ligar?" — para a UI desabilitar o controle em vez de deixar o usuario tentar.
+        bool BindlessMaterialsAvailable() const;
         void SetDepthPrepass(bool Use);
         bool GetDepthPrepass() const;
         void SetUseAsyncCompute(bool V);

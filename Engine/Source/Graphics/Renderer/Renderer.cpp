@@ -139,7 +139,8 @@ namespace Smile {
         ReportInitProgress("Criando filas e swap chain",
                            ToUtf8(Backend->Device.GetAdapterDescription()), 0.12f);
         ReportInitProgress("Compilando pipelines de raster", {}, 0.22f);
-        PipelineState.Initialize(Backend->Device.Native());
+        PipelineState.Initialize(Backend->Device.Native(),
+                                 Backend->Device.SupportsDirectHeapIndexing());
         Targets.SceneColorMipPSO.Initialize(Backend->Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
 
         ReportInitProgress("Alocando G-Buffer e alvos de cena", {}, 0.40f);

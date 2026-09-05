@@ -528,6 +528,16 @@ namespace Smile {
         // Atualiza os descritores de um material sem expor device ou heap ao chamador.
         void UpdateMaterialTextureSlot(FMaterial& Material, u32 LocalSlot, FTexture* Texture);
 
+        // Abre um passe no caminho de material bindless (Fase 3). Devolve `true` quando o passe
+        // deve usar as PSOs bindless; nesse caso ja escreveu o DESCRITOR da tabela canonica na
+        // constante de root — uma vez por passe, contra a linha, que muda por draw.
+        //
+        // Devolve `false` — e nao escreve nada — quando o knob esta desligado, o device nao tem
+        // heap diretamente indexado, as PSOs nao foram construidas ou a tabela ainda nao existe
+        // (cena vazia, primeiro frame de um load). O passe cai no caminho classico inteiro, que e
+        // o fallback que o gate da fase manda deixar explicito.
+        bool BeginBindlessMaterials(ID3D12GraphicsCommandList* CommandList) const;
+
         const FGpuProfiler& GetGpuProfiler() const;
 
         // Passes medidos na fila de COMPUTE assincrona (frequencia/readback proprios).
@@ -1007,6 +1017,13 @@ namespace Smile {
         FAmbientOcclusion AO;
         bool              UseAO   = true;
         bool              AODebug = false;
+
+        // Material BINDLESS no raster (Fase 3 do GPU-DRIVEN-PLAN). DESLIGADO por default: a
+        // regra 3 do plano diz que o commit que introduz a alternativa nao muda o default. Ligar
+        // exige Resource Binding Tier 3 e as quatro PSOs bindless construidas
+        // (FPipelineState::BindlessMaterialsReady); sem isso o setter recusa e o raster fica no
+        // caminho classico inteiro.
+        bool              UseBindlessMaterials = false;
 
         FHiZOcclusion     HiZ; // occlusion culling HZB (build + teste + readback ring)
         bool              UseOcclusionCulling = true;

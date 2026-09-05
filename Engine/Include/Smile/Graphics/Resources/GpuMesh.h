@@ -92,6 +92,20 @@ namespace Smile {
         const FGpuMesh*   LastMesh = nullptr;
         const FMaterial*  LastMat  = nullptr;
 
+        // --- Material BINDLESS (Fase 3) -------------------------------------------------------
+        //
+        // Ligado, o passe deixa de chamar BindMaterial e passa a chamar BindMaterialRow: o
+        // material vira UMA constante de root com o numero da linha, e o pixel shader le a linha
+        // canonica pelo heap. O cache continua filtrando repeticao — a lista ja vem agrupada por
+        // material, entao a maioria dos itens nao emite nada.
+        //
+        // Os dois caminhos coexistem no mesmo frame de proposito: passes ainda nao migrados
+        // (translucidos, sombras, chuva) continuam classicos, e e a contagem por passe que torna
+        // esse fallback visivel em vez de presumido.
+        bool Bindless          = false;
+        u32  MaterialRootIndex = 0;
+        u32  LastRow           = 0xFFFFFFFFu;
+
         // Balde de telemetria do passe (opcional; nullptr = sem instrumentacao). Contar AQUI e
         // deliberado: este e o unico ponto por onde a geometria de cena e submetida, entao o
         // numero nasce do ato de submeter em vez de ser recomposto varrendo listas depois — que
@@ -101,12 +115,21 @@ namespace Smile {
         void Reset() {
             LastMesh = nullptr;
             LastMat  = nullptr;
+            LastRow  = 0xFFFFFFFFu;
             // Stats NAO e zerado: o Reset existe para invalidar o cache ao trocar root
             // signature/PSO no MEIO de um passe, e o balde e do passe inteiro.
         }
 
         void BindMaterial(ID3D12GraphicsCommandList* CommandList,
                           FTextureSRVHeap& SRVHeap, const FMaterial* Mat);
+
+        // Par bindless do BindMaterial: escreve a LINHA do material na constante de root. O
+        // descritor da tabela e escrito uma vez por passe e nao passa por aqui.
+        //
+        // `Mat` entra so para a telemetria poder distinguir "material sem linha" (linha 0 com
+        // material nao nulo) de "renderavel sem material" (linha 0 legitima). Os dois produzem o
+        // mesmo desenho e so um deles e bug.
+        void BindMaterialRow(ID3D12GraphicsCommandList* CommandList, const FMaterial* Mat, u32 Row);
         void DrawMesh(ID3D12GraphicsCommandList* CommandList, const FGpuMesh* Mesh);
     };
 }

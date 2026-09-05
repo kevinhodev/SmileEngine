@@ -9,6 +9,9 @@ cbuffer FrameCB : register(b0) {
 
 #include "MaterialCB.hlsli"
 
+// No caminho bindless as oito vem do MaterialCB.hlsli como globais estaticos, preenchidos pelo
+// SMILE_MATERIAL_LOAD() a partir da base de descritores da linha do material.
+#ifndef SMILE_MATERIAL_BINDLESS
 Texture2D AlbedoMap            : register(t0);
 Texture2D NormalMap            : register(t1);
 Texture2D MetallicRoughnessMap : register(t2);
@@ -17,7 +20,10 @@ Texture2D EmissiveMap          : register(t4);
 Texture2D HeightMap            : register(t5);
 Texture2D MetalnessMap         : register(t6);
 Texture2D RoughnessMap         : register(t7);
+#endif
 
+// O sampler continua ESTATICO na root signature nos dois caminhos: a Fase 3 move descritor de
+// recurso para o heap, nao sampler.
 SamplerState MaterialSampler   : register(s0);
 
 struct PSInput {
@@ -99,6 +105,8 @@ float2 ParallaxOcclusionMapping(float2 uv, float3 Vts, float2 dUVdx, float2 dUVd
 }
 
 GBufferOutput main(PSInput input) {
+    SMILE_MATERIAL_LOAD();
+
     float3 GeoN = normalize(input.worldNormal);
     if (!input.frontFace) GeoN = -GeoN;
 
@@ -187,7 +195,7 @@ GBufferOutput main(PSInput input) {
     else if (HasAOMap)
         AO = lerp(1.0f, AOMap.SampleBias(MaterialSampler, UV, MipBias).r, AOStrength);
 
-    float3 Emissive = EmissiveFactor.rgb * EmissiveStrength;
+    float3 Emissive = SMILE_MATERIAL_EMISSIVE;
     if (HasEmissiveMap)
         Emissive *= EmissiveMap.SampleBias(MaterialSampler, UV, MipBias).rgb;
 

@@ -107,6 +107,18 @@ namespace Smile {
         }
     }
 
+    void FDrawSubmitCache::BindMaterialRow(ID3D12GraphicsCommandList* _CommandList,
+                                           const FMaterial* _Mat, u32 _Row) {
+        // Contado ANTES do filtro do cache, ao contrario dos binds: o que interessa aqui e
+        // quantos ITENS cairiam no material errado, e nao quantas vezes a constante mudou.
+        if (Stats && _Mat != nullptr && _Row == 0u) ++Stats->MaterialRowMisses;
+        if (_Row == LastRow) return;
+        LastRow = _Row;
+        // Offset 1: [0] e o descritor da tabela, escrito uma vez por passe.
+        _CommandList->SetGraphicsRoot32BitConstant(MaterialRootIndex, _Row, 1);
+        if (Stats) ++Stats->MaterialRowSets;
+    }
+
     void FDrawSubmitCache::DrawMesh(ID3D12GraphicsCommandList* _CommandList,
                                     const FGpuMesh* _Mesh) {
         if (!_Mesh || !_Mesh->IsValid()) {
@@ -119,6 +131,12 @@ namespace Smile {
             if (Stats) ++Stats->MeshBinds;
         }
         _Mesh->DrawIndexed(_CommandList);
-        if (Stats) ++Stats->Draws;
+        if (Stats) {
+            ++Stats->Draws;
+            // Contado no ponto da SUBMISSAO, como todo o resto deste balde: o que sobra fora do
+            // caminho bindless e `Draws - BindlessDraws`, e recompor isso varrendo listas depois
+            // daria um numero plausivel e errado (cada passe filtra o seu).
+            if (Bindless) ++Stats->BindlessDraws;
+        }
     }
 }

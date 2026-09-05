@@ -13,8 +13,10 @@
 #include <iterator>
 
 namespace Smile {
-    void FPipelineState::Initialize(ID3D12Device* _Device) {
-        D3D12_ROOT_PARAMETER RootParams[14]{};
+    void FPipelineState::Initialize(ID3D12Device* _Device, bool _DirectHeapIndexing) {
+        SupportsBindlessMaterials = _DirectHeapIndexing;
+
+        D3D12_ROOT_PARAMETER RootParams[15]{};
 
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
@@ -214,12 +216,37 @@ namespace Smile {
         StaticSamplers[2].RegisterSpace    = 0;
         StaticSamplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+        // Material BINDLESS (Fase 3): duas constantes de ROOT em b4.
+        //
+        //   [0] descritor da tabela canonica de materiais — escrito uma vez por passe;
+        //   [1] linha do material — o UNICO estado por draw que sobra no caminho migrado.
+        //
+        // Constantes de root, e nao um CBV: 4 B por item contra os 2 DWORDs de um root CBV mais a
+        // troca da tabela de descritores. Visibilidade ALL porque a Fase 4 quer o mesmo mecanismo
+        // no vertex shader (InstanceSlot).
+        //
+        // O parametro existe nos DOIS caminhos. Deixa-lo fora quando o device nao suporta heap
+        // diretamente indexado daria duas root signatures com indices diferentes, e o indice
+        // aparece em `FMaterial::Bind` e em todos os passes.
+        RootParams[14].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        RootParams[14].Constants.ShaderRegister = 4;
+        RootParams[14].Constants.RegisterSpace  = 0;
+        RootParams[14].Constants.Num32BitValues = 2;
+        RootParams[14].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
+
         D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc{};
         RootSignatureDesc.NumParameters     = _countof(RootParams);
         RootSignatureDesc.pParameters       = RootParams;
         RootSignatureDesc.NumStaticSamplers = _countof(StaticSamplers);
         RootSignatureDesc.pStaticSamplers   = StaticSamplers;
         RootSignatureDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        // A flag e condicional a capability porque serializar uma root signature que o device
+        // recusa derruba o boot inteiro — e ela nao pertence a versao 1.1 da root signature, como
+        // se poderia supor: e um valor de `D3D12_ROOT_SIGNATURE_FLAGS`, enum compartilhado por
+        // `_DESC` (1.0) e `_DESC1` (1.1). O requisito documentado e Shader Model 6.6 + Resource
+        // Binding Tier 3. O caminho de compute da arvore ja a serializa com VERSION_1.
+        if (SupportsBindlessMaterials)
+            RootSignatureDesc.Flags |= D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
         ComPtr<ID3DBlob> RootBlob;
         ComPtr<ID3DBlob> ErrorBlob;
@@ -336,6 +363,37 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthOnlyMasked)));
         PipelineStateDepthOnlyMasked = NewPSODepthOnlyMasked;
 
+        // Gemeas BINDLESS das duas variantes masked: mesmo estado de pipeline, mesmo vertex
+        // shader, so o PS trocado pela permutacao que le a linha canonica. Ficam nulas quando o
+        // device nao tem heap diretamente indexado — e o `Renderer` conferi-las antes de escolher
+        // o caminho e o que torna o fallback explicito em vez de acidental.
+        if (SupportsBindlessMaterials) {
+            auto DepthMaskedBindlessBlob = LoadShaderBytecode("DepthMaskedBindless.ps_6_6.cso");
+            PSODesc.PS = { DepthMaskedBindlessBlob.data(), DepthMaskedBindlessBlob.size() };
+            ComPtr<ID3D12PipelineState> NewPSODepthOnlyMaskedBindless;
+            SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc,
+                                                          IID_PPV_ARGS(&NewPSODepthOnlyMaskedBindless)));
+            PipelineStateDepthOnlyMaskedBindless = NewPSODepthOnlyMaskedBindless;
+
+            auto DepthNormalMaskedBindlessBlob =
+                LoadShaderBytecode("DepthNormalMaskedBindless.ps_6_6.cso");
+            PSODesc.PS            = { DepthNormalMaskedBindlessBlob.data(),
+                                      DepthNormalMaskedBindlessBlob.size() };
+            PSODesc.BlendState    = BlendDesc;
+            PSODesc.RTVFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
+            ComPtr<ID3D12PipelineState> NewPSODepthNormalMaskedBindless;
+            SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc,
+                                                          IID_PPV_ARGS(&NewPSODepthNormalMaskedBindless)));
+            PipelineStateDepthNormalMaskedBindless = NewPSODepthNormalMaskedBindless;
+
+            // Restaura o estado que o bloco do G-buffer, logo abaixo, espera encontrar.
+            PSODesc.BlendState    = NoColor;
+            PSODesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        } else {
+            PipelineStateDepthOnlyMaskedBindless.Reset();
+            PipelineStateDepthNormalMaskedBindless.Reset();
+        }
+
         // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
         // Opaco: depth EQUAL (reusa o depth do prepass). Two-sided/alpha-test (folhagem): nao
         // entram no prepass, entao escrevem o proprio depth (depth LESS + write).
@@ -372,6 +430,34 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSOGBufferTwoSided;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSided)));
         PipelineStateGBufferTwoSided = NewPSOGBufferTwoSided;
+
+        // Gemeas BINDLESS do G-buffer. O estado neste ponto e o do two-sided (cull NONE, depth
+        // LESS_EQUAL); a de cull BACK volta ao DepthEqual, exatamente como o par classico acima.
+        if (SupportsBindlessMaterials) {
+            auto GBufferBindlessBlob = LoadShaderBytecode("GBufferBindless.ps_6_6.cso");
+            PSODesc.PS = { GBufferBindlessBlob.data(), GBufferBindlessBlob.size() };
+
+            ComPtr<ID3D12PipelineState> NewPSOGBufferTwoSidedBindless;
+            SMILE_HR(_Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSidedBindless)));
+            PipelineStateGBufferTwoSidedBindless = NewPSOGBufferTwoSidedBindless;
+
+            RasterizerDesc.CullMode   = D3D12_CULL_MODE_BACK;
+            PSODesc.RasterizerState   = RasterizerDesc;
+            PSODesc.DepthStencilState = DepthEqual;
+            ComPtr<ID3D12PipelineState> NewPSOGBufferBindless;
+            SMILE_HR(_Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&NewPSOGBufferBindless)));
+            PipelineStateGBufferBindless = NewPSOGBufferBindless;
+
+            // Restaura o estado para o passe forward de translucidos, logo abaixo.
+            RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE;
+            PSODesc.RasterizerState   = RasterizerDesc;
+            PSODesc.DepthStencilState = DepthLessEqual;
+        } else {
+            PipelineStateGBufferBindless.Reset();
+            PipelineStateGBufferTwoSidedBindless.Reset();
+        }
 
         // --- Forward de translucidos (materiais Blend: vidro): sobre o HDR ja iluminado. -------
         // Blend PREMULTIPLICADO (SrcBlend=ONE): o shader pesa o tinte por alpha e soma o especular
@@ -476,6 +562,10 @@ namespace Smile {
         // As variantes masked entram porque o RecreatePSO abaixo reconstroi TODAS as PSOs deste
         // conjunto — verificado, nao suposto. Sem elas, editar DepthMasked.ps logava "sem
         // pipeline mapeado" apesar de o reload ja funcionar.
+        // As permutacoes BINDLESS nao entram na lista, e nao precisam: elas compartilham o STEM
+        // do classico ("GBuffer.ps" gera GBuffer.ps_6_0.cso e GBufferBindless.ps_6_6.cso), o
+        // watcher do editor reconstroi o target Shaders inteiro, e o RecreatePSO abaixo recarrega
+        // os dois blobs. Editar o MaterialCB.hlsli e include: forca reload completo.
         static const char* const kStems[] = { "Triangle.vs", "GBuffer.ps", "DeferredLighting.ps",
                                               "DepthNormal.ps", "ForwardBlend.ps",
                                               "DepthMasked.ps", "DepthNormalMasked.ps" };
