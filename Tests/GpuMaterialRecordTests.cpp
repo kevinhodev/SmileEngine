@@ -127,6 +127,93 @@ namespace {
         CheckIndex(R, kMaterialFlagRoughMap,    kMaterialTexRough,    L.RoughMapIndex,    Where + " rough");
     }
 
+    // === Oraculo do BLOCO DE RASTER (Fase 3) ==================================================
+    //
+    // Mesma ideia do LegacyFill acima, para o outro consumidor: o que o pixel shader do raster
+    // LIA do MaterialCB, transcrito a mao. Nao chama a engine — se a derivacao mudar junto com a
+    // implementacao, a comparacao visual da fase acusaria uma diferenca sem dizer se ela veio do
+    // acesso bindless ou de um campo calculado diferente.
+    //
+    // Os valores abaixo sao os EFETIVOS: `Emissive` e o produto que o GBuffer.ps computa na linha
+    // 190 (`EmissiveFactor.rgb * EmissiveStrength`), e nao o par de campos crus. E assim que a
+    // troca "o shader computa" -> "a linha ja traz computado" fica coberta.
+    struct FLegacyMaterialCB {
+        f32 EmissiveR = 0.0f, EmissiveG = 0.0f, EmissiveB = 0.0f;
+        f32 AOStrength = 1.0f;
+        f32 NormalStrength = 1.0f;
+        f32 HeightScale = 0.05f;
+        f32 ParallaxMinSteps = 8.0f;
+        f32 ParallaxMaxSteps = 32.0f;
+        f32 ParallaxFadeStart = 3.0f;
+        f32 ParallaxFadeRange = 5.0f;
+        u32 ParallaxRefineSteps = 5u;
+        u32 ShadingModel = 0u;
+        u32 HasNormalMap = 0u, HasAOMap = 0u, HasHeightMap = 0u;
+        u32 NormalFlipY = 0u, NormalReconstructZ = 0u, ParallaxRefine = 0u;
+    };
+
+    // `Finalized` entra porque os TRES bits de mapa dependem da tabela de descritores — sem ela
+    // nao ha o que amostrar. Os fatores e passos nao dependem: um material sem textura ainda tem
+    // forca de normal e escala de altura.
+    FLegacyMaterialCB LegacyCB(const MaterialConstants& C, bool Finalized) {
+        FLegacyMaterialCB O{};
+        O.EmissiveR = C.EmissiveFactor.X * C.EmissiveStrength;
+        O.EmissiveG = C.EmissiveFactor.Y * C.EmissiveStrength;
+        O.EmissiveB = C.EmissiveFactor.Z * C.EmissiveStrength;
+        O.AOStrength          = C.AOStrength;
+        O.NormalStrength      = C.NormalStrength;
+        O.HeightScale         = C.HeightScale;
+        O.ParallaxMinSteps    = C.ParallaxMinSteps;
+        O.ParallaxMaxSteps    = C.ParallaxMaxSteps;
+        O.ParallaxFadeStart   = C.ParallaxFadeStart;
+        O.ParallaxFadeRange   = C.ParallaxFadeRange;
+        O.ParallaxRefineSteps = C.ParallaxRefineSteps;
+        O.ShadingModel        = C.ShadingModel;
+        O.NormalFlipY         = C.NormalFlipY;
+        O.NormalReconstructZ  = C.NormalReconstructZ;
+        O.ParallaxRefine      = C.ParallaxRefine;
+        if (Finalized) {
+            O.HasNormalMap = C.HasNormalMap;
+            O.HasAOMap     = C.HasAOMap;
+            O.HasHeightMap = C.HasHeightMap;
+        }
+        return O;
+    }
+
+    void CompareRasterCase(const MaterialConstants& C, bool Finalized, u32 Base,
+                           const std::string& Where) {
+        const FLegacyMaterialCB O = LegacyCB(C, Finalized);
+        const FGpuMaterialRecord R = FGpuMaterialRecord::FromParts(
+            C, false, false, Finalized ? Base : FGpuMaterialRecord::kInvalidTextureBase);
+
+        Check(R.RasterEmissive.X == O.EmissiveR && R.RasterEmissive.Y == O.EmissiveG &&
+                  R.RasterEmissive.Z == O.EmissiveB,
+              Where + ": emissivo do raster divergiu (leva EmissiveStrength, nao RTEmissiveScale)");
+        Check(R.RasterEmissive.W == O.AOStrength,     Where + ": AOStrength divergiu");
+        Check(R.NormalStrength == O.NormalStrength,   Where + ": NormalStrength divergiu");
+        Check(R.HeightScale == O.HeightScale,         Where + ": HeightScale divergiu");
+        Check(R.ParallaxMinSteps == O.ParallaxMinSteps, Where + ": ParallaxMinSteps divergiu");
+        Check(R.ParallaxMaxSteps == O.ParallaxMaxSteps, Where + ": ParallaxMaxSteps divergiu");
+        Check(R.ParallaxFadeStart == O.ParallaxFadeStart, Where + ": ParallaxFadeStart divergiu");
+        Check(R.ParallaxFadeRange == O.ParallaxFadeRange, Where + ": ParallaxFadeRange divergiu");
+        Check(R.ParallaxRefineSteps == O.ParallaxRefineSteps,
+              Where + ": ParallaxRefineSteps divergiu");
+        Check(R.ShadingModel == O.ShadingModel, Where + ": ShadingModel divergiu");
+
+        Check(((R.Flags & kMaterialFlagNormalMap) != 0u) == (O.HasNormalMap != 0u),
+              Where + ": HasNormalMap divergiu");
+        Check(((R.Flags & kMaterialFlagAOMap) != 0u) == (O.HasAOMap != 0u),
+              Where + ": HasAOMap divergiu");
+        Check(((R.Flags & kMaterialFlagHeightMap) != 0u) == (O.HasHeightMap != 0u),
+              Where + ": HasHeightMap divergiu");
+        Check(((R.Flags & kMaterialFlagNormalFlipY) != 0u) == (O.NormalFlipY != 0u),
+              Where + ": NormalFlipY divergiu");
+        Check(((R.Flags & kMaterialFlagNormalReconZ) != 0u) == (O.NormalReconstructZ != 0u),
+              Where + ": NormalReconstructZ divergiu");
+        Check(((R.Flags & kMaterialFlagParallaxRefine) != 0u) == (O.ParallaxRefine != 0u),
+              Where + ": ParallaxRefine divergiu");
+    }
+
     // Constantes com valores RECONHECIVEIS por campo: um campo copiado do vizinho aparece como
     // numero errado, e nao como zero que qualquer default tambem produziria.
     MaterialConstants Distinct() {
@@ -139,6 +226,15 @@ namespace {
         C.RTEmissiveScale  = 0.25f;
         C.AlphaCutoff      = 0.77f;
         C.SubsurfaceColor  = { 0.1f, 0.2f, 0.3f, 0.6f };
+        // Bloco de raster: nenhum campo com o proprio default, e todos diferentes entre si.
+        C.AOStrength          = 0.81f;
+        C.NormalStrength      = 0.82f;
+        C.HeightScale         = 0.83f;
+        C.ParallaxMinSteps    = 6.0f;
+        C.ParallaxMaxSteps    = 24.0f;
+        C.ParallaxFadeStart   = 2.5f;
+        C.ParallaxFadeRange   = 4.5f;
+        C.ParallaxRefineSteps = 7u;
         return C;
     }
 }
@@ -149,7 +245,7 @@ int main() {
     // --- ABI ---------------------------------------------------------------------------------
     // Os static_assert do header ja travam isto em compilacao; repetir aqui e o que faz um
     // relaxamento acidental deles aparecer como teste vermelho, e nao como header que compila.
-    Check(sizeof(FGpuMaterialRecord) == 64, "a linha tem de ter 64 B");
+    Check(sizeof(FGpuMaterialRecord) == 112, "a linha tem de ter 112 B");
     Check(offsetof(FGpuMaterialRecord, BaseColor) == 0, "BaseColor no offset 0");
     Check(offsetof(FGpuMaterialRecord, EmissiveFactor) == 16, "EmissiveFactor no offset 16");
     Check(offsetof(FGpuMaterialRecord, SubsurfaceColor) == 32, "SubsurfaceColor no offset 32");
@@ -157,6 +253,17 @@ int main() {
     Check(offsetof(FGpuMaterialRecord, AlphaCutoff) == 52, "AlphaCutoff no offset 52");
     Check(offsetof(FGpuMaterialRecord, Flags) == 56, "Flags no offset 56");
     Check(offsetof(FGpuMaterialRecord, TextureBase) == 60, "TextureBase no offset 60");
+    // Bloco de raster (Fase 3). Os OITO offsets acima nao podem se mexer: eles sao o que todo
+    // shader de hit de RT le, e a fase que acrescentou o bloco abaixo nao mudou uma letra deles.
+    Check(offsetof(FGpuMaterialRecord, RasterEmissive) == 64, "RasterEmissive no offset 64");
+    Check(offsetof(FGpuMaterialRecord, NormalStrength) == 80, "NormalStrength no offset 80");
+    Check(offsetof(FGpuMaterialRecord, HeightScale) == 84, "HeightScale no offset 84");
+    Check(offsetof(FGpuMaterialRecord, ParallaxMinSteps) == 88, "ParallaxMinSteps no offset 88");
+    Check(offsetof(FGpuMaterialRecord, ParallaxMaxSteps) == 92, "ParallaxMaxSteps no offset 92");
+    Check(offsetof(FGpuMaterialRecord, ParallaxFadeStart) == 96, "ParallaxFadeStart no offset 96");
+    Check(offsetof(FGpuMaterialRecord, ParallaxFadeRange) == 100, "ParallaxFadeRange no offset 100");
+    Check(offsetof(FGpuMaterialRecord, ParallaxRefineSteps) == 104, "ParallaxRefineSteps no offset 104");
+    Check(offsetof(FGpuMaterialRecord, ShadingModel) == 108, "ShadingModel no offset 108");
 
     // Valores dos oito bits herdados. Eles viajam ate o HLSL como INSTGEO_FLAG_*; renumerar
     // qualquer um sem tocar no shader troca o significado de um bit em todo hit de RT.
@@ -168,6 +275,17 @@ int main() {
     Check(kMaterialFlagMetalMap    == 32u,  "METALMAP = 32");
     Check(kMaterialFlagRoughMap    == 64u,  "ROUGHMAP = 64");
     Check(kMaterialFlagTranslucent == 128u, "TRANSLUCENT = 128");
+    Check(kMaterialFlagAlbedoMap   == 256u, "ALBEDOMAP = 256");
+    Check(kMaterialFlagTwoSided    == 512u, "TWOSIDED = 512");
+
+    // Os seis bits do bloco de raster. Renumerar um deles mantem o layout certo e troca, por
+    // exemplo, "tem normal map" por "reconstruir Z" — o pixel shader continuaria compilando.
+    Check(kMaterialFlagNormalMap      == 1024u,  "NORMALMAP = 1024");
+    Check(kMaterialFlagAOMap          == 2048u,  "AOMAP = 2048");
+    Check(kMaterialFlagHeightMap      == 4096u,  "HEIGHTMAP = 4096");
+    Check(kMaterialFlagNormalFlipY    == 8192u,  "NORMALFLIPY = 8192");
+    Check(kMaterialFlagNormalReconZ   == 16384u, "NORMALRECONZ = 16384");
+    Check(kMaterialFlagParallaxRefine == 32768u, "PARALLAXREFINE = 32768");
 
     // --- Linha default ------------------------------------------------------------------------
     // Renderavel sem material tinha defaults PROPRIOS no snapshot (cinza 0.7, subsurface branco);
@@ -214,6 +332,61 @@ int main() {
             }
         }
         std::cout << "  paridade snapshot antigo x linha canonica: " << Cases << " casos\n";
+    }
+
+    // --- Matriz do bloco de raster ------------------------------------------------------------
+    // Os seis bits novos x finalizado/nao, exaustivo. O oraculo aqui e o MaterialCB: o que o pixel
+    // shader lia por um CBV amarrado POR DRAW tem de sair identico da linha canonica.
+    //
+    // O ShadingModel varre os QUATRO valores e nao so folhagem: o bit kMaterialFlagFoliage
+    // responde "e folhagem?", que nao reconstroi o modelo Subsurface. Se o campo sumisse e o
+    // shader voltasse a derivar do bit, materiais Subsurface iriam para o G-buffer como
+    // DefaultLit.
+    {
+        constexpr u32 kNormal = 1u, kAO = 2u, kHeight = 4u, kFlipY = 8u, kReconZ = 16u,
+                      kRefine = 32u;
+        u32 Cases = 0;
+        for (u32 Mask = 0; Mask < 64u; ++Mask) {
+            for (u32 Fin = 0; Fin < 2u; ++Fin) {
+                MaterialConstants C = Distinct();
+                C.HasNormalMap       = (Mask & kNormal) ? 1u : 0u;
+                C.HasAOMap           = (Mask & kAO)     ? 1u : 0u;
+                C.HasHeightMap       = (Mask & kHeight) ? 1u : 0u;
+                C.NormalFlipY        = (Mask & kFlipY)  ? 1u : 0u;
+                C.NormalReconstructZ = (Mask & kReconZ) ? 1u : 0u;
+                C.ParallaxRefine     = (Mask & kRefine) ? 1u : 0u;
+                C.ShadingModel       = Mask % 4u;
+                CompareRasterCase(C, Fin != 0, 4096u,
+                                  "raster mask=" + std::to_string(Mask) + " fin=" +
+                                      std::to_string(Fin));
+                ++Cases;
+            }
+        }
+        std::cout << "  paridade MaterialCB x bloco de raster: " << Cases << " casos\n";
+    }
+
+    // --- O emissivo do raster NAO leva o RTEmissiveScale ---------------------------------------
+    // Os dois emissivos da linha existem por causa desta divergencia. Se um dia colapsarem num
+    // campo so, este caso e o que fica vermelho — e nao a comparacao visual, meses depois, num
+    // material decorativo que passou a lavar a cena ou a apagar na tela.
+    {
+        MaterialConstants C{};
+        C.EmissiveFactor   = { 4.0f, 0.0f, 0.0f, 1.0f };
+        C.EmissiveStrength = 3.0f;
+        C.RTEmissiveScale  = 0.5f;
+        const FGpuMaterialRecord R = FGpuMaterialRecord::FromParts(C, false, false, 0u);
+        Check(R.RasterEmissive.X == 12.0f, "emissivo do raster = fator x forca (4 x 3)");
+        Check(R.EmissiveFactor.X == 6.0f,  "emissivo do RT = fator x forca x escala (4 x 3 x 0,5)");
+    }
+
+    // --- AOStrength viaja no .w do emissivo do raster ------------------------------------------
+    // Empacotamento deliberado (evita um campo solto de 4 B), e por isso mesmo o tipo de coisa que
+    // uma leitura desatenta troca pelo alpha do emissivo.
+    {
+        MaterialConstants C{};
+        C.AOStrength = 0.375f;
+        const FGpuMaterialRecord R = FGpuMaterialRecord::FromParts(C, false, false, 0u);
+        Check(R.RasterEmissive.W == 0.375f, "AOStrength no .w do RasterEmissive");
     }
 
     // --- Nao finalizado nao aponta para descritor ---------------------------------------------

@@ -33,6 +33,32 @@ namespace Smile {
         // que eles proprios tracam.
         if (_Blend)                 R.Flags |= kMaterialFlagTranslucent;
 
+        // ---- Bloco de raster (Fase 3) --------------------------------------------------------
+        //
+        // Fica ANTES do early-return da tabela de descritores porque nenhum destes campos depende
+        // dela: sao fatores e passos do MaterialCB, validos com ou sem textura. So os tres BITS
+        // de mapa deste bloco (normal, AO, height) descem para o outro lado.
+        //
+        // O emissivo do raster e o produto SEM o RTEmissiveScale — a divergencia deliberada
+        // descrita no MaterialConstants. Guardar os dois produtos, e nao fator + escala, evita que
+        // o shader repita a multiplicacao por pixel.
+        R.RasterEmissive = { _C.EmissiveFactor.X * _C.EmissiveStrength,
+                             _C.EmissiveFactor.Y * _C.EmissiveStrength,
+                             _C.EmissiveFactor.Z * _C.EmissiveStrength,
+                             _C.AOStrength };
+        R.NormalStrength      = _C.NormalStrength;
+        R.HeightScale         = _C.HeightScale;
+        R.ParallaxMinSteps    = _C.ParallaxMinSteps;
+        R.ParallaxMaxSteps    = _C.ParallaxMaxSteps;
+        R.ParallaxFadeStart   = _C.ParallaxFadeStart;
+        R.ParallaxFadeRange   = _C.ParallaxFadeRange;
+        R.ParallaxRefineSteps = _C.ParallaxRefineSteps;
+        R.ShadingModel        = _C.ShadingModel;
+
+        if (_C.NormalFlipY)        R.Flags |= kMaterialFlagNormalFlipY;
+        if (_C.NormalReconstructZ) R.Flags |= kMaterialFlagNormalReconZ;
+        if (_C.ParallaxRefine)     R.Flags |= kMaterialFlagParallaxRefine;
+
         // Sem tabela de descritores nao ha mapa nenhum: ligar o bit aqui faria o shader somar um
         // deslocamento a uma base invalida e amostrar um descritor de outro dono.
         if (_TextureBase == kInvalidTextureBase) return R;
@@ -52,6 +78,11 @@ namespace Smile {
         // material que e quase todo dieletrico.
         if (_C.HasMetalnessMap) R.Flags |= kMaterialFlagMetalMap;
         if (_C.HasRoughnessMap) R.Flags |= kMaterialFlagRoughMap;
+        // Os tres mapas que so o raster consulta. Mesma regra dos de cima: sob a base valida,
+        // porque um bit ligado com base invalida faria o shader amostrar descritor de outro dono.
+        if (_C.HasNormalMap)    R.Flags |= kMaterialFlagNormalMap;
+        if (_C.HasAOMap)        R.Flags |= kMaterialFlagAOMap;
+        if (_C.HasHeightMap)    R.Flags |= kMaterialFlagHeightMap;
         return R;
     }
 

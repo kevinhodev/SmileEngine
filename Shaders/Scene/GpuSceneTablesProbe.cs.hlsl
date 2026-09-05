@@ -27,8 +27,8 @@ StructuredBuffer<GpuInstanceBounds> InstanceBounds    : register(t4);
 StructuredBuffer<GpuInstanceTransform> InstanceCurrent  : register(t5);
 StructuredBuffer<GpuInstanceTransform> InstancePrevious : register(t6);
 
-// Vinte e um uint4 por instancia: todos os campos das sete structs mais os derivados que provam
-// que as CONSTANTES tambem casam (deslocamento de textura e bits de flag).
+// Vinte e seis uint4 por instancia: todos os campos das sete structs mais os derivados que provam
+// que as CONSTANTES tambem casam (deslocamentos de textura e bits de flag).
 RWStructuredBuffer<uint4> Results : register(u0);
 
 [numthreads(64, 1, 1)]
@@ -46,7 +46,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const GpuInstanceTransform ic = InstanceCurrent[i];
     const GpuInstanceTransform ip = InstancePrevious[i];
 
-    const uint b = i * 21u;
+    const uint b = i * 26u;
     Results[b + 0u] = asuint(m.BaseColor);
     Results[b + 1u] = asuint(m.EmissiveFactor);
     Results[b + 2u] = asuint(m.SubsurfaceColor);
@@ -75,7 +75,27 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     Results[b + 18u] = asuint(ip.Value[1]);
     Results[b + 19u] = asuint(ip.Value[2]);
     Results[b + 20u] = asuint(ip.Value[3]);
-    // Flags e VirtualGeometryId sao reservados e valem 0; conferi-los no C++ exigiria dois uint4
-    // so para dois zeros. O static_assert do offset ja fixa a posicao deles, e o dia em que
-    // ganharem valor este teste ganha a leitura junto.
+
+    // Bloco de RASTER da linha de material (Fase 3). Sao os campos que o pixel shader passa a ler
+    // daqui em vez do CBV por draw: um offset errado neste bloco nao apareceria como material
+    // trocado, e sim como parallax ou intensidade de normal de OUTRO material.
+    Results[b + 21u] = asuint(m.RasterEmissive);
+    Results[b + 22u] = uint4(asuint(m.NormalStrength), asuint(m.HeightScale),
+                             asuint(m.ParallaxMinSteps), asuint(m.ParallaxMaxSteps));
+    Results[b + 23u] = uint4(asuint(m.ParallaxFadeStart), asuint(m.ParallaxFadeRange),
+                             m.ParallaxRefineSteps, m.ShadingModel);
+    // E as seis constantes de bit novas, pela mesma razao das duas antigas: renumerar uma delas
+    // mantem o layout certo e troca o significado do bit.
+    Results[b + 24u] = uint4((m.Flags & SMILE_MAT_FLAG_NORMALMAP)    != 0u ? 1u : 0u,
+                             (m.Flags & SMILE_MAT_FLAG_AOMAP)        != 0u ? 1u : 0u,
+                             (m.Flags & SMILE_MAT_FLAG_HEIGHTMAP)    != 0u ? 1u : 0u,
+                             (m.Flags & SMILE_MAT_FLAG_NORMALFLIPY)  != 0u ? 1u : 0u);
+    Results[b + 25u] = uint4((m.Flags & SMILE_MAT_FLAG_NORMALRECONZ)   != 0u ? 1u : 0u,
+                             (m.Flags & SMILE_MAT_FLAG_PARALLAXREFINE) != 0u ? 1u : 0u,
+                             MaterialTextureIndex(m, SMILE_MAT_TEX_NORMAL),
+                             MaterialTextureIndex(m, SMILE_MAT_TEX_HEIGHT));
+
+    // Flags e VirtualGeometryId da MALHA sao reservados e valem 0; conferi-los no C++ exigiria
+    // dois uint4 so para dois zeros. O static_assert do offset ja fixa a posicao deles, e o dia
+    // em que ganharem valor este teste ganha a leitura junto.
 }

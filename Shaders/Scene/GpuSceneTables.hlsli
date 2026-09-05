@@ -5,7 +5,7 @@
 // Espelho HLSL das tabelas canonicas da GPU scene (Fase 2 do GPU-DRIVEN-PLAN).
 //
 // Espelha, byte a byte:
-//   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 64 B)
+//   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 112 B)
 //   GpuMeshRecord     <- Smile::FGpuMeshRecord      (Graphics/Scene/GpuSceneTables.h, 56 B)
 //   GpuInstanceMeta   <- Smile::FGpuSceneInstanceMeta (20 B)
 //   GpuInstanceBounds <- Smile::FGpuSceneInstanceBounds (32 B)
@@ -37,6 +37,15 @@
 #define SMILE_MAT_FLAG_ALBEDOMAP   256u // tem mapa de albedo (era o uint HasAlbedo)
 #define SMILE_MAT_FLAG_TWOSIDED    512u // FMaterial::IsTwoSidedForRT (era o uint TwoSidedRT)
 
+// Bits do BLOCO DE RASTER (Fase 3): os `uint` do MaterialCB que so o raster consulta e que
+// chegavam ao pixel shader por um CBV amarrado POR DRAW.
+#define SMILE_MAT_FLAG_NORMALMAP       1024u  // HasNormalMap
+#define SMILE_MAT_FLAG_AOMAP           2048u  // HasAOMap
+#define SMILE_MAT_FLAG_HEIGHTMAP       4096u  // HasHeightMap (parallax)
+#define SMILE_MAT_FLAG_NORMALFLIPY     8192u  // normal map DirectX (Y invertido)
+#define SMILE_MAT_FLAG_NORMALRECONZ    16384u // normal BC5 (so RG): reconstruir Z
+#define SMILE_MAT_FLAG_PARALLAXREFINE  32768u // busca binaria no hit do POM
+
 // Deslocamentos na tabela contigua de descritores do material (FMaterial reserva oito).
 #define SMILE_MAT_TEX_ALBEDO   0u
 #define SMILE_MAT_TEX_NORMAL   1u
@@ -50,6 +59,8 @@
 // Uma linha por MATERIAL, e nao por instancia. Editar um material toca esta linha; as instancias
 // que o usam nao sao tocadas.
 struct GpuMaterialRecord {
+    // --- 64 B lidos pelo RAY TRACING. Offsets congelados: mexer aqui troca o significado de um
+    //     byte em todo hit. ---
     float4 BaseColor;       // rgb tint + a opacidade (o alpha-test dos raios usa o .a)
     float4 EmissiveFactor;  // rgb = fator * forca * RTEmissiveScale; w = MetallicFactor
     float4 SubsurfaceColor; // tint rgb + intensidade a
@@ -57,6 +68,20 @@ struct GpuMaterialRecord {
     float  AlphaCutoff;
     uint   Flags;           // SMILE_MAT_FLAG_*
     uint   TextureBase;     // primeiro descritor do material; 0xFFFFFFFF = sem tabela
+
+    // --- Bloco de RASTER (Fase 3), 48 B. O que o MaterialCB entregava por um CBV por draw e os
+    //     64 B acima nao carregam. `ParallaxSelfShadow`/`ParallaxShadowSteps` ficam de fora: os
+    //     dois existem no CBV e nenhum shader os le. ---
+    float4 RasterEmissive;  // rgb = EmissiveFactor * EmissiveStrength (SEM RTEmissiveScale);
+                            // w   = AOStrength
+    float  NormalStrength;
+    float  HeightScale;
+    float  ParallaxMinSteps;
+    float  ParallaxMaxSteps;
+    float  ParallaxFadeStart;
+    float  ParallaxFadeRange;
+    uint   ParallaxRefineSteps;
+    uint   ShadingModel;    // SMILE_SHADINGMODEL_*; VALOR, nao bit (sao quatro modelos)
 };
 
 // Indice bindless de um mapa. Sem tabela, devolve a propria base invalida em vez de um vizinho

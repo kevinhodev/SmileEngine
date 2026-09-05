@@ -5,7 +5,7 @@
 // Tres: materiais, meshes e instancias. A tabela de instancias nasce na Fase 2 como fonte
 // canonica; as fases seguintes migram os consumidores raster/indirect sem mudar sua ABI.
 //
-// O que a de MATERIAIS resolve, em uma frase: editar um material passa a tocar UMA linha de 64 B
+// O que a de MATERIAIS resolve, em uma frase: editar um material passa a tocar UMA linha de 112 B
 // em vez de reescrever o snapshot inteiro da cena (2.479 registros de 100 B na Emerald) com as
 // duas filas drenadas.
 //

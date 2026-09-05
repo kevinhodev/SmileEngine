@@ -71,6 +71,20 @@ namespace {
         C.RTEmissiveScale  = 1.0f;
         C.AlphaCutoff      = Semente + 0.7f;
         C.SubsurfaceColor  = { Semente + 0.8f, Semente + 0.9f, Semente + 1.1f, Semente + 1.2f };
+
+        // Bloco de raster (Fase 3). Valores TODOS distintos entre si e distintos dos defaults: com
+        // os defaults, trocar dois campos de lugar no espelho passaria verde, que e exatamente o
+        // erro que esta sonda existe para pegar.
+        C.AOStrength          = Semente + 1.3f;
+        C.EmissiveStrength    = Semente + 1.4f;
+        C.NormalStrength      = Semente + 1.5f;
+        C.HeightScale         = Semente + 1.6f;
+        C.ParallaxMinSteps    = Semente + 1.7f;
+        C.ParallaxMaxSteps    = Semente + 1.8f;
+        C.ParallaxFadeStart   = Semente + 1.9f;
+        C.ParallaxFadeRange   = Semente + 2.1f;
+        C.ParallaxRefineSteps = 3u + static_cast<u32>(Semente);
+        C.ShadingModel        = 2u; // Subsurface: nem DefaultLit nem o Foliage que ja tem bit
         return C;
     }
 
@@ -257,11 +271,20 @@ int main() try {
         MaterialConstants C = Constantes(1.0f);
         C.HasAlbedoMap = 1u;
         C.HasEmissiveMap = 1u;
+        // Tres dos seis bits novos LIGADOS e tres desligados, para que renumerar um deles nao
+        // possa passar por coincidencia de "tudo zero" ou "tudo um".
+        C.HasNormalMap        = 1u;
+        C.HasHeightMap        = 1u;
+        C.NormalReconstructZ  = 1u;
         Linhas.push_back(FGpuMaterialRecord::FromParts(C, /*TwoSided*/ true, /*Blend*/ false, 4096u));
     }
     {
         MaterialConstants C = Constantes(2.0f);
         C.AlphaTest = 1u;
+        // Os outros tres bits novos, complementares aos da linha acima.
+        C.HasAOMap        = 1u;
+        C.NormalFlipY     = 1u;
+        C.ParallaxRefine  = 1u;
         Linhas.push_back(FGpuMaterialRecord::FromParts(C, /*TwoSided*/ false, /*Blend*/ true, 8192u));
     }
 
@@ -374,7 +397,7 @@ int main() try {
     auto BufBounds = S.Upload(Bounds.data(), Bounds.size() * sizeof(FGpuSceneInstanceBounds));
     auto BufCurrent = S.Upload(Current.data(), Current.size() * sizeof(FGpuSceneInstanceTransform));
     auto BufPrevious = S.Upload(Previous.data(), Previous.size() * sizeof(FGpuSceneInstanceTransform));
-    constexpr u32 kResultRows = 21u;
+    constexpr u32 kResultRows = 26u;
     constexpr u32 kResultStride = kResultRows * 4u;
     const u64 SaidaBytes = static_cast<u64>(kInstancias) * kResultStride * sizeof(u32);
     auto BufSaida   = S.Buffer(D3D12_HEAP_TYPE_DEFAULT, SaidaBytes, true,
@@ -534,6 +557,38 @@ int main() try {
             Check(MesmoFloat(R[68 + K], Previous[I].Value.M[K / 4u][K % 4u]),
                   Onde + ": matriz anterior no indice " + std::to_string(K));
         }
+
+        // Bloco de raster da linha de material (Fase 3), offsets 64..108. Um deslocamento aqui
+        // nao apareceria como material trocado: apareceria como parallax, forca de normal ou
+        // modelo de sombreamento de OUTRO material — bem mais dificil de atribuir numa captura.
+        Check(MesmoFloat(R[84], M.RasterEmissive.X) && MesmoFloat(R[85], M.RasterEmissive.Y) &&
+              MesmoFloat(R[86], M.RasterEmissive.Z) && MesmoFloat(R[87], M.RasterEmissive.W),
+              Onde + ": RasterEmissive no offset 64");
+        Check(MesmoFloat(R[88], M.NormalStrength),   Onde + ": NormalStrength no offset 80");
+        Check(MesmoFloat(R[89], M.HeightScale),      Onde + ": HeightScale no offset 84");
+        Check(MesmoFloat(R[90], M.ParallaxMinSteps), Onde + ": ParallaxMinSteps no offset 88");
+        Check(MesmoFloat(R[91], M.ParallaxMaxSteps), Onde + ": ParallaxMaxSteps no offset 92");
+        Check(MesmoFloat(R[92], M.ParallaxFadeStart), Onde + ": ParallaxFadeStart no offset 96");
+        Check(MesmoFloat(R[93], M.ParallaxFadeRange), Onde + ": ParallaxFadeRange no offset 100");
+        Check(R[94] == M.ParallaxRefineSteps, Onde + ": ParallaxRefineSteps no offset 104");
+        Check(R[95] == M.ShadingModel,        Onde + ": ShadingModel no offset 108");
+
+        Check((R[96] != 0u) == ((M.Flags & kMaterialFlagNormalMap) != 0u),
+              Onde + ": SMILE_MAT_FLAG_NORMALMAP casa com o C++");
+        Check((R[97] != 0u) == ((M.Flags & kMaterialFlagAOMap) != 0u),
+              Onde + ": SMILE_MAT_FLAG_AOMAP casa com o C++");
+        Check((R[98] != 0u) == ((M.Flags & kMaterialFlagHeightMap) != 0u),
+              Onde + ": SMILE_MAT_FLAG_HEIGHTMAP casa com o C++");
+        Check((R[99] != 0u) == ((M.Flags & kMaterialFlagNormalFlipY) != 0u),
+              Onde + ": SMILE_MAT_FLAG_NORMALFLIPY casa com o C++");
+        Check((R[100] != 0u) == ((M.Flags & kMaterialFlagNormalReconZ) != 0u),
+              Onde + ": SMILE_MAT_FLAG_NORMALRECONZ casa com o C++");
+        Check((R[101] != 0u) == ((M.Flags & kMaterialFlagParallaxRefine) != 0u),
+              Onde + ": SMILE_MAT_FLAG_PARALLAXREFINE casa com o C++");
+        Check(R[102] == M.TextureIndex(kMaterialTexNormal),
+              Onde + ": MaterialTextureIndex(NORMAL) casa com o C++");
+        Check(R[103] == M.TextureIndex(kMaterialTexHeight),
+              Onde + ": MaterialTextureIndex(HEIGHT) casa com o C++");
     }
     BufLeitura->Unmap(0, nullptr);
 
