@@ -1281,8 +1281,9 @@ explícita do proprietário; este fechamento não a inicia automaticamente.
 
 ## Fase 2 — Tabelas canônicas e formato-base deliberado
 
-> **Estado em 2026-09-04 — EM ANDAMENTO.** Materiais e meshes entregues; instâncias e a comparação
-> visual pendentes. Detalhe, evidência e o que cada gate fechou (e o que não fechou) em
+> **Estado em 2026-09-05 — EM ANDAMENTO.** Materiais e meshes entregues; comparação visual e
+> validação interativa concluídas. Resta a tabela canônica de instâncias. Detalhe, evidência e o que
+> cada gate fechou (e o que não fechou) em
 > [GPU-DRIVEN-PHASE2-PROGRESS.md](GPU-DRIVEN-PHASE2-PROGRESS.md).
 >
 > **Decisão do proprietário, 2026-09-04 — o formato-base NÃO é bumpado nesta fase.** A verificação

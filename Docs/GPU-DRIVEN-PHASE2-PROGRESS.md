@@ -1,19 +1,10 @@
 # Fase 2 — estado da implementação
 
-Data: 2026-09-04
+Data: 2026-09-05
 
-Estado: **em andamento, não promovível.** As tabelas de materiais e de meshes estão entregues e
-validadas em runtime; os quatro findings da revisão estão corrigidos. Faltam **duas decisões do
-proprietário**, e são elas que seguram o encerramento da fase:
-
-1. **`FGpuSceneInstance`** — desenhada e orçada, não implementada. Ver a seção do layout.
-2. **Validação interativa** de três caminhos que não têm teste automatizado: a troca de textura de
-   material (hazard de lifetime de GPU — quem prova é a debug layer numa sessão Debug), o slider de
-   subsurface, e agora o rebake de micro-map. O rebake é observável: editar o corte de alpha numa
-   folhagem e soltar tem de logar `[OMM] Rebake em runtime: N par(es)...` e fazer o painel mostrar
-   BLAS refeitos, sem que o recorte da folhagem no GI divirja do raster. Vale exercitar também o
-   caminho de **recusa** — trocar o BaseColor por uma textura gerada em runtime: o log tem de dizer
-   qual peça faltou e o controle na UI tem de **voltar sozinho** ao valor anterior.
+Estado: **em andamento, não promovível.** As tabelas de materiais e de meshes estão entregues, e a
+validação interativa dos caminhos de edição foi concluída em Debug. Resta implementar a
+**`FGpuSceneInstance`**, já desenhada e orçada; é a única pendência do objetivo declarado da fase.
 
 O gate do OMM deixou de ser pendência: **decidido pela reconstrução** e implementado.
 
@@ -184,11 +175,28 @@ todo hit de RT.
 |---|---|
 | atualização de material toca uma linha, não todos os `FRTInstanceGeo` | **feito**, testado em `DiffMaterialRows` |
 | o caminho estável não chama `Flush`/`WaitIdle` por edição de material | **feito**: `NotifyMaterialRTStateChanged` perdeu os dois |
-| OMM invalidado quando suas ENTRADAS mudam | **feito**: chaveado pelas quatro entradas, rebakeado no commit da edição e os BLAS afetados reconstruídos. Falta validação interativa |
+| OMM invalidado quando suas ENTRADAS mudam | **feito**: chaveado pelas quatro entradas, rebakeado no commit da edição, BLAS afetados reconstruídos e caminhos positivo/negativo validados em Debug |
 | layouts e versões com testes de ABI, offsets e bounds | **feito** para material, mesh e instância; falta a de instâncias da Fase 4 |
 | cena grande reporta bytes persistentes por tabela e sujos por frame | **feito e medido** na sintética de 1M: `rowsDirty=0` e `copyRegions=0` em regime estável. VRAM e staging são campos separados; ver "o que os bytes medem" |
 | formato-base novo e deliberado | **decidido não bumpar** — ver a nota de estado da Fase 2 no plano |
 | raster CPU e RT mantêm paridade visual | **feito**: `scientific`, N=128, Bistro+Emerald, 8/8 capturas; MAE máximo 0,900, abaixo do piso de ruído de 1,08 já documentado na Fase 1 |
+
+## Validação interativa em Debug — concluída em 2026-09-05
+
+Cena Bistro, material `Foliage_Bux_Hedges46.DoubleSided`, usado por 36 meshes:
+
+- quatro ciclos completos de reconstrução terminaram com
+  `[OMM] Rebake em runtime: 36 par(es) rebakeado(s), 36 BLAS reconstruido(s)`: dois commits de
+  cutoff, troca de BaseColor e import de uma nova origem para o teste de procedência;
+- a troca de BaseColor atualizou o preview e o editor continuou renderizando normalmente;
+- a edição de subsurface produziu dois frames observados com `rowsDirty=1` e `copyRegions=1`, e
+  `rowsUploadedTotal` avançou de 140 para 142; depois voltou ao regime estável;
+- o caminho negativo foi exercitado alterando no disco, depois do import, os bytes da textura usada
+  pela GPU. O rebake recusou por conteúdo divergente, avisou no log e o cutoff voltou sozinho para
+  `0,80` na UI;
+- o processo permaneceu responsivo e o log inteiro da sessão ficou sem `D3D12 #921` e sem
+  `DXGI_ERROR_DEVICE_HUNG`. O `D3D12 #820` do preview de material continua aparecendo e é um aviso
+  independente sobre clear value, não falha do OMM.
 
 ## OMM: o que foi fechado e o que não foi
 
@@ -273,8 +281,8 @@ publicação: os três buffers UPLOAD de cada par (`OmmIndexInput`, `OmmArrayInp
 eram locais do laço e morriam antes de a command list ser executada. A list guarda apenas os
 endereços GPU; ela não retém os recursos. A debug layer acusou `D3D12 #921` e a GPU terminou em
 `DXGI_ERROR_DEVICE_HUNG`. Eles agora sobrevivem ao lado dos scratches até `ExecuteAndSync`. Release
-e Debug compilam e passam 59/59; a repetição interativa na Bistro continua pendente, porque só ela
-prova que a debug layer deixou de acusar o lifetime real.
+e Debug compilam e passam 59/59; a repetição interativa na Bistro completou quatro reconstruções de
+36 pares sem repetir `#921` nem o hang, fechando o lifetime real que a suíte sem placa não alcança.
 
 **Os recursos substituídos são reclamados.** `ForgetBlas` tira a chave do `BlasByMesh` e move o
 recurso do par para a lista de **aposentados**; a reconciliação seguinte os solta. A espera não é
@@ -396,10 +404,10 @@ terreno é o caso real. Nenhum dos dois é alpha-tested hoje.
 | fail-closed no registro | `kOmmNoContentHash` aceito no `RetainMeshSource` → `registro sem fingerprint foi aceito` |
 | hash por elemento | stride assumido compacto → `LoadGeometry falhou` nas **1591** malhas, que é o modo de falha silencioso que essa forma evita |
 
-O que **não** tem prova automatizada, e continua sendo o mesmo conjunto de sempre: a atomicidade por
-material, a reversão para opaco exigindo o BLAS opaco e a reemissão dos sinais na ponte Qt. Os três
-são de sessão de editor com GPU. O rebake é observável no log
-(`[OMM] Rebake em runtime: N par(es)...`) e no painel de BLAS refeitos.
+O que **não** tem prova automatizada continua sendo a atomicidade por material, a reversão para
+opaco exigindo o BLAS opaco e a reemissão dos sinais na ponte Qt. A sessão interativa acima cobre o
+rebake positivo, a recusa por procedência e a reemissão do cutoff; a transição específica para
+opaco continua sustentada pela revisão do caminho e pelos invariantes CPU-puros.
 
 ## Telemetria
 
@@ -492,11 +500,9 @@ absorvendo os dois sistemas, ou deixar a tabela nascer na Fase 4 já com o consu
 
 ## Falta na fase
 
-- `FGpuSceneInstance`: layout e orçamento **feitos** (seção acima); a implementação aguarda
-  decisão do proprietário;
-- medir bytes persistentes e sujos numa cena grande de verdade;
-- comparação visual CPU/RT no mesmo regime da Fase 1 (preset scientific, `N=128`, 4 cenas × 2
-  câmeras). **Exige GPU e aval do proprietário.**
+- `FGpuSceneInstance`: layout e orçamento **feitos** (seção acima); falta implementar sem criar uma
+  terceira cópia incoerente de transforms/bounds. A validação de cena grande, a comparação visual e
+  os fluxos interativos de materiais/OMM já estão fechados.
 
 ## Risco anotado, ainda não medido
 
