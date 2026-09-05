@@ -35,7 +35,8 @@ Base: Fase 1 fechada em `439e7b4`. Nada da Fase 1 foi reaberto.
 | `7e9c9a6` | rebake em runtime + reconstrução dos BLAS afetados |
 | `ee39f68` | os quatro furos do caminho de reconstrução |
 | `2877d82` | procedência que identifica bytes; recusa em vez de meia aplicação |
-| (este) | fingerprint de conteúdo, atomicidade por material, ranges antes das alocações |
+| `04bf69a` | fingerprint de conteúdo, atomicidade por material, ranges antes das alocações |
+| `5aabcef` | publicação transacional dos BLAS, rollback total e reclamação dos recursos substituídos |
 
 ## Findings da revisão (2026-09-04)
 
