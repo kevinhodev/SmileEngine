@@ -1355,12 +1355,13 @@ alterar ainda a submissão raster.
 
 ## Fase 3 — Raster bindless sem indirect
 
-> **Estado em 2026-09-05 — IMPLEMENTADA E REVISADA, NÃO VALIDADA EM GPU.** As slices estão na
-> árvore, Release fecha 61/61 e o cliente TypeScript compila; o default continua no caminho
-> clássico (regra 3). A revisão do proprietário achou 1 P1 e 3 P2, todos corrigidos — entre eles
+> **Estado em 2026-09-05 — ESTRUTURALMENTE COMPLETA, NÃO VALIDADA EM GPU.** As slices estão na
+> árvore, Release fecha 61/61, Release e Debug compilam e o cliente TypeScript compila; o default
+> continua no caminho clássico (regra 3). A revisão do proprietário achou 1 P1 e 3 P2, todos
+> corrigidos — entre eles
 > um em que **o próprio contador usado para julgar o A/B mentia**, contando como fallback de
 > material todo draw que nunca consumiu material. O que falta é o que exige placa: ligar o
-> toggle na Bistro e na Emerald e provar paridade. **A fase não fecha antes disso.** Detalhe,
+> toggle na Bistro e na Emerald, provar paridade e medir. **A fase não fecha antes disso.** Detalhe,
 > evidência, decisões reversíveis e a fila do que falta em
 > [GPU-DRIVEN-PHASE3-PROGRESS.md](GPU-DRIVEN-PHASE3-PROGRESS.md).
 >
@@ -1370,9 +1371,10 @@ alterar ainda a submissão raster.
 > spec de Dynamic Resources exige, era satisfeita por acidente. As duas estão fechadas. A versão
 > da root signature confirmou-se não ser a questão, como o texto abaixo antecipava.
 >
-> **Fora desta rodada, de propósito:** sombras opacas do sol e locais. São duas root signatures
-> próprias e um segundo par de permutações; entram na continuação, para o diff da migração
-> principal caber numa revisão. Translúcidos ficam no clássico por decisão D9.
+> A continuação migrou as root signatures próprias das sombras: caster opaco segue sem material
+> (PS nulo), enquanto alpha-tested lê a linha canônica. No caminho apareceu e foi corrigido um
+> P1 antigo: as tabelas estavam em estado `NON_PIXEL` apesar de já serem lidas pelo G-buffer PS.
+> Translúcidos ficam no clássico por decisão D9.
 
 ### Objetivo
 

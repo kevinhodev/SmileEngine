@@ -2,9 +2,10 @@
 
 Data: 2026-09-05
 
-Estado: **implementada e revisada, NÃO validada em GPU.** As slices estão na árvore, Release fecha
-61/61 e o cliente TypeScript compila. O que falta é exatamente o que exige placa: ligar o toggle
-na Bistro e na Emerald e provar paridade visual. Enquanto isso não acontece, a fase **não fecha**.
+Estado: **implementada, revisada e estruturalmente completa; NÃO validada em GPU.** As slices estão
+na árvore, Release fecha 61/61, Release e Debug compilam e o cliente TypeScript compila. O que falta
+é o que exige placa: ligar o toggle na Bistro e na Emerald, provar paridade visual e medir. Enquanto
+isso não acontece, a fase **não fecha**.
 
 Base: Fase 2 fechada em `7382f21`. Nada da Fase 2 foi reaberto.
 
@@ -21,6 +22,8 @@ O default **não** mudou: `UseBindlessMaterials = false` (regra 3 do plano).
 | `c6e926a` | o A/B exposto no editor e a telemetria dele |
 | `62a96fc` | memoização da consulta de linha nos passes migrados |
 | `95721c8` | os quatro findings da revisão |
+| `31c0136` | fecha as transações de textura e corrige a contagem por item |
+| `926761c` | migra materiais masked das sombras e corrige o estado de leitura das tabelas |
 
 ## Findings da revisão (2026-09-05)
 
@@ -78,6 +81,26 @@ estado existe e é maioria em passes inteiros.
 A guarda é simétrica: `Bindless` descreve o modo do passe, mas `BindlessDraws` só sobe quando o
 item também pediu material. Isso é pré-requisito para migrar sombras opacas — elas podem viver
 numa root bindless sem que cada caster leia uma linha de material.
+
+## Continuação — sombras e estado das tabelas
+
+As sombras do sol e locais têm root signatures próprias. Ambas ganharam o mesmo par de caminhos:
+o PS clássico `ps_6_0` e a permutação bindless `ps_6_6`, com a capability participando da
+disponibilidade global do toggle. A lista continua misturando dois tipos de caster de propósito:
+
+- opaco usa PS nulo e **não pede material**;
+- alpha-tested publica `MaterialRow` e lê a linha canônica.
+
+As linhas são resolvidas depois do sort, uma vez por grupo de material. Isso preserva o objetivo
+do A/B: tirar bindings sem acrescentar uma busca de hash por caster. `Smile.SubmitStats` cobre a
+forma mista nos dois modos e exige que os opacos não inflem nem fallback nem bindless.
+
+A implementação expôs um P1 anterior a esta slice: `FGpuTableStorage` criava e devolvia suas
+tabelas para `NON_PIXEL_SHADER_RESOURCE`, herdado da Fase 2. Desde a primeira migração do G-buffer,
+o pixel shader já lia a tabela canônica; Release compila esse erro e uma imagem pode até parecer
+correta, mas a debug layer acusa estado incompatível. O estado estável agora é
+`PIXEL_SHADER_RESOURCE | NON_PIXEL_SHADER_RESOURCE`, preservando raster, RT e compute, com a
+combinação presa no teste de ABI/WARP.
 
 ## A primeira tarefa: o que a verificação achou
 
@@ -244,7 +267,6 @@ disponibilidade, então o toggle aparece desabilitado em vez de mentir.
 | caminho | por quê |
 |---|---|
 | translúcidos (ForwardBlend) | decisão D9: transparência ordenada é fallback inicial |
-| sombras do sol e locais | root signature própria — slice seguinte |
 | terreno | VB/IB e root próprios; já contava em `TerrainFallback` |
 | chuva (occlusion map) | root do próprio subsistema |
 | picking, contorno de seleção, preview de material | caminho de editor; o plano autoriza |
@@ -290,7 +312,7 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 | derivação do bloco de raster | `Smile.GpuMaterialRecord`: oráculo do `MaterialCB` transcrito à mão — os valores **efetivos** que o shader computava — em 128 casos exaustivos |
 | ABI C++ ↔ HLSL | `Smile.GpuSceneTablesWarp`: os nove campos novos e as oito constantes novas, lidos pelo espelho de produção com o DXC do jogo |
 | contrato do MCP | `Smile.EditorBridgeValidation`: campo a campo mais as coerências dos três estados |
-| contagem de submissão | `Smile.SubmitStats` (WARP, command list gravada e nunca executada): draw sem material nos modos clássico **e bindless**, clássico, bindless, laço misto e o pedido que não vaza por malha inválida |
+| contagem de submissão | `Smile.SubmitStats` (WARP, command list gravada e nunca executada): draw sem material nos modos clássico **e bindless**, clássico, bindless, laço misto clássico/bindless e o pedido que não vaza por malha inválida |
 | recusa com o heap cheio | `Smile.DescriptorLifetime`: enche o heap e exige base, ocupação e contador de falha intactos; a importação interativa recusa antes de abrir a fila COPY |
 
 ### Casos negativos rodados
@@ -314,7 +336,7 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 
 - **Release:** 61/61;
 - **MCP/TypeScript:** `npm run build` limpo;
-- **shaders:** as três permutações bindless compilam em `ps_6_6` sem warning.
+- **shaders:** as quatro permutações bindless compilam em `ps_6_6` sem warning.
 
 ## Falta na fase
 
@@ -324,13 +346,10 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
    ciclo.
 2. **`materialRowMisses` observado em zero** numa cena real. O contador existe; ninguém o leu
    ainda com o caminho ligado.
-3. **Sombras opacas** (sol e locais). São duas root signatures próprias e um segundo par de
-   permutações; ficaram fora desta rodada de propósito, para o diff da migração principal caber
-   numa revisão.
-4. **Sessão em Debug com a debug layer** trocando textura de material, para provar que o
+3. **Sessão em Debug com a debug layer** trocando textura de material, para provar que o
    aposentamento fechou o `#921` sem reintroduzir dreno. A suíte sem placa não alcança hazard de
    lifetime de GPU — foi assim que a Fase 2 validou o conserto do OMM.
-5. **Medir.** O plano proíbe declarar ganho sem baseline limpa. Nenhum número de perf foi
+4. **Medir.** O plano proíbe declarar ganho sem baseline limpa. Nenhum número de perf foi
    produzido aqui, e não se deve supor que menos binds por draw signifique menos tempo de CPU sem
    medir: o `FDrawSubmitCache` já filtrava bind repetido, e a lista do G-buffer já vem agrupada
    por material.
