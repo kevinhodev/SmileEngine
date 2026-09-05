@@ -195,7 +195,11 @@ namespace Smile {
 
         // Um scratch e um resultado POR PAR, e nao um pool suballocado como no Build: sao poucos
         // (o que uma edicao de material toca), e o pool existe para amortizar milhares.
+        // Os uploads tambem precisam sobreviver ate ExecuteAndSync: a command list guarda seus
+        // enderecos GPU, mas nao mantem uma referencia aos recursos que eles identificam.
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> Scratches;
+        std::vector<GpuResources::FUploadBuffer> UploadInputs;
+        UploadInputs.reserve(Missing.size() * 3);
         // O que sera publicado DEPOIS de a fila sincronizar. Enquanto este laco roda, nada em
         // BlasByMesh, RebuiltBlas, OmmArrays ou nos contadores muda: qualquer par pode lancar (o
         // driver recusa um prebuild, uma alocacao falha), e o Close/ExecuteAndSync no fim tambem.
@@ -311,6 +315,9 @@ namespace Smile {
             Pending.push_back(FRebuiltBlas{ Mesh, Omm, Result, OmmArray,
                                             Info.ResultDataMaxSizeInBytes + OmmArrayBytes });
             Scratches.push_back(Scratch);
+            if (OmmIndexInput) UploadInputs.push_back(std::move(OmmIndexInput));
+            if (OmmArrayInput) UploadInputs.push_back(std::move(OmmArrayInput));
+            if (OmmDescInput)  UploadInputs.push_back(std::move(OmmDescInput));
         }
 
         // Monte o estado FINAL ainda antes da submissao. Copiar pode alocar e lancar; fazendo-o
@@ -328,8 +335,8 @@ namespace Smile {
 
         SMILE_HR(CL->Close());
         ID3D12CommandList* Lists[] = { CL };
-        // Sincrono: os scratches morrem no fim deste escopo, e a TLAS do proximo frame vai
-        // referenciar os enderecos novos. Isto e caminho de edicao manual, ja drenado pelo
+        // Sincrono: uploads e scratches morrem no fim deste escopo, e a TLAS do proximo frame
+        // vai referenciar os enderecos novos. Isto e caminho de edicao manual, ja drenado pelo
         // chamador — nao ha frame em voo para atrapalhar.
         _Queue.ExecuteAndSync(Lists, 1);
 
