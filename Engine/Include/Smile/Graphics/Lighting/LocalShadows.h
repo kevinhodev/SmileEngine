@@ -137,6 +137,7 @@ namespace Smile {
         static constexpr u32 kActiveCubes    = 4;
         static constexpr u32 kCubeResolution = 512;
         static constexpr u32 kNoSlot         = 0xFFFFFFFFu; // Acquire*: orcamento cheio
+        static constexpr u32 kMaterialRootIndex = 4;
 
         // Politica de selecao (item 4). Incumbente vale kHysteresis a mais no ranking: sem isso
         // duas luzes de importancia parecida trocam de slot todo frame e a sombra pisca — o
@@ -154,6 +155,7 @@ namespace Smile {
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCB;
             Vec3                      AABBMin;
             Vec3                      AABBMax;
+            u32                       MaterialRow = 0;
         };
 
         // Um slice de SPOT a renderizar neste frame: matriz da luz + esfera de influencia
@@ -186,13 +188,18 @@ namespace Smile {
                                                    const Mat44& SliceViewProj,
                                                    const Vec3& LightPos, f32 Radius)>;
 
-        void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
+        void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                        bool DirectHeapIndexing);
         bool IsInitialized() const { return Initialized; }
+        bool BindlessReady() const {
+            return SupportsBindlessMaterials && MaskedBindlessPSO != nullptr;
+        }
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              u32 FrameSlot, const FShadowDrawItem* Items, size_t Count,
                              const FShadowJob* Jobs, u32 JobCount,
                              const FCubeShadowJob* CubeJobs, u32 CubeJobCount,
+                             bool BindlessMaterials, u32 MaterialTableSrv,
                              const FExtraLocalDraw& ExtraDraw = {},
                              FDrawSubmitStats* Stats = nullptr);
 
@@ -243,6 +250,8 @@ namespace Smile {
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSOs(ID3D12Device* Device);
         void CreateConstantBuffers(ID3D12Device* Device);
+        void BindRoot(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
+                      bool BindlessMaterials, u32 MaterialTableSrv) const;
         void TransitionArray(ID3D12GraphicsCommandList* CommandList, D3D12_RESOURCE_STATES After);
         void TransitionCube(ID3D12GraphicsCommandList* CommandList, D3D12_RESOURCE_STATES After);
 
@@ -258,6 +267,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaquePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedBindlessPSO;
+        bool                                        SupportsBindlessMaterials = false;
 
         Microsoft::WRL::ComPtr<ID3D12Resource>      SliceCB; // Mat44 por slice por frame em voo
         u8*                                         MappedSlice = nullptr;

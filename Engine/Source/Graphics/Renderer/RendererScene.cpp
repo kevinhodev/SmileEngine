@@ -74,7 +74,7 @@ namespace Smile {
     }
 
     bool Renderer::BeginBindlessMaterials(ID3D12GraphicsCommandList* _CommandList) const {
-        if (!UseBindlessMaterials || !PipelineState.BindlessMaterialsReady()) return false;
+        if (!UseBindlessMaterials || !BindlessMaterialsReady()) return false;
         // A tabela pode nao existir ainda: cena vazia, ou o primeiro frame depois de um load em
         // que o RebuildSceneTables nao rodou. Sem ela nao ha descritor para publicar, e um
         // 0xFFFFFFFF na constante de root viraria ResourceDescriptorHeap invalido no shader.

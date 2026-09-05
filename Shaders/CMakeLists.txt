@@ -62,6 +62,8 @@ smile_compile_shader(DepthMasked.ps.hlsl       ps_6_6 main SHADER_OUTPUTS
 # Cascaded Shadow Maps (sol direcional) — depth pass das cascatas
 smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME ShadowDepthBindless ${SMILE_MATERIAL_BINDLESS_FLAGS})
 
 # GI (DDGI) — trace via DXR 1.2 inline ray tracing (RayQuery + OMM, SM 6.9)
 # Debug da BVH: raio primario por pixel na TLAS (GPU Zen 3, 7.3.3). cs_6_6 pelo RayQuery + heap

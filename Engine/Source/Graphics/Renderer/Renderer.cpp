@@ -197,8 +197,9 @@ namespace Smile {
         RainWetness.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
         ReportInitProgress("Preparando sombras, terreno e pós-processo", {}, 0.70f);
-        SunShadows.Initialize(Backend->Device.Native(), Backend->SRVHeap);
-        LocalShadows.Initialize(Backend->Device.Native(), Backend->SRVHeap);
+        const bool DirectHeapIndexing = Backend->Device.SupportsDirectHeapIndexing();
+        SunShadows.Initialize(Backend->Device.Native(), Backend->SRVHeap, DirectHeapIndexing);
+        LocalShadows.Initialize(Backend->Device.Native(), Backend->SRVHeap, DirectHeapIndexing);
 
         Terrain.Initialize(Backend->Device.Native());
 

@@ -100,7 +100,7 @@ namespace Smile {
         // material, entao a maioria dos itens nao emite nada.
         //
         // Os dois caminhos coexistem no mesmo frame de proposito: passes ainda nao migrados
-        // (translucidos, sombras, chuva) continuam classicos, e e a contagem por passe que torna
+        // (translucidos e chuva) continuam classicos, e e a contagem por passe que torna
         // esse fallback visivel em vez de presumido.
         bool Bindless          = false;
         u32  MaterialRootIndex = 0;

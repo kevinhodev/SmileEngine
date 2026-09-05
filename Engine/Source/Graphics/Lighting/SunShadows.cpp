@@ -16,8 +16,10 @@
 #include <iterator>
 
 namespace Smile {
-    void FSunShadows::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+    void FSunShadows::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                 bool _DirectHeapIndexing) {
         if (Initialized) return;
+        SupportsBindlessMaterials = _DirectHeapIndexing;
         CreateResources(_Device, _SRVHeap);
         BuildRootSignature(_Device);
         BuildPSOs(_Device);
@@ -97,7 +99,7 @@ namespace Smile {
         MatRange.RegisterSpace                     = 0;
         MatRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[5]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0; 
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -114,6 +116,14 @@ namespace Smile {
         RootParams[3].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[3].Descriptor.ShaderRegister = 2; 
         RootParams[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        // Mesmo contrato do raster: b4.x = indice SRV da tabela canonica,
+        // b4.y = linha do material. O caminho classico ignora este parametro.
+        RootParams[kMaterialRootIndex].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        RootParams[kMaterialRootIndex].Constants.ShaderRegister = 4;
+        RootParams[kMaterialRootIndex].Constants.RegisterSpace  = 0;
+        RootParams[kMaterialRootIndex].Constants.Num32BitValues = 2;
+        RootParams[kMaterialRootIndex].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
@@ -134,6 +144,8 @@ namespace Smile {
         Desc.NumStaticSamplers = 1;
         Desc.pStaticSamplers   = &Sampler;
         Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        if (SupportsBindlessMaterials)
+            Desc.Flags |= D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
         Microsoft::WRL::ComPtr<ID3DBlob> Blob, ErrorBlob;
         HRESULT Hr = D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &ErrorBlob);
@@ -210,6 +222,29 @@ namespace Smile {
         PSODesc.RasterizerState = Raster;
         PSODesc.PS              = { PS.data(), PS.size() };
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&MaskedPSO)));
+
+        MaskedBindlessPSO.Reset();
+        if (SupportsBindlessMaterials) {
+            auto BindlessPS = LoadShaderBytecode("ShadowDepthBindless.ps_6_6.cso");
+            PSODesc.PS = { BindlessPS.data(), BindlessPS.size() };
+            SMILE_HR(_Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&MaskedBindlessPSO)));
+        }
+    }
+
+    void FSunShadows::BindRoot(ID3D12GraphicsCommandList* _CommandList,
+                               FTextureSRVHeap& _SRVHeap, bool _BindlessMaterials,
+                               u32 _MaterialTableSrv) const {
+        if (SupportsBindlessMaterials) {
+            ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
+            // A ROOT declara acesso direto sempre que o device suporta, inclusive quando este
+            // frame escolheu a permutacao classica. A ordem da spec depende da root, nao do PS.
+            _CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
+        }
+        _CommandList->SetGraphicsRootSignature(RootSig.Get());
+        if (_BindlessMaterials)
+            _CommandList->SetGraphicsRoot32BitConstant(
+                kMaterialRootIndex, _MaterialTableSrv, 0);
     }
 
     void FSunShadows::CreateConstantBuffers(ID3D12Device* _Device) {
@@ -625,6 +660,7 @@ namespace Smile {
     u32 FSunShadows::DrawCasters(ID3D12GraphicsCommandList* _CommandList,
                                  FTextureSRVHeap& _SRVHeap, const FShadowDrawItem* _Items,
                                  size_t _Begin, size_t _End, u32 _Cascade, FCascadeStats* _St,
+                                 bool _BindlessMaterials,
                                  FDrawSubmitStats* _Stats) {
         const f32 MinExtent = MinCasterTexels * (&CPUConstants.CascadeTexelWorld.X)[_Cascade];
         // Cur/LastMat zeram por CHAMADA de proposito: entre duas fases o chamador troca de DSV
@@ -632,7 +668,9 @@ namespace Smile {
         // material precisa religar mesmo que seja o mesmo do fim da fase anterior.
         ID3D12PipelineState* Cur     = nullptr;
         FDrawSubmitCache     Submit;
-        Submit.Stats = _Stats;
+        Submit.Stats             = _Stats;
+        Submit.Bindless          = _BindlessMaterials;
+        Submit.MaterialRootIndex = kMaterialRootIndex;
         u32 Drawn = 0;
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = _Begin; k < _End; ++k) {
@@ -641,11 +679,18 @@ namespace Smile {
             if (!CasterVisible(It, _Cascade, MinExtent, _St)) continue;
             ++Drawn;
             const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
-            ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
+            ID3D12PipelineState* Want = AlphaTested
+                ? (_BindlessMaterials ? MaskedBindlessPSO.Get() : MaskedPSO.Get())
+                : OpaquePSO.Get();
             if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
             _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
             // A lista chega ordenada por (mobilidade, alpha-test, material, mesh).
-            if (AlphaTested) Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+            if (AlphaTested) {
+                if (_BindlessMaterials)
+                    Submit.BindMaterialRow(_CommandList, It.Mat, It.MaterialRow);
+                else
+                    Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+            }
             Submit.DrawMesh(_CommandList, It.Mesh);
         }
         return Drawn;
@@ -654,9 +699,12 @@ namespace Smile {
     void FSunShadows::RecordDepthPass(ID3D12GraphicsCommandList* _CommandList,
                                       FTextureSRVHeap& _SRVHeap,
                                       const FShadowDrawItem* _Items, size_t _Count,
+                                      bool _BindlessMaterials, u32 _MaterialTableSrv,
                                       const FExtraCascadeDraw& _ExtraDraw,
                                       FGpuProfiler* _Profiler,
                                       FDrawSubmitStats* _Stats) {
+        const bool BindlessMaterials = _BindlessMaterials && BindlessReady() &&
+            _MaterialTableSrv != FTextureSRVHeap::kInvalidSlot;
         D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
                            static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
         D3D12_RECT     SC{ 0, 0, static_cast<LONG>(kResolution), static_cast<LONG>(kResolution) };
@@ -691,7 +739,7 @@ namespace Smile {
                 St.SubmittedStatic = 0; St.SubmittedDynamic = 0;
                 St.CulledPlanes = 0; St.CulledSize = 0;
 
-                _CommandList->SetGraphicsRootSignature(RootSig.Get());
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
                 auto DSV = DSVHeap.CpuHandle(c);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -700,9 +748,11 @@ namespace Smile {
                 // Duas chamadas e nao uma sobre a lista inteira: o total nao diria quanto e
                 // dinamico, que e a medida que interessa. Sao contiguas, entao nao ha custo.
                 St.SubmittedStatic  = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                  0, FirstDynamic, c, &St, _Stats);
+                                                  0, FirstDynamic, c, &St,
+                                                  BindlessMaterials, _Stats);
                 St.SubmittedDynamic = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                  FirstDynamic, _Count, c, nullptr, _Stats);
+                                                  FirstDynamic, _Count, c, nullptr,
+                                                  BindlessMaterials, _Stats);
                 St.Submitted        = St.SubmittedStatic + St.SubmittedDynamic;
                 LastDynamicCount[c] = St.SubmittedDynamic;
                 if (_ExtraDraw)
@@ -746,14 +796,15 @@ namespace Smile {
                 FCascadeStats& St = Stats[c];
                 St.SubmittedStatic = 0; St.CulledPlanes = 0; St.CulledSize = 0;
 
-                _CommandList->SetGraphicsRootSignature(RootSig.Get());
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
                 auto DSV = StaticDSVHeap.CpuHandle(c);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
                 _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
 
                 St.SubmittedStatic = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                 0, FirstDynamic, c, &St, _Stats);
+                                                 0, FirstDynamic, c, &St,
+                                                 BindlessMaterials, _Stats);
                 // O terreno e caster estatico por definicao e entra AQUI, no mapa cacheado.
                 // Antes ele redesenhava em toda cascata que acordava — e nas cascatas 2 e 3 da
                 // Bistro ele e praticamente o unico conteudo do mapa.
@@ -798,12 +849,13 @@ namespace Smile {
             FCascadeStats& St = Stats[c];
             St.SubmittedDynamic = 0;
             if (DynVisible[c] > 0) {
-                _CommandList->SetGraphicsRootSignature(RootSig.Get());
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
                 auto DSV = DSVHeap.CpuHandle(c);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
                 St.SubmittedDynamic = DrawCasters(_CommandList, _SRVHeap, _Items,
-                                                  FirstDynamic, _Count, c, nullptr, _Stats);
+                                                  FirstDynamic, _Count, c, nullptr,
+                                                  BindlessMaterials, _Stats);
             }
             // Recomposto do retido, nunca acumulado: SubmittedStatic so muda quando o mapa
             // estatico e refeito, e somar o dinamico nele cresceria sem limite.

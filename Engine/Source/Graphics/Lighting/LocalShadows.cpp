@@ -12,8 +12,10 @@
 #include <cstring>
 
 namespace Smile {
-    void FLocalShadows::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
+    void FLocalShadows::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                   bool _DirectHeapIndexing) {
         if (Initialized) return;
+        SupportsBindlessMaterials = _DirectHeapIndexing;
         CreateResources(_Device, _SRVHeap);
         BuildRootSignature(_Device);
         BuildPSOs(_Device);
@@ -98,7 +100,7 @@ namespace Smile {
         MatRange.RegisterSpace                     = 0;
         MatRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER RootParams[4]{};
+        D3D12_ROOT_PARAMETER RootParams[5]{};
         RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[0].Descriptor.ShaderRegister = 0;
         RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -115,6 +117,12 @@ namespace Smile {
         RootParams[3].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         RootParams[3].Descriptor.ShaderRegister = 2;
         RootParams[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        RootParams[kMaterialRootIndex].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        RootParams[kMaterialRootIndex].Constants.ShaderRegister = 4;
+        RootParams[kMaterialRootIndex].Constants.RegisterSpace  = 0;
+        RootParams[kMaterialRootIndex].Constants.Num32BitValues = 2;
+        RootParams[kMaterialRootIndex].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
@@ -135,6 +143,8 @@ namespace Smile {
         Desc.NumStaticSamplers = 1;
         Desc.pStaticSamplers   = &Sampler;
         Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        if (SupportsBindlessMaterials)
+            Desc.Flags |= D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
         Microsoft::WRL::ComPtr<ID3DBlob> Blob, ErrorBlob;
         HRESULT Hr = D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &ErrorBlob);
@@ -199,6 +209,27 @@ namespace Smile {
 
         PSODesc.PS = { PS.data(), PS.size() };
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&MaskedPSO)));
+
+        MaskedBindlessPSO.Reset();
+        if (SupportsBindlessMaterials) {
+            auto BindlessPS = LoadShaderBytecode("ShadowDepthBindless.ps_6_6.cso");
+            PSODesc.PS = { BindlessPS.data(), BindlessPS.size() };
+            SMILE_HR(_Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&MaskedBindlessPSO)));
+        }
+    }
+
+    void FLocalShadows::BindRoot(ID3D12GraphicsCommandList* _CommandList,
+                                 FTextureSRVHeap& _SRVHeap, bool _BindlessMaterials,
+                                 u32 _MaterialTableSrv) const {
+        if (SupportsBindlessMaterials) {
+            ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
+            _CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
+        }
+        _CommandList->SetGraphicsRootSignature(RootSig.Get());
+        if (_BindlessMaterials)
+            _CommandList->SetGraphicsRoot32BitConstant(
+                kMaterialRootIndex, _MaterialTableSrv, 0);
     }
 
     void FLocalShadows::CreateConstantBuffers(ID3D12Device* _Device) {
@@ -269,10 +300,13 @@ namespace Smile {
                                         const FShadowDrawItem* _Items, size_t _Count,
                                         const FShadowJob* _Jobs, u32 _JobCount,
                                         const FCubeShadowJob* _CubeJobs, u32 _CubeJobCount,
+                                        bool _BindlessMaterials, u32 _MaterialTableSrv,
                                         const FExtraLocalDraw& _ExtraDraw,
                                         FDrawSubmitStats* _Stats) {
         if (!Initialized) return;
         if (_JobCount == 0 && _CubeJobCount == 0) { EnsureReadable(_CommandList); return; }
+        const bool BindlessMaterials = _BindlessMaterials && BindlessReady() &&
+            _MaterialTableSrv != FTextureSRVHeap::kInvalidSlot;
 
         // Broad phase por LUZ (uma varredura da cena, AABB vs esfera de influencia). As views
         // que vem depois — 1 slice do spot, 6 faces do point — refinam com o proprio frustum
@@ -304,17 +338,26 @@ namespace Smile {
             ExtractFrustumPlanes(_ViewProj, Planes);
             ID3D12PipelineState* Cur = nullptr; // local: o ExtraDraw da view anterior trocou o PSO
             FDrawSubmitCache Submit;
-            Submit.Stats = _Stats;
+            Submit.Stats             = _Stats;
+            Submit.Bindless          = BindlessMaterials;
+            Submit.MaterialRootIndex = kMaterialRootIndex;
             _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             for (u32 k : CullScratch) {
                 if (_Stats) ++_Stats->Considered;
                 const FShadowDrawItem& It = _Items[k];
                 if (AABBOutsidePlanes(Planes, It.AABBMin, It.AABBMax)) continue;
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
-                ID3D12PipelineState* Want = AlphaTested ? MaskedPSO.Get() : OpaquePSO.Get();
+                ID3D12PipelineState* Want = AlphaTested
+                    ? (BindlessMaterials ? MaskedBindlessPSO.Get() : MaskedPSO.Get())
+                    : OpaquePSO.Get();
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
                 _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
-                if (AlphaTested) Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+                if (AlphaTested) {
+                    if (BindlessMaterials)
+                        Submit.BindMaterialRow(_CommandList, It.Mat, It.MaterialRow);
+                    else
+                        Submit.BindMaterial(_CommandList, _SRVHeap, It.Mat);
+                }
                 Submit.DrawMesh(_CommandList, It.Mesh);
             }
         };
@@ -344,7 +387,7 @@ namespace Smile {
 
                 // Root sig por slice (nao uma vez fora do loop): o ExtraDraw do slice anterior
                 // trocou root signature e PSO.
-                _CommandList->SetGraphicsRootSignature(RootSig.Get());
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
                 auto DSV = DSVHeap.CpuHandle(Slice);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -403,7 +446,7 @@ namespace Smile {
                     const D3D12_GPU_VIRTUAL_ADDRESS FaceCBAddr =
                         SliceCB->GetGPUVirtualAddress() + CBOffset;
 
-                    _CommandList->SetGraphicsRootSignature(RootSig.Get());
+                    BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
                     auto DSV = CubeDSVHeap.CpuHandle(Cube * 6 + f);
                     _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                     _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);

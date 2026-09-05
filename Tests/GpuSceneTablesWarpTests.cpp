@@ -230,6 +230,12 @@ namespace {
 
         Check(FGpuSceneInstanceTable::kResidentBytesPerSlot == 180u,
               "instancia canonica ocupa 20+32+64+64 = 180 B residentes por slot");
+        Check((FGpuTableStorage::kShaderReadState &
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) != 0,
+              "tabela autoriza leitura do pixel shader do raster");
+        Check((FGpuTableStorage::kShaderReadState &
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) != 0,
+              "tabela continua autorizando RT e compute");
     }
 
     void TestarDiffInstancias() {

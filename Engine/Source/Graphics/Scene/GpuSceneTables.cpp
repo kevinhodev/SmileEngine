@@ -41,7 +41,7 @@ namespace Smile {
             // proprio no breakdown por recurso.
             Buffer_ = GpuResources::CreateBuffer(
                 _Device, static_cast<u64>(Capacity_) * RowBytes_, D3D12_RESOURCE_FLAG_NONE,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, EVramCategory::Misc, _Label);
+                kShaderReadState, EVramCategory::Misc, _Label);
             Staging_ = GpuResources::CreateUploadBuffer(
                 _Device, static_cast<u64>(Capacity_) * RowBytes_, kFrameSlots,
                 /*ForConstantBuffer=*/false);
@@ -85,7 +85,7 @@ namespace Smile {
         B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         B.Transition.pResource   = Buffer_.Get();
         B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        B.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        B.Transition.StateBefore = kShaderReadState;
         B.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
         _CommandList->ResourceBarrier(1, &B);
 
@@ -111,7 +111,7 @@ namespace Smile {
         FlushRun();
 
         B.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        B.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        B.Transition.StateAfter  = kShaderReadState;
         _CommandList->ResourceBarrier(1, &B);
         return Regions;
     }

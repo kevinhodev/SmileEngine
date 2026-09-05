@@ -49,6 +49,7 @@ namespace Smile {
 
         static constexpr u32 kNumCascades = 4;
         static constexpr u32 kResolution  = 2048;
+        static constexpr u32 kMaterialRootIndex = 4;
 
         struct FShadowDrawItem {
             const FGpuMesh*           Mesh;
@@ -61,6 +62,9 @@ namespace Smile {
             // divisao que o cache vai usar para rasterizar as duas metades em alvos
             // diferentes; por ora ela so e medida.
             bool                      Dynamic;
+            // Linha da tabela canonica. So e preenchida quando o A/B bindless esta ligado;
+            // opacos nao a consomem, masked publica pelo root param b4.
+            u32                       MaterialRow = 0;
         };
 
         // Contadores por cascata. Existem para MEDIR: a decisao de separar casters em
@@ -111,7 +115,11 @@ namespace Smile {
         // o qual os cortes de cada cascata sao lidos.
         u32 GetSubmittedCasterCount() const { return LastCasterCount; }
 
-        void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
+        void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                        bool DirectHeapIndexing);
+        bool BindlessReady() const {
+            return SupportsBindlessMaterials && MaskedBindlessPSO != nullptr;
+        }
 
         // StaticCastersVersion vem do FScene: muda quando o CONTEUDO do mapa estatico muda
         // (estatico se move, aparece, some, e ocultado, ou troca de mobilidade). E o sinal que
@@ -129,6 +137,7 @@ namespace Smile {
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              const FShadowDrawItem* Items, size_t Count,
+                             bool BindlessMaterials, u32 MaterialTableSrv,
                              const FExtraCascadeDraw& ExtraDraw = {},
                              FGpuProfiler* Profiler = nullptr,
                              FDrawSubmitStats* Stats = nullptr);
@@ -189,7 +198,10 @@ namespace Smile {
         // viewport e a root signature ja tem de estar ligados pelo chamador.
         u32  DrawCasters(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                          const FShadowDrawItem* Items, size_t Begin, size_t End,
-                         u32 Cascade, FCascadeStats* St, FDrawSubmitStats* Stats = nullptr);
+                         u32 Cascade, FCascadeStats* St, bool BindlessMaterials,
+                         FDrawSubmitStats* Stats = nullptr);
+        void BindRoot(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
+                      bool BindlessMaterials, u32 MaterialTableSrv) const;
         void TransitionStatic(ID3D12GraphicsCommandList* CommandList,
                               D3D12_RESOURCE_STATES After);
 
@@ -219,6 +231,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12RootSignature> RootSig;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaquePSO; 
         Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedPSO; 
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedBindlessPSO;
+        bool                                        SupportsBindlessMaterials = false;
 
         Microsoft::WRL::ComPtr<ID3D12Resource>      CascadeCB; 
         u8*                                         MappedCascade = nullptr;

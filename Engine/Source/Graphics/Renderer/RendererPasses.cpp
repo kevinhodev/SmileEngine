@@ -1265,6 +1265,27 @@ namespace Smile {
         const auto ObjectCBBase        = _Ctx.ObjectCBBase;
         const auto& LocalShadowJobs    = _Jobs.Spot;
         const auto& LocalCubeJobs      = _Jobs.Cube;
+        const bool ShadowBindless      = UseBindlessMaterials && MaterialTable.IsBuilt() &&
+                                         BindlessMaterialsReady();
+        const u32 MaterialTableSrv     = ShadowBindless
+            ? MaterialTable.Srv() : FTextureSRVHeap::kInvalidSlot;
+
+        // As duas listas chegam agrupadas por material. Resolver uma vez por grupo evita
+        // reintroduzir uma busca no unordered_map por caster no caminho que existe para baixar
+        // o custo de submissao. Opacos ficam em zero: eles nao pedem material no shader.
+        auto AssignMaterialRows = [&](auto& _Casters) {
+            if (!ShadowBindless) return;
+            const FMaterial* LastMat = nullptr;
+            u32 LastRow = FGpuMaterialTable::kDefaultRow;
+            for (auto& Caster : _Casters) {
+                if (!Caster.Mat || Caster.Mat->Constants.AlphaTest == 0) continue;
+                if (Caster.Mat != LastMat) {
+                    LastMat = Caster.Mat;
+                    LastRow = MaterialTable.RowOf(LastMat);
+                }
+                Caster.MaterialRow = LastRow;
+            }
+        };
 
         {
             const f32 ShadowNoiseFrame = (Modes.TAAActive || Modes.UpscaleActive)
@@ -1305,6 +1326,7 @@ namespace Smile {
                               if (a.Mat != b.Mat) return a.Mat < b.Mat;
                               return a.Mesh < b.Mesh;
                           });
+                AssignMaterialRows(Casters);
                 } // fim do escopo cronometrado da lista
                 {
                     FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombras — sol (CSM)");
@@ -1317,6 +1339,7 @@ namespace Smile {
                         };
                     FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                     SunShadows.RecordDepthPass(CommandList, Backend->SRVHeap, Casters.data(), Casters.size(),
+                                               ShadowBindless, MaterialTableSrv,
                                                TerrainCasters, &Backend->DirectProfiler,
                                                &CpuStatsBuilding.Pass(ESubmitPass::SunShadows));
                 }
@@ -1358,6 +1381,7 @@ namespace Smile {
                           if (a.Mat != b.Mat) return a.Mat < b.Mat;
                           return a.Mesh < b.Mesh;
                       });
+            AssignMaterialRows(LocalCasters);
             } // fim do escopo cronometrado da lista
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Sombras — locais");
@@ -1384,6 +1408,7 @@ namespace Smile {
                                              static_cast<u32>(LocalShadowJobs.size()),
                                              LocalCubeJobs.data(),
                                              static_cast<u32>(LocalCubeJobs.size()),
+                                             ShadowBindless, MaterialTableSrv,
                                              TerrainCasters,
                                              &CpuStatsBuilding.Pass(ESubmitPass::LocalShadows));
             }

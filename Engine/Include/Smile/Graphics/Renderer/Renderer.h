@@ -549,6 +549,10 @@ namespace Smile {
         // (cena vazia, primeiro frame de um load). O passe cai no caminho classico inteiro, que e
         // o fallback que o gate da fase manda deixar explicito.
         bool BeginBindlessMaterials(ID3D12GraphicsCommandList* CommandList) const;
+        bool BindlessMaterialsReady() const {
+            return PipelineState.BindlessMaterialsReady() && SunShadows.BindlessReady() &&
+                   LocalShadows.BindlessReady();
+        }
 
         const FGpuProfiler& GetGpuProfiler() const;
 

@@ -227,6 +227,33 @@ namespace {
                 "so os tres que pediram material contam como fallback");
     }
 
+    // A mesma forma depois da migracao das sombras: o PASSE e bindless, mas so caster
+    // alpha-tested executa o pixel shader de material. Opacos continuam no terceiro estado —
+    // nem fallback, nem consumo bindless.
+    void TestarLacoMistoBindless(FRig& _Rig) {
+        std::cout << "[submissao] laco misto bindless (sombras)\n";
+        FDrawSubmitStats Stats;
+        FDrawSubmitCache Submit;
+        Submit.Stats             = &Stats;
+        Submit.Bindless          = true;
+        Submit.MaterialRootIndex = FRig::kMaterialRootIndex;
+
+        for (int i = 0; i < 6; ++i) {
+            const bool AlphaTested = (i % 2) == 1;
+            if (AlphaTested)
+                Submit.BindMaterialRow(_Rig.List.Get(), &_Rig.Material, 7u);
+            Submit.DrawMesh(_Rig.List.Get(), &_Rig.Mesh);
+        }
+
+        CheckEq(Stats.Draws, 6u, "os seis draws foram contados");
+        CheckEq(Stats.BindlessDraws, 3u,
+                "so os tres masked consumiram a tabela canonica");
+        CheckEq(Stats.MaterialFallbackDraws, 0u,
+                "nenhum masked caiu no caminho classico");
+        CheckEq(Stats.MaterialRowSets, 1u,
+                "a linha repetida foi publicada uma vez");
+    }
+
     // Malha invalida DEPOIS de um pedido de material: o pedido morre ali e nao e herdado pelo
     // item seguinte, que nao pediu nada.
     void TestarPedidoNaoVaza(FRig& _Rig) {
@@ -259,6 +286,7 @@ int main() {
     TestarBindless(Rig);
     TestarBindlessSemMaterial(Rig);
     TestarLacoMisto(Rig);
+    TestarLacoMistoBindless(Rig);
     TestarPedidoNaoVaza(Rig);
 
     Rig.List->Close(); // gravada e nunca executada: o que esta sob teste e a contagem

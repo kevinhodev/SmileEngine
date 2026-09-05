@@ -274,6 +274,12 @@ namespace Smile {
         // .cpp): a CPU escreve o slice deste frame enquanto a GPU ainda pode estar copiando o do
         // frame anterior.
         static constexpr u32 kFrameSlots = 2;
+        // As tabelas sao compartilhadas por RT/compute e pelo raster. Depois de cada upload o
+        // estado precisa autorizar os dois tipos de leitor; NON_PIXEL sozinho compila e costuma
+        // desenhar, mas viola a validacao de estado quando G-buffer/shadow PS acessam a linha.
+        static constexpr D3D12_RESOURCE_STATES kShaderReadState =
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
         // (Re)cria o buffer quando a capacidade cresce; o SLOT do descritor e preservado sempre.
         // Isso importa: o indice viaja dentro do InstanceGeo e e lido via ResourceDescriptorHeap,
