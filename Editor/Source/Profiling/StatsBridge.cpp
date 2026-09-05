@@ -210,7 +210,9 @@ namespace SmileEditor {
     QVariantList StatsBridge::GetSubmitPasses() const { return Snapshot.SubmitPasses; }
     int          StatsBridge::GetSceneMeshDraws() const { return Snapshot.SceneMeshDraws; }
     int          StatsBridge::GetMaterialBinds() const { return Snapshot.MaterialBinds; }
-    int          StatsBridge::GetFallbackDraws() const { return Snapshot.FallbackDraws; }
+    int          StatsBridge::GetMaterialFallbackDraws() const {
+        return Snapshot.MaterialFallbackDraws;
+    }
     QString      StatsBridge::GetObjectConstantsText() const { return Snapshot.ObjectConstantsText; }
     QString      StatsBridge::GetSrvHeapText() const { return Snapshot.SrvHeapText; }
     QString      StatsBridge::GetGpuSlotsText() const { return Snapshot.GpuSlotsText; }
@@ -512,13 +514,15 @@ namespace SmileEditor {
                 // constante de root com a linha mudou. No A/B, `matBinds` e `matRows` trocam de
                 // lugar mantendo o mesmo total.
                 M[QStringLiteral("bindless")]   = static_cast<int>(S.BindlessDraws);
+                M[QStringLiteral("matFallback")] = static_cast<int>(S.MaterialFallbackDraws);
                 M[QStringLiteral("matRows")]    = static_cast<int>(S.MaterialRowSets);
                 Next.SubmitPasses.append(M);
             }
 
             Next.SceneMeshDraws = static_cast<int>(Cpu.InstrumentedSceneMeshDraws());
             Next.MaterialBinds  = static_cast<int>(Cpu.InstrumentedMaterialBinds());
-            Next.FallbackDraws  = static_cast<int>(Cpu.InstrumentedFallbackDraws());
+            Next.MaterialFallbackDraws =
+                static_cast<int>(Cpu.InstrumentedMaterialFallbackDraws());
             Next.ObjectConstantsText =
                 QStringLiteral("%1 KiB").arg(Loc.toString(Cpu.ObjectConstantBytes / 1024.0, 'f', 1));
             // Aposentados e overflows so aparecem quando existem: em uso normal sao zero, e uma

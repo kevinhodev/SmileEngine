@@ -206,6 +206,7 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
             meshBinds: summarize(rows.map((row) => row.meshBinds)),
             skippedInvalid: summarize(rows.map((row) => row.skippedInvalid)),
             bindlessDraws: summarize(rows.map((row) => row.bindlessDraws)),
+            materialFallbackDraws: summarize(rows.map((row) => row.materialFallbackDraws)),
             materialRowSets: summarize(rows.map((row) => row.materialRowSets)),
             materialRowMisses: summarize(rows.map((row) => row.materialRowMisses)),
           };

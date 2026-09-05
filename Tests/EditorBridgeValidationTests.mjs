@@ -1,7 +1,7 @@
 // Validacao de borda do snapshot de perfil (Tools/SmileMCP/src/editor-bridge.ts).
 //
 // Existe porque o protocolo 4 subiu para EXIGIR o bloco cpu.gpuSlots — o 5, material/mesh — e
-// o 6, a tabela canonica de instancias, e o 7, os contadores por passe da Fase 3.
+// o 6, a tabela canonica de instancias, e o 7/8, os contadores por passe da Fase 3.
 // Exigencia que nao e
 // validada existe so no numero da versao: um payload sem o bloco, ou com um campo string/undefined,
 // atravessava o cast do TypeScript e quebrava la adiante no summarizeProfile com um TypeError.
@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 7.
+// Snapshot minimo VALIDO, no formato do protocolo 8.
 function snapshotValido() {
   return {
     direct: [],
@@ -93,8 +93,8 @@ function snapshotValido() {
       // NAO vazio: com lista vazia o laco de validacao por passe nao roda, e o snapshot valido
       // deixaria de exercitar o contrato que o protocolo 7 introduziu.
       passes: [{ key: "gbuffer", considered: 4, draws: 3, materialBinds: 0, meshBinds: 3,
-                 skippedInvalid: 1, bindlessDraws: 3, materialRowSets: 2,
-                 materialRowMisses: 0 }],
+                 skippedInvalid: 1, bindlessDraws: 3, materialFallbackDraws: 0,
+                 materialRowSets: 2, materialRowMisses: 0 }],
       scene: { renderables: 1, drawItems: 1, visibleItems: 1, occludedItems: 0 },
       objectConstantBytes: 0,
       srvHeap: { used: 1, highWater: 1, capacity: 100, retired: 0, overflows: 0 },
@@ -140,7 +140,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 7,
+                version: 8,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -244,7 +244,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":7,"id":__ID__,"ok":true,"result":' +
+    '{"version":8,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");
@@ -331,7 +331,8 @@ for (const [bloco, campos] of [
 //    mesma regra do gpuSlots: exigencia nao validada existe so no numero da versao, e um editor
 //    anterior a fase produziria agregado de `undefined` num relatorio que parece completo.
 for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
-                     "bindlessDraws", "materialRowSets", "materialRowMisses"]) {
+                     "bindlessDraws", "materialFallbackDraws", "materialRowSets",
+                     "materialRowMisses"]) {
   for (const valor of [undefined, "3", null, true, -1, 1.5, 4294967296]) {
     const p = snapshotValido();
     if (valor === undefined) delete p.cpu.passes[0][campo];
@@ -345,13 +346,22 @@ for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skipp
   await esperaErro(p, "passes", "passe sem chave");
 }
 
-// 7b. Estado IMPOSSIVEL: todo draw do passe leu material por um caminho ou pelo outro, entao
-//     bindless acima de draws descreve um passe que o produtor nao produz. Um contrato so
-//     campo a campo aceitaria — cada numero isolado continua plausivel.
+// 7b. Estado IMPOSSIVEL: os draws COM material — pela tabela ou pelo bind por item — nao podem
+//     passar do total do passe. Um contrato so campo a campo aceitaria: cada numero isolado
+//     continua plausivel.
+//
+//     A soma NAO precisa fechar com draws, e isso e o ponto do conserto: draw sem material
+//     existe e e maioria em passes inteiros (o z-prepass opaco).
 {
   const p = snapshotValido();
   p.cpu.passes[0].bindlessDraws = p.cpu.passes[0].draws + 1;
   await esperaErro(p, "bindlessDraws", "bindlessDraws acima de draws");
+}
+{
+  const p = snapshotValido();
+  p.cpu.passes[0].bindlessDraws = 2;
+  p.cpu.passes[0].materialFallbackDraws = 2; // 2 + 2 > 3
+  await esperaErro(p, "materialFallbackDraws", "bindless + fallback acima de draws");
 }
 {
   const p = snapshotValido();
@@ -361,7 +371,15 @@ for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skipp
 {
   const p = snapshotValido();
   p.cpu.passes[0].bindlessDraws = 0;
-  await esperaOk(p, "bindlessDraws zero (passe inteiro no fallback) e aceito");
+  p.cpu.passes[0].materialFallbackDraws = p.cpu.passes[0].draws;
+  await esperaOk(p, "passe inteiro no fallback de material e aceito");
+}
+{
+  // O caso que o conserto existe para permitir: passe que desenha sem tocar em material.
+  const p = snapshotValido();
+  p.cpu.passes[0].bindlessDraws = 0;
+  p.cpu.passes[0].materialFallbackDraws = 0;
+  await esperaOk(p, "passe sem material nenhum (z-prepass opaco) e aceito");
 }
 
 // 7c. Heap de descritores (protocolo 7). Mesmo contrato u32, e a mesma coerencia de particao

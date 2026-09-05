@@ -233,6 +233,31 @@ set_tests_properties(Smile.GpuSceneTablesWarp PROPERTIES
     TIMEOUT 180
 )
 
+# Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
+# usar WARP: o FDrawSubmitCache grava numa command list de verdade.
+add_executable(SmileSubmitStatsTests
+    SubmitStatsTests.cpp
+)
+
+target_compile_features(SmileSubmitStatsTests PRIVATE cxx_std_20)
+target_link_libraries(SmileSubmitStatsTests PRIVATE SmileEngine d3d12 dxgi)
+set_target_properties(SmileSubmitStatsTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.SubmitStats
+    COMMAND SmileSubmitStatsTests
+)
+
+set_tests_properties(Smile.SubmitStats PROPERTIES
+    LABELS "graphics;telemetry;gpu-driven;warp"
+    TIMEOUT 120
+)
+
 # Ciclo de vida dos descritores de SRV (Fase 3). Linka a engine porque o FTextureSRVHeap cria
 # heaps de descritor de verdade; o device e WARP, nada aqui depende de GPU real.
 add_executable(SmileDescriptorLifetimeTests

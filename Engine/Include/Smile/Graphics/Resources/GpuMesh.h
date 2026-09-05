@@ -117,6 +117,16 @@ namespace Smile {
         const FMaterial* LastRowMat    = nullptr;
         u32              LastRowLookup = 0;
 
+        // "O item que esta sendo submetido AGORA pede material?" Levantado pelos dois Bind* e
+        // consumido pelo DrawMesh seguinte.
+        //
+        // Existe porque material NAO e propriedade do passe: no z-prepass opaco nenhum item
+        // pede, e nas sombras e na chuva so os casters alpha-tested pedem, no MESMO laco dos
+        // que nao pedem. Sem isto, "draws que nao foram bindless" incluiria todo draw que nunca
+        // teve material — e o numero usado para julgar o A/B contaria a cena opaca inteira como
+        // fallback.
+        bool             MaterialRequested = false;
+
         // Balde de telemetria do passe (opcional; nullptr = sem instrumentacao). Contar AQUI e
         // deliberado: este e o unico ponto por onde a geometria de cena e submetida, entao o
         // numero nasce do ato de submeter em vez de ser recomposto varrendo listas depois — que
@@ -129,6 +139,7 @@ namespace Smile {
             LastRow  = 0xFFFFFFFFu;
             LastRowMat    = nullptr;
             LastRowLookup = 0;
+            MaterialRequested = false;
             // Stats NAO e zerado: o Reset existe para invalidar o cache ao trocar root
             // signature/PSO no MEIO de um passe, e o balde e do passe inteiro.
         }

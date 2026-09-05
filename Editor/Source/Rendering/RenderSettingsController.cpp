@@ -344,7 +344,8 @@ namespace SmileEditor {
             Row.MaterialBinds  = B.MaterialBinds;
             Row.MeshBinds      = B.MeshBinds;
             Row.SkippedInvalid = B.SkippedInvalid;
-            Row.BindlessDraws     = B.BindlessDraws;
+            Row.BindlessDraws         = B.BindlessDraws;
+            Row.MaterialFallbackDraws = B.MaterialFallbackDraws;
             Row.MaterialRowSets   = B.MaterialRowSets;
             Row.MaterialRowMisses = B.MaterialRowMisses;
             Out.Passes.push_back(Row);

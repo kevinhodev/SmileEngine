@@ -97,6 +97,10 @@ namespace Smile {
 
     void FDrawSubmitCache::BindMaterial(ID3D12GraphicsCommandList* _CommandList,
                                         FTextureSRVHeap& _SRVHeap, const FMaterial* _Mat) {
+        // ANTES do filtro do cache: o que interessa e se ESTE item consome material, e nao se a
+        // amarracao foi emitida. Um item que reusa o material do anterior consome material do
+        // mesmo jeito.
+        MaterialRequested = (_Mat != nullptr);
         if (_Mat == LastMat) return;
         LastMat = _Mat;
         if (_Mat) {
@@ -111,6 +115,7 @@ namespace Smile {
                                            const FMaterial* _Mat, u32 _Row) {
         // Contado ANTES do filtro do cache, ao contrario dos binds: o que interessa aqui e
         // quantos ITENS cairiam no material errado, e nao quantas vezes a constante mudou.
+        MaterialRequested = (_Mat != nullptr);
         if (Stats && _Mat != nullptr && _Row == 0u) ++Stats->MaterialRowMisses;
         if (_Row == LastRow) return;
         LastRow = _Row;
@@ -121,6 +126,12 @@ namespace Smile {
 
     void FDrawSubmitCache::DrawMesh(ID3D12GraphicsCommandList* _CommandList,
                                     const FGpuMesh* _Mesh) {
+        // Consumido aqui e zerado SEMPRE, inclusive na saida por malha invalida: um item que
+        // nao chamou Bind* nao pode herdar o pedido do anterior. E o caso comum — o z-prepass
+        // opaco nunca chama.
+        const bool NeededMaterial = MaterialRequested;
+        MaterialRequested = false;
+
         if (!_Mesh || !_Mesh->IsValid()) {
             if (Stats) ++Stats->SkippedInvalid;
             return;
@@ -133,10 +144,11 @@ namespace Smile {
         _Mesh->DrawIndexed(_CommandList);
         if (Stats) {
             ++Stats->Draws;
-            // Contado no ponto da SUBMISSAO, como todo o resto deste balde: o que sobra fora do
-            // caminho bindless e `Draws - BindlessDraws`, e recompor isso varrendo listas depois
-            // daria um numero plausivel e errado (cada passe filtra o seu).
-            if (Bindless) ++Stats->BindlessDraws;
+            // Contado no ponto da SUBMISSAO, como todo o resto deste balde. Os dois sao
+            // exclusivos e nenhum cobre o draw SEM material — recompor por subtracao daria um
+            // numero plausivel e errado.
+            if (Bindless)               ++Stats->BindlessDraws;
+            else if (NeededMaterial)    ++Stats->MaterialFallbackDraws;
         }
     }
 }

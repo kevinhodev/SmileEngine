@@ -152,18 +152,24 @@ namespace Smile {
         }
     }
 
-    u32 FMaterial::RepublishTextureTable(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap) {
-        if (SRVTableStart == kInvalidTable) return kInvalidDescriptorTable;
+    bool FMaterial::RepublishTextureTable(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                          u32& _OutRetiredBase) {
+        _OutRetiredBase = kInvalidDescriptorTable;
+        if (SRVTableStart == kInvalidTable) return false;
 
-        // Aloca ANTES de soltar qualquer coisa: sem range novo o material continua valido com o
-        // antigo, e uma falha aqui nao pode deixa-lo sem tabela nenhuma. O Allocate lanca quando
-        // o heap esgota, e nesse caso nada foi publicado.
-        const u32 NewBase = _SRVHeap.Allocate(kMaterialTextureSlots);
+        // Aloca ANTES de publicar qualquer coisa, e RECUSANDO em vez de lancar: sem range novo o
+        // material continua valido com o antigo. Uma excecao daqui subiria por um callback de UI
+        // com o material ja mutado pelo chamador — material CPU e tabela GPU divergentes, ou o
+        // processo terminado.
+        const u32 NewBase = _SRVHeap.TryAllocate(kMaterialTextureSlots);
+        if (NewBase == FTextureSRVHeap::kInvalidSlot) return false;
+
         WriteTextureTable(_Device, _SRVHeap, NewBase);
 
-        const u32 OldBase = SRVTableStart;
-        SRVTableStart     = NewBase;
-        return OldBase;
+        // Publicacao: so aqui o estado muda, e as duas linhas nao podem falhar.
+        _OutRetiredBase = SRVTableStart;
+        SRVTableStart   = NewBase;
+        return true;
     }
 
     void FMaterial::Bind(ID3D12GraphicsCommandList* _CommandList, FTextureSRVHeap& _SRVHeap) const {

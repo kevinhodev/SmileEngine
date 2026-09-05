@@ -24,6 +24,12 @@ namespace Smile {
     }
 
     u32 FTextureSRVHeap::Allocate(u32 _Count) {
+        const u32 Slot = TryAllocate(_Count);
+        if (Slot != kInvalidSlot) return Slot;
+        throw std::runtime_error("TextureSRVHeap capacity exceeded");
+    }
+
+    u32 FTextureSRVHeap::TryAllocate(u32 _Count) {
         if (_Count == 0) _Count = 1;
 
         for (size_t i = 0; i < FreeList.size(); ++i) {
@@ -38,15 +44,15 @@ namespace Smile {
                 return Slot;
             }
         }
-        // Conta e DIZ antes de lancar. O throw sobe por um caminho de load e a excecao so
-        // carrega a frase; sem isto, "acabou o heap" nunca dizia quanto faltava nem quanto
-        // estava preso esperando fence — que e a diferenca entre subir o teto e caçar um
-        // consumidor que nao devolve descritor.
+        // Conta e DIZ. Quem chamou pelo Allocate lanca em seguida, e a excecao so carrega a
+        // frase; sem isto, "acabou o heap" nunca dizia quanto faltava nem quanto estava preso
+        // esperando fence — que e a diferenca entre subir o teto e caçar um consumidor que nao
+        // devolve descritor.
         ++AllocationFailures_;
         LogError("TextureSRVHeap sem espaco: pedido de " + std::to_string(_Count) +
                  " descritor(es); em uso " + std::to_string(UsedSlots_) + ", aposentados " +
                  std::to_string(RetiredSlots_) + ", capacidade " + std::to_string(kCapacity));
-        throw std::runtime_error("TextureSRVHeap capacity exceeded");
+        return kInvalidSlot;
     }
 
     // So o free list. Separado do Free porque o CollectRetired tambem devolve range, e la o slot

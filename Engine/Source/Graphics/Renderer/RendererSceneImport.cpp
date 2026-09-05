@@ -101,6 +101,12 @@ namespace Smile {
             // Depois dos dois drenos acima, o concluido alcancou o submetido: o Collect aqui
             // devolve tudo, e a cena nova reusa em vez de crescer.
             SceneState->Scene.GpuSlots().Collect(Required);
+            // E os ranges de DESCRITOR aposentados por troca de textura no editor. Sem esta
+            // linha eles ficavam presos ate o proximo RenderFrame — que so acontece DEPOIS de a
+            // cena nova alocar. Com os dois drenos acima, o concluido ja alcancou o submetido:
+            // todos eles sao liberaveis agora, e nao ha razao para a cena nova encontrar o heap
+            // mais cheio do que ele esta.
+            Backend->SRVHeap.CollectRetired(Required);
             // As entradas de bake retidas descrevem a cena que esta indo embora: os ponteiros de
             // malha e de textura morrem nas linhas seguintes.
             OmmBakeInputs.Clear();

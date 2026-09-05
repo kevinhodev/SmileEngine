@@ -526,7 +526,14 @@ namespace Smile {
         FRendererGpuMemoryInfo GetGpuMemoryInfo() const;
 
         // Atualiza os descritores de um material sem expor device ou heap ao chamador.
-        void UpdateMaterialTextureSlot(FMaterial& Material, u32 LocalSlot, FTexture* Texture);
+        // Republica a tabela de descritores do material a partir dos ponteiros de textura que
+        // ele carrega AGORA, e aposenta a antiga atras das duas fences. UMA publicacao,
+        // independente de quantos slots o chamador trocou.
+        //
+        // Devolve `false` sem tocar em nada quando o material nao esta finalizado ou o heap nao
+        // pode alocar. O chamador tem estado CPU ja mutado nas maos e PRECISA poder desfazer —
+        // por isso recusa em vez de lancar.
+        bool RepublishMaterialTextures(FMaterial& Material);
 
         // Abre um passe no caminho de material bindless (Fase 3). Devolve `true` quando o passe
         // deve usar as PSOs bindless; nesse caso ja escreveu o DESCRITOR da tabela canonica na

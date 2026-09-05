@@ -128,6 +128,49 @@ namespace {
         CheckEq(Heap.Allocate(8), A, "os dois viram um range de oito");
     }
 
+    // Heap CHEIO: a republicacao RECUSA, e o material fica exatamente como estava.
+    //
+    // Este e o caso que o P1 da revisao apontou. O caminho de edicao chega aqui com o ponteiro
+    // e a flag do material JA trocados pelo chamador; se a alocacao lancasse, a excecao subiria
+    // por um callback do Qt e o material CPU ficaria descrevendo uma textura que a tabela GPU e
+    // o CBV nao conhecem — sem erro visivel, ate o proximo load.
+    void TestarRecusaComHeapCheio(ID3D12Device* _Device) {
+        std::cout << "[descritores] republicacao recusada com o heap cheio\n";
+        FTextureSRVHeap Heap;
+        Heap.Initialize(_Device);
+
+        FMaterial Material;
+        Material.Finalize(_Device, Heap);
+        const u32 Base = Material.AlbedoDescriptorIndex();
+
+        // Enche o que sobrou, EXATAMENTE: nao ha mais range de oito nenhum.
+        const u32 Sobra = FTextureSRVHeap::kCapacity - Heap.UsedSlots();
+        Heap.Allocate(Sobra);
+        CheckEq(Heap.UsedSlots(), FTextureSRVHeap::kCapacity, "o heap ficou cheio");
+        const u32 FalhasAntes = Heap.AllocationFailures();
+
+        u32 Retired = 0xDEADBEEFu;
+        Check(!Material.RepublishTextureTable(_Device, Heap, Retired),
+              "republicacao recusa em vez de lancar");
+        CheckEq(Retired, FMaterial::kInvalidDescriptorTable,
+                "nada foi aposentado na recusa");
+        CheckEq(Material.AlbedoDescriptorIndex(), Base,
+                "a base publicada continua a mesma");
+        CheckEq(Heap.UsedSlots(), FTextureSRVHeap::kCapacity,
+                "a recusa nao consumiu slot nenhum");
+        CheckEq(Heap.RetiredSlots(), 0u, "nem aposentou nada");
+        CheckEq(Heap.AllocationFailures(), FalhasAntes + 1u,
+                "a recusa e contada em AllocationFailures");
+
+        // E a tabela do material continua utilizavel: republicar de novo, com espaco de volta,
+        // parte da MESMA base.
+        Heap.Free(Base + kMaterialTextureSlots, kMaterialTextureSlots);
+        u32 Segunda = 0xDEADBEEFu;
+        Check(Material.RepublishTextureTable(_Device, Heap, Segunda),
+              "com espaco de volta a republicacao aceita");
+        CheckEq(Segunda, Base, "e aposenta a base que estava publicada antes da recusa");
+    }
+
     // O caminho real: o editor troca uma textura, o material publica outro range e devolve o
     // antigo. A base MUDA — e por isso a linha canonica do material fica suja — e a antiga so
     // volta a ser alocavel depois da coleta.
@@ -145,7 +188,8 @@ namespace {
         Check(Base != FMaterial::kInvalidDescriptorTable, "material finalizado tem tabela");
         CheckEq(Heap.UsedSlots(), kMaterialTextureSlots, "a tabela ocupa oito slots");
 
-        const u32 Old = Material.RepublishTextureTable(_Device, Heap);
+        u32 Old = 0xDEADBEEFu;
+        Check(Material.RepublishTextureTable(_Device, Heap, Old), "a republicacao aceita");
         CheckEq(Old, Base, "a republicacao devolve a base antiga");
         Check(Material.AlbedoDescriptorIndex() != Old, "e publica uma base diferente");
         CheckEq(Heap.UsedSlots(), 2u * kMaterialTextureSlots,
@@ -162,8 +206,11 @@ namespace {
         // Material nao finalizado nao tem o que republicar, e recusar e melhor que publicar uma
         // tabela solta que ninguem vai liberar.
         FMaterial Fresh;
-        CheckEq(Fresh.RepublishTextureTable(_Device, Heap), FMaterial::kInvalidDescriptorTable,
-                "material sem tabela recusa a republicacao");
+        u32 FreshRetired = 0xDEADBEEFu;
+        Check(!Fresh.RepublishTextureTable(_Device, Heap, FreshRetired),
+              "material sem tabela recusa a republicacao");
+        CheckEq(FreshRetired, FMaterial::kInvalidDescriptorTable,
+                "e nao devolve base nenhuma para aposentar");
     }
 }
 
@@ -178,6 +225,7 @@ int main() {
     TestarColetaParcial(Device.Get());
     TestarCoalescencia(Device.Get());
     TestarRepublicacaoDoMaterial(Device.Get());
+    TestarRecusaComHeapCheio(Device.Get());
 
     if (Failures != 0) {
         std::cerr << "\n" << Failures << " verificacao(oes) falharam\n";

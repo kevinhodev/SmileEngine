@@ -16,7 +16,15 @@ namespace Smile {
 
         void Initialize(ID3D12Device* Device);
 
+        // Lanca quando nao ha espaco. Serve o caminho de LOAD, em que ficar sem descritor e
+        // fatal e nao ha o que fazer alem de abortar com diagnostico.
         u32  Allocate(u32 Count = 1);
+
+        // A mesma alocacao, RECUSANDO em vez de lancar: devolve kInvalidSlot. Serve o caminho
+        // de EDICAO, em que o chamador tem estado CPU para desfazer e uma excecao atravessando
+        // um callback do Qt deixaria material e tabela GPU divergentes — ou terminaria o
+        // processo. Quem publica descritor com a cena viva usa esta.
+        u32  TryAllocate(u32 Count = 1);
         void Free(u32 Slot, u32 Count = 1);
         void Release(u32& Slot, u32 Count = 1);
 

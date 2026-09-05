@@ -127,11 +127,18 @@ namespace Smile {
 
         void UpdateConstants();
 
-        // Publica uma tabela NOVA de descritores a partir dos ponteiros de textura atuais e
-        // devolve a base ANTIGA, para o chamador aposentar atras das fences. Devolve
-        // kInvalidDescriptorTable quando nao havia tabela (material nao finalizado) ou quando o
-        // heap nao pode mais alocar — nesses dois casos nada e publicado e a base atual continua
-        // valendo.
+        // Publica uma tabela NOVA de descritores a partir dos ponteiros de textura ATUAIS e
+        // devolve, em OutRetiredBase, a base antiga para o chamador aposentar atras das fences.
+        //
+        // TRANSACIONAL, e e o ponto: devolve `false` sem tocar em NADA quando o material nao esta
+        // finalizado ou quando o heap nao pode alocar. Ela usa `TryAllocate`, nao `Allocate` —
+        // uma excecao aqui sobe por um callback de UI do Qt e deixaria o material ja mutado com a
+        // tabela GPU descrevendo outro estado, alem de poder terminar o processo.
+        //
+        // Publica UMA vez para os oito slots. Quem troca varias texturas de uma vez (o reset do
+        // editor) aplica os oito ponteiros primeiro e chama isto uma unica vez; chamar por slot
+        // alocaria oito tabelas, aposentaria sete que ninguem le e, perto do teto, falharia no
+        // meio deixando ponteiros e tabela em estados diferentes.
         //
         // Substitui a reescrita NO LUGAR que existia aqui. O descritor mora no heap
         // shader-visible; reescrever um slot que uma command list ja submetida referencia e
@@ -142,7 +149,8 @@ namespace Smile {
         // As oito posicoes sao SEMPRE escritas, inclusive as sem textura (descritor nulo). Sem
         // isso, rotacionar deixaria slots nao inicializados dentro de um range recem-alocado —
         // e o `CopyTable` do preview de material le os oito sem consultar flag.
-        u32 RepublishTextureTable(ID3D12Device* Device, FTextureSRVHeap& SRVHeap);
+        bool RepublishTextureTable(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
+                                   u32& OutRetiredBase);
 
         bool IsFinalized() const { return MappedCBV != nullptr; }
 

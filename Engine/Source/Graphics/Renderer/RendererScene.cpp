@@ -86,10 +86,8 @@ namespace Smile {
         return true;
     }
 
-    void Renderer::UpdateMaterialTextureSlot(FMaterial& _Material, u32 _LocalSlot,
-                                             FTexture* _Texture) {
-        if (!Initialized || !_Texture || !_Texture->IsValid() || !_Material.IsFinalized()) return;
-        if (_LocalSlot >= kMaterialTextureSlots) return;
+    bool Renderer::RepublishMaterialTextures(FMaterial& _Material) {
+        if (!Initialized || !_Material.IsFinalized()) return false;
 
         // SEM DRENO — e essa e a mudanca da Fase 3.
         //
@@ -108,10 +106,12 @@ namespace Smile {
         // O `CurrentFenceSet` — ultimos valores SUBMETIDOS — e a captura certa porque edicao de
         // editor acontece entre frames, com a command list fechada; e a mesma fronteira que o
         // RemoveRenderable ja usa para aposentar slot de cena.
-        const u32 OldTable =
-            _Material.RepublishTextureTable(Backend->Device.Native(), Backend->SRVHeap);
+        u32 OldTable = FMaterial::kInvalidDescriptorTable;
+        if (!_Material.RepublishTextureTable(Backend->Device.Native(), Backend->SRVHeap, OldTable))
+            return false;
         if (OldTable != FMaterial::kInvalidDescriptorTable)
             Backend->SRVHeap.FreeDeferred(OldTable, kMaterialTextureSlots, CurrentFenceSet());
+        return true;
     }
 
     // O build libera recursos ainda usados por ambas as filas; drene direta antes da compute

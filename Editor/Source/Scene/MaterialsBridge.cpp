@@ -992,10 +992,25 @@ namespace SmileEditor {
         Smile::u32*      Flag = SlotHasFlag(_M, _Slot);
         if (!Ptr || !Flag || !Renderer) return;
         const bool Valid = _T && _T->IsValid();
+
+        // TRANSACIONAL: o ponteiro e a flag mudam antes da publicacao — a republicacao le os
+        // ponteiros ATUAIS do material —, mas se ela recusar tudo volta como estava.
+        //
+        // Sem isso, uma recusa do heap deixava ponteiro e flag ja trocados, pulava
+        // UpdateConstants, as dirty flags e o commit do OMM, e o material CPU passava a descrever
+        // uma textura que a tabela GPU e o CBV nao conhecem. Nada disso daria erro visivel: daria
+        // um material que amostra o descritor errado ate o proximo load.
+        Smile::FTexture* const PrevPtr  = *Ptr;
+        const Smile::u32       PrevFlag = *Flag;
         *Ptr  = Valid ? _T : nullptr;
         *Flag = Valid ? 1 : 0;
-        if (Valid && _M.IsFinalized())
-            Renderer->UpdateMaterialTextureSlot(_M, Smile::u32(_Slot), _T);
+        if (Valid && _M.IsFinalized() && !Renderer->RepublishMaterialTextures(_M)) {
+            *Ptr  = PrevPtr;
+            *Flag = PrevFlag;
+            Smile::LogError("Troca de textura recusada: o heap de descritores nao tem espaco. "
+                            "O material continua como estava.");
+            return;
+        }
         _M.UpdateConstants();
         // Os slots viram indices bindless na linha do material (base + deslocamento) e o bit de
         // albedo governa o alpha-test dos RAIOS (RTAlphaTest.hlsli desiste sem ele). Sem sujar a
@@ -1383,17 +1398,34 @@ namespace SmileEditor {
         auto M = SelMat(); if (!M) return;
         const auto It = Defaults.constFind(M);
         if (It == Defaults.constEnd()) return;
+        // As TEXTURAS primeiro, e as constantes so depois que a publicacao deu certo. Inverter a
+        // ordem faria uma recusa do heap deixar o material com os fatores revertidos e as
+        // texturas antigas — meio revertido, sem erro visivel.
+        //
+        // Texturas trocadas voltam pros mapas cozidos (o snapshot ja tem os Has*Map certos; so
+        // falta reapontar os ponteiros e republicar a tabela).
+        //
+        // Os oito ponteiros PRIMEIRO, UMA publicacao depois. Publicar dentro do laco alocaria oito
+        // tabelas por reset, aposentaria sete que ninguem chega a ler — e as intermediarias
+        // descreveriam um material meio revertido. Perto do teto do heap, a falha cairia no meio,
+        // deixando ponteiros e tabela em estados diferentes.
+        Smile::FTexture* PrevSlots[Smile::kMaterialTextureSlots] = {};
+        for (int i = 0; i < int(Smile::kMaterialTextureSlots); ++i) {
+            Smile::FTexture** Ptr = SlotPointer(*M, i);
+            if (!Ptr) continue;
+            PrevSlots[i] = *Ptr;
+            *Ptr = It.value().Slots[i];
+        }
+        if (M->IsFinalized() && Renderer && !Renderer->RepublishMaterialTextures(*M)) {
+            for (int i = 0; i < int(Smile::kMaterialTextureSlots); ++i)
+                if (Smile::FTexture** Ptr = SlotPointer(*M, i)) *Ptr = PrevSlots[i];
+            Smile::LogError("Reset do material recusado: o heap de descritores nao tem espaco. "
+                            "O material continua como estava.");
+            return;
+        }
         M->Constants = It.value().C;
         M->TwoSided  = It.value().TwoSided;
         M->Blend     = It.value().Blend;
-        // Texturas trocadas voltam pros mapas cozidos (o snapshot ja tem os Has*Map certos;
-        // so falta reapontar o ponteiro e reescrever o SRV do slot).
-        for (int i = 0; i < int(Smile::kMaterialTextureSlots); ++i) {
-            Smile::FTexture* Orig = It.value().Slots[i];
-            if (Smile::FTexture** Ptr = SlotPointer(*M, i)) *Ptr = Orig;
-            if (Orig && Orig->IsValid() && M->IsFinalized() && Renderer)
-                Renderer->UpdateMaterialTextureSlot(*M, Smile::u32(i), Orig);
-        }
         TexOverrides.remove(M);
         M->UpdateConstants();
         // O override salvo (se houver) tambem cai — senao voltaria no proximo load.

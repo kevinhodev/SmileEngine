@@ -14,7 +14,7 @@ import path from "node:path";
 // entraram no RESUMO, que e o que a regua le com o includeSamples default (false). Enquanto
 // estavam so na amostra crua, existiam no editor e nao chegavam a quem mede.
 // 6: cpu.instanceTable, com footprint e sujeira das quatro colunas canonicas por slot.
-const PROTOCOL_VERSION = 7;
+const PROTOCOL_VERSION = 8;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -100,6 +100,11 @@ export interface CpuSubmitPass {
    * ser zero — material fora da tabela desenha como o cinza da linha 0 sem erro nenhum.
    */
   bindlessDraws: number;
+  /**
+   * Draws que CONSOMEM material e ainda o amarram por item. Nao e `draws - bindlessDraws`:
+   * draw sem material — o z-prepass opaco inteiro — nao e fallback de material.
+   */
+  materialFallbackDraws: number;
   materialRowSets: number;
   materialRowMisses: number;
 }
@@ -679,7 +684,8 @@ export class SmileEditorBridge {
         throw new Error(`Snapshot de perfil com cpu.passes[${i}] sem chave de passe.`);
       }
       for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
-                           "bindlessDraws", "materialRowSets", "materialRowMisses"] as const) {
+                           "bindlessDraws", "materialFallbackDraws", "materialRowSets",
+                           "materialRowMisses"] as const) {
         const valor = passe[campo];
         if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
           throw new Error(
@@ -688,12 +694,15 @@ export class SmileEditorBridge {
           );
         }
       }
-      // Os dois se somam por construcao: todo draw do passe leu material pela tabela canonica ou
-      // pelo bind por item. Mais bindless que draws descreve um passe que o produtor nao produz.
-      if ((passe.bindlessDraws as number) > (passe.draws as number)) {
+      // TRES estados exclusivos por draw: leu material pela tabela, amarrou por item, ou nao
+      // consome material. Os dois primeiros nao podem passar do total — e nao podem SOMAR o
+      // total obrigatoriamente, porque o terceiro existe e e maioria em passes inteiros.
+      const comMaterial = (passe.bindlessDraws as number) +
+                          (passe.materialFallbackDraws as number);
+      if (comMaterial > (passe.draws as number)) {
         throw new Error(
-          `Snapshot incoerente: cpu.passes[${i}] com bindlessDraws ${passe.bindlessDraws} ` +
-            `acima de draws ${passe.draws}.`,
+          `Snapshot incoerente: cpu.passes[${i}] com bindlessDraws + materialFallbackDraws = ` +
+            `${comMaterial} acima de draws ${passe.draws}.`,
         );
       }
     }
