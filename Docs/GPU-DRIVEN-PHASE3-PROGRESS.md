@@ -1,11 +1,12 @@
 # Fase 3 — estado da implementação
 
-Data: 2026-09-05
+Data: 2026-09-08
 
-Estado: **implementada, revisada e estruturalmente completa; NÃO validada em GPU.** As slices estão
-na árvore, Release fecha 61/61, Release e Debug compilam e o cliente TypeScript compila. O que falta
-é o que exige placa: ligar o toggle na Bistro e na Emerald, provar paridade visual e medir. Enquanto
-isso não acontece, a fase **não fecha**.
+Estado: **implementada, revisada e validada em GPU no A/B principal.** Release fecha 61/61,
+Release e Debug compilam e o cliente TypeScript compila. O gate reproduzível em `ae30b18` prova
+paridade visual, caminho clássico/bindless, CSM, sombras locais, zero miss de linha e o orçamento
+do heap numa cena de 10.740 meshes. Resta uma validação manual específica em Debug (troca de
+textura com a debug layer); até ela, a fase ainda não é declarada encerrada.
 
 Base: Fase 2 fechada em `7382f21`. Nada da Fase 2 foi reaberto.
 
@@ -24,6 +25,7 @@ O default **não** mudou: `UseBindlessMaterials = false` (regra 3 do plano).
 | `95721c8` | os quatro findings da revisão |
 | `31c0136` | fecha as transações de textura e corrige a contagem por item |
 | `926761c` | migra materiais masked das sombras e corrige o estado de leitura das tabelas |
+| `ae30b18` | A/B automatizado em GPU, proveniência no manifesto e heap de 65.536 descritores |
 
 ## Findings da revisão (2026-09-05)
 
@@ -304,6 +306,37 @@ borda passou a validar os contadores por passe — os três novos e os três ant
 sem checagem — e o bloco `srvHeap` inteiro, mais duas coerências que uma checagem campo a campo
 não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 
+## Validação em GPU
+
+O comando `npm run validate:gpu-driven:phase3`, em `Tools/SmileMCP`, compila shaders e editor
+Release e executa a matriz inteira na RTX 3060 Ti (Resource Binding Tier 3). O knob entra no
+`smile_profile_configure` e volta no readback; cada captura também grava o estado **efetivo** em
+`bindlessMaterials`, para que os PNGs continuem autocontidos sem depender do relatório externo.
+
+Na Bistro (slot 1) e na Emerald Day (slot 0), os draws com material migrados trocaram de canal sem
+perda: z-prepass masked e G-buffer saíram de `materialFallbackDraws` e entraram em
+`bindlessDraws`, com `materialRowMisses = 0` em todos os passes. Em 24 amostras, o `Submit`
+mediano caiu de 0,6140 para 0,2734 ms na Bistro e de 1,1890 para 0,6644 ms na Emerald. São números
+diagnósticos desta validação curta, não uma nova baseline de performance.
+
+As imagens A/B são visualmente equivalentes. A diferença absoluta fica em ruído temporal e
+folhagem, sem troca estrutural de material: no percentil 95, a maior diferença por canal é 1/255
+na Bistro e 2/255 na Emerald; pixels acima de 5/255 são 0,277% e 1,433%, respectivamente.
+
+O gate força a reconstrução das sombras movendo um caster estático para a própria posição. Para
+a sombra local, cria temporariamente — sem sobrescrever autoria existente, e removendo no
+`finally` — uma point light que projeta sombra na Bistro. A mesma lista produziu 2.678 draws de
+CSM e 1.186 draws locais nos dois modos: 231/71 draws masked eram fallback no clássico e os mesmos
+231/71 eram bindless no modo novo, todos com zero miss.
+
+### Orçamento do heap
+
+A primeira tentativa com a MEASURE_SEVEN revelou um limite real: a tabela canônica de 10.740
+meshes pede 32.220 descritores de geometria e o heap de 16.384 falhava antes de publicar a cena.
+O teto passou a 65.536 — 32k ainda seria insuficiente — e o gate exige a cena carregada com pelo
+menos 33.810 slots ocupados. Na rodada registrada, foram 34.218/65.536. O teste de lifetime
+continua enchendo o heap até o teto e passou com a nova capacidade.
+
 ## Provas
 
 | o que | como |
@@ -340,19 +373,13 @@ não pega: `bindlessDraws <= draws` e `used + retired <= capacity`.
 
 ## Falta na fase
 
-1. **Validação em GPU.** Ligar o toggle na Bistro e na Emerald e comparar A/B no mesmo build e
-   bookmark, com `CAPTURE-PROTOCOL.md`. O gate pede paridade em opaco, masked, two-sided,
-   emissivo, motion vectors e guides de TAA/DLSS. **Nada disso foi feito** — não há placa neste
-   ciclo.
-2. **`materialRowMisses` observado em zero** numa cena real. O contador existe; ninguém o leu
-   ainda com o caminho ligado.
-3. **Sessão em Debug com a debug layer** trocando textura de material, para provar que o
+1. **Sessão em Debug com a debug layer** trocando textura de material, para provar que o
    aposentamento fechou o `#921` sem reintroduzir dreno. A suíte sem placa não alcança hazard de
    lifetime de GPU — foi assim que a Fase 2 validou o conserto do OMM.
-4. **Medir.** O plano proíbe declarar ganho sem baseline limpa. Nenhum número de perf foi
-   produzido aqui, e não se deve supor que menos binds por draw signifique menos tempo de CPU sem
-   medir: o `FDrawSubmitCache` já filtrava bind repetido, e a lista do G-buffer já vem agrupada
-   por material.
+
+O A/B curto mede o sinal e impede alegar regressão grosseira, mas a medição formal contra a
+baseline da Fase 0 continua sendo trabalho separado: 24 amostras em duas cenas não substituem a
+matriz limpa do protocolo.
 
 ## Riscos anotados, ainda não medidos
 
