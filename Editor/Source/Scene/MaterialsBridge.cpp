@@ -1134,6 +1134,11 @@ namespace SmileEditor {
             Rnds[i].Visible = SavedVisibility[i] && Rnds[i].Material == M;
         }
         Renderer->GetScene().BumpTransformsVersion(); // TLAS re-coleta -> GI/reflexos seguem
+        // Isolar ESCONDE e MOSTRA, e isso muda o que o mapa estatico contem — a mesma razao pela
+        // qual o olho do Outliner bumpa as duas. Faltava aqui: o shadow map cacheado continuava
+        // com os objetos escondidos dentro dele, e a Fase 4 acrescenta um segundo consumidor
+        // (a membresia da lista de candidatos) que so observa esta versao.
+        Renderer->GetScene().BumpStaticCastersVersion();
         emit VisibilityChanged();
     }
 
@@ -1151,6 +1156,7 @@ namespace SmileEditor {
             for (int i = 0; i < N; ++i) Rnds[i].Visible = SavedVisibility[i];
             if (N > 0) {
                 Renderer->GetScene().BumpTransformsVersion();
+                Renderer->GetScene().BumpStaticCastersVersion(); // ver ApplyIsolation
                 emit VisibilityChanged();
             }
         }
