@@ -1436,6 +1436,27 @@ permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dado
 
 ## Fase 4 — GPU Scene persistente e ranges
 
+> **Estado em 2026-09-08 — ABERTA, quatro slices entregues.** Release fecha 64/64, Debug compila e o
+> cliente TypeScript compila. Dois dos seis itens do gate estão fechados (dirty pages em cena
+> estática e a equivalência range único/sintéticos, esta provada na CPU **e** na GPU); o de escala
+> está provado em 4.096 objetos e **falta medir em 1M**; a aposentadoria do `ObjectCB` e do
+> `TransformBuffer` do TemporalMotion **não foi iniciada**. Detalhe, evidência, casos negativos e a
+> fila do que falta em [GPU-DRIVEN-PHASE4-PROGRESS.md](GPU-DRIVEN-PHASE4-PROGRESS.md).
+>
+> O achado que definiu a primeira slice: as linhas sujas já eram poucas — o gate da Fase 2 provava
+> isso —, mas o **custo de descobri-las** era a tabela inteira, duas vezes (o produtor revarria os
+> renderáveis a cada bump; o diff percorria a capacidade). Em 1M são ~191 MB de `memcmp` por frame
+> para achar uma linha, e `rowsDirty` valia 1 nos dois casos. O contador que existia media o
+> resultado, não o trabalho.
+>
+> A caixa de correio de sujos na `FScene` é **dica, não verdade**: bumpar sem índice invalida a
+> caixa e joga o produtor na varredura completa. Não há como bumpar sem uma das duas coisas
+> acontecer, então esquecer o índice custa trabalho a mais, nunca uma linha desatualizada.
+>
+> A expansão na GPU escreve por **posição**, e não por append atômico: nesta fase não há rejeição,
+> então a saída é 1:1 e fica byte a byte comparável com a referência CPU — que é o gate. Compactar
+> só ganha sentido na Fase 6, quando houver rejeição de verdade.
+
 ### Objetivo
 
 Publicar a cena na GPU por páginas sujas e estabelecer `FInstanceRange` como única entrada do futuro
