@@ -59,6 +59,21 @@ namespace Smile {
         BuiltStaticCastersVersion_ = ~0ull;
     }
 
+    u32 BuildRangeOutputBases(std::span<const FInstanceRange> _Ranges,
+                              std::vector<u32>& _OutBases) {
+        _OutBases.clear();
+        _OutBases.reserve(_Ranges.size());
+        u64 Total = 0;
+        for (const FInstanceRange& Range : _Ranges) {
+            _OutBases.push_back(static_cast<u32>(Total));
+            Total += Range.CandidateCount;
+        }
+        // Saturado, e nao truncado: com mais de 2^32 saidas o total daria a volta e o dispatch
+        // ficaria PEQUENO, o que faz geometria sumir. Nao acontece com as escalas do plano (1M),
+        // e continua sendo a direcao certa do erro.
+        return Total > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<u32>(Total);
+    }
+
     u32 ExpandCandidateRanges(std::span<const FInstanceRange> _Ranges,
                               std::span<const u32> _CandidateIds, std::vector<u32>& _OutSlots) {
         _OutSlots.clear();

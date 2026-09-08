@@ -95,6 +95,29 @@ namespace Smile {
         u64                         BuiltStaticCastersVersion_ = ~0ull;
     };
 
+    // Contadores do dispatch de expansao. ESPELHO de Shaders/GpuScene/ExpandInstanceRanges.cs.hlsl:
+    // os indices sao os mesmos SMILE_EXPAND_COUNTER_* de la, e quem os verifica e o teste WARP, que
+    // le os quatro de volta. Renumerar um lado sem o outro nao quebra compilacao nenhuma.
+    enum EGpuExpandCounter : u32 {
+        GpuExpandCounterExpanded    = 0, // slots escritos na saida
+        GpuExpandCounterInvalidSlot = 1, // slot fora da tabela, linha sem ocupante, offset incoerente
+        GpuExpandCounterRtOnly      = 2, // linha RaytracingOnly alcancada: o produtor CPU falhou
+        GpuExpandCounterOverflow    = 3, // nao coube na capacidade da saida
+        GpuExpandCounterCount       = 4,
+    };
+
+    // Posicao de saida sem candidato. Mesmo valor do SMILE_EXPAND_NO_SLOT do shader; nao e zero,
+    // porque zero e um slot legitimo.
+    constexpr u32 kGpuExpandNoSlot = 0xFFFFFFFFu;
+
+    // Prefixo EXCLUSIVO das contagens dos ranges: onde a saida de cada range comeca. Devolve o
+    // total de saidas.
+    //
+    // Calculado na CPU e enviado junto: os ranges sao poucos enquanto a cena for plana (um), e um
+    // dispatch de prefixo para somar um elemento custaria mais que a copia. Quando o produtor for
+    // por celula, este e o primeiro candidato a virar GPU.
+    u32 BuildRangeOutputBases(std::span<const FInstanceRange> Ranges, std::vector<u32>& OutBases);
+
     // Expande ranges em lista de slots. E a referencia CPU do que o dispatch da GPU faz, e o
     // instrumento do gate "range unico e multiplos ranges sinteticos produzem a mesma lista".
     //

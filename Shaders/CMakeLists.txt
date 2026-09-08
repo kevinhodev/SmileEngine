@@ -159,6 +159,10 @@ smile_compile_shader(Temporal/TemporalResolveProbe.cs.hlsl cs_6_0 main SHADER_OU
 # Sonda de ABI das tabelas canonicas da cena (Fase 2). Mesma logica da de cima: o static_assert do
 # C++ nao diz nada sobre o espelho HLSL, e um campo trocado de lugar compila dos dois lados.
 smile_compile_shader(Scene/GpuSceneTablesProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+# Expansao de ranges em lista de slots (Fase 4). Entrada do culling da Fase 6; nesta fase nao
+# rejeita ninguem, so valida slot/generation e conta. cs_6_0 porque nao usa heap diretamente
+# indexado -- os buffers chegam por descriptor table, como o dispatch de HZB.
+smile_compile_shader(GpuScene/ExpandInstanceRanges.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto
 # Occlusion culling — cadeia HZB (min-reduce do depth em reverse-Z, estilo UE)

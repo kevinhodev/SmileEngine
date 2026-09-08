@@ -283,6 +283,36 @@ set_tests_properties(Smile.GpuSceneCandidates PROPERTIES
     TIMEOUT 180
 )
 
+# Expansao de ranges na GPU (Fase 4). Roda o shader de PRODUCAO em WARP e compara com a referencia
+# CPU do mesmo header. Depende da compilacao dos shaders.
+add_executable(SmileGpuSceneExpandWarpTests
+    GpuSceneExpandWarpTests.cpp
+)
+
+target_compile_features(SmileGpuSceneExpandWarpTests PRIVATE cxx_std_20)
+target_compile_definitions(SmileGpuSceneExpandWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_EXPAND_RANGES_CSO="${SMILE_SHADER_OUTPUT_DIR}/ExpandInstanceRanges.cs_6_0.cso"
+)
+target_link_libraries(SmileGpuSceneExpandWarpTests PRIVATE SmileEngine d3d12 dxgi)
+add_dependencies(SmileGpuSceneExpandWarpTests Shaders)
+set_target_properties(SmileGpuSceneExpandWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuSceneExpandWarp
+    COMMAND SmileGpuSceneExpandWarpTests
+)
+
+set_tests_properties(Smile.GpuSceneExpandWarp PROPERTIES
+    LABELS "scene;gpu-driven;abi;warp"
+    TIMEOUT 240
+)
+
 # Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
 # usar WARP: o FDrawSubmitCache grava numa command list de verdade.
 add_executable(SmileSubmitStatsTests
