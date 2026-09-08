@@ -83,13 +83,14 @@ int main() {
     u32 IdxProxy = 0, IdxHidden = 0, IdxNoMesh = 0, IdxNoSlot = 0;
     std::vector<u32> ExpectedSlots;
     {
+        // A residencia vem do proprio AddRenderable. Alocar um segundo slot por cima deixaria o
+        // primeiro Live e sem dono, e o pool ficaria com o dobro dos vivos — o que aqui tambem
+        // esconderia o caso "sem residencia" atras de um slot orfao ainda vivo.
         auto Add = [&](const char* Name) -> FRenderable& {
             FRenderable R;
             R.Name = Name;
             R.Mesh = &Mesh;
-            FRenderable& Added = Scene.AddRenderable(R);
-            Added.GpuHandle = Scene.GpuSlots().Allocate();
-            return Added;
+            return Scene.AddRenderable(R);
         };
 
         for (u32 I = 0; I < 2; ++I) ExpectedSlots.push_back(Add("normal").GpuHandle.Slot);
@@ -113,6 +114,14 @@ int main() {
 
         ExpectedSlots.push_back(Add("normal").GpuHandle.Slot);
     }
+
+    // Um slot por renderavel, menos o unico que foi aposentado de proposito para exercitar o balde
+    // `InvalidSlot`. Sem esta conferencia, uma alocacao duplicada no aparelho deixaria slots orfaos
+    // vivos e o caso "sem residencia" deixaria de ser o que o nome diz.
+    CheckEq(Scene.GpuSlots().LiveCount(),
+            static_cast<u32>(Scene.Renderables().size()) - 1u,
+            "o pool tem um slot vivo por renderavel, menos o aposentado do teste");
+    CheckEq(Scene.GpuSlots().RetiredCount(), 1u, "e exatamente um aposentado");
 
     FGpuSceneCandidates Candidates;
     Check(Candidates.RefreshIfStale(Scene), "a primeira consulta constroi a lista");

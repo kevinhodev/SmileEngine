@@ -81,12 +81,16 @@ namespace {
 
             // Sem malha e sem material de proposito: as duas tabelas resolvem ponteiro nulo para a
             // linha 0 reservada, e o que esta sob teste e a coluna de INSTANCIA.
+            //
+            // A residencia vem do proprio AddRenderable. Alocar um segundo slot por cima —
+            // `Added.GpuHandle = GpuSlots().Allocate()` — deixaria o primeiro Live e sem dono: o
+            // pool ficaria com o dobro dos vivos, e a tabela seria dimensionada sobre uma
+            // capacidade inflada pelo vazamento em vez de pela folga do TableCapacityFor.
             for (u32 I = 0; I < kObjects; ++I) {
                 FRenderable R;
                 R.Transform.Position = { static_cast<f32>(I), 0.0f, 0.0f };
                 R.RefreshWorldBounds();
-                FRenderable& Added = Scene.AddRenderable(R);
-                Added.GpuHandle = Scene.GpuSlots().Allocate();
+                const FRenderable& Added = Scene.AddRenderable(R);
                 if (Added.GpuHandle.Slot == FGpuSceneHandle::kInvalidSlot) return false;
             }
             Instances.SetupForScene(Device.Get(), Heap, Scene);
@@ -114,6 +118,14 @@ int main() {
     //
     // Nao a capacidade: a folga do TableCapacityFor existe para absorver carga aditiva, e visitar
     // slots que nunca tiveram ocupante e trabalho sobre nada.
+    // Um slot por renderavel, nem mais. E o denominador de tudo o que vem abaixo: com o pool
+    // inflado, a folga de capacidade da tabela viria de um vazamento e nao do TableCapacityFor, e
+    // "a capacidade tem folga" passaria por acidente.
+    CheckEq(Rig.Scene.GpuSlots().LiveCount(),
+            static_cast<u32>(Rig.Scene.Renderables().size()),
+            "o pool tem exatamente um slot vivo por renderavel");
+    CheckEq(Rig.Scene.GpuSlots().RetiredCount(), 0u, "e nenhum aposentado antes da remocao");
+
     Rig.Frame();
     CheckEq(Rig.Instances.LiveRows(), kObjects, "a tabela recebe uma linha por renderavel vivo");
     CheckEq(Rig.Instances.LastRowsScanned(), FGpuSceneInstanceTable::kColumns * kObjects,
@@ -252,8 +264,17 @@ int main() {
         FGpuSceneInstanceMeta Meta{};
         Check(Rig.Instances.MetaFor(Removed, Meta), "a linha do objeto existe antes da remocao");
 
-        Rig.Scene.GpuSlots().Retire(Removed, FGpuFenceSet{});
+        // Pelo caminho de PRODUCAO, sem aposentar a residencia na mao antes. Um `Retire` avulso
+        // aqui e idempotente — o RemoveRenderable simplesmente nao acharia o handle vivo —, e por
+        // isso mesmo mascararia o que interessa: o teste passaria identico se o RemoveRenderable
+        // parasse de aposentar a residencia, e o vazamento de slot so apareceria como pool
+        // crescendo meses depois.
         Check(Rig.Scene.RemoveRenderable(Id, FGpuFenceSet{}), "o renderavel sai da cena");
+        CheckEq(Rig.Scene.GpuSlots().LiveCount(),
+                static_cast<u32>(Rig.Scene.Renderables().size()),
+                "remover pela API de producao aposenta a residencia junto");
+        CheckEq(Rig.Scene.GpuSlots().RetiredCount(), 1u, "e o slot vai para aposentado, nao a lixo");
+
         Rig.Frame();
         CheckEq(Rig.Instances.LiveRows(), kObjects - 1u, "a tabela perde a linha viva");
         CheckEq(Rig.Instances.LastDirtyRows(), 1u, "remover um objeto suja so a linha dele");
