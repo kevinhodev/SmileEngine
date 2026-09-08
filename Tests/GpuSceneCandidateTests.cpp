@@ -124,6 +124,12 @@ int main() {
     CheckEq(Candidates.Stats().NoGeometry, 1u, "o sem malha e contado a parte");
     CheckEq(Candidates.Stats().InvalidSlot, 1u, "o sem residencia e contado a parte");
     CheckEq(Candidates.Stats().Overflow, 0u, "sem teto nao ha overflow");
+    Check(Candidates.IsUsable(), "sem overflow a lista e utilizavel");
+
+    // A generation viaja com o slot: sem ela nao existe validacao de generation nenhuma, so
+    // "esta linha tem algum ocupante?".
+    for (const FGpuCandidateId& C : Candidates.InstanceIds())
+        Check(C.Generation != 0u, "todo candidato carrega a generation esperada");
     CheckEq(Candidates.HighWaterMark(), 4u, "o high-water acompanha o maior conjunto ja visto");
 
     // O slot do proxy NAO pode estar na lista. A contagem acima ja seria satisfeita por um filtro
@@ -131,7 +137,7 @@ int main() {
     {
         const u32 ProxySlot = Scene.Renderables()[IdxProxy].GpuHandle.Slot;
         bool Found = false;
-        for (u32 Slot : Candidates.InstanceIds()) Found = Found || Slot == ProxySlot;
+        for (const FGpuCandidateId& C : Candidates.InstanceIds()) Found = Found || C.Slot == ProxySlot;
         Check(!Found, "o slot do proxy RaytracingOnly nao aparece entre os candidatos");
     }
 
@@ -205,15 +211,45 @@ int main() {
 
     // --- teto e overflow -------------------------------------------------------------------------
     //
-    // Overflow tem de ser CONTADO. Um teto que descartasse em silencio faria geometria sumir sem
-    // deixar rastro, que e o modo de falha que a regra 6 do plano proibe.
+    // Contar o descarte NAO o torna conservador. Uma lista truncada e utilizavel e geometria
+    // sumindo em silencio, que a regra 6 do plano proibe: desenhar demais e aceitavel, desaparecer
+    // nao. Ou a lista descreve a cena inteira, ou ela nao existe.
+    //
+    // A lista vazia com a flag em falso falha ALTO — o consumidor cai no caminho CPU (D9) ou nao
+    // desenha nada, e as duas coisas se notam. Uma lista com tres objetos faltando falha baixo, e
+    // e a baixa que atravessa uma revisao.
     {
         FGpuSceneCandidates Apertado;
         Apertado.SetCapacity(2u);
         Apertado.Rebuild(Scene);
-        CheckEq(Apertado.Stats().Candidates, 2u, "o teto limita a lista");
+        Check(!Apertado.IsUsable(), "com overflow a lista NAO e utilizavel");
+        CheckEq(static_cast<u32>(Apertado.InstanceIds().size()), 0u,
+                "e nao sobra lista parcial para alguem consumir");
+        CheckEq(static_cast<u32>(Apertado.Ranges().size()), 0u, "nem range que a enderece");
         CheckEq(Apertado.Stats().Overflow, 3u, "os que nao couberam sao contados");
-        CheckEq(Apertado.Ranges()[0].CandidateCount, 2u, "o range acompanha o que coube");
+        // `Candidates` conta a cena INTEIRA, e nao o que coube: e com este numero que se
+        // redimensiona o buffer. Se ele contasse so os que couberam, a capacidade necessaria
+        // nunca seria observavel e o overflow seria insoluvel.
+        CheckEq(Apertado.Stats().Candidates, 5u, "e a contagem diz de quanto a cena precisa");
+        CheckEq(Apertado.HighWaterMark(), 5u, "o high-water tambem, para dimensionar o buffer");
+
+        // Aumentar o teto TEM de reconstruir. Nenhuma versao da cena mudou, entao sem invalidacao
+        // explicita a lista ficaria truncada para sempre — e `IsUsable()` continuaria falso com a
+        // cena inteirinha cabendo.
+        Apertado.SetCapacity(16u);
+        Check(Apertado.RefreshIfStale(Scene), "mudar o teto invalida a lista construida");
+        Check(Apertado.IsUsable(), "e com teto suficiente ela volta a ser utilizavel");
+        CheckEq(static_cast<u32>(Apertado.InstanceIds().size()), 5u, "com a cena inteira dentro");
+
+        // Diminuir tambem: o caminho oposto tem o mesmo modo de falha.
+        Apertado.SetCapacity(3u);
+        Check(Apertado.RefreshIfStale(Scene), "diminuir o teto tambem invalida");
+        Check(!Apertado.IsUsable(), "e volta a nao ser utilizavel");
+
+        // Reatribuir o MESMO teto nao invalida: seria uma reconstrucao por nada, e a cada frame se
+        // alguem chamasse SetCapacity com o valor corrente.
+        Apertado.SetCapacity(3u);
+        Check(!Apertado.RefreshIfStale(Scene), "reatribuir o mesmo teto nao reconstroi");
     }
 
     (void)IdxNoMesh;

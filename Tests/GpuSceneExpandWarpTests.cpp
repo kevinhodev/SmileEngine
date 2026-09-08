@@ -170,7 +170,7 @@ namespace {
         };
 
         FResultado Executar(std::span<const FInstanceRange> _Ranges,
-                            std::span<const u32> _CandidateIds,
+                            std::span<const FGpuCandidateId> _CandidateIds,
                             std::span<const FGpuSceneInstanceMeta> _Meta, u32 _OutCapacity) {
             std::vector<u32> Bases;
             const u32 Total = BuildRangeOutputBases(_Ranges, Bases);
@@ -184,7 +184,8 @@ namespace {
                                                   _Ranges.size() * sizeof(FInstanceRange)));
             auto BufBases  = Upload(Bases.data(), std::max<u64>(4, Bases.size() * sizeof(u32)));
             auto BufIds    = Upload(_CandidateIds.data(),
-                                    std::max<u64>(4, _CandidateIds.size() * sizeof(u32)));
+                                    std::max<u64>(sizeof(FGpuCandidateId),
+                                                  _CandidateIds.size() * sizeof(FGpuCandidateId)));
             auto BufMeta   = Upload(_Meta.data(),
                                     std::max<u64>(sizeof(FGpuSceneInstanceMeta),
                                                   _Meta.size() * sizeof(FGpuSceneInstanceMeta)));
@@ -237,15 +238,18 @@ namespace {
 
             SRV(BufRanges.Get(), static_cast<u32>(_Ranges.size()), sizeof(FInstanceRange), 0);
             SRV(BufBases.Get(), static_cast<u32>(Bases.size()), sizeof(u32), 1);
-            SRV(BufIds.Get(), static_cast<u32>(_CandidateIds.size()), sizeof(u32), 2);
+            SRV(BufIds.Get(), static_cast<u32>(_CandidateIds.size()), sizeof(FGpuCandidateId), 2);
             SRV(BufMeta.Get(), static_cast<u32>(_Meta.size()), sizeof(FGpuSceneInstanceMeta), 3);
             UAV(BufSaida.Get(), _OutCapacity, 4);
             UAV(BufCont.Get(), GpuExpandCounterCount, 5);
 
             alignas(16) u8 CB[256]{};
-            const u32 Params4[4]{ Total, static_cast<u32>(_Ranges.size()), _OutCapacity,
-                                  static_cast<u32>(_Meta.size()) };
-            std::memcpy(CB, Params4, sizeof(Params4));
+            // Dois uint4: o segundo carrega o tamanho de CandidateIds, sem o qual o shader nao tem
+            // como recusar um range que a referencia CPU recusa.
+            const u32 Params8[8]{ Total, static_cast<u32>(_Ranges.size()), _OutCapacity,
+                                  static_cast<u32>(_Meta.size()),
+                                  static_cast<u32>(_CandidateIds.size()), 0u, 0u, 0u };
+            std::memcpy(CB, Params8, sizeof(Params8));
             auto BufCB = Upload(CB, sizeof(CB));
 
             wrl::ComPtr<ID3D12CommandAllocator>    Allocator;
@@ -368,8 +372,13 @@ int main() try {
 
     // Slots NAO contiguos e fora de ordem: se o consumidor voltar a interpretar o range como
     // intervalo de slots, a saida deixa de bater. Com uma lista identidade os dois passariam.
-    const std::vector<u32> Ids{ 7u, 2u, 11u, 3u, 9u, 5u };
+    //
+    // A generation de cada candidato e a que `MetaViva` grava na linha (Slot + 1): e a generation
+    // ESPERADA, e o shader recusa quem nao bater.
     const std::vector<FGpuSceneInstanceMeta> Meta = MetaViva(16u);
+    auto Cand = [&](u32 Slot) { return FGpuCandidateId{ Slot, Meta[Slot].Generation }; };
+    const std::vector<FGpuCandidateId> Ids{ Cand(7u), Cand(2u), Cand(11u),
+                                            Cand(3u), Cand(9u), Cand(5u) };
     const u32 Capacidade = static_cast<u32>(Ids.size());
 
     // --- range unico da cena plana --------------------------------------------------------------
@@ -401,8 +410,12 @@ int main() try {
     //
     // Dois candidatos ruins: um alem da tabela e um apontando para a linha 0, que e vazia por
     // convencao. Os dois tem de virar sentinela e contador, e nunca um slot plausivel.
+    //
+    // O candidato da linha vazia carrega generation 0 — que e como um candidato invalido chega de
+    // verdade. Sem a recusa explicita da generation zero, ela CASARIA com a generation 0 da linha
+    // vazia e os dois erros se cancelariam num acerto aparente.
     {
-        const std::vector<u32> Ruins{ 4u, 999u, 0u, 6u };
+        const std::vector<FGpuCandidateId> Ruins{ Cand(4u), { 999u, 1u }, { 0u, 0u }, Cand(6u) };
         const FInstanceRange R[] = { { 0u, 4u } };
         const FSonda::FResultado R4 = Sonda.Executar(R, Ruins, Meta, 4u);
         CheckEq(R4.Counters[GpuExpandCounterExpanded], 2u, "so os dois validos passam");
@@ -414,6 +427,55 @@ int main() try {
         CheckEq(R4.Slots[3], 6u, "o segundo valido tambem e posicional");
     }
 
+    // --- generation VELHA contra um slot reciclado -----------------------------------------------
+    //
+    // O caso que a validacao de generation existe para pegar, e que "a linha tem algum ocupante?"
+    // nao pega: o slot continua vivo, a linha continua valida, e o ocupante e OUTRO. Sem a
+    // generation esperada no candidato, o dispatch aceitaria o objeto novo com o transform novo no
+    // lugar do que a lista descrevia — desenhar o objeto errado, que e o desfecho que a regra 6 do
+    // plano coloca acima de desenhar demais.
+    //
+    // As duas generations sao validas e diferentes de zero: um teste que usasse zero de um lado
+    // provaria de novo o caso anterior, e nao este.
+    {
+        std::vector<FGpuSceneInstanceMeta> Reciclado = Meta;
+        Reciclado[4].Generation = Meta[4].Generation + 7u; // o slot trocou de ocupante
+        const std::vector<FGpuCandidateId> Velhos{ Cand(4u), Cand(6u) };
+        const FInstanceRange R[] = { { 0u, 2u } };
+        const FSonda::FResultado Res = Sonda.Executar(R, Velhos, Reciclado, 2u);
+        Check(Meta[4].Generation != 0u && Reciclado[4].Generation != 0u,
+              "as duas generations do caso sao validas, e a diferenca e o que decide");
+        CheckEq(Res.Counters[GpuExpandCounterInvalidSlot], 1u,
+                "candidato com generation velha e recusado");
+        CheckEq(Res.Counters[GpuExpandCounterExpanded], 1u, "e nao entra na saida");
+        CheckEq(Res.Slots[0], kGpuExpandNoSlot, "a posicao dele fica marcada");
+        CheckEq(Res.Slots[1], 6u, "o candidato coerente continua passando");
+    }
+
+    // --- range fora da LISTA de candidatos -------------------------------------------------------
+    //
+    // A referencia CPU ignora este range. Sem o tamanho da lista nas constantes, o shader nao
+    // tinha como fazer o mesmo: ele leria fora do StructuredBuffer, o que NAO trava — o D3D12
+    // devolve zero — e por isso e pior, porque o candidato vira o slot 0, que e plausivel, e a
+    // GPU passa a discordar da referencia em silencio.
+    {
+        const FInstanceRange Fora[] = { { 0u, 2u }, { 4u, 99u } };
+        std::vector<u32> Ref;
+        CheckEq(ExpandCandidateRanges(Fora, Ids, Ref), 1u,
+                "a referencia CPU ignora o range fora da lista");
+
+        const FSonda::FResultado Res = Sonda.Executar(Fora, Ids, Meta, 101u);
+        CheckEq(Res.Counters[GpuExpandCounterExpanded], 2u,
+                "a GPU tambem expande so o range valido");
+        CheckEq(Res.Counters[GpuExpandCounterInvalidSlot], 99u,
+                "e conta cada saida do range recusado");
+        for (u32 I = 2; I < 101u; ++I)
+            if (Res.Slots[I] != kGpuExpandNoSlot) {
+                Check(false, "nenhuma posicao do range recusado recebe slot");
+                break;
+            }
+    }
+
     // --- verificacao cruzada da exclusao RaytracingOnly -------------------------------------------
     //
     // O produtor CPU ja filtra; este contador existe para o dia em que ele parar de filtrar. Se
@@ -421,7 +483,7 @@ int main() try {
     {
         std::vector<FGpuSceneInstanceMeta> ComProxy = Meta;
         ComProxy[5].Flags |= GpuSceneInstanceRaytracingOnly;
-        const std::vector<u32> ComProxyIds{ 4u, 5u, 6u };
+        const std::vector<FGpuCandidateId> ComProxyIds{ Cand(4u), Cand(5u), Cand(6u) };
         const FInstanceRange R[] = { { 0u, 3u } };
         const FSonda::FResultado Res = Sonda.Executar(R, ComProxyIds, ComProxy, 3u);
         CheckEq(Res.Counters[GpuExpandCounterRtOnly], 1u,
@@ -430,14 +492,22 @@ int main() try {
         CheckEq(Res.Slots[1], kGpuExpandNoSlot, "a posicao dela fica marcada");
     }
 
-    // --- overflow ---------------------------------------------------------------------------------
+    // --- overflow: CANARIO, e nao politica ---------------------------------------------------------
     //
-    // Capacidade menor que a lista. O que nao coube tem de ser CONTADO: um teto que descartasse em
-    // silencio faz geometria sumir, que e o que a regra 6 do plano proibe.
+    // Um shader nao tem como cair no fallback CPU, e uma saida truncada seria geometria sumindo.
+    // Quem impede isso e o dimensionamento — a CPU conhece `Stats().Candidates`, que conta
+    // inclusive quem nao coube, e aloca a saida por ele. O contador aqui existe para DENUNCIAR que
+    // o dimensionamento falhou; diferente de zero significa que a lista deste frame nao pode ser
+    // consumida, e nao que ela vale parcialmente.
+    //
+    // O teste prova que ele denuncia. Nao prova que uma saida truncada seja aceitavel — e o
+    // produtor CPU, no lado que PODE decidir, devolve lista vazia em vez de parcial.
     {
         const FSonda::FResultado Apertado = Sonda.Executar(Unico, Ids, Meta, 4u);
-        CheckEq(Apertado.Counters[GpuExpandCounterExpanded], 4u, "so o que cabe e expandido");
-        CheckEq(Apertado.Counters[GpuExpandCounterOverflow], 2u, "o que nao coube e contado");
+        CheckEq(Apertado.Counters[GpuExpandCounterOverflow], 2u,
+                "o canario dispara com uma saida menor que a lista");
+        Check(Apertado.Counters[GpuExpandCounterExpanded] < Capacidade,
+              "e a saida fica incompleta, que e o motivo de o canario existir");
     }
 
     // --- lista vazia -------------------------------------------------------------------------------

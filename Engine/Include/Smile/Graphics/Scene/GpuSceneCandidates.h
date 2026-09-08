@@ -35,6 +35,31 @@ namespace Smile {
     static_assert(offsetof(FInstanceRange, FirstCandidate) == 0);
     static_assert(offsetof(FInstanceRange, CandidateCount) == 4);
 
+    // Um candidato: slot MAIS a generation esperada.
+    //
+    // A generation viaja junto porque sem ela nao existe validacao de generation nenhuma — o
+    // consumidor so consegue perguntar "esta linha tem ALGUM ocupante?", que e outra pergunta. Com
+    // ela, um candidato de uma lista que ficou para tras e RECUSADO em vez de aceitar em silencio o
+    // ocupante novo do slot reciclado.
+    //
+    // Isso hoje e coberto por construcao — reciclar slot passa por Add/Remove, que bumpam a versao
+    // de estrutura e reconstroem a lista —, e e exatamente por isso que a checagem vale: ela
+    // verifica o invariante em vez de presumi-lo. Custa 4 B por candidato.
+    //
+    // Espelhado em HLSL como `GpuCandidateId`.
+    struct FGpuCandidateId {
+        u32 Slot       = FGpuSceneHandle::kInvalidSlot;
+        u32 Generation = 0; // 0 = invalido, mesma convencao do FGpuSceneHandle
+    };
+    static_assert(sizeof(FGpuCandidateId) == 8);
+    static_assert(offsetof(FGpuCandidateId, Slot)       == 0);
+    static_assert(offsetof(FGpuCandidateId, Generation) == 4);
+
+    inline bool operator==(const FGpuCandidateId& A, const FGpuCandidateId& B) {
+        return A.Slot == B.Slot && A.Generation == B.Generation;
+    }
+    inline bool operator!=(const FGpuCandidateId& A, const FGpuCandidateId& B) { return !(A == B); }
+
     // Por que cada renderavel ficou de FORA da lista.
     //
     // Publicados separados, e nao somados num "rejeitados": eles tem causas e consequencias
@@ -42,12 +67,14 @@ namespace Smile {
     // crescendo e residencia que nao foi alocada, que e defeito; `Overflow` diferente de zero e
     // geometria que SOME, que a regra 6 do plano proibe.
     struct FGpuCandidateStats {
-        u32 Candidates      = 0; // entraram na lista
+        // Quantos candidatos a cena TEM, e nao quantos couberam. E o numero que dimensiona o
+        // buffer: se fosse "quantos couberam", a capacidade necessaria nunca seria observavel.
+        u32 Candidates      = 0;
         u32 InvalidSlot     = 0; // sem residencia GPU, ou generation que nao confere
         u32 RaytracingOnly  = 0; // classe EXCLUIDA do raster; ver abaixo
         u32 NoGeometry      = 0; // sem malha valida: nao ha o que desenhar
         u32 Hidden          = 0; // FRenderable::Visible == false (estado autoral, nao culling)
-        u32 Overflow        = 0; // nao coube na capacidade — o unico que tem de ser ZERO
+        u32 Overflow        = 0; // quantos passaram do teto — o unico que tem de ser ZERO
     };
 
     // Lista persistente de candidatos ao raster, mais os ranges que a enderecam.
@@ -72,27 +99,43 @@ namespace Smile {
         void Reset();
 
         // Teto da lista. Zero significa "sem teto" — e o default, porque a lista e CPU e cresce
-        // com a cena. O teto existe para o dia em que ela espelhar um buffer GPU de capacidade
-        // fixa, e e o que faz `Overflow` poder ser diferente de zero.
-        void SetCapacity(u32 Capacity) { Capacity_ = Capacity; }
+        // com a cena. O teto existe para quando ela espelhar um buffer GPU de capacidade fixa.
+        //
+        // Mudar o teto INVALIDA a lista construida: ela foi montada sob o teto antigo, e nem as
+        // versoes da cena nem qualquer outra coisa que o RefreshIfStale observa mudaram. Sem esta
+        // invalidacao, aumentar o teto depois de um overflow deixaria a lista truncada para
+        // sempre.
+        void SetCapacity(u32 Capacity);
         u32  Capacity() const { return Capacity_; }
+        // O maior conjunto de candidatos ja visto — inclusive o que nao coube. E com ele que se
+        // dimensiona o buffer, e por isso ele acompanha `Stats().Candidates` e nao o tamanho da
+        // lista.
         u32  HighWaterMark() const { return HighWater_; }
 
-        std::span<const u32>            InstanceIds() const { return CandidateIds_; }
-        std::span<const FInstanceRange> Ranges()      const { return Ranges_; }
-        const FGpuCandidateStats&       Stats()       const { return Stats_; }
+        // ⚠️ FALSO quando houve overflow, e nesse caso a lista vem VAZIA.
+        //
+        // Contar o descarte nao o torna conservador: uma lista truncada e utilizavel e geometria
+        // sumindo em silencio, que a regra 6 do plano proibe. Ou a lista descreve a cena inteira,
+        // ou ela nao existe — e o consumidor cai no caminho CPU (decisao D9). O numero para
+        // redimensionar sai de `Stats().Candidates`, que conta todos.
+        bool IsUsable() const { return Built_ && Stats_.Overflow == 0; }
+
+        std::span<const FGpuCandidateId> InstanceIds() const { return CandidateIds_; }
+        std::span<const FInstanceRange>  Ranges()      const { return Ranges_; }
+        const FGpuCandidateStats&        Stats()       const { return Stats_; }
 
         u64 BuiltStructureVersion()    const { return BuiltStructureVersion_; }
         u64 BuiltStaticCastersVersion() const { return BuiltStaticCastersVersion_; }
 
     private:
-        std::vector<u32>            CandidateIds_;
-        std::vector<FInstanceRange> Ranges_;
-        FGpuCandidateStats          Stats_;
-        u32                         Capacity_  = 0;
-        u32                         HighWater_ = 0;
-        u64                         BuiltStructureVersion_     = ~0ull;
-        u64                         BuiltStaticCastersVersion_ = ~0ull;
+        std::vector<FGpuCandidateId> CandidateIds_;
+        std::vector<FInstanceRange>  Ranges_;
+        FGpuCandidateStats           Stats_;
+        u32                          Capacity_  = 0;
+        u32                          HighWater_ = 0;
+        bool                         Built_     = false;
+        u64                          BuiltStructureVersion_     = ~0ull;
+        u64                          BuiltStaticCastersVersion_ = ~0ull;
     };
 
     // Contadores do dispatch de expansao. ESPELHO de Shaders/GpuScene/ExpandInstanceRanges.cs.hlsl:
@@ -126,5 +169,6 @@ namespace Smile {
     // demais e aceitavel, sumir geometria nao. Ignorar deixa o range aparecer inteiro ou nao
     // aparecer, e o contador de invalidos denuncia.
     u32 ExpandCandidateRanges(std::span<const FInstanceRange> Ranges,
-                              std::span<const u32> CandidateIds, std::vector<u32>& OutSlots);
+                              std::span<const FGpuCandidateId> CandidateIds,
+                              std::vector<u32>& OutSlots);
 }

@@ -19,12 +19,19 @@ struct GpuInstanceRange {
     uint CandidateCount;
 };
 
+// Espelho de Smile::FGpuCandidateId. A generation viaja com o slot porque sem ela nao ha validacao
+// de generation nenhuma: da para perguntar "esta linha tem ALGUM ocupante?", que e outra coisa.
+struct GpuCandidateId {
+    uint Slot;
+    uint Generation; // 0 = invalido, mesma convencao do FGpuSceneHandle
+};
+
 // Contadores. Indices fixos, porque o consumidor e a CPU e um enum compartilhado seria um terceiro
 // espelho a manter em dia.
 #define SMILE_EXPAND_COUNTER_EXPANDED     0u // slots escritos na saida
-#define SMILE_EXPAND_COUNTER_INVALID_SLOT 1u // slot fora da tabela, ou linha sem ocupante
+#define SMILE_EXPAND_COUNTER_INVALID_SLOT 1u // slot fora da tabela/lista, ou generation que nao bate
 #define SMILE_EXPAND_COUNTER_RT_ONLY      2u // linha marcada RaytracingOnly: o produtor falhou
-#define SMILE_EXPAND_COUNTER_OVERFLOW     3u // nao coube na capacidade da saida
+#define SMILE_EXPAND_COUNTER_OVERFLOW     3u // nao coube na capacidade da saida; ver abaixo
 #define SMILE_EXPAND_COUNTER_COUNT        4u
 
 // Marca uma posicao de saida que nao recebeu candidato. Nao e zero: zero e um slot legitimo.
@@ -32,13 +39,14 @@ struct GpuInstanceRange {
 
 cbuffer ExpandCB : register(b0) {
     uint4 ExpandParams;  // x=total de saidas, y=ranges, z=capacidade da saida, w=capacidade da meta
+    uint4 ExpandParams2; // x=tamanho de CandidateIds; yzw reservados
 };
 
 StructuredBuffer<GpuInstanceRange> CandidateRanges  : register(t0);
 // Offset de saida ACUMULADO de cada range (prefixo exclusivo). Vem da CPU junto dos ranges: a
 // alternativa e um dispatch de prefixo so para o caso de um range.
 StructuredBuffer<uint>             RangeOutputBase  : register(t1);
-StructuredBuffer<uint>             CandidateIds     : register(t2);
+StructuredBuffer<GpuCandidateId>   CandidateIds     : register(t2);
 StructuredBuffer<GpuInstanceMeta>  InstanceMeta     : register(t3);
 
 RWStructuredBuffer<uint> ExpandedSlots : register(u0);
@@ -59,10 +67,11 @@ uint FindRange(uint Index, uint RangeCount) {
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
-    const uint Total       = ExpandParams.x;
-    const uint RangeCount  = ExpandParams.y;
-    const uint OutCapacity = ExpandParams.z;
-    const uint MetaCount   = ExpandParams.w;
+    const uint Total          = ExpandParams.x;
+    const uint RangeCount     = ExpandParams.y;
+    const uint OutCapacity    = ExpandParams.z;
+    const uint MetaCount      = ExpandParams.w;
+    const uint CandidateCount = ExpandParams2.x;
 
     const uint Index = dtid.x;
     if (Index >= Total || RangeCount == 0u) return;
@@ -70,6 +79,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // Sentinela ANTES de qualquer saida antecipada. Uma posicao nao escrita carregaria o slot do
     // frame anterior, que e um candidato PLAUSIVEL e errado — o pior desfecho possivel para quem
     // le esta lista sem saber que ela tem buraco.
+    //
+    // ⚠️ O overflow aqui e CANARIO, e nao politica. Um shader nao tem como cair no fallback CPU, e
+    // uma saida truncada seria geometria sumindo — o que a regra 6 do plano proibe. Quem impede
+    // isso e o dimensionamento: a CPU conhece `Stats().Candidates` (que conta inclusive quem nao
+    // coube) e aloca a saida por ele. Este contador tem de ser ZERO; diferente de zero significa
+    // que a lista deste frame nao pode ser consumida.
     if (Index >= OutCapacity) {
         InterlockedAdd(Counters[SMILE_EXPAND_COUNTER_OVERFLOW], 1u);
         return;
@@ -87,21 +102,42 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         return;
     }
 
-    const uint Slot = CandidateIds[Range.FirstCandidate + Local];
-
-    // Validacao de slot e de generation.
+    // Range fora da LISTA, recusado antes do Load.
     //
-    // O que ela PROVA: o slot cabe na tabela e a linha tem ocupante (generation 0 e reservada para
-    // linha vazia). O que ela NAO prova: que o ocupante e o mesmo de quando a lista foi montada —
-    // para isso a lista teria de carregar a generation esperada. Hoje isso e coberto por
-    // construcao e nao por checagem: todo evento que recicla um slot passa por Add/Remove, que
-    // bumpam a versao de ESTRUTURA, e essa versao reconstroi a lista.
-    if (Slot >= MetaCount) {
+    // Sem isto, o mesmo range que a referencia CPU ignora produz aqui uma leitura fora do
+    // StructuredBuffer. Ela nao trava — o D3D12 devolve zero —, e por isso e pior: o candidato
+    // vira o slot 0, que e plausivel, e a GPU passa a discordar da referencia em silencio.
+    //
+    // A comparacao e por SUBTRACAO no lado seguro (`Count - First`) em vez de somar: a soma pode
+    // dar a volta em 32 bits e transformar um range absurdo num que cabe. E o mesmo cuidado que a
+    // referencia CPU toma promovendo para u64.
+    if (Range.FirstCandidate >= CandidateCount ||
+        Range.CandidateCount > CandidateCount - Range.FirstCandidate) {
         InterlockedAdd(Counters[SMILE_EXPAND_COUNTER_INVALID_SLOT], 1u);
         return;
     }
+
+    const GpuCandidateId Candidate = CandidateIds[Range.FirstCandidate + Local];
+
+    // Validacao de slot e de generation.
+    //
+    // A generation ESPERADA vem no proprio candidato. Sem ela so daria para perguntar se a linha
+    // tem algum ocupante, e um candidato de uma lista que ficou para tras aceitaria em silencio o
+    // ocupante NOVO de um slot reciclado — desenhando o objeto errado com o transform errado.
+    //
+    // Hoje isso e coberto por construcao (reciclar slot passa por Add/Remove, que bumpam a versao
+    // de estrutura e reconstroem a lista), e e por isso que a checagem vale: ela VERIFICA o
+    // invariante em vez de presumi-lo.
+    // A generation ZERO do candidato e recusada ANTES da comparacao. Sem isso, um candidato
+    // invalido (generation 0) apontando para uma linha VAZIA (generation 0 tambem) casaria — dois
+    // erros se cancelando num acerto aparente.
+    if (Candidate.Slot >= MetaCount || Candidate.Generation == 0u) {
+        InterlockedAdd(Counters[SMILE_EXPAND_COUNTER_INVALID_SLOT], 1u);
+        return;
+    }
+    const uint Slot = Candidate.Slot;
     const GpuInstanceMeta Meta = InstanceMeta[Slot];
-    if (Meta.Generation == 0u) {
+    if (Meta.Generation != Candidate.Generation) {
         InterlockedAdd(Counters[SMILE_EXPAND_COUNTER_INVALID_SLOT], 1u);
         return;
     }
