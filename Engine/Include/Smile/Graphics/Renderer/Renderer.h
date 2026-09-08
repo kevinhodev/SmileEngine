@@ -69,6 +69,7 @@
 #include "Smile/Graphics/Water/OceanFFT.h"
 #include "Smile/Graphics/Water/Water.h"
 #include "Smile/Graphics/Scene/Terrain.h"
+#include "Smile/Graphics/Scene/GpuInstanceTransform.h"
 
 namespace Smile {
     struct CameraInput;
@@ -161,12 +162,12 @@ namespace Smile {
         Vec4 SpotParams;
     };
 
-    struct alignas(256) ObjectConstants {
-        Mat44 MVP;            // 64 bytes — Model * View * Projection (jittered, p/ SV_POSITION)
-        Mat44 ModelMatrix;    // 64 bytes — world (para worldPos/worldNormal)
-        Mat44 CurMVPNoJitter; // 64 bytes — Model * ViewProjUnjittered (atual) — motion vector
-        Mat44 PrevMVP;        // 64 bytes — PrevModel * PrevViewProjUnjittered — motion vector
-    };
+    // O conteudo do ObjectCB. O LAYOUT mora em Graphics/Scene/GpuInstanceTransform.h, junto da
+    // composicao que o produz e do espelho HLSL — as quatro matrizes sao derivadas das duas colunas
+    // canonicas mais as tres de view, e a Fase 4 as compoe no shader em vez de escrever 256 B por
+    // instancia por frame. O alias fica porque o caminho classico continua indexando o CB por
+    // `sizeof(ObjectConstants)`.
+    using ObjectConstants = FGpuObjectTransforms;
 
     // Snapshot independente do backend para telemetria de memoria da GPU.
     struct FRendererGpuMemoryInfo {

@@ -22,6 +22,17 @@ set(SMILE_NRD_ROOT "D:/Engines/NRD" CACHE PATH "Raiz do NRD SDK")
 set(SMILE_NRD_SHADER_INCLUDE -I "${SMILE_NRD_ROOT}/Shaders")
 
 smile_compile_shader(Triangle.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+# Permutacao BINDLESS do TRANSFORM (Fase 4). O mesmo corpo lendo as duas matrizes da tabela
+# canonica pelo slot da instancia, em vez do CBV de 256 B amarrado por draw. vs_6_6 porque
+# `ResourceDescriptorHeap` e do Shader Model 6.6 — e agora e o VERTEX shader que o usa, ao
+# contrario da Fase 3, onde so o pixel shader precisava.
+set(SMILE_INSTANCE_BINDLESS_FLAGS -D SMILE_INSTANCE_BINDLESS=1)
+smile_compile_shader(Triangle.vs.hlsl vs_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME TriangleBindless ${SMILE_INSTANCE_BINDLESS_FLAGS})
+# Sonda de PARIDADE: compoe as quatro matrizes a partir das colunas canonicas, pelo MESMO include
+# que o VS usa, e devolve o resultado para o teste comparar com a composicao do C++. A ordem do
+# produto e o erro classico desta migracao, e ela compila e desenha dos dois jeitos.
+smile_compile_shader(Scene/InstanceTransformProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)

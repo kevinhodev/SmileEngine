@@ -313,6 +313,39 @@ set_tests_properties(Smile.GpuSceneExpandWarp PROPERTIES
     TIMEOUT 240
 )
 
+# Paridade da composicao de transform (Fase 4). Nao linka a engine: o header sob teste e puro, e o
+# ponto e justamente comparar a composicao do C++ com a do HLSL sem nada no meio.
+add_executable(SmileInstanceTransformWarpTests
+    InstanceTransformWarpTests.cpp
+)
+
+target_compile_features(SmileInstanceTransformWarpTests PRIVATE cxx_std_20)
+target_include_directories(SmileInstanceTransformWarpTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+target_compile_definitions(SmileInstanceTransformWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_INSTANCE_TRANSFORM_PROBE_CSO="${SMILE_SHADER_OUTPUT_DIR}/InstanceTransformProbe.cs_6_0.cso"
+)
+target_link_libraries(SmileInstanceTransformWarpTests PRIVATE d3d12 dxgi)
+add_dependencies(SmileInstanceTransformWarpTests Shaders)
+set_target_properties(SmileInstanceTransformWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.InstanceTransformWarp
+    COMMAND SmileInstanceTransformWarpTests
+)
+
+set_tests_properties(Smile.InstanceTransformWarp PROPERTIES
+    LABELS "scene;gpu-driven;abi;warp"
+    TIMEOUT 180
+)
+
 # Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
 # usar WARP: o FDrawSubmitCache grava numa command list de verdade.
 add_executable(SmileSubmitStatsTests

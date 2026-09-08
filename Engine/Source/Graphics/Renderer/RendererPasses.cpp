@@ -2019,6 +2019,11 @@ namespace Smile {
 
         const u32 FrameObjectBase = FrameSlot * MaxObjects;
 
+        // As tres matrizes que NAO dependem do objeto. No caminho classico elas entram na conta de
+        // cada instancia; no bindless viram um CBV amarrado uma vez por passe.
+        const FGpuViewMatrices ViewMatrices{ Vw.ViewProjection, Vw.ViewProjUnjittered,
+                                             FrameState->PrevViewProj };
+
         auto& AllItems = _Ctx.All;
 
         u32             SelectedSlot  = kInvalidSlot;
@@ -2049,11 +2054,11 @@ namespace Smile {
                 // herdar o Model do ocupante anterior produziria um smear vindo do nada.
                 Mat44 PrevModel = Model;
                 InstanceTable.TransformsFor(R.GpuHandle, Model, PrevModel);
-                ObjectConstants OC;
-                OC.MVP            = Model * Vw.ViewProjection;
-                OC.ModelMatrix    = Model;
-                OC.CurMVPNoJitter = Model * Vw.ViewProjUnjittered;
-                OC.PrevMVP        = PrevModel * FrameState->PrevViewProj;
+                // Pela funcao compartilhada, e nao por quatro linhas soltas aqui: o espelho HLSL
+                // reproduz exatamente esta composicao, e o teste de paridade compara as duas
+                // saidas. Com uma copia solta neste laco, o teste compararia o espelho com OUTRA
+                // copia — e a que roda no frame poderia divergir das duas.
+                const ObjectConstants OC = ComposeObjectTransforms(ViewMatrices, Model, PrevModel);
                 std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
                             &OC, sizeof(ObjectConstants));
                 if (static_cast<int>(si) == SelectedRenderable) {
