@@ -457,6 +457,15 @@ namespace Smile {
                 return FGpuSceneHandle::kInvalidSlot;
 
             const u32 Slot = Handle.Slot;
+            // UMA escrita por slot por ciclo, e este guarda nao e defensivo: a caixa de correio
+            // repete indice de rotina. Mover um objeto ESTATICO bumpa transform e static casters,
+            // e os dois marcam o mesmo renderavel.
+            //
+            // A segunda escrita seria destrutiva, nao redundante: `Previous` sai de
+            // TransformRows_[Slot], que a primeira acabou de igualar a `Current`. O objeto perderia
+            // o passado no exato frame em que se moveu — motion vector zero, sem erro nenhum. A
+            // deduplicacao de TouchedSlots_ acontece tarde demais para impedir isso.
+            if (SeenEpoch_[Slot] == Epoch) return Slot;
             const FGpuSceneInstanceMeta OldMeta = MetaRows_[Slot];
             const Mat44 Current = R.Transform.Matrix();
             const Mat44 Previous = OldMeta.Generation == Handle.Generation

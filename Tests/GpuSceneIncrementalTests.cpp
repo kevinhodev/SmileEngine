@@ -152,6 +152,39 @@ int main() {
     Rig.Frame();
     CheckEq(Rig.Instances.LastRowsScanned(), 0u, "depois do assentamento a tabela volta a zero");
 
+    // --- indice REPETIDO na caixa de correio ----------------------------------------------------
+    //
+    // Mover um objeto ESTATICO bumpa transform E static casters, e os dois marcam o mesmo
+    // renderavel: a caixa chega com o indice duas vezes. E o caso comum, nao uma borda.
+    //
+    // A segunda escrita da mesma linha nao seria redundante, seria DESTRUTIVA: `Previous` sai de
+    // TransformRows_[Slot], que a primeira acabou de igualar a `Current`. O objeto perderia o
+    // passado no exato frame em que se moveu — motion vector zero, sem erro nenhum, so o objeto
+    // parando de borrar. Por isso o que se confere aqui sao as MATRIZES, e nao o contador: uma
+    // deduplicacao que rodasse tarde demais deixaria os contadores certos e as matrizes erradas.
+    {
+        constexpr u32 kIdx = 77u;
+        FRenderable& R = Rig.Scene.Renderables()[kIdx];
+        const Mat44 Antes = R.Transform.Matrix();
+        R.Transform.Position.X += 13.0f;
+        R.RefreshWorldBounds();
+        Rig.Scene.BumpTransformsVersion(kIdx);
+        Rig.Scene.BumpStaticCastersVersion(kIdx); // o segundo bump, com o MESMO indice
+        Rig.Frame();
+
+        Mat44 Atual{}, Anterior{};
+        Check(Rig.Instances.TransformsFor(R.GpuHandle, Atual, Anterior),
+              "a linha do objeto movido continua resolvivel");
+        Check(Atual.M[3][0] != Anterior.M[3][0],
+              "indice repetido nao pode colapsar previous em current");
+        Check(Anterior.M[3][0] == Antes.M[3][0],
+              "o previous continua sendo o transform de antes do movimento");
+        CheckEq(Rig.Instances.LastDirtyRows(), 1u, "e ainda e uma linha suja so");
+        CheckEq(Rig.Instances.LastRowsScanned(), FGpuSceneInstanceTable::kColumns,
+                "o indice repetido nao dobra o trabalho do diff");
+    }
+    for (u32 I = 0; I < 3; ++I) Rig.Frame(); // assenta
+
     // --- transform storm: proporcional ao que se mexeu -----------------------------------------
     //
     // Um oitavo da cena em movimento. O numero visitado tem de acompanhar quem se mexeu e nao o
