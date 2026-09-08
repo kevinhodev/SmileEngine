@@ -397,14 +397,16 @@ namespace SmileEditor {
         Renderer->Settings().SetUseTerrain(_V); // gates de prepass/G-buffer/CSM do FTerrain
         // O chao do GI e o proxy RaytracingOnly na TLAS — esconde junto, senao o DDGI
         // continua quicando luz num terreno invisivel.
-        bool Bumped = false;
-        for (auto& R : Renderer->GetScene().Renderables()) {
+        auto& Renderables = Renderer->GetScene().Renderables();
+        for (Smile::u32 I = 0; I < Renderables.size(); ++I) {
+            auto& R = Renderables[I];
             if (R.RaytracingOnly && R.Visible != _V) {
                 R.Visible = _V;
-                Bumped = true;
+                // Um bump POR proxy, com o indice: sao poucos (o chao do GI), e a alternativa e
+                // um bump cego que faz o produtor da GPU scene revarrer a cena inteira.
+                Renderer->GetScene().BumpTransformsVersion(I);
             }
         }
-        if (Bumped) Renderer->GetScene().BumpTransformsVersion();
         CachedTerrainOn = _V;
         MarkDirty();
         Rebuild();
@@ -503,7 +505,7 @@ namespace SmileEditor {
         Smile::FRenderable& R = List[static_cast<size_t>(Sel)];
         if (R.Mobility == Want) return;
         R.Mobility = Want;
-        Renderer->GetScene().BumpStaticCastersVersion();
+        Renderer->GetScene().BumpStaticCastersVersion(static_cast<Smile::u32>(Sel));
         emit SceneChanged();
         emit SelectionChanged();
     }
@@ -542,9 +544,9 @@ namespace SmileEditor {
         }
 
         R.RefreshWorldBounds();
-        Renderer->GetScene().BumpTransformsVersion();
+        Renderer->GetScene().BumpTransformsVersion(static_cast<Smile::u32>(Sel));
         if (R.Mobility == Smile::EMobility::Static)
-            Renderer->GetScene().BumpStaticCastersVersion();
+            Renderer->GetScene().BumpStaticCastersVersion(static_cast<Smile::u32>(Sel));
         Renderer->NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
         Renderer->NotifyGIRegionChanged(R.AABBMin, R.AABBMax, Smile::EGIRegionChange::Geometry);
 

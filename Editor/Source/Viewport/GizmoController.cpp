@@ -380,7 +380,9 @@ namespace SmileEditor {
         if (Idx < 0 || Idx >= static_cast<int>(List.size())) return;
         Smile::FRenderable& Rn = List[static_cast<size_t>(Idx)];
         Rn.RefreshWorldBounds();
-        R.GetScene().BumpTransformsVersion();
+        // Com o indice: e o caminho QUENTE, um bump por frame enquanto o arraste dura. Sem ele o
+        // produtor da GPU scene revarreria a cena a cada quadro do gesto (Fase 4).
+        R.GetScene().BumpTransformsVersion(static_cast<Smile::u32>(Idx));
         // Invalida os volumes anterior e atual para remover iluminação residual.
         R.NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
         R.NotifyGIRegionChanged(Rn.AABBMin, Rn.AABBMax, Smile::EGIRegionChange::Geometry);
@@ -436,7 +438,7 @@ namespace SmileEditor {
                 const Smile::FRenderable& Rn = List[static_cast<size_t>(Idx)];
                 R.SetDraggingRenderable(Rn.Id);
                 if (Rn.Mobility == Smile::EMobility::Static)
-                    R.GetScene().BumpStaticCastersVersion();
+                    R.GetScene().BumpStaticCastersVersion(static_cast<Smile::u32>(Idx));
             }
         }
         return true;
@@ -605,8 +607,14 @@ namespace SmileEditor {
         // Ao terminar, devolve o objeto ao cache estático do CSM.
         if (Dragging && !DragIsLight && R.GetDraggingRenderable() != 0) {
             const Smile::FRenderable* Rn = R.GetScene().FindRenderable(R.GetDraggingRenderable());
-            if (Rn && Rn->Mobility == Smile::EMobility::Static)
-                R.GetScene().BumpStaticCastersVersion();
+            if (Rn && Rn->Mobility == Smile::EMobility::Static) {
+                // Pelo Id, e nao pelo DragIdx guardado: um objeto pode ter sido removido durante o
+                // gesto, e ai o indice antigo aponta para o vizinho. -1 nao acontece aqui (o Rn
+                // acabou de resolver), mas o ramo cego continua correto por construcao.
+                const int Idx = R.GetScene().IndexOfRenderable(R.GetDraggingRenderable());
+                if (Idx >= 0) R.GetScene().BumpStaticCastersVersion(static_cast<Smile::u32>(Idx));
+                else          R.GetScene().BumpStaticCastersVersion();
+            }
             // Clique sem deslocamento não deve sujar a camada autorada.
             auto Differs = [](const Vec3& A, const Vec3& B) {
                 return std::fabs(A.X-B.X) > 1e-6f || std::fabs(A.Y-B.Y) > 1e-6f

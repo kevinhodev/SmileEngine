@@ -507,9 +507,9 @@ namespace SmileEditor {
         Object.Transform.Position = {
             static_cast<float>(_X), static_cast<float>(_Y), static_cast<float>(_Z) };
         Object.RefreshWorldBounds();
-        Access->GetScene().BumpTransformsVersion();
+        Access->GetScene().BumpTransformsVersion(static_cast<Smile::u32>(_Index));
         if (Object.Mobility == Smile::EMobility::Static)
-            Access->GetScene().BumpStaticCastersVersion();
+            Access->GetScene().BumpStaticCastersVersion(static_cast<Smile::u32>(_Index));
         Access->NotifyGIRegionChanged(OldMin, OldMax, Smile::EGIRegionChange::Geometry);
         Access->NotifyGIRegionChanged(Object.AABBMin, Object.AABBMax,
                                       Smile::EGIRegionChange::Geometry);
