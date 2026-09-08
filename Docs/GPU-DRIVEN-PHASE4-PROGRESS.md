@@ -2,15 +2,16 @@
 
 Data: 2026-09-08
 
-Estado: **aberta, quatro slices entregues e uma rodada de revisão fechada.** Release fecha 64/64,
+Estado: **aberta, quatro slices entregues e duas rodadas de revisão fechadas.** Release fecha 64/64,
 Debug compila e o cliente TypeScript compila. Dois dos seis itens do gate de saída estão fechados;
 os outros quatro continuam abertos, e dois deles (`ObjectCB` e `TransformBuffer` do TemporalMotion)
 ainda não foram tocados.
 
-A revisão do Codex reprovou a primeira versão com seis achados, três bloqueadores — entre eles uma
+A primeira revisão do Codex reprovou a fase com seis achados, três bloqueadores — entre eles uma
 regressão de motion vector que eu tinha introduzido e um trio de checagens que eu havia
-**documentado como decisão deliberada**. Os seis estão corrigidos; a seção da revisão registra cada
-um e o que o padrão deles ensina.
+**documentado como decisão deliberada**. A segunda não achou P1 novo e pegou um defeito no aparato
+de teste. Os sete estão corrigidos; a seção da revisão registra cada um e o que o padrão deles
+ensina.
 
 Base: Fase 3 encerrada em `3b38694`. **Nada da Fase 3 foi reaberto.**
 
@@ -28,6 +29,7 @@ não caminho quente.
 | `24c5194` | índice repetido na caixa de correio destruía o `PrevTransform` |
 | `3fb93cd` | o candidato carrega a generation, e o overflow deixa de ser parcial |
 | `80b9dbf` | isolar material não invalidava o mapa estático de sombra |
+| `f67d646` | o aparelho de teste alocava dois slots por renderável |
 
 ## O gate de saída, item a item
 
@@ -129,6 +131,25 @@ o isolar está ligado. Consequência da Fase 4: a lista de candidatos ficaria co
 Auditei os outros seis escritores de `FRenderable::Visible`. Os cinco restantes estão certos: o olho
 do Outliner, a lista de ocultas do JSON e o `.smap` já bumpam as duas; os dois de terreno tocam
 **apenas** proxies `RaytracingOnly`, que estão fora do raster e do CSM de qualquer forma.
+
+### Segunda rodada — P2 no aparato de teste
+
+Nenhum P1 novo. Sobrou um defeito no **aparelho**, e ele vale ser registrado porque a categoria é
+traiçoeira: os dois testes sobrescreviam o handle que o `AddRenderable` já havia alocado com um
+segundo `GpuSlots().Allocate()`, deixando o primeiro slot `Live` e sem dono.
+
+O estrago não era só contábil. `SetupForScene` dimensiona a tabela por `GpuSlots().Capacity()`, então
+a folga que o teste conferia vinha do **vazamento** e não do `TableCapacityFor` — a asserção "a
+capacidade tem folga sobre as linhas vivas" passava por acidente.
+
+E o teste incremental aposentava o handle na mão antes do `RemoveRenderable`. `Retire` é idempotente,
+então isso não corrompia contador nenhum — e era exatamente esse o problema: o teste passaria
+idêntico se o `RemoveRenderable` parasse de aposentar a residência. Confirmado pelo caso negativo:
+sem o `Retire` manual, remover a aposentadoria da produção deixa 4.096 vivos e zero aposentados, e o
+teste fica vermelho.
+
+Regra que sai daí, irmã da anterior: **um passo de setup que contorna a API de produção compra
+conveniência com cobertura.**
 
 ### O padrão dos três primeiros
 
@@ -266,6 +287,8 @@ declarar feito:
 | guarda de epoch removido do `WriteRow` | vermelho no previous colapsado em current |
 | generation de volta a "a linha tem ocupante?" | 3 asserts vermelhos |
 | guarda de limite da lista removida do shader | 3 asserts vermelhos, com dois slots lidos além da lista entrando como válidos |
+| alocação dupla de slot no aparelho de teste | 8.192 vivos para 4.096 renderáveis — vermelho |
+| `RemoveRenderable` sem aposentar a residência | 4.096 vivos e zero aposentados após a remoção — vermelho |
 
 Um achado do processo: a equivalência "range único vs sintéticos" **não** pega o range lido como
 intervalo de slots — os dois modos cobrem o mesmo span, então a interpretação errada produz a mesma
