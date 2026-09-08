@@ -43,6 +43,7 @@
     "benchmark:gpu-driven": "npm run build && node scripts/gpu-driven-baseline.mjs",
     "benchmark:gpu-driven:smoke": "npm run build && node scripts/gpu-driven-baseline.mjs --scenes synthetic_10k --warmup 3 --samples 8 --interval 150",
     "benchmark:gpu-driven:capture": "npm run build && node scripts/gpu-driven-baseline.mjs --capture-only",
+    "validate:gpu-driven:phase3": "npm run build && node scripts/gpu-driven-phase3-validation.mjs",
     "baseline:promote": "node scripts/promote-baseline.mjs"
   },
   "engines": {

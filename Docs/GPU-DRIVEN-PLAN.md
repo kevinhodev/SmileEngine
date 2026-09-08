@@ -808,9 +808,13 @@ contra assets incompatíveis.
 
   - **`ObjectCB` medido**: 407 KB na Bistro, 634 KB na Emerald e **256 MB em 1M** (256 B por
     objeto por frame). É o número concreto por trás da aposentadoria do `ObjectCB` na Fase 4.
-  - **Heap de SRV**: o pico em todo o corpus é **7.238** descritores (Bistro); Emerald 3.913 e as
-    sintéticas 1.126 (poucos materiais por construção). Com `kCapacity` em 16.384, a cena mais
-    densa usa 44% — folga medida para o bindless da Fase 3, que consome do mesmo orçamento.
+  - **Heap de SRV na baseline da Fase 0**: o pico então medido era **7.238** descritores
+    (Bistro); Emerald 3.913 e as sintéticas 1.126 (poucos materiais por construção). Com o
+    `kCapacity` de 16.384 daquela rodada, a cena mais densa usava 44%. A Fase 2 mudou essa
+    demanda estruturalmente: a tabela canônica reserva três descritores por mesh, e a
+    MEASURE_SEVEN (10.740 meshes) passou a pedir 32.220 só para geometria, ou 33.810 com os
+    1.590 já residentes. A Fase 3 elevou o teto para **65.536**; a baseline histórica continua
+    correta, mas sua antiga folga não descreve mais o consumidor atual.
 
 - ~~capturar baseline **visual** conforme `CAPTURE-PROTOCOL.md`~~ — **feita**, 20 capturas (as
   mesmas 5 cenas × 4 slots), preset científico, N=128, TOD 10h. A régua de performance ganhou

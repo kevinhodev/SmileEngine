@@ -537,6 +537,8 @@ namespace Smile {
                 File << "  \"directDenoiserEffective\": \""
                      << _State.DirectDenoiserEffective   << "\",\n";
                 File << "  \"taa\": " << Bool(_State.UseTAA) << ",\n";
+                File << "  \"bindlessMaterials\": "
+                     << Bool(_State.BindlessMaterials) << ",\n";
                 File << "  \"useGI\": "        << Bool(_State.UseGI)       << ",\n";
                 File << "  \"ddgiReady\": "    << Bool(_State.DDGIReady)   << ",\n";
                 File << "  \"ddgiCascadeCount\": " << _State.DDGICascadeCount << ",\n";

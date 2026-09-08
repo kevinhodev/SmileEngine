@@ -104,6 +104,9 @@ namespace Smile {
         const char* DirectDenoiserEffective   = "";
         int  UpscalerQuality = 0;
         bool UseTAA = false;
+        // Estado EFETIVO do A/B bindless. Sem ele, duas capturas visualmente comparadas
+        // poderiam ter manifestos identicos apesar de usarem caminhos de submissao distintos.
+        bool BindlessMaterials = false;
 
         // Os toggles do A/B da Fase 0. A matriz de quatro baselines do plano se le daqui.
         bool UseGI              = false; // dominio indireto ligado

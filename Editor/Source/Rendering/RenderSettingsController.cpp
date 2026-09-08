@@ -67,6 +67,8 @@ namespace SmileEditor {
         Out.RenderScale               = Settings.GetRenderScale();
         Out.TimeOfDayHours            = Tod.TimeHours;
         Out.TimeOfDayRunning          = Tod.Running;
+        Out.BindlessMaterials          = Settings.GetBindlessMaterials();
+        Out.BindlessMaterialsAvailable = Settings.BindlessMaterialsAvailable();
         Out.DIAnalyticCandidates      = static_cast<int>(Settings.GetDIInitialCandidates());
         Out.DIMeshCandidates          = static_cast<int>(Settings.GetDIMeshCandidates());
         Out.DIMeshLightsInPool        = Settings.GetDIMeshLightsInPool();
@@ -257,6 +259,8 @@ namespace SmileEditor {
             // Muda o DOMINIO amostrado: o setter forca rebuild da tabela e limpa historico.
             if (_Overrides.DIMeshCompactSupport)
                 Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);
+            if (_Overrides.BindlessMaterials)
+                Settings.SetBindlessMaterials(*_Overrides.BindlessMaterials);
             if (_Overrides.RainAmount)
                 Settings.SetRainAmount(static_cast<float>(*_Overrides.RainAmount));
 

@@ -892,6 +892,12 @@ server.registerTool(
         .describe(
           "Compacta o pool para o suporte positivo (fluxo > 0). Nao muda a distribuicao — os descartados ja tinham probabilidade zero — e reconstroi a alias table.",
         ),
+      bindlessMaterials: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B da Fase 3: material por linha da tabela canonica (true) ou descritores por draw (false). O readback em settings confirma o estado efetivo.",
+        ),
     },
     annotations: {
       readOnlyHint: false,

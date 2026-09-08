@@ -325,6 +325,7 @@ export interface ProfileOverrides {
   diInitialVisibility?: boolean;
   diBrdfRatio?: boolean;
   meshCompactSupport?: boolean;
+  bindlessMaterials?: boolean;
   backgroundThrottle?: boolean;
 }
 

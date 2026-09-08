@@ -11,7 +11,10 @@
 namespace Smile {
     class FTextureSRVHeap {
     public:
-        static constexpr u32 kCapacity    = 16384;
+        // MEASURE_SEVEN possui 10.740 meshes. A tabela canonica da Fase 2 reserva tres
+        // descritores por mesh e, somada aos 1.590 descritores ja residentes da cena,
+        // precisa de 33.810 slots. 32k portanto ainda seria insuficiente.
+        static constexpr u32 kCapacity    = 65536;
         static constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 
         void Initialize(ID3D12Device* Device);

@@ -541,6 +541,7 @@ namespace Smile {
         // EFETIVO, nao selecionado: o preset cientifico desliga o upscaler, e sem upscaler o
         // `TAAActive = UseTAA && !UpscaleActive` decide sozinho se o TAA acendeu.
         S.UseTAA = _Modes.TAAActive;
+        S.BindlessMaterials = UseBindlessMaterials;
 
         // O manifesto descreve execucao efetiva, nao apenas toggles solicitados.
         S.UseGI       = UseGI;               // dominio indireto: intencao, e nao ha passe unico

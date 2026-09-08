@@ -58,6 +58,10 @@ namespace SmileEditor {
         double RenderScale           = 1.0;
         double TimeOfDayHours        = 0.0;
         bool   TimeOfDayRunning      = false;
+        // Fase 3: pedido efetivo e capacidade ficam no readback para o A/B nao inferir que o
+        // device aceitou bindless apenas porque o comando nao retornou erro.
+        bool   BindlessMaterials          = false;
+        bool   BindlessMaterialsAvailable = false;
         // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Entram no READBACK, e nao so na
         // aplicacao: quem roda o sweep precisa confirmar o degrau que de fato ficou, sem inferir
         // do que pediu. Mesmo contrato do resto deste struct.
@@ -88,6 +92,7 @@ namespace SmileEditor {
         std::optional<bool> DIInitialVisibility;
         std::optional<bool> DIBrdfRatio;
         std::optional<bool> DIMeshCompactSupport;
+        std::optional<bool> BindlessMaterials;
         // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
         // janela recebeu o foco enquanto o agente coleta as amostras.
         std::optional<bool> BackgroundThrottleEnabled;

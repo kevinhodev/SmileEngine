@@ -207,6 +207,9 @@ namespace SmileEditor {
                 { QStringLiteral("renderScale"), _Settings.RenderScale },
                 { QStringLiteral("timeOfDayHours"), _Settings.TimeOfDayHours },
                 { QStringLiteral("timeOfDayRunning"), _Settings.TimeOfDayRunning },
+                { QStringLiteral("bindlessMaterials"), _Settings.BindlessMaterials },
+                { QStringLiteral("bindlessMaterialsAvailable"),
+                  _Settings.BindlessMaterialsAvailable },
                 // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Vao no readback para o sweep
                 // confirmar o degrau aplicado em vez de assumir que o pedido pegou.
                 { QStringLiteral("diAnalyticCandidates"), _Settings.DIAnalyticCandidates },
@@ -785,6 +788,7 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "diInitialVisibility", Overrides.DIInitialVisibility) &&
             ReadOptionalBool(_Arguments, "diBrdfRatio", Overrides.DIBrdfRatio) &&
             ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
+            ReadOptionalBool(_Arguments, "bindlessMaterials", Overrides.BindlessMaterials) &&
             ReadOptionalBool(_Arguments, "backgroundThrottle",
                              Overrides.BackgroundThrottleEnabled);
         if (!KnobsOk) {
