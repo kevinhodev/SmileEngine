@@ -36,7 +36,7 @@ namespace SmileEditor {
         // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
         // 6: cpu.instanceTable. A tabela canônica de instâncias entrou no resumo que a régua
         // consome; sem bump, um editor v5 pareceria compatível e só falharia na agregação.
-        constexpr int kProtocolVersion = 8;
+        constexpr int kProtocolVersion = 9;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -323,6 +323,7 @@ namespace SmileEditor {
                     { QStringLiteral("rowsDirty"),         static_cast<double>(_Cpu.InstanceRowsDirty) },
                     { QStringLiteral("bytesDirty"),        static_cast<double>(_Cpu.InstanceBytesDirty) },
                     { QStringLiteral("copyRegions"),       static_cast<double>(_Cpu.InstanceCopyRegions) },
+                    { QStringLiteral("rowsScanned"),      static_cast<double>(_Cpu.InstanceRowsScanned) },
                     { QStringLiteral("bytesUploadedTotal"),
                       static_cast<double>(_Cpu.InstanceBytesUploadedTotal) },
                 } },

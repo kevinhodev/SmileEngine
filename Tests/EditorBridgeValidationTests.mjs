@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 8.
+// Snapshot minimo VALIDO, no formato do protocolo 9.
 function snapshotValido() {
   return {
     direct: [],
@@ -103,7 +103,7 @@ function snapshotValido() {
                        copyRegions: 0, rowsUploadedTotal: 3 },
       meshTable: { rows: 2, residentBytes: 1848, stagingBytes: 3696 },
       instanceTable: { rows: 8, residentBytes: 23040, stagingBytes: 46080,
-                       rowsDirty: 0, bytesDirty: 0, copyRegions: 0,
+                       rowsDirty: 0, bytesDirty: 0, copyRegions: 0, rowsScanned: 0,
                        bytesUploadedTotal: 1440 },
     },
   };
@@ -140,7 +140,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 8,
+                version: 9,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -244,7 +244,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":8,"id":__ID__,"ok":true,"result":' +
+    '{"version":9,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");
@@ -284,6 +284,8 @@ for (const [bloco, campos] of [
   ["instanceTable", [
     ["rows", kU32Max], ["residentBytes", kU64Max], ["stagingBytes", kU64Max],
     ["rowsDirty", kU32Max], ["bytesDirty", kU64Max], ["copyRegions", kU32Max],
+    // Protocolo 9 (Fase 4): entra no resumo, entao vale a mesma exigencia dos demais.
+    ["rowsScanned", kU32Max],
     ["bytesUploadedTotal", kU64Max],
   ]],
 ]) {

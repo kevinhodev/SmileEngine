@@ -168,6 +168,10 @@ namespace Smile {
         RenderableIndexById_.emplace(Added.Id,
                                      static_cast<u32>(RenderableList.size() - 1));
         ++StructureVersion_;
+        // A dica de sujos guarda INDICE, e mudanca de estrutura desloca indices. Invalidar aqui e
+        // o que autoriza o produtor a confiar nela nos frames em que a lista nao muda.
+        DirtyRenderables_.clear();
+        DirtyHintComplete_ = false;
         // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
         // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
         ++StaticCastersVersion_;
@@ -213,6 +217,10 @@ namespace Smile {
         RenderableList.erase(RenderableList.begin() + Index);
         RebuildRenderableIndex();
         ++StructureVersion_;
+        // A dica de sujos guarda INDICE, e mudanca de estrutura desloca indices. Invalidar aqui e
+        // o que autoriza o produtor a confiar nela nos frames em que a lista nao muda.
+        DirtyRenderables_.clear();
+        DirtyHintComplete_ = false;
         // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
         // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
         ++StaticCastersVersion_;
@@ -293,6 +301,10 @@ namespace Smile {
         MeshLibrary.clear();
         LightList.clear();
         ++StructureVersion_;
+        // A dica de sujos guarda INDICE, e mudanca de estrutura desloca indices. Invalidar aqui e
+        // o que autoriza o produtor a confiar nela nos frames em que a lista nao muda.
+        DirtyRenderables_.clear();
+        DirtyHintComplete_ = false;
         // Objeto que nasce ou morre muda o CONTEUDO do mapa estatico, nao so o indice: o
         // shadow map cacheado precisa ser re-rasterizado. Ver StaticCastersVersion.
         ++StaticCastersVersion_;

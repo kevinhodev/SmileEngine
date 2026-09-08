@@ -14,7 +14,11 @@ import path from "node:path";
 // entraram no RESUMO, que e o que a regua le com o includeSamples default (false). Enquanto
 // estavam so na amostra crua, existiam no editor e nao chegavam a quem mede.
 // 6: cpu.instanceTable, com footprint e sujeira das quatro colunas canonicas por slot.
-const PROTOCOL_VERSION = 8;
+// 9: cpu.instanceTable.rowsScanned (Fase 4). Entra no RESUMO pela mesma regra do 5: e o numero
+// que separa "upload incremental" de "trabalho incremental" e que julga o gate da fase. Um editor
+// anterior publicaria null exatamente onde a medida decide, e um relatorio com null nesse campo
+// parece completo sem ser.
+const PROTOCOL_VERSION = 9;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -159,6 +163,8 @@ export interface CpuProfileStats {
     rowsDirty: number;
     bytesDirty: number;
     copyRegions: number;
+    // Slots que o diff comparou para achar as sujas acima (Fase 4).
+    rowsScanned: number;
     bytesUploadedTotal: number;
   };
   passes: CpuSubmitPass[];
@@ -626,6 +632,7 @@ export class SmileEditorBridge {
         ["rowsDirty", kU32Max],
         ["bytesDirty", kU64Max],
         ["copyRegions", kU32Max],
+        ["rowsScanned", kU32Max],
         ["bytesUploadedTotal", kU64Max],
       ]],
     ];

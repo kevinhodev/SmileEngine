@@ -236,6 +236,44 @@ namespace Smile {
         return static_cast<u32>(OutChanged.size());
     }
 
+    // Mesma diferenca, restrita aos slots que o PRODUTOR tocou.
+    //
+    // Existe porque a versao acima varre `Fresh.size()`, e `Fresh` e dimensionada pela CAPACIDADE
+    // da tabela, nao pelas linhas vivas: arrastar um objeto no gizmo com a sintetica de 1M carregada
+    // fazia quatro memcmp de tabela inteira (~191 MB) por frame para achar UMA linha. O gate da
+    // Fase 4 — "1M instancias nao exigem reconstrucao/upload integral por frame" — e exatamente
+    // este numero.
+    //
+    // `Touched` tem de vir ORDENADO e sem repeticao: o `OutChanged` resultante herda a ordem, e o
+    // RecordUpload depende dela para coalescer linhas contiguas numa copia so. Os slots vem de uma
+    // free list, entao a ordem NAO e a de percurso da cena — quem monta ordena.
+    //
+    // O que NAO muda em relacao ao diff completo: um slot ausente de `Touched` tambem nao foi
+    // escrito pelo produtor, entao seu par (linha, shadow) continua igual por construcao. O shadow
+    // cresce ate `Fresh.size()` na primeira chamada para que os dois indices continuem falando do
+    // mesmo slot.
+    // `OutVisited` e ACUMULADO, uma unidade por comparacao efetivamente feita, e nao derivado de
+    // `Touched.size()`. A diferenca e o ponto: um contador calculado a partir do conjunto de
+    // entrada continuaria dizendo "1" se alguem trocasse este laco por um que varre a tabela
+    // inteira — mediria a intencao, nao o trabalho. O gate da fase se decide por este numero,
+    // entao ele conta de dentro do laco.
+    template <typename TRow>
+    u32 DiffTableRowsAt(std::span<const TRow> Fresh, std::span<const u32> Touched,
+                        std::vector<TRow>& Shadow, std::vector<u32>& OutChanged,
+                        u32& OutVisited) {
+        OutChanged.clear();
+        if (Shadow.size() != Fresh.size()) Shadow.resize(Fresh.size());
+        for (u32 Slot : Touched) {
+            if (Slot >= Fresh.size()) continue;
+            ++OutVisited;
+            if (Shadow[Slot] != Fresh[Slot]) {
+                Shadow[Slot] = Fresh[Slot];
+                OutChanged.push_back(Slot);
+            }
+        }
+        return static_cast<u32>(OutChanged.size());
+    }
+
     inline u32 DiffMaterialRows(std::span<const FGpuMaterialRecord> Fresh,
                                 std::vector<FGpuMaterialRecord>& Shadow,
                                 std::vector<u32>& OutChanged) {
@@ -462,11 +500,15 @@ namespace Smile {
         void Release(FTextureSRVHeap& SRVHeap);
 
         // Atualiza a imagem CPU apenas quando estrutura/transform/static-casters mudaram ou quando
-        // o previous transform precisa assentar em current no frame seguinte. Nesses eventos a
-        // Fase 2 ainda percorre os renderaveis e o diff por conteudo decide as linhas realmente
-        // copiadas; no frame estavel nao ha varredura nem upload. Dirty ranges incrementais no
-        // produtor sao trabalho explicito da Fase 4.
-        void PrepareFrame(const FScene& Scene, const FGpuMeshTable& Meshes,
+        // o previous transform precisa assentar em current no frame seguinte. No frame estavel nao
+        // ha varredura nem upload.
+        //
+        // A cena entra por referencia NAO-CONST por um motivo so: este e o consumidor unico da
+        // caixa de correio de sujos (FScene::DirtyRenderableHints), e le-la esvazia-a. Quando a
+        // caixa esta completa, o trabalho e proporcional a quem mudou; quando nao esta — bump sem
+        // dica, mudanca de estrutura, primeira publicacao —, cai na varredura completa. Nenhum
+        // outro campo da cena e tocado.
+        void PrepareFrame(FScene& Scene, const FGpuMeshTable& Meshes,
                           const FGpuMaterialTable& Materials);
         void RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
 
@@ -495,6 +537,14 @@ namespace Smile {
         u64 LastDirtyBytes() const { return LastDirtyBytes_; }
         u32 LastCopyRegions() const { return LastCopyRegions_; }
         u64 TotalBytesUploaded() const { return TotalBytesUploaded_; }
+        // Comparacoes que o diff FEZ neste frame, contadas de dentro do laco. Uma por (slot,
+        // coluna): um slot visitado vale quatro, porque as quatro colunas sao comparadas.
+        //
+        // E o numero que separa "upload incremental" de "trabalho incremental": as linhas sujas ja
+        // eram poucas antes da Fase 4, mas o custo de descobri-las era a capacidade da tabela. Num
+        // frame sem edicao vale zero, porque o produtor nem chega ao diff.
+        u32 LastRowsScanned() const { return LastRowsScanned_; }
+        static constexpr u32 kColumns = 4; // meta, bounds, transform, prev transform
 
     private:
         FGpuTableStorage MetaStorage_;
@@ -518,6 +568,15 @@ namespace Smile {
         std::vector<u32> PrevTransformChanged_;
         std::vector<u32> LiveSlots_;
         std::vector<u32> NextLiveSlots_;
+        // Slots escritos ou limpos pelo PrepareFrame deste ciclo, ordenados e sem repeticao. E a
+        // ponte entre produtor e diff: sem ela o diff teria de redescobrir por varredura o que o
+        // produtor acabou de saber por construcao.
+        std::vector<u32> TouchedSlots_;
+        // Slots cujo previous transform ainda nao alcancou o atual. Sem esta lista, o assentamento
+        // do frame seguinte precisaria revarrer a cena so para descobrir quem ficou para tras — o
+        // que devolveria, pelo caminho do assentamento, o custo que a caixa de correio tirou.
+        std::vector<u32> SettleSlots_;
+        std::vector<u32> NextSettleSlots_;
         std::vector<u32> SeenEpoch_;
         std::vector<u8>  DirtyMarks_;
 
@@ -532,6 +591,7 @@ namespace Smile {
         u32 LastDirtyRows_       = 0;
         u64 LastDirtyBytes_      = 0;
         u32 LastCopyRegions_     = 0;
+        u32 LastRowsScanned_     = 0;
         u64 TotalBytesUploaded_  = 0;
     };
 }

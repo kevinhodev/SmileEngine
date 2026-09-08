@@ -340,18 +340,26 @@ namespace Smile {
         PrevTransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
                                      "GpuSceneInstancePrevTransform");
 
-        MetaRows_.assign(Capacity, {});
-        BoundsRows_.assign(Capacity, {});
-        TransformRows_.assign(Capacity, {});
-        PrevTransformRows_.assign(Capacity, {});
+        // Dimensionados pela capacidade DO BUFFER, e nao pela recem-calculada: o Create preserva
+        // um buffer maior quando a cena nova e menor, e o Capacity() publico — o mesmo que
+        // PrepareFrame usa como limite de slot — passa a ser o do buffer. Com a local, um slot
+        // entre os dois valores passaria pela guarda e indexaria fora do vetor.
+        const u32 RowCapacity = MetaStorage_.Capacity();
+        MetaRows_.assign(RowCapacity, {});
+        BoundsRows_.assign(RowCapacity, {});
+        TransformRows_.assign(RowCapacity, {});
+        PrevTransformRows_.assign(RowCapacity, {});
         MetaShadow_.clear();
         BoundsShadow_.clear();
         TransformShadow_.clear();
         PrevTransformShadow_.clear();
         LiveSlots_.clear();
         NextLiveSlots_.clear();
-        SeenEpoch_.assign(Capacity, 0u);
-        DirtyMarks_.assign(Capacity, 0u);
+        TouchedSlots_.clear();
+        SettleSlots_.clear();
+        NextSettleSlots_.clear();
+        SeenEpoch_.assign(RowCapacity, 0u);
+        DirtyMarks_.assign(RowCapacity, 0u);
         PrepareEpoch_ = 0;
         PreparedStructureVersion_ = ~0ull;
         PreparedTransformVersion_ = ~0ull;
@@ -362,6 +370,7 @@ namespace Smile {
         LastDirtyRows_ = 0;
         LastDirtyBytes_ = 0;
         LastCopyRegions_ = 0;
+        LastRowsScanned_ = 0;
         TotalBytesUploaded_ = 0;
     }
 
@@ -384,6 +393,9 @@ namespace Smile {
         PrevTransformChanged_.clear();
         LiveSlots_.clear();
         NextLiveSlots_.clear();
+        TouchedSlots_.clear();
+        SettleSlots_.clear();
+        NextSettleSlots_.clear();
         SeenEpoch_.clear();
         DirtyMarks_.clear();
         PreparedStructureVersion_ = ~0ull;
@@ -396,10 +408,11 @@ namespace Smile {
         LastDirtyRows_ = 0;
         LastDirtyBytes_ = 0;
         LastCopyRegions_ = 0;
+        LastRowsScanned_ = 0;
         TotalBytesUploaded_ = 0;
     }
 
-    void FGpuSceneInstanceTable::PrepareFrame(const FScene& _Scene,
+    void FGpuSceneInstanceTable::PrepareFrame(FScene& _Scene,
                                               const FGpuMeshTable& _Meshes,
                                               const FGpuMaterialTable& _Materials) {
         if (!IsBuilt() || _Scene.GpuSlots().Capacity() > Capacity()) return;
@@ -414,18 +427,34 @@ namespace Smile {
             TransformVersion == PreparedTransformVersion_ &&
             StaticCastersVersion == PreparedStaticCastersVersion_ && !NeedsSettle_) return;
 
+        // Varredura completa quando NAO da para confiar na caixa de correio da cena: primeira
+        // publicacao, mudanca de estrutura (indices se deslocam) ou alguem que bumpou sem dizer
+        // quem. Versao nova com caixa vazia tambem cai aqui — nao deveria acontecer, e o desfecho
+        // conservador custa uma varredura, nunca uma linha desatualizada.
+        const std::span<const u32> Hints = _Scene.DirtyRenderableHints();
+        const bool VersionsMoved = StructureVersion != PreparedStructureVersion_ ||
+                                   TransformVersion != PreparedTransformVersion_ ||
+                                   StaticCastersVersion != PreparedStaticCastersVersion_;
+        const bool FullScan = PreparedStructureVersion_ == ~0ull ||
+                              StructureVersion != PreparedStructureVersion_ ||
+                              !_Scene.DirtyHintComplete() ||
+                              (VersionsMoved && Hints.empty());
+
         if (++PrepareEpoch_ == 0) {
             std::fill(SeenEpoch_.begin(), SeenEpoch_.end(), 0u);
             PrepareEpoch_ = 1;
         }
         const u32 Epoch = PrepareEpoch_;
-        NextLiveSlots_.clear();
-        NextLiveSlots_.reserve(_Scene.Renderables().size());
-        bool SettleNextFrame = false;
+        TouchedSlots_.clear();
+        NextSettleSlots_.clear();
 
-        for (const FRenderable& R : _Scene.Renderables()) {
+        // Recompoe as quatro colunas de UM renderavel. Devolve o slot escrito, ou kInvalidSlot
+        // quando o objeto nao tem residencia — o mesmo filtro que a varredura completa aplicava
+        // no laco, agora num lugar so para os dois ramos nao poderem divergir.
+        auto WriteRow = [&](const FRenderable& R) -> u32 {
             const FGpuSceneHandle Handle = R.GpuHandle;
-            if (!_Scene.GpuSlots().IsAlive(Handle) || Handle.Slot >= Capacity()) continue;
+            if (!_Scene.GpuSlots().IsAlive(Handle) || Handle.Slot >= Capacity())
+                return FGpuSceneHandle::kInvalidSlot;
 
             const u32 Slot = Handle.Slot;
             const FGpuSceneInstanceMeta OldMeta = MetaRows_[Slot];
@@ -451,28 +480,67 @@ namespace Smile {
             BoundsRows_[Slot] = Bounds;
             TransformRows_[Slot].Value = Current;
             PrevTransformRows_[Slot].Value = Previous;
-            if (TransformRows_[Slot] != PrevTransformRows_[Slot]) SettleNextFrame = true;
+            if (TransformRows_[Slot] != PrevTransformRows_[Slot])
+                NextSettleSlots_.push_back(Slot);
 
             SeenEpoch_[Slot] = Epoch;
-            NextLiveSlots_.push_back(Slot);
+            TouchedSlots_.push_back(Slot);
+            return Slot;
+        };
+
+        if (FullScan) {
+            NextLiveSlots_.clear();
+            NextLiveSlots_.reserve(_Scene.Renderables().size());
+            for (const FRenderable& R : _Scene.Renderables()) {
+                const u32 Slot = WriteRow(R);
+                if (Slot != FGpuSceneHandle::kInvalidSlot) NextLiveSlots_.push_back(Slot);
+            }
+
+            // Limpa apenas quem estava vivo na imagem anterior. Nao varre a capacidade: remover um
+            // objeto deve tocar a linha dele, nao um milhao de slots vazios.
+            for (u32 Slot : LiveSlots_) {
+                if (Slot >= SeenEpoch_.size() || SeenEpoch_[Slot] == Epoch) continue;
+                MetaRows_[Slot] = {};
+                BoundsRows_[Slot] = {};
+                TransformRows_[Slot] = {};
+                PrevTransformRows_[Slot] = {};
+                // O slot limpo tambem foi ESCRITO, e a linha zerada precisa chegar a GPU: sem ele
+                // no conjunto tocado, um objeto removido continuaria residente na tabela ate
+                // alguem reusar o slot.
+                TouchedSlots_.push_back(Slot);
+            }
+            LiveSlots_.swap(NextLiveSlots_);
+            LiveRows_ = static_cast<u32>(LiveSlots_.size());
+        } else {
+            // O conjunto vivo NAO mudou — estrutura igual e a condicao de estar neste ramo —,
+            // entao LiveSlots_ e LiveRows_ seguem validos sem ser refeitos.
+            const std::vector<FRenderable>& List = _Scene.Renderables();
+            for (u32 Index : Hints)
+                if (Index < List.size()) WriteRow(List[Index]);
         }
 
-        // Limpa apenas quem estava vivo na imagem anterior. Nao varre a capacidade: remover um
-        // objeto deve tocar a linha dele, nao um milhao de slots vazios.
-        for (u32 Slot : LiveSlots_) {
+        // Assentamento do previous transform. Um slot reescrito acima ja recebeu o previous certo
+        // (o current do ciclo anterior); os que sobraram so precisam alcancar o atual, e para isso
+        // nao ha o que perguntar ao renderavel — nada nele mudou desde o ciclo passado.
+        for (u32 Slot : SettleSlots_) {
             if (Slot >= SeenEpoch_.size() || SeenEpoch_[Slot] == Epoch) continue;
-            MetaRows_[Slot] = {};
-            BoundsRows_[Slot] = {};
-            TransformRows_[Slot] = {};
-            PrevTransformRows_[Slot] = {};
+            PrevTransformRows_[Slot] = TransformRows_[Slot];
+            SeenEpoch_[Slot] = Epoch;
+            TouchedSlots_.push_back(Slot);
         }
+        SettleSlots_.swap(NextSettleSlots_);
 
-        LiveSlots_.swap(NextLiveSlots_);
-        LiveRows_ = static_cast<u32>(LiveSlots_.size());
+        // Ordenado e sem repeticao porque o RecordUpload coalesce intervalos contiguos, e slots
+        // vem de free list — a ordem de percurso da cena nao e a ordem de slot.
+        std::sort(TouchedSlots_.begin(), TouchedSlots_.end());
+        TouchedSlots_.erase(std::unique(TouchedSlots_.begin(), TouchedSlots_.end()),
+                            TouchedSlots_.end());
+
+        _Scene.ConsumeDirtyRenderableHints();
         PreparedStructureVersion_ = StructureVersion;
         PreparedTransformVersion_ = TransformVersion;
         PreparedStaticCastersVersion_ = StaticCastersVersion;
-        NeedsSettle_ = SettleNextFrame;
+        NeedsSettle_ = !SettleSlots_.empty();
         Dirty_ = true;
     }
 
@@ -481,15 +549,22 @@ namespace Smile {
         LastDirtyRows_ = 0;
         LastDirtyBytes_ = 0;
         LastCopyRegions_ = 0;
+        LastRowsScanned_ = 0;
         if (!Dirty_ || !IsBuilt()) return;
         Dirty_ = false;
 
-        DiffTableRows<FGpuSceneInstanceMeta>(MetaRows_, MetaShadow_, MetaChanged_);
-        DiffTableRows<FGpuSceneInstanceBounds>(BoundsRows_, BoundsShadow_, BoundsChanged_);
-        DiffTableRows<FGpuSceneInstanceTransform>(TransformRows_, TransformShadow_,
-                                                   TransformChanged_);
-        DiffTableRows<FGpuSceneInstanceTransform>(PrevTransformRows_, PrevTransformShadow_,
-                                                   PrevTransformChanged_);
+        // O conjunto tocado e o mesmo para as quatro colunas — quem escreve uma linha escreve as
+        // quatro —, entao o custo do diff e |tocados| x 4, e nao a capacidade da tabela x 4.
+        const std::span<const u32> Touched{ TouchedSlots_ };
+        DiffTableRowsAt<FGpuSceneInstanceMeta>(MetaRows_, Touched, MetaShadow_, MetaChanged_,
+                                               LastRowsScanned_);
+        DiffTableRowsAt<FGpuSceneInstanceBounds>(BoundsRows_, Touched, BoundsShadow_,
+                                                 BoundsChanged_, LastRowsScanned_);
+        DiffTableRowsAt<FGpuSceneInstanceTransform>(TransformRows_, Touched, TransformShadow_,
+                                                    TransformChanged_, LastRowsScanned_);
+        DiffTableRowsAt<FGpuSceneInstanceTransform>(PrevTransformRows_, Touched,
+                                                    PrevTransformShadow_, PrevTransformChanged_,
+                                                    LastRowsScanned_);
 
         auto Upload = [&](FGpuTableStorage& Storage, const auto& Rows,
                           const std::vector<u32>& Changed, u32 RowBytes) {

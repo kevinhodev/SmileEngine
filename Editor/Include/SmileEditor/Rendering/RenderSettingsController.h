@@ -168,6 +168,7 @@ namespace SmileEditor {
         quint32 InstanceRowsDirty          = 0;
         quint64 InstanceBytesDirty         = 0;
         quint32 InstanceCopyRegions        = 0;
+        quint32 InstanceRowsScanned        = 0;
         quint64 InstanceBytesUploadedTotal = 0;
 
         QVector<FCpuSubmitPassSnapshot> Passes;

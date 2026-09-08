@@ -1044,6 +1044,7 @@ namespace Smile {
         CpuStatsBuilding.InstanceRowsDirty          = InstanceTable.LastDirtyRows();
         CpuStatsBuilding.InstanceBytesDirty         = InstanceTable.LastDirtyBytes();
         CpuStatsBuilding.InstanceCopyRegions        = InstanceTable.LastCopyRegions();
+        CpuStatsBuilding.InstanceRowsScanned        = InstanceTable.LastRowsScanned();
         CpuStatsBuilding.InstanceBytesUploadedTotal = InstanceTable.TotalBytesUploaded();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.

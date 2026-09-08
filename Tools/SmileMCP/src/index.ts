@@ -192,6 +192,7 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           rowsDirty: summarize(cpuStats.map((c) => c.instanceTable.rowsDirty)),
           bytesDirty: summarize(cpuStats.map((c) => c.instanceTable.bytesDirty)),
           copyRegions: summarize(cpuStats.map((c) => c.instanceTable.copyRegions)),
+          rowsScanned: summarize(cpuStats.map((c) => c.instanceTable.rowsScanned)),
           bytesUploadedTotal: cpuStats.at(-1)?.instanceTable.bytesUploadedTotal ?? null,
         },
         passes: [...passKeys].map((key) => {

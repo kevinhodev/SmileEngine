@@ -6,6 +6,7 @@
 #include "Smile/Scene/GpuSceneHandle.h"
 #include "Smile/Scene/Light.h"
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -236,8 +237,21 @@ namespace Smile {
 
         // Versao dos transforms dos renderables — quem muta transform (gizmo do editor)
         // bumpa; o Renderer compara por frame p/ reconstruir SO a TLAS (BLAS intactos).
+        //
+        // A sobrecarga com indice acrescenta a DICA de quem mudou, consumida pelo produtor da GPU
+        // scene (Fase 4): com ela, um objeto arrastado reescreve uma linha da tabela canonica em
+        // vez de a cena inteira ser revarrida. A versao SEM argumento continua valida e continua
+        // correta — ela invalida a dica, e o produtor cai na varredura completa.
+        //
+        // A direcao do erro e deliberada e e o ponto do desenho: esquecer de passar o indice custa
+        // trabalho a mais, nunca uma linha desatualizada. Nao ha como bumpar sem uma das duas
+        // coisas acontecer.
         u64  TransformsVersion() const { return TransformsVersion_; }
-        void BumpTransformsVersion()   { ++TransformsVersion_; }
+        void BumpTransformsVersion()   { ++TransformsVersion_; DirtyHintComplete_ = false; }
+        void BumpTransformsVersion(u32 RenderableIndex) {
+            ++TransformsVersion_;
+            HintRenderableDirty(RenderableIndex);
+        }
 
         // Versao da ESTRUTURA — muda quando a lista ganha ou perde um renderavel. Separada da
         // de transforms de proposito: aquela pede rebuild da TLAS (barato, por frame), esta pede
@@ -255,7 +269,32 @@ namespace Smile {
         // some, e ocultado, ou troca de mobilidade. NAO bumpa quando um DINAMICO se move, que
         // e o caso comum e justamente o que o cache tolera sem refazer nada.
         u64  StaticCastersVersion() const { return StaticCastersVersion_; }
-        void BumpStaticCastersVersion()   { ++StaticCastersVersion_; }
+        void BumpStaticCastersVersion()   { ++StaticCastersVersion_; DirtyHintComplete_ = false; }
+        void BumpStaticCastersVersion(u32 RenderableIndex) {
+            ++StaticCastersVersion_;
+            HintRenderableDirty(RenderableIndex);
+        }
+
+        // === Dica de quem mudou (Fase 4 do GPU-DRIVEN-PLAN) =====================================
+        //
+        // As tres versoes acima dizem QUE algo mudou; esta lista diz QUEM. Sem ela o produtor da
+        // tabela canonica precisa revarrer todos os renderaveis a cada bump — e num arraste de
+        // gizmo isso e por frame, com a cena inteira, para reescrever uma linha.
+        //
+        // ⚠️ UM consumidor: FGpuSceneInstanceTable::PrepareFrame. A lista e uma caixa de correio
+        // que se esvazia na leitura, entao um segundo leitor roubaria os avisos do primeiro. Um
+        // consumidor novo ganha caixa propria, nao esta.
+        //
+        // Guarda o INDICE, e nao o slot: o produtor precisa do FRenderable para recompor a linha, e
+        // ir do slot ao renderavel exigiria um mapa que nao existe. O indice so vale enquanto a
+        // lista nao muda — e mudanca de lista bumpa StructureVersion_, que ja obriga varredura
+        // completa por conta propria.
+        bool DirtyHintComplete() const { return DirtyHintComplete_; }
+        std::span<const u32> DirtyRenderableHints() const { return DirtyRenderables_; }
+        void ConsumeDirtyRenderableHints() {
+            DirtyRenderables_.clear();
+            DirtyHintComplete_ = true;
+        }
 
         // Residencia GPU dos renderaveis. Mora aqui, ao lado do RenderableIndexById_ e do
         // NextObjectId_, porque e a mesma familia de coisa: identidade que precisa sobreviver a
@@ -268,6 +307,22 @@ namespace Smile {
     private:
         void RebuildRenderableIndex();
 
+        // Teto da caixa de correio. Acima dele a dica deixa de valer a pena: varrer a cena uma vez
+        // custa menos que carregar uma lista maior que ela, e um bug de marcacao repetida nao pode
+        // fazer a lista crescer sem limite. Estourar cai na varredura completa, que e o desfecho
+        // conservador de sempre.
+        static constexpr size_t kMaxDirtyHints = 4096;
+
+        void HintRenderableDirty(u32 RenderableIndex) {
+            if (!DirtyHintComplete_) return; // ja invalidada; nao adianta acumular
+            if (DirtyRenderables_.size() >= kMaxDirtyHints) {
+                DirtyHintComplete_ = false;
+                DirtyRenderables_.clear();
+                return;
+            }
+            DirtyRenderables_.push_back(RenderableIndex);
+        }
+
         std::vector<std::unique_ptr<FGpuMesh>> MeshLibrary;
         std::vector<FRenderable>               RenderableList;
         std::vector<FLight>                    LightList;
@@ -278,6 +333,10 @@ namespace Smile {
         u64                                    TransformsVersion_ = 0;
         u64                                    StructureVersion_  = 0;
         u64                                    StaticCastersVersion_ = 0;
+        // Comeca COMPLETA e vazia: uma cena recem-construida nao tem nada sujo. O primeiro
+        // PrepareFrame varre assim mesmo, porque compara as versoes com ~0ull.
+        std::vector<u32>                       DirtyRenderables_;
+        bool                                   DirtyHintComplete_ = true;
         // UM contador para os dois tipos. Ver ESceneObject.
         u64                                    NextObjectId_      = 0;
         // NAO e resetado no Clear, pela mesma razao do NextObjectId_. Ver o comentario la.

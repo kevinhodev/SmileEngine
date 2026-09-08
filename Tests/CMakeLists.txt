@@ -233,6 +233,31 @@ set_tests_properties(Smile.GpuSceneTablesWarp PROPERTIES
     TIMEOUT 180
 )
 
+# Custo do produtor da tabela de instancias (Fase 4). Linka a engine — nao so os .cpp da tabela —
+# porque a FScene arrasta o pool de slots, o FGpuMesh e a fabrica de recursos; o device e WARP.
+add_executable(SmileGpuSceneIncrementalTests
+    GpuSceneIncrementalTests.cpp
+)
+
+target_compile_features(SmileGpuSceneIncrementalTests PRIVATE cxx_std_20)
+target_link_libraries(SmileGpuSceneIncrementalTests PRIVATE SmileEngine d3d12 dxgi)
+set_target_properties(SmileGpuSceneIncrementalTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuSceneIncremental
+    COMMAND SmileGpuSceneIncrementalTests
+)
+
+set_tests_properties(Smile.GpuSceneIncremental PROPERTIES
+    LABELS "scene;gpu-driven;warp"
+    TIMEOUT 180
+)
+
 # Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
 # usar WARP: o FDrawSubmitCache grava numa command list de verdade.
 add_executable(SmileSubmitStatsTests

@@ -333,6 +333,7 @@ namespace SmileEditor {
         Out.InstanceRowsDirty          = S.InstanceRowsDirty;
         Out.InstanceBytesDirty         = S.InstanceBytesDirty;
         Out.InstanceCopyRegions        = S.InstanceCopyRegions;
+        Out.InstanceRowsScanned        = S.InstanceRowsScanned;
         Out.InstanceBytesUploadedTotal = S.InstanceBytesUploadedTotal;
         // TODOS os passes, inclusive os zerados: uma serie temporal com conjunto de chaves
         // variavel obrigaria o agente a tratar ausencia como zero, e ausencia tambem poderia

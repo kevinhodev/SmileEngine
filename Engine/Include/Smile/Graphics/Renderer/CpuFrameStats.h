@@ -210,6 +210,12 @@ namespace Smile {
         u64 InstanceBytesDirty        = 0;
         u32 InstanceCopyRegions       = 0;
         u64 InstanceBytesUploadedTotal = 0;
+        // Slots que o diff COMPAROU para chegar aos sujos acima (Fase 4). Separa "upload
+        // incremental" de "trabalho incremental": antes da Fase 4 as linhas sujas ja eram poucas,
+        // mas descobri-las custava a CAPACIDADE da tabela — quatro colunas x 1,06M linhas na
+        // sintetica de 1M, por frame, enquanto o gizmo arrastasse. O modo de falha e este voltar a
+        // acompanhar `InstanceTableRows` em vez de `InstanceRowsDirty`.
+        u32 InstanceRowsScanned       = 0;
 
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
