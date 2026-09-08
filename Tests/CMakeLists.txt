@@ -258,6 +258,31 @@ set_tests_properties(Smile.GpuSceneIncremental PROPERTIES
     TIMEOUT 180
 )
 
+# Lista de candidatos e ranges (Fase 4). A logica e CPU pura; o device WARP existe so porque um
+# FGpuMesh valido precisa apontar para um pool D3D12 de verdade.
+add_executable(SmileGpuSceneCandidateTests
+    GpuSceneCandidateTests.cpp
+)
+
+target_compile_features(SmileGpuSceneCandidateTests PRIVATE cxx_std_20)
+target_link_libraries(SmileGpuSceneCandidateTests PRIVATE SmileEngine d3d12 dxgi)
+set_target_properties(SmileGpuSceneCandidateTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuSceneCandidates
+    COMMAND SmileGpuSceneCandidateTests
+)
+
+set_tests_properties(Smile.GpuSceneCandidates PROPERTIES
+    LABELS "scene;gpu-driven;warp"
+    TIMEOUT 180
+)
+
 # Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
 # usar WARP: o FDrawSubmitCache grava numa command list de verdade.
 add_executable(SmileSubmitStatsTests
