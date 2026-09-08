@@ -1456,6 +1456,13 @@ permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dado
 > A expansão na GPU escreve por **posição**, e não por append atômico: nesta fase não há rejeição,
 > então a saída é 1:1 e fica byte a byte comparável com a referência CPU — que é o gate. Compactar
 > só ganha sentido na Fase 6, quando houver rejeição de verdade.
+>
+> **A revisão reprovou a primeira versão: seis achados, três bloqueadores, todos corrigidos.** Uma
+> regressão de motion vector (índice repetido na caixa de correio colapsava `PrevTransform` em
+> `Transform` no exato frame do movimento) e três checagens que eu havia documentado como decisão
+> deliberada: a generation não era validada, o overflow produzia lista parcial utilizável, e a GPU
+> lia fora do buffer onde a CPU recusava. O padrão vale para as fases seguintes — **quando o
+> comentário explica por que NÃO verificar, o comentário é o defeito.**
 
 ### Objetivo
 

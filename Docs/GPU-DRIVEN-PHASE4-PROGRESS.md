@@ -2,10 +2,15 @@
 
 Data: 2026-09-08
 
-Estado: **aberta, quatro slices entregues.** Release fecha 64/64, Debug compila e o cliente
-TypeScript compila. Dois dos seis itens do gate de saída estão fechados; os outros quatro
-continuam abertos, e dois deles (`ObjectCB` e `TransformBuffer` do TemporalMotion) ainda não foram
-tocados.
+Estado: **aberta, quatro slices entregues e uma rodada de revisão fechada.** Release fecha 64/64,
+Debug compila e o cliente TypeScript compila. Dois dos seis itens do gate de saída estão fechados;
+os outros quatro continuam abertos, e dois deles (`ObjectCB` e `TransformBuffer` do TemporalMotion)
+ainda não foram tocados.
+
+A revisão do Codex reprovou a primeira versão com seis achados, três bloqueadores — entre eles uma
+regressão de motion vector que eu tinha introduzido e um trio de checagens que eu havia
+**documentado como decisão deliberada**. Os seis estão corrigidos; a seção da revisão registra cada
+um e o que o padrão deles ensina.
 
 Base: Fase 3 encerrada em `3b38694`. **Nada da Fase 3 foi reaberto.**
 
@@ -20,6 +25,9 @@ não caminho quente.
 | `58cf601` | os caminhos quentes do editor dizem quem mudou |
 | `d190e10` | `FInstanceRange` e a lista de candidatos |
 | `d6cd442` | expansão de ranges na GPU, com validação e contadores |
+| `24c5194` | índice repetido na caixa de correio destruía o `PrevTransform` |
+| `3fb93cd` | o candidato carrega a generation, e o overflow deixa de ser parcial |
+| `80b9dbf` | isolar material não invalidava o mapa estático de sombra |
 
 ## O gate de saída, item a item
 
@@ -31,6 +39,103 @@ não caminho quente.
 | 4 | 1M instâncias não exigem reconstrução/upload integral por frame | **provado em 4.096, não medido em 1M.** Falta a medição na sintética |
 | 5 | `ObjectCB` e `TransformBuffer` do TemporalMotion deixaram de ser alocados | **não iniciado** |
 | 6 | range único e múltiplos ranges sintéticos produzem a mesma lista expandida | **fechado** — na CPU e na GPU |
+
+## Revisão do Codex (2026-09-08) — seis achados, três bloqueadores
+
+A revisão do range `3b38694..c28038a` reprovou a fase. Os seis achados eram defeitos de verdade;
+nenhum era cosmético, e três deles eu tinha **documentado como decisão deliberada** — o que os
+tornava piores, não melhores.
+
+### P1 — índice repetido destruía o `PrevTransform`
+
+Regressão minha, de `a7fa48c` + `58cf601`. Mover um objeto **estático** bumpa transform *e* static
+casters, e desde a segunda slice os dois marcam o mesmo renderável: a caixa chega com o índice
+duas vezes. É o caso comum — campo de transform do Outliner, `set_object_position` do MCP —, não
+uma borda.
+
+A segunda escrita da mesma linha não era redundante, era destrutiva:
+
+```
+WriteRow #1: Current=B, Previous=TransformRows_[S]=A  → Transform=B, Prev=A   ✓
+WriteRow #2: Current=B, Previous=TransformRows_[S]=B  → Transform=B, Prev=B   ✗
+```
+
+O objeto perdia o passado no exato frame em que se movia: motion vector zero, sem erro nenhum, só o
+objeto deixando de borrar. A deduplicação que existia acontecia em `TouchedSlots_`, **depois** das
+escritas — tarde demais.
+
+Conserto: uma escrita por slot por ciclo, pelo epoch que o `PrepareFrame` já mantém.
+
+O teste de duplicatas que eu tinha escrito **não cobria isto**: ele ultrapassava o teto de 4.096 e
+caía na varredura completa, que escreve cada slot uma vez. O caso novo repete o índice **abaixo** do
+teto e confere as **matrizes**, não os contadores — uma deduplicação tardia deixaria os contadores
+certos e o previous errado.
+
+### P1 — a validação de generation não existia
+
+A lista carregava só `u32 Slot`, então o shader só conseguia perguntar "esta linha tem **algum**
+ocupante?". Um candidato de uma lista atrasada aceitaria em silêncio o ocupante **novo** de um slot
+reciclado: objeto errado, transform errado, sem contador subindo.
+
+O argumento que eu tinha escrito para não carregar a generation — reciclar slot passa por
+`Add`/`Remove`, que bumpam a versão de estrutura e reconstroem a lista — continua verdadeiro, e
+continua sendo o **motivo errado**: o valor de uma checagem está em verificar o invariante, não em
+presumi-lo. Custa 4 B por candidato.
+
+`FGpuCandidateId {Slot, Generation}`, com espelho HLSL. A generation **zero** do candidato é
+recusada antes da comparação: sem isso, um candidato inválido (generation 0) apontando para uma
+linha vazia (generation 0 também) casaria — dois erros se cancelando num acerto aparente.
+
+### P1 — overflow produzia lista parcial utilizável
+
+Contar o descarte não o torna conservador. Uma lista truncada e consumível é geometria sumindo em
+silêncio, que a regra 6 do plano proíbe — e os testes antigos **institucionalizavam** isso,
+esperando dois candidatos e três sumidos como comportamento correto.
+
+Agora: ou a lista descreve a cena inteira, ou ela não existe. Com overflow ela vem **vazia** e
+`IsUsable()` é falso; o consumidor cai no caminho CPU (D9). Lista vazia com a flag em falso falha
+**alto**; três objetos faltando falha baixo, e é a baixa que atravessa uma revisão.
+
+`Stats().Candidates` passou a contar a cena inteira, e não o que coube — é com esse número que se
+redimensiona o buffer. Contando só os que couberam, a capacidade necessária nunca seria observável e
+o overflow seria insolúvel.
+
+No shader o overflow virou **canário** explícito: um dispatch não tem como cair no fallback, então
+quem impede a saída truncada é o dimensionamento pela CPU. Diferente de zero significa "a lista
+deste frame não pode ser consumida".
+
+### P2 — a GPU lia fora do buffer onde a CPU recusava
+
+O shader não recebia o tamanho de `CandidateIds`, então o mesmo range que a referência ignora
+produzia aqui leitura fora do `StructuredBuffer`. Ela **não trava** — o D3D12 devolve zero —, e por
+isso é pior: o candidato vira o slot 0, que é plausível, e a GPU passa a discordar da referência em
+silêncio. A guarda compara por subtração no lado seguro, porque a soma pode dar a volta em 32 bits.
+
+### P2 — mudar a capacidade não invalidava a lista
+
+`SetCapacity` só trocava o membro, e `RefreshIfStale` olha versões da cena. Aumentar o teto depois de
+um overflow deixava a lista truncada para sempre. Agora invalida quando o valor **muda** —
+reatribuir o mesmo valor não reconstrói, senão um chamador por frame reconstruiria por frame.
+
+### P2 — isolar material não invalidava a membresia
+
+Defeito **pré-existente**, anterior à Fase 4. `ApplyIsolation`/`StopIsolation` escondem e mostram
+renderáveis e bumpavam só `TransformsVersion`. Ocultar ou mostrar muda o que o mapa estático contém
+— o olho do Outliner já bumpa as duas por essa exata razão, com o comentário escrito lá desde antes.
+
+Consequência de hoje: o shadow map cacheado continua com os objetos escondidos dentro dele enquanto
+o isolar está ligado. Consequência da Fase 4: a lista de candidatos ficaria com a membresia velha.
+
+Auditei os outros seis escritores de `FRenderable::Visible`. Os cinco restantes estão certos: o olho
+do Outliner, a lista de ocultas do JSON e o `.smap` já bumpam as duas; os dois de terreno tocam
+**apenas** proxies `RaytracingOnly`, que estão fora do raster e do CSM de qualquer forma.
+
+### O padrão dos três primeiros
+
+Os três P1 tinham a mesma forma: um comentário meu explicando por que o caminho mais fraco bastava.
+Nos três casos o raciocínio estava certo **sobre o código de hoje** e errado sobre o que uma
+checagem serve para fazer. Vale como regra para as fases seguintes: quando o comentário explica por
+que **não** verificar, o comentário é o defeito.
 
 ## O achado que definiu a primeira slice
 
@@ -158,6 +263,9 @@ declarar feito:
 | range lido como intervalo de slots (CPU) | vermelho na comparação com os slots esperados |
 | range lido como intervalo de slots (GPU) | 13 asserts vermelhos |
 | verificação cruzada de `RaytracingOnly` removida do shader | 3 asserts vermelhos |
+| guarda de epoch removido do `WriteRow` | vermelho no previous colapsado em current |
+| generation de volta a "a linha tem ocupante?" | 3 asserts vermelhos |
+| guarda de limite da lista removida do shader | 3 asserts vermelhos, com dois slots lidos além da lista entrando como válidos |
 
 Um achado do processo: a equivalência "range único vs sintéticos" **não** pega o range lido como
 intervalo de slots — os dois modos cobrem o mesmo span, então a interpretação errada produz a mesma
@@ -195,3 +303,11 @@ julga o gate, e um editor anterior publicaria `null` exatamente onde a medida de
 - O teto da caixa é 4.096. Acima dele, varredura. Numa cena de 1M com muita coisa em movimento, o
   regime volta a ser o de antes — e é a escolha certa, porque uma lista maior que a cena não ajuda;
   o que resolveria de verdade é o produtor por célula, que é Fase 8.
+- `IsUsable()` é **contrato, não mecanismo**: nada impede um consumidor futuro de expandir a lista
+  sem consultá-lo. Como a lista vem vazia no overflow, ignorá-lo produz zero draws — falha alta, que
+  é o desfecho preferível — mas continua sendo uma falha. O gate de verdade é o dimensionamento pelo
+  `Stats().Candidates`, e ele só passa a ser exercitado quando a Fase 5 ligar o consumidor.
+- O canário de overflow do shader **não é lido por ninguém** hoje. Ler contador de GPU para decidir
+  draw esbarraria na regra 7 do plano (nenhum readback novo decide visibilidade), então o consumo
+  correto dele é telemetria/asserção de debug, não política de frame. Fica anotado como decisão a
+  tomar na Fase 5.
