@@ -231,7 +231,7 @@ namespace Smile {
         RootParams[14].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         RootParams[14].Constants.ShaderRegister = 4;
         RootParams[14].Constants.RegisterSpace  = 0;
-        RootParams[14].Constants.Num32BitValues = 2;
+        RootParams[14].Constants.Num32BitValues = kRootConstCount;
         RootParams[14].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc{};
@@ -270,6 +270,12 @@ namespace Smile {
 
     void FPipelineState::RecreatePSO(ID3D12Device* _Device) {
         auto VertexShaderBlob = LoadShaderBytecode("Triangle.vs_6_0.cso");
+        // Permutacao da Fase 4: o mesmo VS lendo transform da tabela canonica. Vazia num device
+        // sem heap diretamente indexado — e a checagem do blob e separada da capability pelo mesmo
+        // motivo do material: um .cso ausente daria PSO nula com a capability ligada.
+        auto VertexShaderBindlessBlob = LoadShaderBytecode("TriangleBindless.vs_6_6.cso");
+        const bool VsBindlessAvailable =
+            SupportsBindlessMaterials && !VertexShaderBindlessBlob.empty();
 
         D3D12_INPUT_ELEMENT_DESC InputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -318,6 +324,20 @@ namespace Smile {
         PSODesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
         PSODesc.SampleDesc            = { 1, 0 };
 
+        // Gemea VS-BINDLESS da PSO que o `PSODesc` descreve NESTE ponto. Fica ao lado de cada
+        // criacao, e nao num bloco no fim, porque o `PSODesc` e mutado ao longo da funcao: um
+        // bloco final teria de reconstruir seis estados a mao, e cada um seria uma chance de
+        // divergir da gemea classica em algo que nao e o vertex shader.
+        auto MakeVsBindless = [&](ComPtr<ID3D12PipelineState>& _Out) {
+            if (!VsBindlessAvailable) { _Out.Reset(); return; }
+            const D3D12_SHADER_BYTECODE Saved = PSODesc.VS;
+            PSODesc.VS = { VertexShaderBindlessBlob.data(), VertexShaderBindlessBlob.size() };
+            ComPtr<ID3D12PipelineState> New;
+            SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&New)));
+            _Out = New;
+            PSODesc.VS = Saved;
+        };
+
         // Z-prepass (depth-only): escreve o depth opaco; o geometry pass usa depth EQUAL p/ matar
         // o overdraw no shader gordo do G-buffer (POM etc.). Sem cor (writemask 0, sem PS).
         D3D12_BLEND_DESC NoColor  = BlendDesc;
@@ -330,6 +350,7 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSODepth;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepth)));
         PipelineStateDepthOnly = NewPSODepth;
+        MakeVsBindless(PipelineStateDepthOnlyVsBindless);
 
         auto NormalPSBlob = LoadShaderBytecode("DepthNormal.ps_6_0.cso");
         PSODesc.VS                = { VertexShaderBlob.data(), VertexShaderBlob.size() };
@@ -341,6 +362,7 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSODepthNormal;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSODepthNormal)));
         PipelineStateDepthNormal = NewPSODepthNormal;
+        MakeVsBindless(PipelineStateDepthNormalVsBindless);
 
         // Variantes masked/two-sided do prepass (GTAO F4): cull NONE (cards de folhagem) + PS
         // com alpha-clip condicional (AlphaTest=0 em two-sided opaco -> so rasteriza os 2 lados).
@@ -374,6 +396,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc,
                                                           IID_PPV_ARGS(&NewPSODepthOnlyMaskedBindless)));
             PipelineStateDepthOnlyMaskedBindless = NewPSODepthOnlyMaskedBindless;
+            MakeVsBindless(PipelineStateDepthOnlyMaskedVsBindless);
 
             auto DepthNormalMaskedBindlessBlob =
                 LoadShaderBytecode("DepthNormalMaskedBindless.ps_6_6.cso");
@@ -385,6 +408,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc,
                                                           IID_PPV_ARGS(&NewPSODepthNormalMaskedBindless)));
             PipelineStateDepthNormalMaskedBindless = NewPSODepthNormalMaskedBindless;
+            MakeVsBindless(PipelineStateDepthNormalMaskedVsBindless);
 
             // Restaura o estado que o bloco do G-buffer, logo abaixo, espera encontrar.
             PSODesc.BlendState    = NoColor;
@@ -392,6 +416,8 @@ namespace Smile {
         } else {
             PipelineStateDepthOnlyMaskedBindless.Reset();
             PipelineStateDepthNormalMaskedBindless.Reset();
+            PipelineStateDepthOnlyMaskedVsBindless.Reset();
+            PipelineStateDepthNormalMaskedVsBindless.Reset();
         }
 
         // --- Geometry pass do deferred: escreve o G-buffer (MRT 3 RTs) -------------------------
@@ -441,6 +467,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateGraphicsPipelineState(
                 &PSODesc, IID_PPV_ARGS(&NewPSOGBufferTwoSidedBindless)));
             PipelineStateGBufferTwoSidedBindless = NewPSOGBufferTwoSidedBindless;
+            MakeVsBindless(PipelineStateGBufferTwoSidedVsBindless);
 
             RasterizerDesc.CullMode   = D3D12_CULL_MODE_BACK;
             PSODesc.RasterizerState   = RasterizerDesc;
@@ -449,6 +476,7 @@ namespace Smile {
             SMILE_HR(_Device->CreateGraphicsPipelineState(
                 &PSODesc, IID_PPV_ARGS(&NewPSOGBufferBindless)));
             PipelineStateGBufferBindless = NewPSOGBufferBindless;
+            MakeVsBindless(PipelineStateGBufferVsBindless);
 
             // Restaura o estado para o passe forward de translucidos, logo abaixo.
             RasterizerDesc.CullMode   = D3D12_CULL_MODE_NONE;
@@ -457,6 +485,8 @@ namespace Smile {
         } else {
             PipelineStateGBufferBindless.Reset();
             PipelineStateGBufferTwoSidedBindless.Reset();
+            PipelineStateGBufferVsBindless.Reset();
+            PipelineStateGBufferTwoSidedVsBindless.Reset();
         }
 
         // --- Forward de translucidos (materiais Blend: vidro): sobre o HDR ja iluminado. -------
@@ -566,7 +596,8 @@ namespace Smile {
         // do classico ("GBuffer.ps" gera GBuffer.ps_6_0.cso e GBufferBindless.ps_6_6.cso), o
         // watcher do editor reconstroi o target Shaders inteiro, e o RecreatePSO abaixo recarrega
         // os dois blobs. Editar o MaterialCB.hlsli e include: forca reload completo.
-        static const char* const kStems[] = { "Triangle.vs", "GBuffer.ps", "DeferredLighting.ps",
+        static const char* const kStems[] = { "Triangle.vs", "TriangleBindless.vs",
+                                              "GBuffer.ps", "DeferredLighting.ps",
                                               "DepthNormal.ps", "ForwardBlend.ps",
                                               "DepthMasked.ps", "DepthNormalMasked.ps" };
         return { kStems, static_cast<u32>(std::size(kStems)) };

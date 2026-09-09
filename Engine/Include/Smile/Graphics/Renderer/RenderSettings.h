@@ -88,6 +88,10 @@ namespace Smile {
         bool GetBindlessMaterials() const;
         // "Da para ligar?" — para a UI desabilitar o controle em vez de deixar o usuario tentar.
         bool BindlessMaterialsAvailable() const;
+        // Fase 4: transform bindless no vertex shader. Depende do de material estar disponivel.
+        void SetBindlessTransforms(bool Use);
+        bool GetBindlessTransforms() const;
+        bool BindlessTransformsAvailable() const;
         void SetDepthPrepass(bool Use);
         bool GetDepthPrepass() const;
         void SetUseAsyncCompute(bool V);

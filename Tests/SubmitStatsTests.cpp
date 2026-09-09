@@ -96,7 +96,9 @@ namespace {
             Params[2].DescriptorTable.pDescriptorRanges   = &MaterialRange;
             Params[3].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
             Params[3].Constants.ShaderRegister = 4;
-            Params[3].Constants.Num32BitValues = 2;
+            // Cinco desde a Fase 4: as duas de material mais as tres de transform. O papel do rig e
+            // ser aceito pela mesma escrita que a producao emite, entao o tamanho acompanha.
+            Params[3].Constants.Num32BitValues = 5;
 
             D3D12_ROOT_SIGNATURE_DESC Desc{};
             Desc.NumParameters = _countof(Params);
@@ -272,6 +274,54 @@ namespace {
         CheckEq(Stats.MaterialFallbackDraws, 0u,
                 "e ele nao herdou o pedido de material do item pulado");
     }
+
+    // --- Transform: os dois caminhos contam em baldes EXCLUSIVOS (Fase 4) ----------------------
+    //
+    // `TransformBinds` e o numero que sustenta o gate `objectConstantBytes == 0`: enquanto ele for
+    // diferente de zero num passe migrado, algum call site continua amarrando o CBV de 256 B —
+    // sem que a imagem mude, porque o dado e o mesmo. E o modo de falha que so aparece na conta.
+    void TestarTransformClassico(FRig& _Rig) {
+        std::cout << "[submissao] transform pelo CBV por item (classico)\n";
+        FDrawSubmitStats Stats;
+        FDrawSubmitCache Submit;
+        Submit.Stats              = &Stats;
+        Submit.TransformBindless  = false;
+        Submit.TransformRootIndex = 0; // b0 no rig; b2 na producao
+        Submit.ObjectCBBase       = _Rig.Pool->GetGPUVirtualAddress();
+        Submit.ObjectCBStride     = 256;
+
+        for (u32 i = 0; i < 4; ++i) {
+            Submit.BindTransform(_Rig.List.Get(), i, i);
+            Submit.DrawMesh(_Rig.List.Get(), &_Rig.Mesh);
+        }
+
+        // SEM filtro de cache, ao contrario do bindless: cada item tem endereco proprio, e uma
+        // amarracao pulada desenharia o item anterior.
+        CheckEq(Stats.TransformBinds, 4u, "um CBV amarrado por item");
+        CheckEq(Stats.TransformSlotSets, 0u, "e nenhuma constante de slot escrita");
+    }
+
+    void TestarTransformBindless(FRig& _Rig) {
+        std::cout << "[submissao] transform pelo slot da instancia (bindless)\n";
+        FDrawSubmitStats Stats;
+        FDrawSubmitCache Submit;
+        Submit.Stats                  = &Stats;
+        Submit.TransformBindless      = true;
+        Submit.DrawConstantsRootIndex = FRig::kMaterialRootIndex;
+
+        // Quatro itens, e o terceiro repete o slot do segundo. Hoje isso nao acontece — um
+        // renderavel por slot —, mas a Fase 5 submete por instancia repetida, e o filtro tem de
+        // estar sob teste antes de ela existir.
+        const u32 kSlots[] = { 7u, 3u, 3u, 9u };
+        for (u32 Slot : kSlots) {
+            Submit.BindTransform(_Rig.List.Get(), 0u, Slot);
+            Submit.DrawMesh(_Rig.List.Get(), &_Rig.Mesh);
+        }
+
+        CheckEq(Stats.TransformBinds, 0u, "nenhum CBV amarrado");
+        CheckEq(Stats.TransformSlotSets, 3u, "o slot repetido nao emite constante de novo");
+        CheckEq(Stats.Draws, 4u, "mas os quatro desenham");
+    }
 }
 
 int main() {
@@ -288,6 +338,8 @@ int main() {
     TestarLacoMisto(Rig);
     TestarLacoMistoBindless(Rig);
     TestarPedidoNaoVaza(Rig);
+    TestarTransformClassico(Rig);
+    TestarTransformBindless(Rig);
 
     Rig.List->Close(); // gravada e nunca executada: o que esta sob teste e a contagem
 

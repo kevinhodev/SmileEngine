@@ -86,6 +86,40 @@ namespace Smile {
         return true;
     }
 
+    void Renderer::SetupTransformBinding(FDrawSubmitCache& _Submit, bool _Bindless,
+                                         D3D12_GPU_VIRTUAL_ADDRESS _ObjectCBBase) {
+        _Submit.TransformBindless       = _Bindless;
+        _Submit.TransformRootIndex      = FPipelineState::kObjectCBRootIndex;
+        _Submit.DrawConstantsRootIndex  = FPipelineState::kMaterialRootIndex;
+        _Submit.ObjectCBBase            = _ObjectCBBase;
+        _Submit.ObjectCBStride          = sizeof(ObjectConstants);
+    }
+
+    bool Renderer::BeginBindlessTransforms(ID3D12GraphicsCommandList* _CommandList,
+                                           u32 _FrameSlot) const {
+        if (!UseBindlessTransforms || !BindlessTransformsReady()) return false;
+        // Sem tabela nao ha descritor, e um 0xFFFFFFFF na constante de root viraria um
+        // ResourceDescriptorHeap invalido dentro do vertex shader — mesma razao do material.
+        if (!InstanceTable.IsBuilt() || !ViewMatricesCB) return false;
+
+        // Quatro escritas por PASSE. O slot da instancia (offset kRootConstInstanceSlot) e o
+        // unico estado por draw que sobra no vertex shader, e quem o escreve e a submissao.
+        _CommandList->SetGraphicsRoot32BitConstant(FPipelineState::kMaterialRootIndex,
+                                                   InstanceTable.TransformSrv(),
+                                                   FPipelineState::kRootConstTransformTable);
+        _CommandList->SetGraphicsRoot32BitConstant(FPipelineState::kMaterialRootIndex,
+                                                   InstanceTable.PrevTransformSrv(),
+                                                   FPipelineState::kRootConstPrevTransform);
+        // b2: no caminho classico este mesmo parametro carrega o ObjectCB do item; aqui ele
+        // carrega as tres matrizes do passe, amarradas UMA vez.
+        _CommandList->SetGraphicsRootConstantBufferView(
+            FPipelineState::kObjectCBRootIndex,
+            ViewMatricesCB->GetGPUVirtualAddress() +
+                static_cast<u64>(_FrameSlot % FCommandQueue::kFramesInFlight) *
+                    sizeof(FGpuViewMatricesSlice));
+        return true;
+    }
+
     bool Renderer::RepublishMaterialTextures(FMaterial& _Material) {
         if (!Initialized || !_Material.IsFinalized()) return false;
 

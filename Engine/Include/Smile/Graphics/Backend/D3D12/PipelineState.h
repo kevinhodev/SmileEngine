@@ -84,9 +84,64 @@ namespace Smile {
             return PipelineStateDepthNormalMaskedBindless.Get();
         }
 
-        // Indice do parametro de root das duas constantes de material (b4): [0] descritor da
-        // tabela, [1] linha. Publico porque quem escreve por draw e o passe, nao esta classe.
+        // Indice do parametro de root do bloco de constantes de draw (b4). Publico porque quem
+        // escreve por draw e o passe, nao esta classe.
+        //
+        // O bloco nasceu na Fase 3 com as duas primeiras (material) e a Fase 4 acrescentou as tres
+        // seguintes. O nome continua `kMaterialRootIndex` porque ele aparece em call sites de tres
+        // subsistemas; o que descreve o conteudo sao os offsets abaixo.
         static constexpr u32 kMaterialRootIndex = 14;
+        // CBV b2, visibilidade VERTEX. Carrega o `ObjectConstants` do item no caminho classico e
+        // as tres matrizes de view do passe no bindless — o mesmo parametro, porque o que ele
+        // tinha de dependente do objeto foi para a tabela canonica. Era um `4` literal em oito
+        // call sites de submissao.
+        static constexpr u32 kObjectCBRootIndex = 4;
+        // Offsets DENTRO do bloco. Nomeados porque um inteiro cru no call site nao diz qual
+        // constante esta sendo escrita, e trocar dois deles compila e desenha.
+        //
+        // Quatro sao por PASSE e uma e por DRAW: `MaterialRow` muda por grupo de material,
+        // `InstanceSlot` muda por item. As outras tres sao descritores publicados uma vez.
+        static constexpr u32 kRootConstMaterialTable  = 0;
+        static constexpr u32 kRootConstMaterialRow    = 1;
+        static constexpr u32 kRootConstTransformTable = 2;
+        static constexpr u32 kRootConstPrevTransform  = 3;
+        static constexpr u32 kRootConstInstanceSlot   = 4;
+        static constexpr u32 kRootConstCount          = 5;
+
+        // "As PSOs de transform bindless existem?" — mesma pergunta que BindlessMaterialsReady,
+        // pelo mesmo motivo: capability ligada com .cso ausente daria PSO nula.
+        //
+        // ⚠️ As quatro variantes com material sao construidas SOBRE as bindless de material, e nao
+        // em paralelo a elas. Isso e acoplamento deliberado: com os dois eixos independentes
+        // seriam quatro combinacoes de PSO por passe, num arquivo que nomeia cada PSO a mao. A
+        // escada do A/B fica classico -> material bindless -> material + transform bindless, e
+        // cada degrau isola uma mudanca. As duas de profundidade OPACA nao tem material e por isso
+        // sao independentes.
+        bool BindlessTransformsReady() const {
+            return BindlessMaterialsReady() && PipelineStateDepthOnlyVsBindless &&
+                   PipelineStateDepthNormalVsBindless && PipelineStateGBufferVsBindless &&
+                   PipelineStateGBufferTwoSidedVsBindless &&
+                   PipelineStateDepthOnlyMaskedVsBindless &&
+                   PipelineStateDepthNormalMaskedVsBindless;
+        }
+        ID3D12PipelineState* PSODepthOnlyVsBindless() const {
+            return PipelineStateDepthOnlyVsBindless.Get();
+        }
+        ID3D12PipelineState* PSODepthNormalVsBindless() const {
+            return PipelineStateDepthNormalVsBindless.Get();
+        }
+        ID3D12PipelineState* PSOGBufferVsBindless() const {
+            return PipelineStateGBufferVsBindless.Get();
+        }
+        ID3D12PipelineState* PSOGBufferTwoSidedVsBindless() const {
+            return PipelineStateGBufferTwoSidedVsBindless.Get();
+        }
+        ID3D12PipelineState* PSODepthOnlyMaskedVsBindless() const {
+            return PipelineStateDepthOnlyMaskedVsBindless.Get();
+        }
+        ID3D12PipelineState* PSODepthNormalMaskedVsBindless() const {
+            return PipelineStateDepthNormalMaskedVsBindless.Get();
+        }
         // Deferred lighting fullscreen (le o G-buffer -> HDR), na root signature principal.
         // Aditivo: soma a luz sobre o emissivo que o geometry pass escreveu no SceneColor.
         // Debug: variante opaca p/ as views de SSAO/GI (o shader substitui a tela inteira).
@@ -108,6 +163,15 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> PipelineStateGBufferTwoSidedBindless;
         ComPtr<ID3D12PipelineState> PipelineStateDepthOnlyMaskedBindless;
         ComPtr<ID3D12PipelineState> PipelineStateDepthNormalMaskedBindless;
+
+        // Fase 4: as mesmas seis com o VERTEX shader lendo o transform da tabela canonica. As duas
+        // primeiras nao tem pixel shader de material e por isso nao dependem do eixo da Fase 3.
+        ComPtr<ID3D12PipelineState> PipelineStateDepthOnlyVsBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthNormalVsBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateGBufferVsBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateGBufferTwoSidedVsBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthOnlyMaskedVsBindless;
+        ComPtr<ID3D12PipelineState> PipelineStateDepthNormalMaskedVsBindless;
         bool                        SupportsBindlessMaterials = false;
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLighting;
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLightingDebug;

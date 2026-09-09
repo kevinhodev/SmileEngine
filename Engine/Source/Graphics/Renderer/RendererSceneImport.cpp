@@ -50,6 +50,17 @@ namespace Smile {
         ObjectCB       = Upload.Resource;
         MappedObjectCB = Upload.Mapped;
 
+        // O ring de view do caminho bindless. Criado aqui por conveniencia de ciclo de vida — e o
+        // mesmo ponto em que o ObjectCB nasce —, mas NAO e dimensionado por MaxObjects: sao
+        // kFramesInFlight slices, e so. E essa a troca que a fase persegue.
+        if (!ViewMatricesCB) {
+            const GpuResources::FUploadBuffer ViewUpload = GpuResources::CreateUploadBuffer(
+                Backend->Device.Native(), sizeof(FGpuViewMatricesSlice),
+                FCommandQueue::kFramesInFlight);
+            ViewMatricesCB       = ViewUpload.Resource;
+            MappedViewMatricesCB = ViewUpload.Mapped;
+        }
+
         // ObjectCB e HiZ compartilham a mesma capacidade de objetos.
         HiZ.SetupObjects(Backend->Device.Native(), Backend->SRVHeap, MaxObjects);
     }

@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Renderer/CpuFrameStats.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Core/HResultCheck.h"
@@ -122,6 +123,25 @@ namespace Smile {
         // Offset 1: [0] e o descritor da tabela, escrito uma vez por passe.
         _CommandList->SetGraphicsRoot32BitConstant(MaterialRootIndex, _Row, 1);
         if (Stats) ++Stats->MaterialRowSets;
+    }
+
+    void FDrawSubmitCache::BindTransform(ID3D12GraphicsCommandList* _CommandList, u32 _ObjectSlot,
+                                         u32 _InstanceSlot) {
+        if (!TransformBindless) {
+            _CommandList->SetGraphicsRootConstantBufferView(
+                TransformRootIndex, ObjectCBBase + static_cast<u64>(_ObjectSlot) * ObjectCBStride);
+            if (Stats) ++Stats->TransformBinds;
+            return;
+        }
+        // Filtrado pelo cache, ao contrario da linha de material: dois itens seguidos com o MESMO
+        // slot de instancia nao existem hoje (um renderavel por slot), entao o filtro nao muda a
+        // contagem — ele esta aqui porque a Fase 5 vai submeter por instancia repetida e a
+        // alternativa seria descobrir isso por uma escrita a mais e silenciosa.
+        if (_InstanceSlot == LastInstanceSlot) return;
+        LastInstanceSlot = _InstanceSlot;
+        _CommandList->SetGraphicsRoot32BitConstant(DrawConstantsRootIndex, _InstanceSlot,
+                                                   FPipelineState::kRootConstInstanceSlot);
+        if (Stats) ++Stats->TransformSlotSets;
     }
 
     void FDrawSubmitCache::DrawMesh(ID3D12GraphicsCommandList* _CommandList,

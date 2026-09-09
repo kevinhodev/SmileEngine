@@ -121,6 +121,17 @@ namespace Smile {
         return R.BindlessMaterialsReady();
     }
 
+    void FRenderSettings::SetBindlessTransforms(bool _Use) {
+        // Mesma recusa do de material, mais a dependencia: as PSOs de transform sao construidas
+        // sobre as bindless de material, entao ligar este sem aquele nao tem PSO para onde ir. O
+        // getter devolve o estado EFETIVO.
+        R.UseBindlessTransforms = _Use && R.BindlessTransformsReady();
+    }
+    bool FRenderSettings::GetBindlessTransforms() const { return R.UseBindlessTransforms; }
+    bool FRenderSettings::BindlessTransformsAvailable() const {
+        return R.BindlessTransformsReady();
+    }
+
     void FRenderSettings::SetDepthPrepass(bool _Use) { R.UseDepthPrepass = _Use; }
     bool FRenderSettings::GetDepthPrepass() const    { return R.UseDepthPrepass; }
 

@@ -555,6 +555,25 @@ namespace Smile {
                    LocalShadows.BindlessReady();
         }
 
+        // Irma da de cima, para o TRANSFORM (Fase 4). Publica os dois descritores das colunas
+        // canonicas e amarra o CBV das matrizes de view — as quatro coisas por PASSE. O que sobra
+        // por draw e o slot da instancia.
+        //
+        // Devolve `false` sem escrever nada quando o knob esta desligado, quando as PSOs nao
+        // existem ou quando a tabela de instancias ainda nao foi construida. O passe cai no
+        // ObjectCB inteiro, que e o fallback explicito que o gate da fase exige.
+        bool BeginBindlessTransforms(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot) const;
+        // Preenche o cache com os dois enderecos que o BindTransform escolhe entre si. Existe para
+        // que o call site nao repita quatro atribuicoes por passe — quatro chances de um passe
+        // ficar com o modo de um e a base do outro, que desenharia o objeto errado sem erro.
+        static void SetupTransformBinding(FDrawSubmitCache& Submit, bool Bindless,
+                                          D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase);
+        bool BindlessTransformsReady() const {
+            // Exige o eixo de MATERIAL pronto porque as PSOs de transform sao construidas sobre as
+            // bindless de material (ver a nota em FPipelineState::BindlessTransformsReady).
+            return BindlessMaterialsReady() && PipelineState.BindlessTransformsReady();
+        }
+
         const FGpuProfiler& GetGpuProfiler() const;
 
         // Passes medidos na fila de COMPUTE assincrona (frequencia/readback proprios).
@@ -862,10 +881,17 @@ namespace Smile {
         u32                      GILightSRVSlot[FCommandQueue::kFramesInFlight] = {};
 
         u32                      MaxObjects = 1024;
-        ComPtr<ID3D12Resource>   ObjectCB;          
+        ComPtr<ID3D12Resource>   ObjectCB;
         u8*                      MappedObjectCB = nullptr;
-     
+
         void RecreateObjectCB();
+
+        // As tres matrizes de view do frame, no lugar do ObjectCB por instancia (Fase 4).
+        //
+        // Dimensionado por FRAME EM VOO e nao por objeto: e essa a troca. Um slice de 256 B por
+        // frame contra 256 B por instancia por frame — 256 MB na sintetica de 1M.
+        ComPtr<ID3D12Resource>   ViewMatricesCB;
+        u8*                      MappedViewMatricesCB = nullptr;
 
         std::vector<std::unique_ptr<FTexture>>  ImportedTextures;
         std::vector<std::unique_ptr<FMaterial>> ImportedMaterials;
@@ -1041,6 +1067,14 @@ namespace Smile {
         // (FPipelineState::BindlessMaterialsReady); sem isso o setter recusa e o raster fica no
         // caminho classico inteiro.
         bool              UseBindlessMaterials = false;
+
+        // Transform BINDLESS no vertex shader (Fase 4). Mesmo contrato do de cima e o mesmo
+        // default: quem liga e o setter, que recusa sem capability/PSOs.
+        //
+        // Ligar este EXIGE o de material ligado — as PSOs sao construidas sobre as dele. O setter
+        // e o `BeginBindlessTransforms` conferem, entao a combinacao invalida nao existe em
+        // runtime; a escada do A/B fica classico -> material -> material + transform.
+        bool              UseBindlessTransforms = false;
 
         FHiZOcclusion     HiZ; // occlusion culling HZB (build + teste + readback ring)
         bool              UseOcclusionCulling = true;

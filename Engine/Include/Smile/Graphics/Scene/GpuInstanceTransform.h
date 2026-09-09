@@ -34,6 +34,15 @@ namespace Smile {
     static_assert(offsetof(FGpuViewMatrices, ViewProjUnjittered)     ==  64);
     static_assert(offsetof(FGpuViewMatrices, PrevViewProjUnjittered) == 128);
 
+    // Uma fatia do ring de view do frame. O alinhamento vem do requisito de root CBV: o endereco
+    // amarrado tem de ser multiplo de 256, entao o slice e 256 mesmo carregando 192 de conteudo.
+    // O HLSL declara so o `GpuViewMatrices` no b2 e ignora o resto do slice.
+    struct alignas(256) FGpuViewMatricesSlice {
+        FGpuViewMatrices View;
+    };
+    static_assert(sizeof(FGpuViewMatricesSlice) == 256);
+    static_assert(offsetof(FGpuViewMatricesSlice, View) == 0);
+
     // O que o VS consome. E o layout que o `ObjectConstants` carrega hoje; quando o caminho
     // bindless virar default, ele deixa de existir como BUFFER e passa a ser um valor composto
     // dentro do shader.

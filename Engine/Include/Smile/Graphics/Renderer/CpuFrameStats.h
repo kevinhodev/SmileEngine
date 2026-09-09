@@ -43,6 +43,13 @@ namespace Smile {
         u32 BindlessDraws         = 0;
         u32 MaterialFallbackDraws = 0;
         u32 MaterialRowSets       = 0;
+        // Par da Fase 4, e a mesma leitura: `TransformBinds` conta os CBV de 256 B amarrados por
+        // item no caminho classico, `TransformSlotSets` conta as constantes de root escritas no
+        // bindless. Num passe migrado o primeiro tem de ir a ZERO — e ele que sustenta o
+        // `objectConstantBytes == 0` do gate, porque um call site esquecido continuaria amarrando
+        // o CBV sem que a imagem mudasse.
+        u32 TransformBinds        = 0;
+        u32 TransformSlotSets     = 0;
         // Material que chegou ao draw sem linha na tabela canonica. TEM de ser zero: `RowOf`
         // devolve a linha 0 para desconhecido, e a linha 0 e "renderavel sem material" — cinza
         // 0,7, sem textura. Sem este contador, um material fora da tabela nao daria erro nenhum:

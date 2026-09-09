@@ -139,6 +139,7 @@ namespace Smile {
             LastRow  = 0xFFFFFFFFu;
             LastRowMat    = nullptr;
             LastRowLookup = 0;
+            LastInstanceSlot = 0xFFFFFFFFu;
             MaterialRequested = false;
             // Stats NAO e zerado: o Reset existe para invalidar o cache ao trocar root
             // signature/PSO no MEIO de um passe, e o balde e do passe inteiro.
@@ -154,6 +155,29 @@ namespace Smile {
         // material nao nulo) de "renderavel sem material" (linha 0 legitima). Os dois produzem o
         // mesmo desenho e so um deles e bug.
         void BindMaterialRow(ID3D12GraphicsCommandList* CommandList, const FMaterial* Mat, u32 Row);
+
+        // --- Transform BINDLESS (Fase 4) -------------------------------------------------------
+        //
+        // Ligado, o item deixa de amarrar um CBV de 256 B e passa a escrever UMA constante de root
+        // com o slot da instancia; o vertex shader compoe as quatro matrizes a partir das colunas
+        // canonicas mais as tres de view do passe.
+        //
+        // Os dois caminhos vivem no mesmo metodo porque o que muda entre eles e exatamente uma
+        // linha de submissao. Espalhados por oito call sites, a diferenca seria oito ramos, e um
+        // esquecido desenharia o objeto anterior — sem erro nenhum, so o objeto no lugar errado.
+        bool TransformBindless = false;
+        u32  TransformRootIndex = 0; // CBV b2 no caminho classico
+        u32  DrawConstantsRootIndex = 0; // bloco de constantes b4 no bindless
+        D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase = 0;
+        u64  ObjectCBStride = 0;
+        u32  LastInstanceSlot = 0xFFFFFFFFu;
+
+        // `ObjectSlot` endereca o ObjectCB do frame; `InstanceSlot` e a residencia GPU. Sao
+        // numeros diferentes e o metodo recebe os dois para que o call site nao precise saber
+        // qual dos dois o caminho ativo consome.
+        void BindTransform(ID3D12GraphicsCommandList* CommandList, u32 ObjectSlot,
+                           u32 InstanceSlot);
+
         void DrawMesh(ID3D12GraphicsCommandList* CommandList, const FGpuMesh* Mesh);
     };
 }

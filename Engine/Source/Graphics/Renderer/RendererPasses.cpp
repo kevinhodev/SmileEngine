@@ -1218,8 +1218,9 @@ namespace Smile {
                 for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
                     ++Submit.Stats->Considered;
                     if (!It->Mat->Blend) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(It->Slot) * sizeof(ObjectConstants));
+                    // Translucidos ficam no classico por decisao D9; o BindTransform passa pelo
+                    // mesmo metodo so para o contador do passe nao mentir por omissao.
+                    Submit.BindTransform(CommandList, It->Slot, It->R->GpuHandle.Slot);
                     Submit.BindMaterial(CommandList, Backend->SRVHeap, It->Mat);
                     Submit.DrawMesh(CommandList, It->R->Mesh);
                 }
@@ -1442,6 +1443,9 @@ namespace Smile {
         const bool DoPrepass = true;
         if (DoPrepass) {
             Backend->DirectProfiler.Begin(CommandList, "Z-prepass");
+            // Publica descritores das colunas e o CBV de view do passe. Falso = caminho classico
+            // inteiro, e nenhuma constante foi escrita.
+            const bool PrepassVsBindless = BeginBindlessTransforms(CommandList, FrameSlot);
             if (Modes.GeometricNormalWillRun) {
                 FBarrierBatch Batch;
                 Batch.TransitionTracked(Targets.NormalBuffer.Get(), Targets.NormalBufferState,
@@ -1451,21 +1455,25 @@ namespace Smile {
                 CommandList->OMSetRenderTargets(1, &NormalRTV, FALSE, &DSV);
                 const FLOAT NeutralN[4] = { 0.5f, 0.5f, 0.5f, 0.0f };
                 CommandList->ClearRenderTargetView(NormalRTV, NeutralN, 0, nullptr);
-                CommandList->SetPipelineState(PipelineState.PSODepthNormal());
+                CommandList->SetPipelineState(PrepassVsBindless
+                                                  ? PipelineState.PSODepthNormalVsBindless()
+                                                  : PipelineState.PSODepthNormal());
             } else {
-                CommandList->SetPipelineState(PipelineState.PSODepthOnly());
+                CommandList->SetPipelineState(PrepassVsBindless
+                                                  ? PipelineState.PSODepthOnlyVsBindless()
+                                                  : PipelineState.PSODepthOnly());
             }
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - opacos");
                 FDrawSubmitCache Submit;
                 Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassOpaque);
+                SetupTransformBinding(Submit, PrepassVsBindless, ObjectCBBase);
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem& V : VisibleScratch) {
                     ++Submit.Stats->Considered;
                     if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    Submit.BindTransform(CommandList, V.Slot, V.R->GpuHandle.Slot);
                     Submit.DrawMesh(CommandList, V.R->Mesh);
                 }
             }
@@ -1473,8 +1481,15 @@ namespace Smile {
             // Unico passe do prepass que le material (alpha-clip); o opaco acima nao amarra
             // material nenhum e por isso nao tem caminho bindless.
             const bool MaskedBindless = BeginBindlessMaterials(CommandList);
+            // A gemea VS-bindless so existe sobre a de material bindless (ver a nota do
+            // FPipelineState::BindlessTransformsReady). `PrepassVsBindless` ja implica as duas.
+            const bool MaskedVsBindless = MaskedBindless && PrepassVsBindless;
             CommandList->SetPipelineState(
-                MaskedBindless
+                MaskedVsBindless
+                    ? (Modes.GeometricNormalWillRun
+                           ? PipelineState.PSODepthNormalMaskedVsBindless()
+                           : PipelineState.PSODepthOnlyMaskedVsBindless())
+                : MaskedBindless
                     ? (Modes.GeometricNormalWillRun ? PipelineState.PSODepthNormalMaskedBindless()
                                                     : PipelineState.PSODepthOnlyMaskedBindless())
                     : (Modes.GeometricNormalWillRun ? PipelineState.PSODepthNormalMasked()
@@ -1485,13 +1500,13 @@ namespace Smile {
                 Submit.Stats             = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassMasked);
                 Submit.Bindless          = MaskedBindless;
                 Submit.MaterialRootIndex = FPipelineState::kMaterialRootIndex;
+                SetupTransformBinding(Submit, MaskedVsBindless, ObjectCBBase);
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem& V : VisibleScratch) {
                     ++Submit.Stats->Considered;
                     if (V.Mat->Blend) continue;
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants));
+                    Submit.BindTransform(CommandList, V.Slot, V.R->GpuHandle.Slot);
                     if (MaskedBindless) {
                         // A consulta da linha e memoizada: RowOf e um unordered_map e a lista
                         // ja vem agrupada por material.
@@ -1644,11 +1659,14 @@ namespace Smile {
 
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 const bool GBufferBindless = BeginBindlessMaterials(CommandList);
+                const bool GBufferVsBindless =
+                    GBufferBindless && BeginBindlessTransforms(CommandList, FrameSlot);
                 ID3D12PipelineState* CurGeomPSO = nullptr;
                 FDrawSubmitCache Submit;
                 Submit.Stats             = &CpuStatsBuilding.Pass(ESubmitPass::GBuffer);
                 Submit.Bindless          = GBufferBindless;
                 Submit.MaterialRootIndex = FPipelineState::kMaterialRootIndex;
+                SetupTransformBinding(Submit, GBufferVsBindless, ObjectCBBase);
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (const FVisibleItem* V : GBufferOrder) {
                     ++Submit.Stats->Considered;
@@ -1657,14 +1675,16 @@ namespace Smile {
                     // A classe de PSO nao muda com o caminho: two-sided continua sendo estado de
                     // pipeline (D6 do plano). O que muda e so de qual familia a PSO sai.
                     ID3D12PipelineState* Want =
-                        GBufferBindless
+                        GBufferVsBindless
+                            ? (TwoSided ? PipelineState.PSOGBufferTwoSidedVsBindless()
+                                        : PipelineState.PSOGBufferVsBindless())
+                        : GBufferBindless
                             ? (TwoSided ? PipelineState.PSOGBufferTwoSidedBindless()
                                         : PipelineState.PSOGBufferBindless())
                             : (TwoSided ? PipelineState.PSOGBufferTwoSided()
                                         : PipelineState.PSOGBuffer());
                     if (Want != CurGeomPSO) { CommandList->SetPipelineState(Want); CurGeomPSO = Want; }
-                    CommandList->SetGraphicsRootConstantBufferView(
-                        4, ObjectCBBase + static_cast<u64>(V->Slot) * sizeof(ObjectConstants));
+                    Submit.BindTransform(CommandList, V->Slot, V->R->GpuHandle.Slot);
                     if (GBufferBindless) {
                         if (Mat != Submit.LastRowMat) {
                             Submit.LastRowMat = Mat;
@@ -2023,6 +2043,15 @@ namespace Smile {
         // cada instancia; no bindless viram um CBV amarrado uma vez por passe.
         const FGpuViewMatrices ViewMatrices{ Vw.ViewProjection, Vw.ViewProjUnjittered,
                                              FrameState->PrevViewProj };
+        // Uma escrita por FRAME, no slice do frame em voo. O caminho classico nao a le; escrever
+        // sempre custa 192 B e evita um ramo que so seria exercitado com o toggle ligado.
+        if (MappedViewMatricesCB) {
+            const FGpuViewMatricesSlice Slice{ ViewMatrices };
+            std::memcpy(MappedViewMatricesCB +
+                            static_cast<size_t>(FrameSlot % FCommandQueue::kFramesInFlight) *
+                                sizeof(FGpuViewMatricesSlice),
+                        &Slice, sizeof(Slice));
+        }
 
         auto& AllItems = _Ctx.All;
 
