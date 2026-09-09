@@ -6,6 +6,7 @@
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cmath>
@@ -15,8 +16,9 @@
 namespace Smile {
 
     void FRainWetness::Initialize(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
-                                  u32 _Width, u32 _Height) {
+                                  u32 _Width, u32 _Height, bool _DirectHeapIndexing) {
         if (IsInitialized()) return;
+        SupportsDirectHeapIndexing = _DirectHeapIndexing;
         BuildRootSignature(_Device);
         BuildPSO(_Device);
         BuildCurtainPSO(_Device);
@@ -457,7 +459,7 @@ namespace Smile {
             MatRange.BaseShaderRegister                = 0;
             MatRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-            D3D12_ROOT_PARAMETER RootParams[4]{};
+            D3D12_ROOT_PARAMETER RootParams[5]{};
             RootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
             RootParams[0].Descriptor.ShaderRegister = 0;
             RootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -474,6 +476,21 @@ namespace Smile {
             RootParams[3].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
             RootParams[3].Descriptor.ShaderRegister = 2;
             RootParams[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+            // Bloco de constantes b4 (Fase 4). Esta root signature nao tinha nenhum: a chuva
+            // nunca entrou no eixo de material bindless, e o masked dela continua amarrando
+            // textura por descriptor table.
+            //
+            // Por isso o transform aqui NAO depende do eixo de material, ao contrario do raster
+            // e das sombras: a gemea masked leva o VS novo com o PS CLASSICO, entao nao ha PS
+            // bindless para exigir tabela publicada.
+            RootParams[kOccDrawConstantsRootIndex].ParameterType =
+                D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            RootParams[kOccDrawConstantsRootIndex].Constants.ShaderRegister = 4;
+            RootParams[kOccDrawConstantsRootIndex].Constants.RegisterSpace  = 0;
+            RootParams[kOccDrawConstantsRootIndex].Constants.Num32BitValues =
+                FPipelineState::kRootConstCount;
+            RootParams[kOccDrawConstantsRootIndex].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
             D3D12_STATIC_SAMPLER_DESC Sampler{};
             Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
@@ -493,6 +510,10 @@ namespace Smile {
             Desc.NumStaticSamplers = 1;
             Desc.pStaticSamplers   = &Sampler;
             Desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+            // Sem esta flag a PSO do VS bindless falha na criacao com E_INVALIDARG: o shader usa
+            // ResourceDescriptorHeap, e a spec de Dynamic Resources exige que a ROOT declare.
+            if (SupportsDirectHeapIndexing)
+                Desc.Flags |= D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
             Microsoft::WRL::ComPtr<ID3DBlob> Blob, ErrorBlob;
             HRESULT Hr = D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1,
@@ -551,6 +572,22 @@ namespace Smile {
 
             PSODesc.PS = { PS.data(), PS.size() }; // alpha-test: copa de arvore filtra chuva
             SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&OccMaskedPSO)));
+
+            // Gemeas de TRANSFORM (Fase 4). O PS continua o CLASSICO nas duas: a chuva nunca
+            // entrou no eixo de material bindless, entao aqui o transform nao depende dele.
+            // Estado do PSODesc intacto entre as duas — so o VS e, depois, o PS mudam.
+            OccOpaqueVsBindlessPSO.Reset();
+            OccMaskedVsBindlessPSO.Reset();
+            auto VsBindless = SupportsDirectHeapIndexing
+                ? LoadShaderBytecode("ShadowDepthVsBindless.vs_6_6.cso") : std::vector<u8>{};
+            if (!VsBindless.empty()) {
+                PSODesc.VS = { VsBindless.data(), VsBindless.size() };
+                SMILE_HR(_Device->CreateGraphicsPipelineState(
+                    &PSODesc, IID_PPV_ARGS(&OccMaskedVsBindlessPSO)));
+                PSODesc.PS = { nullptr, 0 };
+                SMILE_HR(_Device->CreateGraphicsPipelineState(
+                    &PSODesc, IID_PPV_ARGS(&OccOpaqueVsBindlessPSO)));
+            }
         }
 
         // Depth 512^2 D32 + SRV R32. Criado em PSR: so vira DEPTH_WRITE dentro do Record;
@@ -596,8 +633,12 @@ namespace Smile {
                                           FTextureSRVHeap& _SRVHeap, u32 _FrameSlot,
                                           const Vec3& _CamPos,
                                           const FOccluderItem* _Items, size_t _Count,
+                                          bool _BindlessTransforms, u32 _TransformTableSrv,
                                           FDrawSubmitStats* _Stats) {
         if (!OccOpaquePSO) return false;
+        // Sem exigir o eixo de material: a gemea masked leva o VS novo com o PS classico.
+        const bool BindlessTransforms = _BindlessTransforms && OcclusionTransformBindlessReady() &&
+            _TransformTableSrv != FTextureSRVHeap::kInvalidSlot;
 
         // Centro snapado num quantum grosso (16 m): andar so re-renderiza ao cruzar a
         // fronteira — estilo do bProcessed da Cry, mas automatico. Snap tambem em Y (a
@@ -657,6 +698,14 @@ namespace Smile {
         ID3D12PipelineState* Cur = nullptr;
         FDrawSubmitCache Submit;
         Submit.Stats = _Stats;
+        Submit.TransformBindless      = BindlessTransforms;
+        Submit.TransformRootIndex     = kOccObjectCBRootIndex;
+        Submit.DrawConstantsRootIndex = kOccDrawConstantsRootIndex;
+        // Uma escrita por PASSE: o descritor da coluna. O mapa de oclusao e top-down e nao tem
+        // motion vector, entao PrevTransform e o CBV de view ficam de fora, como nas sombras.
+        if (BindlessTransforms)
+            _Cmd->SetGraphicsRoot32BitConstant(kOccDrawConstantsRootIndex, _TransformTableSrv,
+                                               FPipelineState::kRootConstTransformTable);
         _Cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = 0; k < _Count; ++k) {
             if (_Stats) ++_Stats->Considered;
@@ -665,9 +714,11 @@ namespace Smile {
             if (It.AABBMax.X < MinX || It.AABBMin.X > MaxX ||
                 It.AABBMax.Z < MinZ || It.AABBMin.Z > MaxZ) continue;
             const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
-            ID3D12PipelineState* Want = AlphaTested ? OccMaskedPSO.Get() : OccOpaquePSO.Get();
+            ID3D12PipelineState* Want = AlphaTested
+                ? (BindlessTransforms ? OccMaskedVsBindlessPSO.Get() : OccMaskedPSO.Get())
+                : (BindlessTransforms ? OccOpaqueVsBindlessPSO.Get() : OccOpaquePSO.Get());
             if (Want != Cur) { _Cmd->SetPipelineState(Want); Cur = Want; }
-            _Cmd->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
+            Submit.BindTransformAt(_Cmd, It.ObjectCB, It.InstanceSlot);
             if (AlphaTested) Submit.BindMaterial(_Cmd, _SRVHeap, It.Mat);
             Submit.DrawMesh(_Cmd, It.Mesh);
         }

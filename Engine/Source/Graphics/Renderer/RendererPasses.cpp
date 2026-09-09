@@ -1753,10 +1753,17 @@ namespace Smile {
                 for (const FDrawItem& A : AllItems)
                     RainOccluders.push_back({ A.R->Mesh, A.Mat,
                                               ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                              A.R->GpuHandle.Slot,
                                               A.R->AABBMin, A.R->AABBMax });
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
+                // A chuva nao depende do eixo de material: a gemea masked leva o VS novo com o PS
+                // classico. O gate aqui e so o toggle mais a tabela existir.
+                const bool RainVsBindless = UseBindlessTransforms && InstanceTable.IsBuilt();
                 RainWetness.RecordOcclusionMap(CommandList, Backend->SRVHeap, FrameSlot, Vw.CameraPosition,
                                                RainOccluders.data(), RainOccluders.size(),
+                                               RainVsBindless,
+                                               RainVsBindless ? InstanceTable.TransformSrv()
+                                                              : FTextureSRVHeap::kInvalidSlot,
                                                &CpuStatsBuilding.Pass(ESubmitPass::RainOcclusion));
             }
             const Vec3 KeyColorInt = { Lt.KeyColor.X * Lt.KeyInt, Lt.KeyColor.Y * Lt.KeyInt,

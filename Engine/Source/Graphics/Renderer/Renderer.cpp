@@ -194,7 +194,8 @@ namespace Smile {
 
         SunShafts.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
 
-        RainWetness.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight());
+        RainWetness.Initialize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(),
+                               RenderHeight(), Backend->Device.SupportsDirectHeapIndexing());
 
         ReportInitProgress("Preparando sombras, terreno e pós-processo", {}, 0.70f);
         const bool DirectHeapIndexing = Backend->Device.SupportsDirectHeapIndexing();

@@ -60,11 +60,17 @@ namespace Smile {
             const FGpuMesh*           Mesh;
             const FMaterial*          Mat;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCB;
+            // Residencia GPU do occluder (Fase 4). Ver a nota gemea no FShadowDrawItem.
+            u32                       InstanceSlot = 0;
             Vec3                      AABBMin;
             Vec3                      AABBMax;
         };
 
-        void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
+        // `DirectHeapIndexing` chega desde a Fase 4: sem ele a root signature de OCLUSAO nao
+        // declara heap diretamente indexado, e a PSO com o vertex shader bindless falha na
+        // criacao com E_INVALIDARG. A chuva nunca teve caminho bindless antes disso.
+        void Initialize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height,
+                        bool DirectHeapIndexing);
         void Resize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 Width, u32 Height);
         void Recreate(ID3D12Device* Device); // reload de shader (PSO apenas)
 
@@ -76,7 +82,11 @@ namespace Smile {
         bool RecordOcclusionMap(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                                 u32 FrameSlot, const Vec3& CamPos,
                                 const FOccluderItem* Items, size_t Count,
-                                FDrawSubmitStats* Stats = nullptr);
+                                // Stats SEM default, pela mesma razao do DrawCasters: com ele, um
+                                // call site que esquecesse um bool novo compilaria (o ponteiro
+                                // converte em silencio) e as estatisticas sumiriam.
+                                bool BindlessTransforms, u32 TransformTableSrv,
+                                FDrawSubmitStats* Stats);
         void InvalidateOcclusion() { OccValid = false; }
 
         void UpdatePerFrame(u32 FrameSlot, const Mat44& InvViewProjFull,
@@ -126,8 +136,20 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> OccRootSig; // clone do layout do CSM
                                                                 // (Material::Bind assume 1/2)
+        // Bloco de constantes b4 nesta root signature. O CBV de objeto e o 3, como nas sombras.
+        bool SupportsDirectHeapIndexing = false;
+        static constexpr u32 kOccDrawConstantsRootIndex = 4;
+        static constexpr u32 kOccObjectCBRootIndex      = 3;
+        bool OcclusionTransformBindlessReady() const {
+            return OccOpaqueVsBindlessPSO && OccMaskedVsBindlessPSO;
+        }
+
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OccOpaquePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OccMaskedPSO;
+        // Fase 4: as duas com o VS lendo o transform da tabela. O PS continua o CLASSICO nas
+        // duas — a chuva nunca teve caminho de material bindless.
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> OccOpaqueVsBindlessPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> OccMaskedVsBindlessPSO;
         Microsoft::WRL::ComPtr<ID3D12Resource>      OccDepth;
         FDescriptorHeap                             OccDSVHeap;
         u32                                         OccSRVSlot = 0xFFFFFFFFu;
