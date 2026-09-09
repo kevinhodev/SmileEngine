@@ -897,10 +897,25 @@ namespace Smile {
                     PickIds.push_back({ V.R->GpuHandle, V.R->Id });
                     PickItems.push_back({ V.R->Mesh, V.Mat,
                                           ObjectCBBase + static_cast<u64>(V.Slot) * sizeof(ObjectConstants),
+                                          V.R->GpuHandle.Slot,
                                           EncodeCapturedIdentity(PickIds.size() - 1) });
                 }
+                // O picking COMPOE a MVP, entao precisa das matrizes de view — ao contrario das
+                // sombras e da chuva, que recebem a projecao pronta. Sem o CBV ele cai no
+                // classico inteiro, que e o que o proprio RecordIDPass confere.
+                const bool PickVsBindless = UseBindlessTransforms && InstanceTable.IsBuilt() &&
+                                            ViewMatricesCB != nullptr;
                 ObjectPicker.RecordIDPass(CommandList, Backend->SRVHeap,
-                                          PickItems.data(), PickItems.size());
+                                          PickItems.data(), PickItems.size(),
+                                          PickVsBindless,
+                                          PickVsBindless ? InstanceTable.TransformSrv()
+                                                         : FTextureSRVHeap::kInvalidSlot,
+                                          PickVsBindless
+                                              ? ViewMatricesCB->GetGPUVirtualAddress() +
+                                                    static_cast<u64>(FrameSlot %
+                                                        FCommandQueue::kFramesInFlight) *
+                                                        sizeof(FGpuViewMatricesSlice)
+                                              : 0);
 
                 auto SceneRTV = Targets.HDRRTVHeap.CpuHandle(0);
                 CommandList->OMSetRenderTargets(1, &SceneRTV, FALSE, &DSV);

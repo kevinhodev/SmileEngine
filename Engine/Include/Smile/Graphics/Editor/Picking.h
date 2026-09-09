@@ -29,6 +29,10 @@ namespace Smile {
             const FGpuMesh*           Mesh;
             const FMaterial*          Material;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCBAddress; // slot b2 desse renderavel (mesmo MVP do forward)
+            // Residencia GPU (Fase 4). O picking TEM de concordar com o raster ate o ultimo bit:
+            // se ele compuser a MVP de outro jeito, o objeto sob o cursor deixa de ser o objeto
+            // desenhado ali. Por isso a composicao vem do include compartilhado.
+            u32                       InstanceSlot = 0;
             // Indice na tabela de identidades DESTE passe, + 1 (0 fica reservado para vazio).
             // NAO e o indice do renderavel na lista: o readback chega frames depois, e ate la a
             // lista pode ter mudado -- era assim que o pick endereçava, e so nao trocava de
@@ -49,7 +53,9 @@ namespace Smile {
         // ObjectId de cada item indexa aqui (menos 1).
         std::vector<FPickIdentity>& Identities() { return PickIdentities; }
 
-        void Initialize(ID3D12Device* Device, u32 Width, u32 Height);
+        // `DirectHeapIndexing` desde a Fase 4: sem ele a root signature nao declara heap
+        // diretamente indexado e a PSO do vertex shader bindless falha na criacao.
+        void Initialize(ID3D12Device* Device, u32 Width, u32 Height, bool DirectHeapIndexing);
         void Resize(ID3D12Device* Device, u32 Width, u32 Height);
         bool IsInitialized() const override { return Initialized; }
 
@@ -75,9 +81,15 @@ namespace Smile {
 
         // Grava um depth/ID proprio e copia o texel. Materiais masked repetem o alpha clip;
         // translucidos escrevem apenas neste depth privado para o frontal continuar selecionavel.
+        //
+        // Os tres ultimos sao o caminho de transform da Fase 4, e as tres condicoes valem
+        // JUNTAS: sem o CBV de view o picking nao tem como compor a MVP, ao contrario das
+        // sombras e da chuva, que recebem a projecao pronta.
         void RecordIDPass(ID3D12GraphicsCommandList* CmdList,
                           FTextureSRVHeap& SRVHeap,
-                          const FDrawItem* Items, size_t Count);
+                          const FDrawItem* Items, size_t Count,
+                          bool BindlessTransforms, u32 TransformTableSrv,
+                          D3D12_GPU_VIRTUAL_ADDRESS ViewMatricesCB);
 
         // Avanca o relogio interno (1x por frame, no topo do RenderFrame apos o BeginFrame).
         void Tick();
@@ -105,6 +117,18 @@ namespace Smile {
         ComPtr<ID3D12RootSignature> RootSig;
         ComPtr<ID3D12PipelineState> PSO;
         ComPtr<ID3D12PipelineState> AlphaPSO;
+        // Fase 4: as duas com o VS lendo o transform da tabela. O pixel shader nao muda -- o
+        // picking nunca teve caminho de material bindless.
+        ComPtr<ID3D12PipelineState> VsBindlessPSO;
+        ComPtr<ID3D12PipelineState> AlphaVsBindlessPSO;
+        bool SupportsDirectHeapIndexing = false;
+        // b4, lido pelo VERTEX. Nao confundir com o Params[3], que e b0 e so do pixel.
+        static constexpr u32 kDrawConstantsRootIndex = 4;
+        // CBV b2 nesta root signature: ObjectCB no classico, matrizes de view no bindless.
+        static constexpr u32 kObjectCBRootIndex      = 0;
+        bool TransformBindlessReady() const {
+            return VsBindlessPSO && AlphaVsBindlessPSO;
+        }
 
         EState State          = EState::Idle;
         std::vector<FPickIdentity> PickIdentities;

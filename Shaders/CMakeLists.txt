@@ -278,6 +278,10 @@ smile_compile_shader(Tonemap/FlickerHeatmap.ps.hlsl       ps_6_0 main SHADER_OUT
 
 # Selecao no editor — picking (GPU ID-buffer, estilo hit-proxy) + outline (mascara + edge-detect)
 smile_compile_shader(Selection/SelectionGeom.vs.hlsl      vs_6_0 main SHADER_OUTPUTS)
+# Permutacao de transform da Fase 4, usada SO pelo picking. O contorno de selecao continua no
+# .cso classico acima: ele tem ObjectCB proprio e nao le a tabela.
+smile_compile_shader(Selection/SelectionGeom.vs.hlsl vs_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME SelectionGeomVsBindless ${SMILE_INSTANCE_BINDLESS_FLAGS})
 smile_compile_shader(Selection/ObjectID.ps.hlsl           ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Selection/ObjectIDAlpha.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Selection/SelectionMask.ps.hlsl      ps_6_0 main SHADER_OUTPUTS)

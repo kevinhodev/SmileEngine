@@ -5,6 +5,7 @@
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
 #include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Graphics/Renderer/DepthConfig.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
@@ -14,7 +15,9 @@
 namespace Smile {
     static constexpr u32 kReadbackRowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT; 
 
-    void FObjectPicker::Initialize(ID3D12Device* Device, u32 Width, u32 Height) {
+    void FObjectPicker::Initialize(ID3D12Device* Device, u32 Width, u32 Height,
+                                   bool DirectHeapIndexing) {
+        SupportsDirectHeapIndexing = DirectHeapIndexing;
         if (Initialized) return;
         BuildRootSignature(Device);
         BuildPSO(Device);
@@ -77,7 +80,7 @@ namespace Smile {
         MaterialRange.BaseShaderRegister                = 0;
         MaterialRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER Params[4]{};
+        D3D12_ROOT_PARAMETER Params[5]{};
         Params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         Params[0].Descriptor.ShaderRegister = 2; 
         Params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -96,6 +99,15 @@ namespace Smile {
         Params[3].Constants.Num32BitValues = 4;
         Params[3].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
 
+        // Bloco de constantes de draw em b4 (Fase 4). SEPARADO do de cima: aquele e b0, so do
+        // pixel shader (ObjectId + modo de alpha). Este e lido pelo VERTEX, entao visibilidade ALL.
+        Params[kDrawConstantsRootIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        Params[kDrawConstantsRootIndex].Constants.ShaderRegister = 4;
+        Params[kDrawConstantsRootIndex].Constants.RegisterSpace  = 0;
+        Params[kDrawConstantsRootIndex].Constants.Num32BitValues =
+            FPipelineState::kRootConstCount;
+        Params[kDrawConstantsRootIndex].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
         Sampler.MaxAnisotropy    = 8;
@@ -112,6 +124,10 @@ namespace Smile {
         Desc.NumStaticSamplers = 1;
         Desc.pStaticSamplers   = &Sampler;
         Desc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        // Sem esta flag a PSO do VS bindless falha com E_INVALIDARG. Foi o achado da chuva, que
+        // so apareceu porque o teste de identidade cria device de verdade.
+        if (SupportsDirectHeapIndexing)
+            Desc.Flags |= D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
         ComPtr<ID3DBlob> Blob, Err;
         HRESULT Hr = D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &Err);
@@ -165,6 +181,20 @@ namespace Smile {
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&PSO)));
         PSODesc.PS = { AlphaPS.data(), AlphaPS.size() };
         SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&AlphaPSO)));
+
+        // Gemeas de TRANSFORM (Fase 4). O PSODesc chega aqui com o PS de ALPHA; a de baixo volta
+        // ao PS opaco, que e a ordem inversa das duas de cima. Estado do raster intacto.
+        VsBindlessPSO.Reset();
+        AlphaVsBindlessPSO.Reset();
+        auto VsBindless = SupportsDirectHeapIndexing
+            ? LoadShaderBytecode("SelectionGeomVsBindless.vs_6_6.cso") : std::vector<u8>{};
+        if (!VsBindless.empty()) {
+            PSODesc.VS = { VsBindless.data(), VsBindless.size() };
+            SMILE_HR(Device->CreateGraphicsPipelineState(
+                &PSODesc, IID_PPV_ARGS(&AlphaVsBindlessPSO)));
+            PSODesc.PS = { PS.data(), PS.size() };
+            SMILE_HR(Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&VsBindlessPSO)));
+        }
     }
 
     void FObjectPicker::RequestPick(u32 X, u32 Y) {
@@ -177,8 +207,15 @@ namespace Smile {
 
     void FObjectPicker::RecordIDPass(ID3D12GraphicsCommandList* CmdList,
                                      FTextureSRVHeap& SRVHeap,
-                                     const FDrawItem* Items, size_t Count) {
+                                     const FDrawItem* Items, size_t Count,
+                                     bool BindlessTransforms, u32 TransformTableSrv,
+                                     D3D12_GPU_VIRTUAL_ADDRESS ViewMatricesCB) {
         if (!Initialized || State != EState::Requested) return;
+        // Exige as tres coisas juntas: PSOs, descritor da coluna e o CBV de view. O picking
+        // compoe a MVP, entao sem as matrizes de view ele nao tem como -- ao contrario das
+        // sombras, que recebem a projecao da luz por b0.
+        const bool VsBindless = BindlessTransforms && TransformBindlessReady() &&
+            TransformTableSrv != FTextureSRVHeap::kInvalidSlot && ViewMatricesCB != 0;
 
         auto RTV = IDRTVHeap.CpuHandle(0);
         auto DSV = PickDSVHeap.CpuHandle(0);
@@ -205,13 +242,21 @@ namespace Smile {
         ID3D12DescriptorHeap* Heaps[] = { SRVHeap.Native() };
         CmdList->SetDescriptorHeaps(1, Heaps);
         CmdList->SetGraphicsRootSignature(RootSig.Get());
+        if (VsBindless) {
+            // Duas escritas por PASSE: o descritor da coluna e o CBV de view no lugar do ObjectCB.
+            CmdList->SetGraphicsRoot32BitConstant(kDrawConstantsRootIndex, TransformTableSrv,
+                                                  FPipelineState::kRootConstTransformTable);
+            CmdList->SetGraphicsRootConstantBufferView(kObjectCBRootIndex, ViewMatricesCB);
+        }
         ID3D12PipelineState* BoundPSO = nullptr;
         for (size_t i = 0; i < Count; ++i) {
             const FDrawItem& It = Items[i];
             if (!It.Mesh || !It.Mesh->IsValid()) continue;
             const bool AlphaAware = It.Material &&
                 (It.Material->Constants.AlphaTest != 0 || It.Material->Blend);
-            ID3D12PipelineState* Wanted = AlphaAware ? AlphaPSO.Get() : PSO.Get();
+            ID3D12PipelineState* Wanted = AlphaAware
+                ? (VsBindless ? AlphaVsBindlessPSO.Get() : AlphaPSO.Get())
+                : (VsBindless ? VsBindlessPSO.Get() : PSO.Get());
             if (Wanted != BoundPSO) {
                 CmdList->SetPipelineState(Wanted);
                 BoundPSO = Wanted;
@@ -221,7 +266,11 @@ namespace Smile {
                 It.Material->Bind(CmdList, SRVHeap);
                 Constants[1] = It.Material->Blend ? 2u : 1u;
             }
-            CmdList->SetGraphicsRootConstantBufferView(0, It.ObjectCBAddress);
+            if (VsBindless)
+                CmdList->SetGraphicsRoot32BitConstant(kDrawConstantsRootIndex, It.InstanceSlot,
+                                                      FPipelineState::kRootConstInstanceSlot);
+            else
+                CmdList->SetGraphicsRootConstantBufferView(kObjectCBRootIndex, It.ObjectCBAddress);
             CmdList->SetGraphicsRoot32BitConstants(3, 4, Constants, 0);
             It.Mesh->Draw(CmdList);
         }

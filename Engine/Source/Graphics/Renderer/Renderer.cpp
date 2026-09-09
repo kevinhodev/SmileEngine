@@ -206,7 +206,9 @@ namespace Smile {
 
         PostProcessor.Initialize(Backend->Device.Native(), Backend->SRVHeap, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
-        ObjectPicker.Initialize(Backend->Device.Native(), Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
+        ObjectPicker.Initialize(Backend->Device.Native(), Backend->SwapChain.GetWidth(),
+                                Backend->SwapChain.GetHeight(),
+                                Backend->Device.SupportsDirectHeapIndexing());
 
         SelectionOutline.Initialize(Backend->Device.Native(), Backend->SRVHeap, Backend->SwapChain.GetWidth(), Backend->SwapChain.GetHeight());
 
