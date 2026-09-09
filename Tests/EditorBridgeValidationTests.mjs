@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 9.
+// Snapshot minimo VALIDO, no formato do protocolo 10.
 function snapshotValido() {
   return {
     direct: [],
@@ -94,7 +94,9 @@ function snapshotValido() {
       // deixaria de exercitar o contrato que o protocolo 7 introduziu.
       passes: [{ key: "gbuffer", considered: 4, draws: 3, materialBinds: 0, meshBinds: 3,
                  skippedInvalid: 1, bindlessDraws: 3, materialFallbackDraws: 0,
-                 materialRowSets: 2, materialRowMisses: 0 }],
+                 materialRowSets: 2, materialRowMisses: 0,
+                 // Protocolo 10: os dois entram no resumo, entao valem a mesma exigencia.
+                 transformBinds: 0, transformSlotSets: 3 }],
       scene: { renderables: 1, drawItems: 1, visibleItems: 1, occludedItems: 0 },
       objectConstantBytes: 0,
       srvHeap: { used: 1, highWater: 1, capacity: 100, retired: 0, overflows: 0 },
@@ -140,7 +142,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 9,
+                version: 10,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -244,7 +246,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":9,"id":__ID__,"ok":true,"result":' +
+    '{"version":10,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");
@@ -334,7 +336,7 @@ for (const [bloco, campos] of [
 //    anterior a fase produziria agregado de `undefined` num relatorio que parece completo.
 for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
                      "bindlessDraws", "materialFallbackDraws", "materialRowSets",
-                     "materialRowMisses"]) {
+                     "materialRowMisses", "transformBinds", "transformSlotSets"]) {
   for (const valor of [undefined, "3", null, true, -1, 1.5, 4294967296]) {
     const p = snapshotValido();
     if (valor === undefined) delete p.cpu.passes[0][campo];

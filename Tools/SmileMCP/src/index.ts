@@ -210,6 +210,10 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
             materialFallbackDraws: summarize(rows.map((row) => row.materialFallbackDraws)),
             materialRowSets: summarize(rows.map((row) => row.materialRowSets)),
             materialRowMisses: summarize(rows.map((row) => row.materialRowMisses)),
+            // Fase 4. `transformBinds` zero num passe migrado e a prova de QUAL caminho executou;
+            // ela nao substitui `objectConstantBytes`, que prova que o buffer parou de ser escrito.
+            transformBinds: summarize(rows.map((row) => row.transformBinds)),
+            transformSlotSets: summarize(rows.map((row) => row.transformSlotSets)),
           };
         }),
       }
@@ -898,6 +902,12 @@ server.registerTool(
         .nullish()
         .describe(
           "A/B da Fase 3: material por linha da tabela canonica (true) ou descritores por draw (false). O readback em settings confirma o estado efetivo.",
+        ),
+      bindlessTransforms: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B da Fase 4: transform lido da tabela canonica pelo vertex shader (true) ou CBV de 256 B por draw (false). EXIGE bindlessMaterials ligado — as PSOs sao construidas sobre as dele —, e ligar os dois na mesma chamada funciona porque a aplicacao respeita essa ordem. O readback em settings confirma o estado efetivo; quem prova qual caminho executou e passes[].transformBinds.",
         ),
     },
     annotations: {

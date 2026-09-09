@@ -69,6 +69,8 @@ namespace SmileEditor {
         Out.TimeOfDayRunning          = Tod.Running;
         Out.BindlessMaterials          = Settings.GetBindlessMaterials();
         Out.BindlessMaterialsAvailable = Settings.BindlessMaterialsAvailable();
+        Out.BindlessTransforms          = Settings.GetBindlessTransforms();
+        Out.BindlessTransformsAvailable = Settings.BindlessTransformsAvailable();
         Out.DIAnalyticCandidates      = static_cast<int>(Settings.GetDIInitialCandidates());
         Out.DIMeshCandidates          = static_cast<int>(Settings.GetDIMeshCandidates());
         Out.DIMeshLightsInPool        = Settings.GetDIMeshLightsInPool();
@@ -261,6 +263,11 @@ namespace SmileEditor {
                 Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);
             if (_Overrides.BindlessMaterials)
                 Settings.SetBindlessMaterials(*_Overrides.BindlessMaterials);
+            // DEPOIS do de material, e nao antes: o setter de transform recusa quando o de
+            // material esta desligado, entao ligar os dois na mesma chamada so funciona nesta
+            // ordem. Inverter passaria no teste com os dois ja ligados e falharia do frio.
+            if (_Overrides.BindlessTransforms)
+                Settings.SetBindlessTransforms(*_Overrides.BindlessTransforms);
             if (_Overrides.RainAmount)
                 Settings.SetRainAmount(static_cast<float>(*_Overrides.RainAmount));
 
@@ -353,6 +360,8 @@ namespace SmileEditor {
             Row.MaterialFallbackDraws = B.MaterialFallbackDraws;
             Row.MaterialRowSets   = B.MaterialRowSets;
             Row.MaterialRowMisses = B.MaterialRowMisses;
+            Row.TransformBinds    = B.TransformBinds;
+            Row.TransformSlotSets = B.TransformSlotSets;
             Out.Passes.push_back(Row);
         }
         return Out;

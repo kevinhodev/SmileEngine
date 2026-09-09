@@ -18,7 +18,15 @@ import path from "node:path";
 // que separa "upload incremental" de "trabalho incremental" e que julga o gate da fase. Um editor
 // anterior publicaria null exatamente onde a medida decide, e um relatorio com null nesse campo
 // parece completo sem ser.
-const PROTOCOL_VERSION = 9;
+// 10: transformBinds/transformSlotSets por PASSE, e o toggle bindlessTransforms (Fase 4).
+//
+// Os dois contadores entram no resumo porque `transformBinds == 0` e a prova de QUAL CAMINHO
+// EXECUTOU — a imagem sozinha nao da isso, porque os dois caminhos produzem o mesmo pixel. Ela e
+// distinta de `objectConstantBytes == 0`, que prova que o BUFFER deixou de ser escrito: um passe
+// migrado zera o primeiro enquanto o segundo continua alto, e o segundo so cai quando todos os
+// passes migrarem. Uma nao substitui a outra, e publicar so uma delas deixaria metade do gate
+// sem evidencia.
+const PROTOCOL_VERSION = 10;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -112,6 +120,13 @@ export interface CpuSubmitPass {
   materialFallbackDraws: number;
   materialRowSets: number;
   materialRowMisses: number;
+  /**
+   * Fase 4. `transformBinds` conta os CBV de 256 B amarrados por item; `transformSlotSets`, as
+   * constantes de root do caminho bindless. Num passe migrado o primeiro tem de ser ZERO — e essa
+   * e a prova de que o passe executou o caminho novo, que a imagem sozinha nao da.
+   */
+  transformBinds: number;
+  transformSlotSets: number;
 }
 
 export interface CpuProfileStats {
@@ -332,6 +347,7 @@ export interface ProfileOverrides {
   diBrdfRatio?: boolean;
   meshCompactSupport?: boolean;
   bindlessMaterials?: boolean;
+  bindlessTransforms?: boolean;
   backgroundThrottle?: boolean;
 }
 
@@ -694,7 +710,7 @@ export class SmileEditorBridge {
       }
       for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
                            "bindlessDraws", "materialFallbackDraws", "materialRowSets",
-                           "materialRowMisses"] as const) {
+                           "materialRowMisses", "transformBinds", "transformSlotSets"] as const) {
         const valor = passe[campo];
         if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
           throw new Error(

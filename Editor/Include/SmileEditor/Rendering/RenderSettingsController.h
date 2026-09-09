@@ -62,6 +62,10 @@ namespace SmileEditor {
         // device aceitou bindless apenas porque o comando nao retornou erro.
         bool   BindlessMaterials          = false;
         bool   BindlessMaterialsAvailable = false;
+        // Fase 4. `Available` e falso quando falta capability, PSO ou o eixo de material — o
+        // acoplamento e deliberado, ver FPipelineState::BindlessTransformsReady.
+        bool   BindlessTransforms          = false;
+        bool   BindlessTransformsAvailable = false;
         // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Entram no READBACK, e nao so na
         // aplicacao: quem roda o sweep precisa confirmar o degrau que de fato ficou, sem inferir
         // do que pediu. Mesmo contrato do resto deste struct.
@@ -93,6 +97,7 @@ namespace SmileEditor {
         std::optional<bool> DIBrdfRatio;
         std::optional<bool> DIMeshCompactSupport;
         std::optional<bool> BindlessMaterials;
+        std::optional<bool> BindlessTransforms;
         // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
         // janela recebeu o foco enquanto o agente coleta as amostras.
         std::optional<bool> BackgroundThrottleEnabled;
@@ -116,6 +121,13 @@ namespace SmileEditor {
         quint32 MaterialFallbackDraws = 0;
         quint32 MaterialRowSets   = 0;
         quint32 MaterialRowMisses = 0;
+        // Fase 4, e as duas provam coisas DIFERENTES do gate. `TransformBinds` diz que nenhum
+        // draw deste passe amarrou o CBV antigo; `objectConstantBytes`, la em cima, diz que o
+        // buffer deixou de ser ESCRITO. Um passe migrado com TransformBinds zero convive com
+        // objectConstantBytes alto enquanto outro passe nao migrar, e a alocacao so cai quando
+        // todos migrarem. Uma nao substitui a outra.
+        quint32 TransformBinds    = 0;
+        quint32 TransformSlotSets = 0;
     };
 
     struct FCpuProfileSnapshot {

@@ -36,7 +36,7 @@ namespace SmileEditor {
         // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
         // 6: cpu.instanceTable. A tabela canônica de instâncias entrou no resumo que a régua
         // consome; sem bump, um editor v5 pareceria compatível e só falharia na agregação.
-        constexpr int kProtocolVersion = 9;
+        constexpr int kProtocolVersion = 10;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -208,6 +208,9 @@ namespace SmileEditor {
                 { QStringLiteral("timeOfDayHours"), _Settings.TimeOfDayHours },
                 { QStringLiteral("timeOfDayRunning"), _Settings.TimeOfDayRunning },
                 { QStringLiteral("bindlessMaterials"), _Settings.BindlessMaterials },
+                { QStringLiteral("bindlessTransforms"), _Settings.BindlessTransforms },
+                { QStringLiteral("bindlessTransformsAvailable"),
+                  _Settings.BindlessTransformsAvailable },
                 { QStringLiteral("bindlessMaterialsAvailable"),
                   _Settings.BindlessMaterialsAvailable },
                 // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Vao no readback para o sweep
@@ -246,6 +249,12 @@ namespace SmileEditor {
                       static_cast<double>(P.MaterialFallbackDraws) },
                     { QStringLiteral("materialRowSets"), static_cast<double>(P.MaterialRowSets) },
                     { QStringLiteral("materialRowMisses"), static_cast<double>(P.MaterialRowMisses) },
+                    // Fase 4. `transformBinds` e a prova de que o passe deixou de amarrar o CBV
+                    // por item; ela NAO substitui `objectConstantBytes`, que prova que o buffer
+                    // deixou de ser escrito. As duas so coincidem quando todos os passes migram.
+                    { QStringLiteral("transformBinds"), static_cast<double>(P.TransformBinds) },
+                    { QStringLiteral("transformSlotSets"),
+                      static_cast<double>(P.TransformSlotSets) },
                 });
             }
             return QJsonObject{
@@ -790,6 +799,7 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "diBrdfRatio", Overrides.DIBrdfRatio) &&
             ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
             ReadOptionalBool(_Arguments, "bindlessMaterials", Overrides.BindlessMaterials) &&
+            ReadOptionalBool(_Arguments, "bindlessTransforms", Overrides.BindlessTransforms) &&
             ReadOptionalBool(_Arguments, "backgroundThrottle",
                              Overrides.BackgroundThrottleEnabled);
         if (!KnobsOk) {
