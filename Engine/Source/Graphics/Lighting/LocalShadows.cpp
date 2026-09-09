@@ -1,5 +1,6 @@
 #include "Smile/Graphics/Renderer/CpuFrameStats.h"
 #include "Smile/Graphics/Lighting/LocalShadows.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
@@ -121,8 +122,10 @@ namespace Smile {
         RootParams[kMaterialRootIndex].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         RootParams[kMaterialRootIndex].Constants.ShaderRegister = 4;
         RootParams[kMaterialRootIndex].Constants.RegisterSpace  = 0;
-        RootParams[kMaterialRootIndex].Constants.Num32BitValues = 2;
-        RootParams[kMaterialRootIndex].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+        // Cinco e visibilidade ALL desde a Fase 4, pelo mesmo motivo do CSM: as tres constantes
+        // novas sao lidas pelo VERTEX shader, e com PIXEL o `InstanceSlot` nao chegaria la.
+        RootParams[kMaterialRootIndex].Constants.Num32BitValues = FPipelineState::kRootConstCount;
+        RootParams[kMaterialRootIndex].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
@@ -211,17 +214,33 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&MaskedPSO)));
 
         MaskedBindlessPSO.Reset();
+        OpaqueVsBindlessPSO.Reset();
+        MaskedVsBindlessPSO.Reset();
         if (SupportsBindlessMaterials) {
             auto BindlessPS = LoadShaderBytecode("ShadowDepthBindless.ps_6_6.cso");
             PSODesc.PS = { BindlessPS.data(), BindlessPS.size() };
             SMILE_HR(_Device->CreateGraphicsPipelineState(
                 &PSODesc, IID_PPV_ARGS(&MaskedBindlessPSO)));
+
+            // Gemeas de TRANSFORM. A unica diferenca entre a opaca e a masked e o PIXEL SHADER;
+            // o raster nao muda entre as duas neste passe, e mexer nele aqui seria reconstruir
+            // estado de memoria — o erro que o CSM ja pagou uma vez.
+            auto VsBindless = LoadShaderBytecode("ShadowDepthVsBindless.vs_6_6.cso");
+            if (!VsBindless.empty()) {
+                PSODesc.VS = { VsBindless.data(), VsBindless.size() };
+                SMILE_HR(_Device->CreateGraphicsPipelineState(
+                    &PSODesc, IID_PPV_ARGS(&MaskedVsBindlessPSO)));
+                PSODesc.PS = { nullptr, 0 };
+                SMILE_HR(_Device->CreateGraphicsPipelineState(
+                    &PSODesc, IID_PPV_ARGS(&OpaqueVsBindlessPSO)));
+            }
         }
     }
 
     void FLocalShadows::BindRoot(ID3D12GraphicsCommandList* _CommandList,
                                  FTextureSRVHeap& _SRVHeap, bool _BindlessMaterials,
-                                 u32 _MaterialTableSrv) const {
+                                 u32 _MaterialTableSrv, bool _BindlessTransforms,
+                                 u32 _TransformTableSrv) const {
         if (SupportsBindlessMaterials) {
             ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
             _CommandList->SetDescriptorHeaps(_countof(Heaps), Heaps);
@@ -229,7 +248,12 @@ namespace Smile {
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         if (_BindlessMaterials)
             _CommandList->SetGraphicsRoot32BitConstant(
-                kMaterialRootIndex, _MaterialTableSrv, 0);
+                kMaterialRootIndex, _MaterialTableSrv, FPipelineState::kRootConstMaterialTable);
+        // Uma escrita por PASSE. O caster local le so a coluna Transform: a ViewProj da face
+        // chega por b0 e nao ha motion vector aqui.
+        if (_BindlessTransforms)
+            _CommandList->SetGraphicsRoot32BitConstant(
+                kMaterialRootIndex, _TransformTableSrv, FPipelineState::kRootConstTransformTable);
     }
 
     void FLocalShadows::CreateConstantBuffers(ID3D12Device* _Device) {
@@ -301,12 +325,16 @@ namespace Smile {
                                         const FShadowJob* _Jobs, u32 _JobCount,
                                         const FCubeShadowJob* _CubeJobs, u32 _CubeJobCount,
                                         bool _BindlessMaterials, u32 _MaterialTableSrv,
+                                        bool _BindlessTransforms, u32 _TransformTableSrv,
                                         const FExtraLocalDraw& _ExtraDraw,
                                         FDrawSubmitStats* _Stats) {
         if (!Initialized) return;
         if (_JobCount == 0 && _CubeJobCount == 0) { EnsureReadable(_CommandList); return; }
         const bool BindlessMaterials = _BindlessMaterials && BindlessReady() &&
             _MaterialTableSrv != FTextureSRVHeap::kInvalidSlot;
+        // Exige o de material LIGADO no frame: a PSO masked de transform carrega o PS bindless.
+        const bool BindlessTransforms = _BindlessTransforms && BindlessMaterials &&
+            TransformBindlessReady() && _TransformTableSrv != FTextureSRVHeap::kInvalidSlot;
 
         // Broad phase por LUZ (uma varredura da cena, AABB vs esfera de influencia). As views
         // que vem depois — 1 slice do spot, 6 faces do point — refinam com o proprio frustum
@@ -341,6 +369,10 @@ namespace Smile {
             Submit.Stats             = _Stats;
             Submit.Bindless          = BindlessMaterials;
             Submit.MaterialRootIndex = kMaterialRootIndex;
+            Submit.TransformBindless      = BindlessTransforms;
+            // 3, e nao o 4 do raster: root signature propria deste passe.
+            Submit.TransformRootIndex     = kObjectCBRootIndex;
+            Submit.DrawConstantsRootIndex = kMaterialRootIndex;
             _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             for (u32 k : CullScratch) {
                 if (_Stats) ++_Stats->Considered;
@@ -348,10 +380,13 @@ namespace Smile {
                 if (AABBOutsidePlanes(Planes, It.AABBMin, It.AABBMax)) continue;
                 const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
                 ID3D12PipelineState* Want = AlphaTested
-                    ? (BindlessMaterials ? MaskedBindlessPSO.Get() : MaskedPSO.Get())
-                    : OpaquePSO.Get();
+                    ? (BindlessTransforms ? MaskedVsBindlessPSO.Get()
+                       : BindlessMaterials ? MaskedBindlessPSO.Get()
+                                           : MaskedPSO.Get())
+                    : (BindlessTransforms ? OpaqueVsBindlessPSO.Get() : OpaquePSO.Get());
                 if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
-                _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
+                // Pelo ENDERECO: o caster ja o carrega resolvido.
+                Submit.BindTransformAt(_CommandList, It.ObjectCB, It.InstanceSlot);
                 if (AlphaTested) {
                     if (BindlessMaterials)
                         Submit.BindMaterialRow(_CommandList, It.Mat, It.MaterialRow);
@@ -387,7 +422,8 @@ namespace Smile {
 
                 // Root sig por slice (nao uma vez fora do loop): o ExtraDraw do slice anterior
                 // trocou root signature e PSO.
-                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv,
+                         BindlessTransforms, _TransformTableSrv);
                 auto DSV = DSVHeap.CpuHandle(Slice);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -446,7 +482,8 @@ namespace Smile {
                     const D3D12_GPU_VIRTUAL_ADDRESS FaceCBAddr =
                         SliceCB->GetGPUVirtualAddress() + CBOffset;
 
-                    BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
+                    BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv,
+                         BindlessTransforms, _TransformTableSrv);
                     auto DSV = CubeDSVHeap.CpuHandle(Cube * 6 + f);
                     _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                     _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);

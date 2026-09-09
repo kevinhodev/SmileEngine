@@ -1377,6 +1377,7 @@ namespace Smile {
                 if (A.Mat && A.Mat->Blend) continue; // vidro nao projeta sombra opaca
                 LocalCasters.push_back({ A.R->Mesh, A.Mat,
                                          ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                         A.R->GpuHandle.Slot,
                                          A.R->AABBMin, A.R->AABBMax });
             }
             // Mesma chave do CSM (sem mobilidade): alpha-test agrupado e Bind/IA
@@ -1418,6 +1419,7 @@ namespace Smile {
                                              LocalCubeJobs.data(),
                                              static_cast<u32>(LocalCubeJobs.size()),
                                              ShadowBindless, MaterialTableSrv,
+                                             ShadowVsBindless, TransformTableSrv,
                                              TerrainCasters,
                                              &CpuStatsBuilding.Pass(ESubmitPass::LocalShadows));
             }

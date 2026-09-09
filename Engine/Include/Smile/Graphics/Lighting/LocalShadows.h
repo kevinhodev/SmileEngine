@@ -138,6 +138,8 @@ namespace Smile {
         static constexpr u32 kCubeResolution = 512;
         static constexpr u32 kNoSlot         = 0xFFFFFFFFu; // Acquire*: orcamento cheio
         static constexpr u32 kMaterialRootIndex = 4;
+        // CBV b2 do caster nesta root signature propria. Nao e o 4 do raster.
+        static constexpr u32 kObjectCBRootIndex = 3;
 
         // Politica de selecao (item 4). Incumbente vale kHysteresis a mais no ranking: sem isso
         // duas luzes de importancia parecida trocam de slot todo frame e a sombra pisca — o
@@ -153,6 +155,9 @@ namespace Smile {
             const FGpuMesh*           Mesh;
             const FMaterial*          Mat;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCB;
+            // Residencia GPU do caster (Fase 4). Endereco de CB e slot de tabela sao numeros
+            // diferentes; cada caminho le um.
+            u32                       InstanceSlot = 0;
             Vec3                      AABBMin;
             Vec3                      AABBMax;
             u32                       MaterialRow = 0;
@@ -194,14 +199,17 @@ namespace Smile {
         bool BindlessReady() const {
             return SupportsBindlessMaterials && MaskedBindlessPSO != nullptr;
         }
+        bool TransformBindlessReady() const {
+            return BindlessReady() && OpaqueVsBindlessPSO && MaskedVsBindlessPSO;
+        }
 
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              u32 FrameSlot, const FShadowDrawItem* Items, size_t Count,
                              const FShadowJob* Jobs, u32 JobCount,
                              const FCubeShadowJob* CubeJobs, u32 CubeJobCount,
                              bool BindlessMaterials, u32 MaterialTableSrv,
-                             const FExtraLocalDraw& ExtraDraw = {},
-                             FDrawSubmitStats* Stats = nullptr);
+                             bool BindlessTransforms, u32 TransformTableSrv,
+                             const FExtraLocalDraw& ExtraDraw, FDrawSubmitStats* Stats);
 
         // Slot persistente por luz (ver TShadowSlotCache). Em LOTE: a selecao inteira do frame
         // de uma vez, senao a alocacao remapeia em cascata. Slot kNoSlot = ficou sem sombra.
@@ -251,7 +259,8 @@ namespace Smile {
         void BuildPSOs(ID3D12Device* Device);
         void CreateConstantBuffers(ID3D12Device* Device);
         void BindRoot(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                      bool BindlessMaterials, u32 MaterialTableSrv) const;
+                      bool BindlessMaterials, u32 MaterialTableSrv,
+                      bool BindlessTransforms, u32 TransformTableSrv) const;
         void TransitionArray(ID3D12GraphicsCommandList* CommandList, D3D12_RESOURCE_STATES After);
         void TransitionCube(ID3D12GraphicsCommandList* CommandList, D3D12_RESOURCE_STATES After);
 
@@ -268,6 +277,8 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaquePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedPSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedBindlessPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaqueVsBindlessPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedVsBindlessPSO;
         bool                                        SupportsBindlessMaterials = false;
 
         Microsoft::WRL::ComPtr<ID3D12Resource>      SliceCB; // Mat44 por slice por frame em voo
