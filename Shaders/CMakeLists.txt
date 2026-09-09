@@ -72,6 +72,10 @@ smile_compile_shader(DepthMasked.ps.hlsl       ps_6_6 main SHADER_OUTPUTS
 
 # Cascaded Shadow Maps (sol direcional) — depth pass das cascatas
 smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+# Permutacao de transform da Fase 4. O caster le UMA coluna: sem motion vector e com a
+# LightViewProj vindo por cascata, nem PrevTransform nem o CBV de view entram aqui.
+smile_compile_shader(Shadow/ShadowDepth.vs.hlsl vs_6_6 main SHADER_OUTPUTS
+    OUTPUT_NAME ShadowDepthVsBindless ${SMILE_INSTANCE_BINDLESS_FLAGS})
 smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Shadow/ShadowDepth.ps.hlsl ps_6_6 main SHADER_OUTPUTS
     OUTPUT_NAME ShadowDepthBindless ${SMILE_MATERIAL_BINDLESS_FLAGS})

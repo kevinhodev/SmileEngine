@@ -178,6 +178,13 @@ namespace Smile {
         void BindTransform(ID3D12GraphicsCommandList* CommandList, u32 ObjectSlot,
                            u32 InstanceSlot);
 
+        // Par do de cima para quem ja carrega o ENDERECO resolvido em vez do slot — as listas de
+        // caster de sombra e o mapa de oclusao de chuva sao montados fora do laco de submissao e
+        // guardam a GPU VA por item. Um `u32 ObjectSlot` nao serve la: truncaria o endereco de 64
+        // bits, e o resultado (endereco zero) desenha sem erro nenhum.
+        void BindTransformAt(ID3D12GraphicsCommandList* CommandList,
+                             D3D12_GPU_VIRTUAL_ADDRESS ObjectCBAddress, u32 InstanceSlot);
+
         void DrawMesh(ID3D12GraphicsCommandList* CommandList, const FGpuMesh* Mesh);
     };
 }

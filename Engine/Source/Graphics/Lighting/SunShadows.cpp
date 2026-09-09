@@ -6,6 +6,7 @@
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
+#include "Smile/Graphics/Backend/D3D12/PipelineState.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include "Smile/Graphics/Backend/D3D12/ShaderUtils.h"
@@ -122,8 +123,11 @@ namespace Smile {
         RootParams[kMaterialRootIndex].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         RootParams[kMaterialRootIndex].Constants.ShaderRegister = 4;
         RootParams[kMaterialRootIndex].Constants.RegisterSpace  = 0;
-        RootParams[kMaterialRootIndex].Constants.Num32BitValues = 2;
-        RootParams[kMaterialRootIndex].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+        // Cinco desde a Fase 4, e visibilidade ALL: as tres constantes novas sao lidas pelo VERTEX
+        // shader. Com PIXEL, o `InstanceSlot` simplesmente nao chegaria la — e o caster seria
+        // desenhado com o transform do slot zero, sem erro nenhum.
+        RootParams[kMaterialRootIndex].Constants.Num32BitValues = FPipelineState::kRootConstCount;
+        RootParams[kMaterialRootIndex].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_STATIC_SAMPLER_DESC Sampler{};
         Sampler.Filter           = D3D12_FILTER_ANISOTROPIC;
@@ -224,17 +228,35 @@ namespace Smile {
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&MaskedPSO)));
 
         MaskedBindlessPSO.Reset();
+        OpaqueVsBindlessPSO.Reset();
+        MaskedVsBindlessPSO.Reset();
+        auto VsBindless = LoadShaderBytecode("ShadowDepthVsBindless.vs_6_6.cso");
         if (SupportsBindlessMaterials) {
             auto BindlessPS = LoadShaderBytecode("ShadowDepthBindless.ps_6_6.cso");
             PSODesc.PS = { BindlessPS.data(), BindlessPS.size() };
             SMILE_HR(_Device->CreateGraphicsPipelineState(
                 &PSODesc, IID_PPV_ARGS(&MaskedBindlessPSO)));
+
+            // Gemeas de TRANSFORM, e a unica diferenca entre a opaca e a masked e o PIXEL
+            // SHADER: o raster e `CULL_NONE` para as duas desde o topo — caster e oclusor
+            // two-sided por decisao, e mexer no CullMode aqui vazaria sol pelas cascas
+            // single-sided da Bistro sem quebrar teste nenhum.
+            if (!VsBindless.empty()) {
+                PSODesc.VS = { VsBindless.data(), VsBindless.size() };
+                SMILE_HR(_Device->CreateGraphicsPipelineState(
+                    &PSODesc, IID_PPV_ARGS(&MaskedVsBindlessPSO)));
+
+                PSODesc.PS = { nullptr, 0 }; // opaco: sem material, como a classica
+                SMILE_HR(_Device->CreateGraphicsPipelineState(
+                    &PSODesc, IID_PPV_ARGS(&OpaqueVsBindlessPSO)));
+            }
         }
     }
 
     void FSunShadows::BindRoot(ID3D12GraphicsCommandList* _CommandList,
                                FTextureSRVHeap& _SRVHeap, bool _BindlessMaterials,
-                               u32 _MaterialTableSrv) const {
+                               u32 _MaterialTableSrv, bool _BindlessTransforms,
+                               u32 _TransformTableSrv) const {
         if (SupportsBindlessMaterials) {
             ID3D12DescriptorHeap* Heaps[] = { _SRVHeap.Native() };
             // A ROOT declara acesso direto sempre que o device suporta, inclusive quando este
@@ -244,7 +266,12 @@ namespace Smile {
         _CommandList->SetGraphicsRootSignature(RootSig.Get());
         if (_BindlessMaterials)
             _CommandList->SetGraphicsRoot32BitConstant(
-                kMaterialRootIndex, _MaterialTableSrv, 0);
+                kMaterialRootIndex, _MaterialTableSrv, FPipelineState::kRootConstMaterialTable);
+        // Uma escrita por PASSE, como a do material. O caster nao le PrevTransform nem o CBV de
+        // view: ele so precisa do ModelMatrix, e a LightViewProj ja chega por cascata em b0.
+        if (_BindlessTransforms)
+            _CommandList->SetGraphicsRoot32BitConstant(
+                kMaterialRootIndex, _TransformTableSrv, FPipelineState::kRootConstTransformTable);
     }
 
     void FSunShadows::CreateConstantBuffers(ID3D12Device* _Device) {
@@ -660,7 +687,7 @@ namespace Smile {
     u32 FSunShadows::DrawCasters(ID3D12GraphicsCommandList* _CommandList,
                                  FTextureSRVHeap& _SRVHeap, const FShadowDrawItem* _Items,
                                  size_t _Begin, size_t _End, u32 _Cascade, FCascadeStats* _St,
-                                 bool _BindlessMaterials,
+                                 bool _BindlessMaterials, bool _BindlessTransforms,
                                  FDrawSubmitStats* _Stats) {
         const f32 MinExtent = MinCasterTexels * (&CPUConstants.CascadeTexelWorld.X)[_Cascade];
         // Cur/LastMat zeram por CHAMADA de proposito: entre duas fases o chamador troca de DSV
@@ -671,6 +698,11 @@ namespace Smile {
         Submit.Stats             = _Stats;
         Submit.Bindless          = _BindlessMaterials;
         Submit.MaterialRootIndex = kMaterialRootIndex;
+        Submit.TransformBindless      = _BindlessTransforms;
+        // 3, e nao o 4 do raster: esta root signature e PROPRIA das sombras e o CBV de objeto mora
+        // noutro indice. Passar o do raster amarraria o CBV no parametro da tabela de material.
+        Submit.TransformRootIndex     = kObjectCBRootIndex;
+        Submit.DrawConstantsRootIndex = kMaterialRootIndex;
         u32 Drawn = 0;
         _CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         for (size_t k = _Begin; k < _End; ++k) {
@@ -680,10 +712,13 @@ namespace Smile {
             ++Drawn;
             const bool AlphaTested = It.Mat && (It.Mat->Constants.AlphaTest != 0);
             ID3D12PipelineState* Want = AlphaTested
-                ? (_BindlessMaterials ? MaskedBindlessPSO.Get() : MaskedPSO.Get())
-                : OpaquePSO.Get();
+                ? (_BindlessTransforms ? MaskedVsBindlessPSO.Get()
+                   : _BindlessMaterials ? MaskedBindlessPSO.Get()
+                                        : MaskedPSO.Get())
+                : (_BindlessTransforms ? OpaqueVsBindlessPSO.Get() : OpaquePSO.Get());
             if (Want != Cur) { _CommandList->SetPipelineState(Want); Cur = Want; }
-            _CommandList->SetGraphicsRootConstantBufferView(3, It.ObjectCB);
+            // Pelo ENDERECO: o caster ja o carrega resolvido, e um slot em u32 truncaria a GPU VA.
+            Submit.BindTransformAt(_CommandList, It.ObjectCB, It.InstanceSlot);
             // A lista chega ordenada por (mobilidade, alpha-test, material, mesh).
             if (AlphaTested) {
                 if (_BindlessMaterials)
@@ -700,11 +735,17 @@ namespace Smile {
                                       FTextureSRVHeap& _SRVHeap,
                                       const FShadowDrawItem* _Items, size_t _Count,
                                       bool _BindlessMaterials, u32 _MaterialTableSrv,
+                                      bool _BindlessTransforms, u32 _TransformTableSrv,
                                       const FExtraCascadeDraw& _ExtraDraw,
                                       FGpuProfiler* _Profiler,
                                       FDrawSubmitStats* _Stats) {
         const bool BindlessMaterials = _BindlessMaterials && BindlessReady() &&
             _MaterialTableSrv != FTextureSRVHeap::kInvalidSlot;
+        // Exige o de material LIGADO neste frame, e nao so disponivel: a PSO masked de transform
+        // carrega o PS bindless, entao ligar transform com material desligado desenharia o
+        // alpha-test lendo uma tabela que ninguem publicou.
+        const bool BindlessTransforms = _BindlessTransforms && BindlessMaterials &&
+            TransformBindlessReady() && _TransformTableSrv != FTextureSRVHeap::kInvalidSlot;
         D3D12_VIEWPORT VP{ 0.0f, 0.0f, static_cast<FLOAT>(kResolution),
                            static_cast<FLOAT>(kResolution), 0.0f, 1.0f };
         D3D12_RECT     SC{ 0, 0, static_cast<LONG>(kResolution), static_cast<LONG>(kResolution) };
@@ -739,7 +780,8 @@ namespace Smile {
                 St.SubmittedStatic = 0; St.SubmittedDynamic = 0;
                 St.CulledPlanes = 0; St.CulledSize = 0;
 
-                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv,
+                         BindlessTransforms, _TransformTableSrv);
                 auto DSV = DSVHeap.CpuHandle(c);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -749,10 +791,10 @@ namespace Smile {
                 // dinamico, que e a medida que interessa. Sao contiguas, entao nao ha custo.
                 St.SubmittedStatic  = DrawCasters(_CommandList, _SRVHeap, _Items,
                                                   0, FirstDynamic, c, &St,
-                                                  BindlessMaterials, _Stats);
+                                                  BindlessMaterials, BindlessTransforms, _Stats);
                 St.SubmittedDynamic = DrawCasters(_CommandList, _SRVHeap, _Items,
                                                   FirstDynamic, _Count, c, nullptr,
-                                                  BindlessMaterials, _Stats);
+                                                  BindlessMaterials, BindlessTransforms, _Stats);
                 St.Submitted        = St.SubmittedStatic + St.SubmittedDynamic;
                 LastDynamicCount[c] = St.SubmittedDynamic;
                 if (_ExtraDraw)
@@ -796,7 +838,8 @@ namespace Smile {
                 FCascadeStats& St = Stats[c];
                 St.SubmittedStatic = 0; St.CulledPlanes = 0; St.CulledSize = 0;
 
-                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv,
+                         BindlessTransforms, _TransformTableSrv);
                 auto DSV = StaticDSVHeap.CpuHandle(c);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->ClearDepthStencilView(DSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -849,13 +892,14 @@ namespace Smile {
             FCascadeStats& St = Stats[c];
             St.SubmittedDynamic = 0;
             if (DynVisible[c] > 0) {
-                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv);
+                BindRoot(_CommandList, _SRVHeap, BindlessMaterials, _MaterialTableSrv,
+                         BindlessTransforms, _TransformTableSrv);
                 auto DSV = DSVHeap.CpuHandle(c);
                 _CommandList->OMSetRenderTargets(0, nullptr, FALSE, &DSV);
                 _CommandList->SetGraphicsRootConstantBufferView(0, CascadeCBAddr(c));
                 St.SubmittedDynamic = DrawCasters(_CommandList, _SRVHeap, _Items,
                                                   FirstDynamic, _Count, c, nullptr,
-                                                  BindlessMaterials, _Stats);
+                                                  BindlessMaterials, BindlessTransforms, _Stats);
             }
             // Recomposto do retido, nunca acumulado: SubmittedStatic so muda quando o mapa
             // estatico e refeito, e somar o dinamico nele cresceria sem limite.

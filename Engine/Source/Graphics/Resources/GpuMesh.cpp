@@ -127,9 +127,16 @@ namespace Smile {
 
     void FDrawSubmitCache::BindTransform(ID3D12GraphicsCommandList* _CommandList, u32 _ObjectSlot,
                                          u32 _InstanceSlot) {
+        BindTransformAt(_CommandList,
+                        ObjectCBBase + static_cast<u64>(_ObjectSlot) * ObjectCBStride,
+                        _InstanceSlot);
+    }
+
+    void FDrawSubmitCache::BindTransformAt(ID3D12GraphicsCommandList* _CommandList,
+                                           D3D12_GPU_VIRTUAL_ADDRESS _ObjectCBAddress,
+                                           u32 _InstanceSlot) {
         if (!TransformBindless) {
-            _CommandList->SetGraphicsRootConstantBufferView(
-                TransformRootIndex, ObjectCBBase + static_cast<u64>(_ObjectSlot) * ObjectCBStride);
+            _CommandList->SetGraphicsRootConstantBufferView(TransformRootIndex, _ObjectCBAddress);
             if (Stats) ++Stats->TransformBinds;
             return;
         }

@@ -1270,6 +1270,12 @@ namespace Smile {
                                          BindlessMaterialsReady();
         const u32 MaterialTableSrv     = ShadowBindless
             ? MaterialTable.Srv() : FTextureSRVHeap::kInvalidSlot;
+        // O caster le UMA coluna: sem motion vector e com a LightViewProj por cascata, nem
+        // PrevTransform nem o CBV de view entram no caminho de sombra.
+        const bool ShadowVsBindless    = ShadowBindless && UseBindlessTransforms &&
+                                         InstanceTable.IsBuilt();
+        const u32 TransformTableSrv    = ShadowVsBindless
+            ? InstanceTable.TransformSrv() : FTextureSRVHeap::kInvalidSlot;
 
         // As duas listas chegam agrupadas por material. Resolver uma vez por grupo evita
         // reintroduzir uma busca no unordered_map por caster no caminho que existe para baixar
@@ -1314,6 +1320,7 @@ namespace Smile {
                                       A.R->Id == SceneState->DraggingRenderableId);
                     Casters.push_back({ A.R->Mesh, A.Mat,
                                         ObjectCBBase + static_cast<u64>(A.Slot) * sizeof(ObjectConstants),
+                                        A.R->GpuHandle.Slot,
                                         A.R->AABBMin, A.R->AABBMax, Dyn });
                 }
                 // Mobilidade separa as metades cacheada/dinamica; material reduz trocas de PSO.
@@ -1341,6 +1348,7 @@ namespace Smile {
                     FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                     SunShadows.RecordDepthPass(CommandList, Backend->SRVHeap, Casters.data(), Casters.size(),
                                                ShadowBindless, MaterialTableSrv,
+                                               ShadowVsBindless, TransformTableSrv,
                                                TerrainCasters, &Backend->DirectProfiler,
                                                &CpuStatsBuilding.Pass(ESubmitPass::SunShadows));
                 }

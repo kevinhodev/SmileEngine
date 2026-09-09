@@ -50,11 +50,17 @@ namespace Smile {
         static constexpr u32 kNumCascades = 4;
         static constexpr u32 kResolution  = 2048;
         static constexpr u32 kMaterialRootIndex = 4;
+        // CBV b2 do caster nesta root signature PROPRIA. Nao e o 4 do raster: os dois indices
+        // coincidirem seria coincidencia, e aqui eles nao coincidem.
+        static constexpr u32 kObjectCBRootIndex = 3;
 
         struct FShadowDrawItem {
             const FGpuMesh*           Mesh;
             const FMaterial*          Mat;
             D3D12_GPU_VIRTUAL_ADDRESS ObjectCB;
+            // Residencia GPU do caster (Fase 4). O ObjectCB acima endereca o CB do frame; este
+            // endereca a linha da tabela. Sao numeros diferentes e cada caminho le um.
+            u32                       InstanceSlot = 0;
             Vec3                      AABBMin;
             Vec3                      AABBMax;
             // Ver EMobility. A lista chega ordenada com os estaticos PRIMEIRO, entao este
@@ -120,6 +126,9 @@ namespace Smile {
         bool BindlessReady() const {
             return SupportsBindlessMaterials && MaskedBindlessPSO != nullptr;
         }
+        bool TransformBindlessReady() const {
+            return BindlessReady() && OpaqueVsBindlessPSO && MaskedVsBindlessPSO;
+        }
 
         // StaticCastersVersion vem do FScene: muda quando o CONTEUDO do mapa estatico muda
         // (estatico se move, aparece, some, e ocultado, ou troca de mobilidade). E o sinal que
@@ -138,6 +147,7 @@ namespace Smile {
         void RecordDepthPass(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                              const FShadowDrawItem* Items, size_t Count,
                              bool BindlessMaterials, u32 MaterialTableSrv,
+                             bool BindlessTransforms, u32 TransformTableSrv,
                              const FExtraCascadeDraw& ExtraDraw = {},
                              FGpuProfiler* Profiler = nullptr,
                              FDrawSubmitStats* Stats = nullptr);
@@ -199,9 +209,12 @@ namespace Smile {
         u32  DrawCasters(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                          const FShadowDrawItem* Items, size_t Begin, size_t End,
                          u32 Cascade, FCascadeStats* St, bool BindlessMaterials,
-                         FDrawSubmitStats* Stats = nullptr);
+                         bool BindlessTransforms, FDrawSubmitStats* Stats = nullptr);
+        // `TransformTableSrv` e o descritor da coluna Transform da tabela canonica; kInvalidSlot
+        // significa "sem tabela", e nesse caso o caminho de transform cai no classico inteiro.
         void BindRoot(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
-                      bool BindlessMaterials, u32 MaterialTableSrv) const;
+                      bool BindlessMaterials, u32 MaterialTableSrv,
+                      bool BindlessTransforms, u32 TransformTableSrv) const;
         void TransitionStatic(ID3D12GraphicsCommandList* CommandList,
                               D3D12_RESOURCE_STATES After);
 
@@ -232,6 +245,10 @@ namespace Smile {
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaquePSO; 
         Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedPSO; 
         Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedBindlessPSO;
+        // Fase 4: as duas com o VS lendo o transform da tabela. A opaca NAO depende do eixo de
+        // material (PS nulo), mas e construida no mesmo bloco porque compartilha a capability.
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> OpaqueVsBindlessPSO;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> MaskedVsBindlessPSO;
         bool                                        SupportsBindlessMaterials = false;
 
         Microsoft::WRL::ComPtr<ID3D12Resource>      CascadeCB; 
