@@ -211,21 +211,13 @@ int wmain(int Argc, wchar_t** Argv) try {
             return Index >= 0 ? Scene.IdAt(static_cast<u32>(Index)) : 0;
         };
 
-        // Uma borda REAL: dois pixels adjacentes com identidades diferentes. So o interior nao
-        // serve — e la que uma divergencia de fracao de pixel some.
-        u32 HitX = 0, HitY = 0, BorderX = 0;
-        u64 HitId = 0, BorderLeft = 0, BorderRight = 0;
-        for (u32 Y = 80; Y < 300 && !BorderX; Y += 60) {
-            u64 Prev = 0;
-            for (u32 X = 60; X < 600; X += 8) {
+        // Um hit qualquer, so para escolher QUAL objeto vai ser transformado.
+        u32 HitX = 0, HitY = 0;
+        u64 HitId = 0;
+        for (u32 Y = 80; Y < 300 && !HitId; Y += 40) {
+            for (u32 X = 60; X < 600 && !HitId; X += 24) {
                 const u64 Id = PickAt(X, Y);
-                if (Id != 0 && HitId == 0) { HitId = Id; HitX = X; HitY = Y; }
-                if (Prev != 0 && Id != 0 && Id != Prev) {
-                    BorderX = X - 8; BorderLeft = Prev; BorderRight = Id;
-                    HitY = Y;
-                    break;
-                }
-                Prev = Id;
+                if (Id != 0) { HitId = Id; HitX = X; HitY = Y; }
             }
         }
         Require(HitId != 0, "A/B do picking nao achou hit nenhum apos o reload");
@@ -240,7 +232,51 @@ int wmain(int Argc, wchar_t** Argv) try {
         Scene.BumpTransformsVersion();
         Scene.BumpStaticCastersVersion();
         Frames(R, 3);
-        const u64 SkewedClassic = PickAt(HitX, HitY);
+
+        // REACHA o objeto DEPOIS da transformacao, no classico. O pixel de antes pode ter deixado
+        // de acerta-lo — a transformacao muda a silhueta — e comparar um pixel que virou FUNDO
+        // com o mesmo pixel de fundo no bindless daria verde sem exercitar nada. Este teste ja
+        // teve exatamente esse defeito.
+        auto FindPixelFor = [&](u64 Id, u32& OutX, u32& OutY) -> bool {
+            if (PickAt(HitX, HitY) == Id) { OutX = HitX; OutY = HitY; return true; }
+            // Cruz em torno do hit original: a transformacao mexe em escala e rotacao, e nao na
+            // posicao, entao a pegada de tela continua sobreposta. Limitada de proposito — este e
+            // um teste de hardware e cada pick custa frames.
+            for (i32 D = 3; D <= 60; D += 3) {
+                const i32 Xs[4] = { static_cast<i32>(HitX) + D, static_cast<i32>(HitX) - D,
+                                    static_cast<i32>(HitX),     static_cast<i32>(HitX) };
+                const i32 Ys[4] = { static_cast<i32>(HitY),     static_cast<i32>(HitY),
+                                    static_cast<i32>(HitY) + D, static_cast<i32>(HitY) - D };
+                for (int K = 0; K < 4; ++K) {
+                    if (Xs[K] < 1 || Xs[K] > 630 || Ys[K] < 1 || Ys[K] > 350) continue;
+                    const u32 X = static_cast<u32>(Xs[K]), Y = static_cast<u32>(Ys[K]);
+                    if (PickAt(X, Y) == Id) { OutX = X; OutY = Y; return true; }
+                }
+            }
+            return false;
+        };
+
+        u32 SkewX = 0, SkewY = 0;
+        Require(FindPixelFor(HitId, SkewX, SkewY),
+                "caso de escala nao uniforme perdeu o objeto e compararia fundo com fundo");
+        const u64 SkewedClassic = PickAt(SkewX, SkewY);
+        Require(SkewedClassic == HitId,
+                "o pixel do caso transformado nao resolve para o objeto transformado");
+
+        // Borda ADJACENTE de verdade, achada DEPOIS da transformacao e a partir do proprio objeto
+        // transformado: caminha de um em um pixel ate a identidade mudar. Dois pixels a 8 de
+        // distancia nao sao uma borda — sao duas amostras, e uma divergencia de fracao de pixel
+        // cabe inteira entre elas.
+        u32 BorderX = 0;
+        u64 BorderLeft = 0, BorderRight = 0;
+        for (u32 X = SkewX; X + 1 < 632; ++X) {
+            const u64 Right = PickAt(X + 1, SkewY);
+            if (Right != HitId) { BorderX = X; BorderLeft = HitId; BorderRight = Right; break; }
+        }
+        // OBRIGATORIA, e nao "se achar". Ela e propriedade declarada deste teste; pular em
+        // silencio quando nao acha e o mesmo gate-fantasma de sempre.
+        Require(BorderX != 0, "A/B do picking nao achou borda adjacente do objeto transformado");
+        Require(BorderLeft != BorderRight, "a borda encontrada tem a mesma identidade dos dois lados");
 
         Settings.SetBindlessMaterials(true);
         Settings.SetBindlessTransforms(true);
@@ -250,19 +286,20 @@ int wmain(int Argc, wchar_t** Argv) try {
             std::cout << "  (A/B do picking PULADO: transform bindless indisponivel neste device)\n";
         } else {
             Frames(R, 3);
-            Require(PickAt(HitX, HitY) == SkewedClassic,
+            Require(PickAt(SkewX, SkewY) == HitId,
                     "picking bindless resolveu outro objeto com escala nao uniforme");
-            if (BorderX != 0) {
-                Require(PickAt(BorderX, HitY) == BorderLeft,
-                        "picking bindless trocou a identidade do lado esquerdo da borda");
-                Require(PickAt(BorderX + 8, HitY) == BorderRight,
-                        "picking bindless trocou a identidade do lado direito da borda");
-            }
+            Require(PickAt(BorderX, SkewY) == BorderLeft,
+                    "picking bindless trocou a identidade do lado esquerdo da borda");
+            Require(PickAt(BorderX + 1, SkewY) == BorderRight,
+                    "picking bindless trocou a identidade do lado direito da borda");
             Settings.SetBindlessTransforms(false);
             Settings.SetBindlessMaterials(false);
             Frames(R, 3);
-            Require(PickAt(HitX, HitY) == SkewedClassic,
-                    "voltar ao classico nao restaurou a identidade");
+            Require(PickAt(SkewX, SkewY) == HitId,
+                    "voltar ao classico nao restaurou a identidade do objeto transformado");
+            Require(PickAt(BorderX, SkewY) == BorderLeft &&
+                        PickAt(BorderX + 1, SkewY) == BorderRight,
+                    "voltar ao classico nao restaurou a borda");
         }
         Settings.SetUseTAA(TAAWas);
     }
