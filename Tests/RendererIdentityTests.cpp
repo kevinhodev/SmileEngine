@@ -92,6 +92,7 @@ int wmain(int Argc, wchar_t** Argv) try {
         }
     }
     Require(PickedId != 0, "picking never hit the synthetic scene");
+
     const u64 Victim = Scene.IdAt(0) != PickedId ? Scene.IdAt(0) : Scene.IdAt(1);
     const auto OldHandle = Scene.FindRenderable(Victim)->GpuHandle;
     const auto Survivor = Scene.FindRenderable(PickedId)->GpuHandle;
@@ -176,8 +177,99 @@ int wmain(int Argc, wchar_t** Argv) try {
     Require(!Scene.GpuSlots().IsAlive(PreReload), "reload resurrected an old handle");
     Frames(R, 8);
     Require(FRendererIdentityTestAccess::History(R), "history failed to resume after reload");
+
+    // --- A/B do picking: classico contra transform bindless (Fase 4) -------------------------
+    //
+    // O picking COMPOE a MVP no vertex shader, e nao a recebe pronta. Se a composicao bindless
+    // divergir da classica, o objeto sob o cursor deixa de ser o objeto desenhado ali — e o
+    // sintoma e "selecionou o vizinho" numa borda, nao uma tela quebrada.
+    //
+    // NO FIM e AUTOCONTIDO, com pixel proprio. A primeira versao ficava no meio, reusando o pixel
+    // do teste de pick pendente, e derrubava uma assercao 40 linhas ABAIXO: os frames a mais
+    // mudavam a fase do jitter, e aquele pixel e marginal. Um bloco de cobertura nova nao pode
+    // mudar o resultado da cobertura que ja existia.
+    //
+    // O TAA sai porque OFF e ON sao medidos em FRAMES diferentes, logo em fases diferentes do
+    // jitter: a MVP jitterada move a geometria por fracao de pixel entre as duas medidas, e num
+    // pixel de borda isso troca a identidade sem que nada esteja errado.
+    {
+        const bool TAAWas = Settings.GetUseTAA();
+        Settings.SetUseTAA(false);
+        Frames(R, 3);
+
+        // Drena ate o resultado chegar: `RequestPick` sai cedo com um pick em voo, entao um
+        // resultado nao consumido faria a proxima chamada ser ignorada em silencio.
+        auto PickAt = [&](u32 X, u32 Y) -> u64 {
+            R.RequestPick(X, Y);
+            int Index = -1;
+            bool Arrived = false;
+            for (unsigned Tries = 0; Tries < 16 && !Arrived; ++Tries) {
+                Frames(R, 1);
+                Arrived = R.TryGetPickResult(Index);
+            }
+            Require(Arrived, "pick do A/B nao resolveu; ficaria pendente e engoliria o proximo");
+            return Index >= 0 ? Scene.IdAt(static_cast<u32>(Index)) : 0;
+        };
+
+        // Uma borda REAL: dois pixels adjacentes com identidades diferentes. So o interior nao
+        // serve — e la que uma divergencia de fracao de pixel some.
+        u32 HitX = 0, HitY = 0, BorderX = 0;
+        u64 HitId = 0, BorderLeft = 0, BorderRight = 0;
+        for (u32 Y = 80; Y < 300 && !BorderX; Y += 60) {
+            u64 Prev = 0;
+            for (u32 X = 60; X < 600; X += 8) {
+                const u64 Id = PickAt(X, Y);
+                if (Id != 0 && HitId == 0) { HitId = Id; HitX = X; HitY = Y; }
+                if (Prev != 0 && Id != 0 && Id != Prev) {
+                    BorderX = X - 8; BorderLeft = Prev; BorderRight = Id;
+                    HitY = Y;
+                    break;
+                }
+                Prev = Id;
+            }
+        }
+        Require(HitId != 0, "A/B do picking nao achou hit nenhum apos o reload");
+
+        // Escala NAO UNIFORME + rotacao: e onde a ordem do produto e a convencao de linha/coluna
+        // divergem. Com escala uniforme as duas composicoes coincidem mesmo estando erradas.
+        FRenderable* Skewed = Scene.FindRenderable(HitId);
+        Require(Skewed != nullptr, "objeto do A/B sumiu");
+        Skewed->Transform.Scale = { 1.7f, 0.6f, 1.15f };
+        Skewed->Transform.RotationEuler.Y += 27.0f;
+        Skewed->RefreshWorldBounds();
+        Scene.BumpTransformsVersion();
+        Scene.BumpStaticCastersVersion();
+        Frames(R, 3);
+        const u64 SkewedClassic = PickAt(HitX, HitY);
+
+        Settings.SetBindlessMaterials(true);
+        Settings.SetBindlessTransforms(true);
+        if (!Settings.GetBindlessTransforms()) {
+            // Device sem Resource Binding Tier 3, ou PSOs ausentes. Dizer ALTO: um A/B que some
+            // sozinho num device nao suportado e o gate-fantasma que o plano proibe.
+            std::cout << "  (A/B do picking PULADO: transform bindless indisponivel neste device)\n";
+        } else {
+            Frames(R, 3);
+            Require(PickAt(HitX, HitY) == SkewedClassic,
+                    "picking bindless resolveu outro objeto com escala nao uniforme");
+            if (BorderX != 0) {
+                Require(PickAt(BorderX, HitY) == BorderLeft,
+                        "picking bindless trocou a identidade do lado esquerdo da borda");
+                Require(PickAt(BorderX + 8, HitY) == BorderRight,
+                        "picking bindless trocou a identidade do lado direito da borda");
+            }
+            Settings.SetBindlessTransforms(false);
+            Settings.SetBindlessMaterials(false);
+            Frames(R, 3);
+            Require(PickAt(HitX, HitY) == SkewedClassic,
+                    "voltar ao classico nao restaurou a identidade");
+        }
+        Settings.SetUseTAA(TAAWas);
+    }
+
     R.Shutdown();
-    std::cout << "PASS: renderer lifecycle, pending pick, slot reuse, visibility and reload\n";
+    std::cout << "PASS: renderer lifecycle, pending pick, slot reuse, visibility, reload e A/B "
+                 "do picking bindless\n";
     return 0;
 } catch (const std::exception& Error) {
     std::cerr << "FAIL: " << Error.what() << '\n';
