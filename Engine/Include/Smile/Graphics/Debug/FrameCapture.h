@@ -107,6 +107,15 @@ namespace Smile {
         // Estado EFETIVO do A/B bindless. Sem ele, duas capturas visualmente comparadas
         // poderiam ter manifestos identicos apesar de usarem caminhos de submissao distintos.
         bool BindlessMaterials = false;
+        // Fase 4: o segundo eixo do A/B. Sem ele, duas capturas com submissao de TRANSFORM
+        // diferente teriam manifestos identicos — que e exatamente o par que esta sob teste.
+        bool BindlessTransforms = false;
+        // PRE-REQUISITOS da leitura dos contadores de sombra, e nao decoracao. Com o cache das
+        // cascatas ligado, `sunShadows.draws == 0` e ambiguo entre "nao desenhou" e "reusou o
+        // mapa": os dois sao estados legitimos e o contador nao os distingue. Um A/B de sombra
+        // que nao declara estes dois nao prova nada.
+        bool UseSunShadows = false;
+        bool ShadowCascadeCache = false;
 
         // Os toggles do A/B da Fase 0. A matriz de quatro baselines do plano se le daqui.
         bool UseGI              = false; // dominio indireto ligado

@@ -542,6 +542,10 @@ namespace Smile {
         // `TAAActive = UseTAA && !UpscaleActive` decide sozinho se o TAA acendeu.
         S.UseTAA = _Modes.TAAActive;
         S.BindlessMaterials = UseBindlessMaterials;
+        S.BindlessTransforms = UseBindlessTransforms;
+        // Pre-requisitos da leitura dos contadores de sombra. Ver a nota no FrameCapture.h.
+        S.UseSunShadows      = UseSunShadows;
+        S.ShadowCascadeCache = SunShadows.GetCascadeCache();
 
         // O manifesto descreve execucao efetiva, nao apenas toggles solicitados.
         S.UseGI       = UseGI;               // dominio indireto: intencao, e nao ha passe unico

@@ -71,6 +71,8 @@ namespace SmileEditor {
         Out.BindlessMaterialsAvailable = Settings.BindlessMaterialsAvailable();
         Out.BindlessTransforms          = Settings.GetBindlessTransforms();
         Out.BindlessTransformsAvailable = Settings.BindlessTransformsAvailable();
+        Out.SunShadows         = Settings.GetUseSunShadows();
+        Out.ShadowCascadeCache = Settings.GetShadowCascadeCache();
         Out.DIAnalyticCandidates      = static_cast<int>(Settings.GetDIInitialCandidates());
         Out.DIMeshCandidates          = static_cast<int>(Settings.GetDIMeshCandidates());
         Out.DIMeshLightsInPool        = Settings.GetDIMeshLightsInPool();
@@ -268,6 +270,13 @@ namespace SmileEditor {
             // ordem. Inverter passaria no teste com os dois ja ligados e falharia do frio.
             if (_Overrides.BindlessTransforms)
                 Settings.SetBindlessTransforms(*_Overrides.BindlessTransforms);
+            if (_Overrides.SunShadows)
+                Settings.SetUseSunShadows(*_Overrides.SunShadows);
+            // `SetCascadeCache` INVALIDA o cache ao ser chamado, inclusive para ligar. Desligar
+            // antes da captura e o que faz cada sample re-rasterizar as cascatas, e e assim que
+            // `sunShadows.draws` deixa de ser ambiguo.
+            if (_Overrides.ShadowCascadeCache)
+                Settings.SetShadowCascadeCache(*_Overrides.ShadowCascadeCache);
             if (_Overrides.RainAmount)
                 Settings.SetRainAmount(static_cast<float>(*_Overrides.RainAmount));
 

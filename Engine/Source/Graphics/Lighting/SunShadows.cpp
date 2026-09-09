@@ -847,7 +847,7 @@ namespace Smile {
 
                 St.SubmittedStatic = DrawCasters(_CommandList, _SRVHeap, _Items,
                                                  0, FirstDynamic, c, &St,
-                                                 BindlessMaterials, _Stats);
+                                                 BindlessMaterials, BindlessTransforms, _Stats);
                 // O terreno e caster estatico por definicao e entra AQUI, no mapa cacheado.
                 // Antes ele redesenhava em toda cascata que acordava — e nas cascatas 2 e 3 da
                 // Bistro ele e praticamente o unico conteudo do mapa.

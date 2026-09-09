@@ -66,6 +66,12 @@ namespace SmileEditor {
         // acoplamento e deliberado, ver FPipelineState::BindlessTransformsReady.
         bool   BindlessTransforms          = false;
         bool   BindlessTransformsAvailable = false;
+        // PRE-REQUISITOS da leitura dos contadores de sombra. Com o cache das cascatas ligado,
+        // `sunShadows.draws == 0` e ambiguo entre "nao desenhou" e "reusou o mapa" — os dois sao
+        // estados legitimos e o contador nao os separa. Sem declarar os dois, um A/B de sombra
+        // nao prova nada.
+        bool   SunShadows         = false;
+        bool   ShadowCascadeCache = false;
         // Knobs da matriz da Fase 0 do MESH-LIGHTS-PLAN.md. Entram no READBACK, e nao so na
         // aplicacao: quem roda o sweep precisa confirmar o degrau que de fato ficou, sem inferir
         // do que pediu. Mesmo contrato do resto deste struct.
@@ -98,6 +104,8 @@ namespace SmileEditor {
         std::optional<bool> DIMeshCompactSupport;
         std::optional<bool> BindlessMaterials;
         std::optional<bool> BindlessTransforms;
+        std::optional<bool> SunShadows;
+        std::optional<bool> ShadowCascadeCache;
         // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
         // janela recebeu o foco enquanto o agente coleta as amostras.
         std::optional<bool> BackgroundThrottleEnabled;

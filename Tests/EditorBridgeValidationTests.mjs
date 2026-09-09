@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 10.
+// Snapshot minimo VALIDO, no formato do protocolo 11.
 function snapshotValido() {
   return {
     direct: [],
@@ -142,7 +142,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 10,
+                version: 11,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -246,7 +246,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":10,"id":__ID__,"ok":true,"result":' +
+    '{"version":11,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");

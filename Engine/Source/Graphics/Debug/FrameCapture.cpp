@@ -539,6 +539,12 @@ namespace Smile {
                 File << "  \"taa\": " << Bool(_State.UseTAA) << ",\n";
                 File << "  \"bindlessMaterials\": "
                      << Bool(_State.BindlessMaterials) << ",\n";
+                File << "  \"bindlessTransforms\": "
+                     << Bool(_State.BindlessTransforms) << ",\n";
+                File << "  \"useSunShadows\": "
+                     << Bool(_State.UseSunShadows) << ",\n";
+                File << "  \"shadowCascadeCache\": "
+                     << Bool(_State.ShadowCascadeCache) << ",\n";
                 File << "  \"useGI\": "        << Bool(_State.UseGI)       << ",\n";
                 File << "  \"ddgiReady\": "    << Bool(_State.DDGIReady)   << ",\n";
                 File << "  \"ddgiCascadeCount\": " << _State.DDGICascadeCount << ",\n";

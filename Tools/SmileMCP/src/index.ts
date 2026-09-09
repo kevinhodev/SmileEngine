@@ -903,6 +903,18 @@ server.registerTool(
         .describe(
           "A/B da Fase 3: material por linha da tabela canonica (true) ou descritores por draw (false). O readback em settings confirma o estado efetivo.",
         ),
+      sunShadows: z
+        .boolean()
+        .nullish()
+        .describe(
+          "Liga/desliga o CSM do sol. Declarar explicitamente e pre-requisito para ler passes.sunShadows: sem isso, zero draws pode ser 'desligado' e ninguem sabe.",
+        ),
+      shadowCascadeCache: z
+        .boolean()
+        .nullish()
+        .describe(
+          "Cache estatico das cascatas. DESLIGUE para medir sombra: com ele ligado, zero draws tambem significa 'mapa reutilizado', e o contador deixa de distinguir os dois. Chamar o setter invalida o cache, entao cada sample re-rasteriza.",
+        ),
       bindlessTransforms: z
         .boolean()
         .nullish()

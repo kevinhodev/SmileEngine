@@ -209,7 +209,12 @@ namespace Smile {
         u32  DrawCasters(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,
                          const FShadowDrawItem* Items, size_t Begin, size_t End,
                          u32 Cascade, FCascadeStats* St, bool BindlessMaterials,
-                         bool BindlessTransforms, FDrawSubmitStats* Stats = nullptr);
+                         // Stats SEM default: com ele, um call site que esquecesse o
+                         // `BindlessTransforms` compilava — o ponteiro converte para bool em
+                         // silencio e o Stats caia no default. Foi o que aconteceu no caminho
+                         // com cache, onde o flag virou `(_Stats != nullptr)` e as estatisticas
+                         // da fase estatica sumiam. Sem default, vira erro de arity.
+                         bool BindlessTransforms, FDrawSubmitStats* Stats);
         // `TransformTableSrv` e o descritor da coluna Transform da tabela canonica; kInvalidSlot
         // significa "sem tabela", e nesse caso o caminho de transform cai no classico inteiro.
         void BindRoot(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap,

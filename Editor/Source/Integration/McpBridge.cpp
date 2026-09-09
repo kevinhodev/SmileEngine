@@ -36,7 +36,7 @@ namespace SmileEditor {
         // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
         // 6: cpu.instanceTable. A tabela canônica de instâncias entrou no resumo que a régua
         // consome; sem bump, um editor v5 pareceria compatível e só falharia na agregação.
-        constexpr int kProtocolVersion = 10;
+        constexpr int kProtocolVersion = 11;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -209,6 +209,8 @@ namespace SmileEditor {
                 { QStringLiteral("timeOfDayRunning"), _Settings.TimeOfDayRunning },
                 { QStringLiteral("bindlessMaterials"), _Settings.BindlessMaterials },
                 { QStringLiteral("bindlessTransforms"), _Settings.BindlessTransforms },
+                { QStringLiteral("sunShadows"), _Settings.SunShadows },
+                { QStringLiteral("shadowCascadeCache"), _Settings.ShadowCascadeCache },
                 { QStringLiteral("bindlessTransformsAvailable"),
                   _Settings.BindlessTransformsAvailable },
                 { QStringLiteral("bindlessMaterialsAvailable"),
@@ -800,6 +802,8 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
             ReadOptionalBool(_Arguments, "bindlessMaterials", Overrides.BindlessMaterials) &&
             ReadOptionalBool(_Arguments, "bindlessTransforms", Overrides.BindlessTransforms) &&
+            ReadOptionalBool(_Arguments, "sunShadows", Overrides.SunShadows) &&
+            ReadOptionalBool(_Arguments, "shadowCascadeCache", Overrides.ShadowCascadeCache) &&
             ReadOptionalBool(_Arguments, "backgroundThrottle",
                              Overrides.BackgroundThrottleEnabled);
         if (!KnobsOk) {

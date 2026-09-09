@@ -26,7 +26,15 @@ import path from "node:path";
 // migrado zera o primeiro enquanto o segundo continua alto, e o segundo so cai quando todos os
 // passes migrarem. Uma nao substitui a outra, e publicar so uma delas deixaria metade do gate
 // sem evidencia.
-const PROTOCOL_VERSION = 10;
+// 11: `settings.sunShadows` e `settings.shadowCascadeCache`, com readback efetivo e override, mais
+// `bindlessTransforms` no manifesto da captura.
+//
+// Sao PRE-REQUISITOS de leitura, e nao knobs a mais: com o cache das cascatas ligado,
+// `passes.sunShadows.draws == 0` e ambiguo entre "nao desenhou" e "reusou o mapa" — os dois sao
+// estados legitimos e o contador nao os separa. Um A/B de sombra que nao declara os dois nao
+// prova nada, e o manifesto sem `bindlessTransforms` deixa duas capturas do MESMO par sob teste
+// com procedencia identica.
+const PROTOCOL_VERSION = 11;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -348,6 +356,8 @@ export interface ProfileOverrides {
   meshCompactSupport?: boolean;
   bindlessMaterials?: boolean;
   bindlessTransforms?: boolean;
+  sunShadows?: boolean;
+  shadowCascadeCache?: boolean;
   backgroundThrottle?: boolean;
 }
 
