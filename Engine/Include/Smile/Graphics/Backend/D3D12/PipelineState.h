@@ -150,6 +150,9 @@ namespace Smile {
         // Forward de translucidos (materiais Blend): alpha-blend premultiplicado sobre o HDR,
         // depth read-only, cull none (vidro two-sided).
         ID3D12PipelineState* PSOForwardBlend() const { return PipelineStateForwardBlend.Get(); }
+        ID3D12PipelineState* PSOForwardBlendVsBindless() const {
+            return PipelineStateForwardBlendVsBindless.Get();
+        }
 
     private:
         ComPtr<ID3D12RootSignature> RootSignature;
@@ -176,5 +179,6 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLighting;
         ComPtr<ID3D12PipelineState> PipelineStateDeferredLightingDebug;
         ComPtr<ID3D12PipelineState> PipelineStateForwardBlend;
+        ComPtr<ID3D12PipelineState> PipelineStateForwardBlendVsBindless;
     };
 } 

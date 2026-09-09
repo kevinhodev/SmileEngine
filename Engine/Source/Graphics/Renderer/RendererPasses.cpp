@@ -1210,16 +1210,26 @@ namespace Smile {
                         ? Atmosphere.TransmittanceSRV() : IBLTableStart;
                     CommandList->SetGraphicsRootDescriptorTable(13, Backend->SRVHeap.GpuHandle(AtmoTable));
                 }
-                CommandList->SetPipelineState(PipelineState.PSOForwardBlend());
+                // O D9 deixa translucidos no fallback da SUBMISSAO — eles nao entram no caminho
+                // indirect/GPU-driven. Ler o transform da tabela e outro eixo: nao torna o passe
+                // GPU-driven, e sem ele o `objectConstantBytes` nunca chega a zero, porque quem
+                // escreve o CB e o laco de montagem, que nao sabe qual passe vai consumir.
+                const bool BlendVsBindless = BeginBindlessTransforms(CommandList, _Ctx.FrameSlot);
+                CommandList->SetPipelineState(BlendVsBindless
+                                                  ? PipelineState.PSOForwardBlendVsBindless()
+                                                  : PipelineState.PSOForwardBlend());
                 CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 FDrawSubmitCache Submit;
                 Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::Translucent);
+                Submit.TransformBindless      = BlendVsBindless;
+                Submit.TransformRootIndex     = FPipelineState::kObjectCBRootIndex;
+                Submit.DrawConstantsRootIndex = FPipelineState::kMaterialRootIndex;
+                Submit.ObjectCBBase           = ObjectCBBase;
+                Submit.ObjectCBStride         = sizeof(ObjectConstants);
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
                 for (auto It = VisibleScratch.rbegin(); It != VisibleScratch.rend(); ++It) {
                     ++Submit.Stats->Considered;
                     if (!It->Mat->Blend) continue;
-                    // Translucidos ficam no classico por decisao D9; o BindTransform passa pelo
-                    // mesmo metodo so para o contador do passe nao mentir por omissao.
                     Submit.BindTransform(CommandList, It->Slot, It->R->GpuHandle.Slot);
                     Submit.BindMaterial(CommandList, Backend->SRVHeap, It->Mat);
                     Submit.DrawMesh(CommandList, It->R->Mesh);

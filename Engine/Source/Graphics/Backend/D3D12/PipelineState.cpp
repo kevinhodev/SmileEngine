@@ -539,6 +539,9 @@ namespace Smile {
         ComPtr<ID3D12PipelineState> NewPSOForwardBlend;
         SMILE_HR(_Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&NewPSOForwardBlend)));
         PipelineStateForwardBlend = NewPSOForwardBlend;
+        // Gemea de TRANSFORM. O material do translucido continua CLASSICO (o ForwardBlend.ps nao
+        // tem permutacao bindless), entao aqui o eixo de transform anda sozinho, como na chuva.
+        MakeVsBindless(PipelineStateForwardBlendVsBindless);
 
         // --- Deferred lighting: fullscreen (PostProcess.vs), le o G-buffer e ilumina -> HDR. ----
         // Usa a root signature principal (a tabela de material e religada p/ [A,B,C,Depth]).
