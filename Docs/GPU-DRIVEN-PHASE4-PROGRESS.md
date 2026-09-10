@@ -1,17 +1,19 @@
 # Fase 4 — estado da implementação
 
-Data: 2026-09-08
+Data: 2026-09-10
 
-Estado: **aberta, quatro slices entregues e duas rodadas de revisão fechadas.** Release fecha 64/64,
-Debug compila e o cliente TypeScript compila. Dois dos seis itens do gate de saída estão fechados;
-os outros quatro continuam abertos, e dois deles (`ObjectCB` e `TransformBuffer` do TemporalMotion)
-ainda não foram tocados.
+Estado: **aberta, oito consumidores migrados e três rodadas de revisão fechadas.** Release fecha
+66/66, Debug compila e o cliente TypeScript compila. Três dos seis itens do gate estão fechados; o
+`ObjectCB` **já pode deixar de ser alocado** (sete consumidores migrados, alocação sob demanda,
+troca transacional), e a aposentadoria do `TransformBuffer` do TemporalMotion começou pela
+matemática. Falta a medição em 1M, que é o que fecha os dois.
 
 A primeira revisão do Codex reprovou a fase com seis achados, três bloqueadores — entre eles uma
 regressão de motion vector que eu tinha introduzido e um trio de checagens que eu havia
 **documentado como decisão deliberada**. A segunda não achou P1 novo e pegou um defeito no aparato
-de teste. Os sete estão corrigidos; a seção da revisão registra cada um e o que o padrão deles
-ensina.
+de teste. A terceira, sobre o `ObjectCB` sob demanda, achou dois P1, um P2 **e uma afirmação de
+estado errada minha** — eu disse que faltavam "1M + documentação" com o `TransformBuffer` intacto.
+Todos corrigidos; as seções de revisão registram cada um e o que o padrão deles ensina.
 
 Base: Fase 3 encerrada em `3b38694`. **Nada da Fase 3 foi reaberto.**
 
@@ -30,6 +32,37 @@ não caminho quente.
 | `3fb93cd` | o candidato carrega a generation, e o overflow deixa de ser parcial |
 | `80b9dbf` | isolar material não invalidava o mapa estático de sombra |
 | `f67d646` | o aparelho de teste alocava dois slots por renderável |
+| `0704793` | a composição do transform sai do CBV por draw (composição compartilhada C++/HLSL) |
+| `b82c92b` | caminho bindless de transform selecionável no main view (z-prepass + G-buffer) |
+| `8679e01` | MCP expõe o toggle e os contadores de transform (protocolo 10) |
+| `7c30c6a` | sombras do sol lendo o transform da tabela |
+| `e0d0ece` | MCP declara os pré-requisitos da leitura de sombra (protocolo 11) |
+| `bb572c0` | sombras locais lendo o transform da tabela |
+| `66b91ad` | mapa de oclusão de chuva lendo o transform da tabela |
+| `e56cb4f` | translúcidos lendo o transform da tabela |
+| `b6cef2f` | picking lendo o transform da tabela |
+| `6055d6a` | A/B do picking no teste versionado — **falso-verde**, ver a revisão |
+| `13b2b51` | fecha o falso-verde do A/B do picking |
+| `0e6688e` | `ObjectCB` alocado sob demanda, com troca transacional |
+| `e0841b5` | liberar o `ObjectCB` exige o caminho clássico inteiro aposentado |
+| `092e0c0` | alocação do `ObjectCB` que recusa de verdade (`TryCreateUploadBuffer`) |
+| `f4f84c5` | MCP valida os dois números do `ObjectCB` na borda (protocolo 12) |
+| `d28cb52` | derivação do par temporal, com paridade provada em WARP |
+
+### Os sete consumidores do `ObjectCB`
+
+Cada um foi migrado, medido pelo par `transformBinds`/`transformSlotSets` e aprovado em GPU antes do
+seguinte. A ordem não foi arbitrária: do mais visível para o mais silencioso.
+
+| passe | evidência da rodada |
+|---|---|
+| z-prepass opaco + mascarado | Z opaco 572.373, Z masked 191.035 — slots == draws exatamente |
+| G-buffer | 763.408; OFF↔ON dentro do ruído de ON↔ON |
+| sombras do sol | 10/10 amostras redesenharam 2.678 casters; OFF binds 2.678/slots 0, ON binds 0/slots 2.678 |
+| sombras locais | 20/20 amostras, 5.880 considerados, 1.186 draws; controle negativo com `castShadows:false` |
+| oclusão de chuva | câmera forçada a cruzar o quantum de 16 m dez vezes por caminho; 1.591 considerados |
+| translúcidos | ~890 considerados, 27–29 draws; vidro intacto, p95 ≤ 1/255 |
+| picking | A/B no teste versionado, em hardware Tier 3 — o único cuja falha não aparece na imagem |
 
 ## O gate de saída, item a item
 
@@ -37,9 +70,9 @@ não caminho quente.
 |---|---|---|
 | 1 | cena estática envia zero dirty pages depois do assentamento | **fechado** — já valia pela saída antecipada por versão; agora está sob teste (`Smile.GpuSceneIncremental`) |
 | 2 | mover um objeto não faz upload proporcional ao total | **fechado** — e o custo de *descobrir* também deixou de ser |
-| 3 | remover/reusar slot respeita generation e fences | herdado da Fase 1; o teste novo cobre a linha zerada na remoção |
+| 3 | remover/reusar slot respeita generation e fences | **fechado** — herdado da Fase 1; o teste novo cobre a linha zerada na remoção |
 | 4 | 1M instâncias não exigem reconstrução/upload integral por frame | **provado em 4.096, não medido em 1M.** Falta a medição na sintética |
-| 5 | `ObjectCB` e `TransformBuffer` do TemporalMotion deixaram de ser alocados | **não iniciado** |
+| 5 | `ObjectCB` e `TransformBuffer` do TemporalMotion deixaram de ser alocados | **metade pronta, nenhuma medida.** `ObjectCB`: sete consumidores migrados e alocação sob demanda — com o toggle ligado ele não existe. `TransformBuffer`: só a matemática (`d28cb52`); o buffer continua alocado e reescrito por frame |
 | 6 | range único e múltiplos ranges sintéticos produzem a mesma lista expandida | **fechado** — na CPU e na GPU |
 
 ## Revisão do Codex (2026-09-08) — seis achados, três bloqueadores
@@ -158,6 +191,82 @@ Nos três casos o raciocínio estava certo **sobre o código de hoje** e errado 
 checagem serve para fazer. Vale como regra para as fases seguintes: quando o comentário explica por
 que **não** verificar, o comentário é o defeito.
 
+## Revisão do Codex (2026-09-10) — o `ObjectCB` sob demanda
+
+Dois P1, um P2 e uma afirmação de estado errada minha.
+
+### P1 — o `ObjectCB` podia ser liberado com passes ainda no clássico
+
+`SetBindlessTransforms(true)` não exigia `UseBindlessMaterials`. Como as PSOs de transform são
+gêmeas das de material, com o eixo de material **desligado** todo passe que consome material escolhe
+a PSO clássica — e a clássica lê o CBV por draw, que o toggle acabara de liberar. Reproduzido
+ligando transform antes de material, e também desligando material pela UI com transform ligado.
+
+O comentário no setter dizia que a dependência existia. Ela existia **na construção das PSOs**, não
+no estado dos toggles: `BindlessTransformsReady()` responde "as PSOs existem?", e ninguém perguntava
+"os passes vão usá-las?".
+
+Segundo defeito no mesmo achado: a lista de prontidão cobria as seis PSOs do main view. A do
+`ForwardBlend` (translúcidos) ficou de fora quando o passe foi migrado, e nada notou.
+
+Correção em `e0841b5`: a decisão passa a sair de **um** predicado, `CanRetireObjectCB`, chamado pelo
+setter e pelo `RecreateObjectCB`. A condição de LIBERAR é a conjunção literal do que cada passe
+avalia para NÃO USAR — eixo de material ligado, as duas tabelas construídas, o CBV de view e as PSOs
+das **sete** consumidoras. Desligar material passa a cascatear para transform (o outro sentido do
+invariante, que a UI produz com um clique) e recusa a operação inteira se o `ObjectCB` não puder ser
+recriado. Desligar transform sozinho continua legal: material bindless com transform clássico é um
+degrau da escada do A/B.
+
+Sobra uma rede no único ponto do frame que lê o endereço do buffer: se algum passe ainda alcança o
+clássico e o buffer sumiu, ele é recriado ali, sem dreno — ninguém pode estar lendo o que não
+existe. O silêncio era o caro: **nem todo consumidor é visível.** Sem buffer, o picking devolve outro
+objeto e a oclusão de chuva perde o telhado, e a imagem não muda.
+
+### P1 — a falha de alocação não era transacional
+
+`AllocateObjectCB` prometia "devolve `false` sem tocar em nada", mas chamava `CreateUploadBuffer`,
+que usa `SMILE_HR` na criação **e** no `Map`. A falha nunca chegava ao `if (!Upload.Resource)`: ela
+saía como exceção pelo setter do Qt/MCP. A troca transacional só era transacional no comentário.
+
+Correção em `092e0c0`: entra um `TryCreateUploadBuffer` real, com o corpo compartilhado com o que
+lança — uma única função devolvendo `HRESULT`, para as duas versões não poderem divergir. Ela nunca
+entrega um buffer meio pronto: se o `Map` falha, o recurso morre com o `ComPtr` local.
+
+Os dois chamadores divergem **de propósito**: o setter recusa e preserva o bindless (que funciona);
+o `RecreateObjectCB` (load/setup) **aborta**, porque ali não há estado anterior para preservar e
+seguir sem buffer entregaria um renderer que não desenha e não reclama.
+
+### P2 — o protocolo 12 não validava o campo que passou a exigir
+
+`objectConstantBytesReserved` entrou no tipo e no resumo sem entrar na validação do
+`profile_snapshot`. Apagar o campo do payload atravessava a borda, e o resumo publicaria `undefined`
+exatamente no número que decide a fase — a mesma falha que fez o `gpuSlots` virar exigência na v4.
+
+Correção em `f4f84c5`: os dois campos validados como u64 (`isSafeInteger`, não negativo) — e não
+u32, porque em 1M o reservado passa de 512 MB — mais uma coerência entre eles: **escrita não pode
+passar do reservado**. O caso extremo, `bytes > 0` com `reserved == 0`, descreve um renderer
+impossível, e é justamente o par que as duas provas do gate existem para manter independente.
+
+### E a afirmação de estado errada
+
+Eu disse que faltavam "1M + documentação". O `TransformBuffer` do TemporalMotion continuava
+alocando `2 × capacidade × 128 B`, criando os SRVs e sendo reescrito inteiro por frame — 256 B
+residentes por instância, ~256 MB em 1M, e o gate exige explicitamente que ele desapareça.
+
+Vale como regra: **um item de gate não sai da lista porque o outro item do mesmo bullet andou.**
+
+### O falso-verde do A/B do picking (`6055d6a` → `13b2b51`)
+
+Merece registro próprio porque o defeito estava no **teste**, e ele passava. O caso de escala e
+rotação não uniformes: `HitY` era sobrescrito no ramo da borda, `SkewedClassic` nunca era comparado
+com `HitId` nem com zero, a borda era opcional ("se achar") e os pixels ditos adjacentes estavam a 8
+de distância — uma divergência de fração de pixel cabe inteira entre eles. O revisor provou o
+vermelho numa 3060 Ti acrescentando um único `Require`.
+
+Três rodadas seguidas com defeito no meu **aparato de teste**, e não na implementação. A regra que
+sai daí: **código de teste merece a mesma desconfiança que código de produção** — e um `Require` que
+nunca falha em nenhum estado é indistinguível de nenhum `Require`.
+
 ## O achado que definiu a primeira slice
 
 As linhas sujas já eram poucas — o gate da Fase 2 provou isso. O que ninguém media era o **custo de
@@ -270,6 +379,9 @@ nenhuma — a causa fica a cinco chamadas de distância. O aparelho do teste pas
 | `Smile.GpuSceneIncremental` (WARP) | primeira publicação, assentamento, mover um objeto, storm de 1/8 da cena, remoção, bump cego, dica invalidada no mesmo intervalo, estouro do teto da caixa |
 | `Smile.GpuSceneCandidates` (WARP) | as cinco causas de exclusão por contador **e** por identidade do slot, range único, equivalência com quatro ranges sintéticos, range estourado, range que dá a volta em u32, persistência sob transform, reconstrução sob visibilidade, overflow com teto |
 | `Smile.GpuSceneExpandWarp` (WARP) | o shader de produção contra a referência CPU; range único vs sintéticos; slot fora da tabela; linha vazia; linha `RaytracingOnly`; overflow; lista vazia; os quatro índices de contador lidos de volta |
+| `Smile.InstanceTransformWarp` (WARP) | a composição das quatro matrizes do VS, C++ contra HLSL, pelo include de produção — a ordem do produto é o erro clássico da migração |
+| `Smile.TemporalTransformWarp` (WARP) | o par temporal derivado: inversa 4x4 e ordem do produto, com caso espelhado, longe da origem, sem histórico, singular e **não afim**, mais round-trip para a identidade |
+| `Smile.RendererIdentity` (hardware, opt-in) | ganhou o A/B do picking bindless e a transação inteira do `ObjectCB`: invariante transform⇒material nos dois sentidos, `reserved == 0` com o toggle ligado, `> 0` na volta, e a recusa por falta de memória |
 
 ## Casos negativos rodados
 
@@ -289,6 +401,20 @@ declarar feito:
 | guarda de limite da lista removida do shader | 3 asserts vermelhos, com dois slots lidos além da lista entrando como válidos |
 | alocação dupla de slot no aparelho de teste | 8.192 vivos para 4.096 renderáveis — vermelho |
 | `RemoveRenderable` sem aposentar a residência | 4.096 vivos e zero aposentados após a remoção — vermelho |
+| eixo de material fora do `CanRetireObjectCB` | "transform bindless ligou sem material bindless" — vermelho |
+| cascata material→transform removida | "desligar material deixou o transform bindless ligado" — vermelho |
+| `CreateUploadBuffer` de volta no lugar do `Try` | `HRESULT 0x8007000E` atravessando o setter — vermelho |
+| validação dos dois campos de bytes removida do bridge | 11 dos 14 payloads de borda passam a ser aceitos; os 3 restantes caem na coerência, um deles citando o campo errado |
+| ordem do produto trocada no par temporal | vermelho em 3 dos 6 casos (os outros são simétricos por construção) |
+| sinal de cofator trocado na inversa HLSL | vermelho — **e verde antes de o conjunto de teste ser consertado** |
+| corte de determinante removido da inversa HLSL | "a inversa singular não produziu NaN/Inf" — vermelho |
+
+Um segundo achado do processo, na mesma linha do primeiro: o sinal de cofator trocado passava
+**verde** enquanto as matrizes de teste usavam rotação só em Y. Uma rotação de eixo único deixa
+zeros estruturais no 3x3, e o termo trocado multiplicava zero. Com entrada afim — a única que um
+transform de objeto produz — metade dos termos de cada cofator é inalcançável por construção, e por
+isso o conjunto ganhou um caso **não afim**: a função sob teste é uma inversa geral, e o que se
+prova é a transcrição dela, não o uso.
 
 Um achado do processo: a equivalência "range único vs sintéticos" **não** pega o range lido como
 intervalo de slots — os dois modos cobrem o mesmo span, então a interpretação errada produz a mesma
@@ -297,26 +423,67 @@ guarda explícita de que a lista de candidatos **não** é a identidade.
 
 ## Protocolo do MCP
 
-Foi a **9**. `cpu.instanceTable.rowsScanned` entra no RESUMO, pela mesma regra do 5: é o número que
-julga o gate, e um editor anterior publicaria `null` exatamente onde a medida decide.
+Foi a **12**, em três degraus:
+
+- **10** — `transformBinds`/`transformSlotSets` por passe e o toggle `bindlessTransforms`. Os dois
+  contadores entram no resumo porque `transformBinds == 0` é a prova de **qual caminho executou**, e
+  a imagem sozinha não dá isso: os dois caminhos produzem o mesmo pixel.
+- **11** — `sunShadows` e `shadowCascadeCache` com readback efetivo e override, mais
+  `bindlessTransforms` no manifesto da captura. São pré-requisitos de **leitura**: com o cache das
+  cascatas ligado, `sunShadows.draws == 0` é ambíguo entre "não desenhou" e "reusou o mapa".
+- **12** — `objectConstantBytesReserved`. As duas provas do gate, separadas: `objectConstantBytes ==
+  0` diz que ninguém mais **escreve**; esta diz que o buffer deixou de **existir**. Durante seis das
+  sete migrações a primeira caiu por passe enquanto a segunda ficou intacta.
+
+O número de memória sai do **renderer**, e não do VramTracker: upload heap não é itemizado lá (o
+tracker cobre VRAM/DEFAULT). Procurar a ausência do `ObjectCB` no breakdown por recurso não acharia
+nada, nem antes nem depois.
 
 ## O que falta
 
-1. **Medir na sintética de 1M.** A propriedade está provada em 4.096 objetos, em WARP. O gate fala
-   de 1M, e o número tem de sair de uma rodada com o editor aberto. **Exige GPU.**
-2. **Ligar a lista de candidatos ao frame** e publicar os contadores dela. Hoje `FGpuSceneCandidates`
-   não tem chamador; o consumidor natural chega com a Fase 5.
-3. **Aposentar o `ObjectCB`** — 256 B por item aceito, por frame, sempre. Some quando o VS passar a
-   ler `Transform`/`PrevTransform` da tabela e a compor MVP com as matrizes do `FrameCB`. Precisa de
-   `InstanceSlot` por draw (constante de root, como o `MaterialRow` da Fase 3) e mexe em oito call
-   sites de submissão. **Mexe na imagem: vai atrás de A/B, como a Fase 3.**
-4. **Aposentar o `TransformBuffer` do TemporalMotion** — 128 B por instância, por frame, sempre.
-   Ele guarda `Current⁻¹·Previous` e `Previous⁻¹·Current`, derivados das duas colunas que já
-   existem. A tensão real: a tabela derivada existe para **evitar inversão por pixel**, e os três
-   consumidores (`DualMotion`, `ReflectionMotion`, `ReSTIRDISpatial`) indexam por `InstanceID` da
-   TLAS, não por slot. Migrar exige passar pela tabela de identidade + remap e decidir onde a
-   inversão passa a acontecer. Não é uma troca de ponteiro.
-5. **Verificar a memória por medição**, não por leitura de código, como o gate exige.
+1. **Medir na sintética de 1M.** Fecha os gates 4 e 5 de uma vez. Com
+   `bindlessMaterials + bindlessTransforms` ligados: `objectConstantBytes == 0` **e**
+   `objectConstantBytesReserved == 0`, com `transformBinds == 0` nos sete passes. No clássico, o
+   esperado é ~256 MB escritos por frame contra ~563 MB reservados — são dois frames em voo sobre a
+   capacidade com folga, e a razão entre os dois números é a própria evidência de que as duas provas
+   medem coisas diferentes. **Exige GPU.**
+2. **Aposentar o `TransformBuffer` do TemporalMotion.** Começou em `d28cb52` pela matemática; falta
+   migrar os consumidores e apagar o buffer. Detalhe abaixo.
+3. **Ligar a lista de candidatos ao frame** e publicar os contadores dela. Hoje
+   `FGpuSceneCandidates` não tem chamador; o consumidor natural chega com a Fase 5.
+4. **Exercitar a troca de toggle com cena carregada**, nas duas ordens, e capturar depois. A
+   transação drena e realoca com o `MaxObjects` corrente; um erro ali aparece como raster vazio
+   **depois de desligar**, não ao ligar. **Exige GPU.**
+
+### O plano do `TransformBuffer`, slice a slice
+
+O que ele guarda (`Current⁻¹·Previous` e `Previous⁻¹·Current`) é **derivado** de duas matrizes que
+já moram na tabela canônica — e as entradas saem literalmente de lá, via `TransformsFor`. O custo
+não é só a memória: o `UpdatePerFrame` faz **duas inversas 4x4 por instância por frame**, na CPU, em
+cima da cena inteira. Em 1M isso é 2M inversas e 128 MB de escrita por frame.
+
+A tensão anotada antes — "a tabela existe para evitar inversão por pixel, e os consumidores indexam
+por `InstanceID`, não por slot" — se resolve por um caminho que já existe: os três consumidores já
+leem a **tabela de identidade**, que é indexada por `InstanceID` e devolve `{Slot, Generation}`. O
+slot está na mão no exato ponto da leitura. E `RaytracingHandle()` é o mesmo `GpuHandle` filtrado por
+visibilidade, então `identity[i].Generation == 0` ⟺ a entrada era identidade — a guarda de hoje
+transfere sem mudar de significado.
+
+| slice | conteúdo | risco |
+|---|---|---|
+| `d28cb52` ✔ | contrato compartilhado, inversa em HLSL, paridade em WARP | nenhum — não muda comportamento |
+| 4b | migrar `DualMotion` | baixo: já amarra identidade e remap |
+| 4c | migrar `ReflectionMotion` (trace + mirror) | **médio** — mexe em descriptor table de passe RT |
+| 4d | migrar `ReSTIRDISpatial` | **médio** — idem, e é o passe com 3 lookups por pixel |
+| 4e | apagar buffer, SRVs e o laço da CPU; asserção de memória | baixo, depois dos três |
+
+Cada uma de 4b–4d **mexe em reprojeção temporal**, que é onde uma troca de ordem aparece como
+ghosting/shimmer e o suspeito natural é o denoiser. Vão atrás de A/B em GPU, uma por vez.
+
+Decisão registrada: a inversa em HLSL é a **geral**, transcrita linha a linha do `Mat44::Inverse`, e
+não a forma afim barata. As duas coincidem para TRS, mas a afim depende de uma garantia que nada
+verifica. Especializar é um passo de **medição**, com a paridade em WARP como rede — e o custo atual
+não é o que a fase persegue: são ~200 ALU sem tráfego nenhum.
 
 ## Riscos anotados
 

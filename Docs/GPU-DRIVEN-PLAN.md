@@ -1436,12 +1436,20 @@ permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dado
 
 ## Fase 4 — GPU Scene persistente e ranges
 
-> **Estado em 2026-09-08 — ABERTA, quatro slices entregues.** Release fecha 64/64, Debug compila e o
-> cliente TypeScript compila. Dois dos seis itens do gate estão fechados (dirty pages em cena
-> estática e a equivalência range único/sintéticos, esta provada na CPU **e** na GPU); o de escala
-> está provado em 4.096 objetos e **falta medir em 1M**; a aposentadoria do `ObjectCB` e do
-> `TransformBuffer` do TemporalMotion **não foi iniciada**. Detalhe, evidência, casos negativos e a
-> fila do que falta em [GPU-DRIVEN-PHASE4-PROGRESS.md](GPU-DRIVEN-PHASE4-PROGRESS.md).
+> **Estado em 2026-09-10 — ABERTA, oito consumidores migrados.** Release fecha 66/66, Debug compila e
+> o cliente TypeScript compila. Três dos seis itens do gate estão fechados; o de escala está provado
+> em 4.096 objetos e **falta medir em 1M**. O `ObjectCB` **já pode deixar de ser alocado** — os sete
+> consumidores leem o transform da tabela, a alocação é sob demanda e a troca de toggle é
+> transacional nos dois sentidos —, e o `TransformBuffer` do TemporalMotion tem só a matemática
+> pronta, com paridade provada em WARP. **Nenhum dos dois foi medido**, e é a medição que o gate
+> exige. Detalhe, evidência, casos negativos e a fila do que falta em
+> [GPU-DRIVEN-PHASE4-PROGRESS.md](GPU-DRIVEN-PHASE4-PROGRESS.md).
+>
+> A terceira revisão achou dois P1 no `ObjectCB` sob demanda — liberar o buffer não exigia que o eixo
+> de material estivesse LIGADO (só que as PSOs existissem), e a falha de alocação lançava em vez de
+> recusar — e **uma afirmação de estado errada minha**: eu disse que faltavam "1M + documentação"
+> com o `TransformBuffer` intacto. Regra que sai daí: um item de gate não sai da lista porque o outro
+> item do mesmo bullet andou.
 >
 > O achado que definiu a primeira slice: as linhas sujas já eram poucas — o gate da Fase 2 provava
 > isso —, mas o **custo de descobri-las** era a tabela inteira, duas vezes (o produtor revarria os
@@ -1463,6 +1471,12 @@ permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dado
 > deliberada: a generation não era validada, o overflow produzia lista parcial utilizável, e a GPU
 > lia fora do buffer onde a CPU recusava. O padrão vale para as fases seguintes — **quando o
 > comentário explica por que NÃO verificar, o comentário é o defeito.**
+>
+> Três rodadas seguidas acharam defeito no **aparato de teste**, e não na implementação: dois slots
+> por renderável, um A/B de picking que era falso-verde, e um conjunto de matrizes cuja rotação de
+> eixo único escondia um sinal de cofator trocado. Irmã da regra acima — **código de teste merece a
+> mesma desconfiança que código de produção**, e um `Require` que não fica vermelho em estado nenhum
+> é indistinguível de nenhum `Require`.
 
 ### Objetivo
 
