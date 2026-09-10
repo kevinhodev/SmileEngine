@@ -116,6 +116,13 @@ namespace Smile {
         void ExecuteParticles(ID3D12GraphicsCommandList* Cmd, FTextureSRVHeap& SRVHeap,
                               u32 DepthSRVSlot, u32 Width, u32 Height);
 
+        // PUBLICA porque quem decide liberar o ObjectCB e o Renderer, e nao este passe: sem as
+        // duas gemeas aqui o mapa de oclusao desenha pelo caminho classico, e um ObjectCB
+        // liberado deixaria o telhado fora do mapa — chuva atravessando teto, sem erro de API.
+        bool OcclusionTransformBindlessReady() const {
+            return OccOpaqueVsBindlessPSO && OccMaskedVsBindlessPSO;
+        }
+
     private:
         void BuildRootSignature(ID3D12Device* Device);
         void BuildPSO(ID3D12Device* Device);
@@ -140,9 +147,6 @@ namespace Smile {
         bool SupportsDirectHeapIndexing = false;
         static constexpr u32 kOccDrawConstantsRootIndex = 4;
         static constexpr u32 kOccObjectCBRootIndex      = 3;
-        bool OcclusionTransformBindlessReady() const {
-            return OccOpaqueVsBindlessPSO && OccMaskedVsBindlessPSO;
-        }
 
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OccOpaquePSO;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> OccMaskedPSO;

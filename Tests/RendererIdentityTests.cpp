@@ -279,6 +279,20 @@ int wmain(int Argc, wchar_t** Argv) try {
         Require(BorderX != 0, "A/B do picking nao achou borda adjacente do objeto transformado");
         Require(BorderLeft != BorderRight, "a borda encontrada tem a mesma identidade dos dois lados");
 
+        // INVARIANTE ESTRUTURAL, antes do A/B: transform bindless => material bindless. As PSOs
+        // de transform sao gemeas das de material, entao com o material desligado os passes que
+        // consomem material escolhem a PSO CLASSICA -- e o classico le o CBV por draw. Ligar so
+        // este eixo e liberar o ObjectCB deixaria o G-buffer com `ObjectCBBase == 0`.
+        //
+        // O estado inicial e classico nos dois eixos: se o buffer some aqui, a regressao e
+        // exatamente essa.
+        Settings.SetBindlessMaterials(false);
+        Settings.SetBindlessTransforms(true);
+        Require(!Settings.GetBindlessTransforms(),
+                "transform bindless ligou sem material bindless");
+        Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                "transform bindless ligou sem material bindless e liberou o ObjectCB do fallback");
+
         Settings.SetBindlessMaterials(true);
         Settings.SetBindlessTransforms(true);
         if (!Settings.GetBindlessTransforms()) {
@@ -298,8 +312,13 @@ int wmain(int Argc, wchar_t** Argv) try {
                     "picking bindless trocou a identidade do lado esquerdo da borda");
             Require(PickAt(BorderX + 1, SkewY) == BorderRight,
                     "picking bindless trocou a identidade do lado direito da borda");
-            Settings.SetBindlessTransforms(false);
+            // A VOLTA pela CASCATA: desliga so o material. O outro sentido do invariante — o
+            // usuario que destica "bindless materials" na UI com transform ligado — e o que
+            // deixaria os passes de material no classico sem buffer. Desligar material tem de
+            // derrubar transform junto, e a queda tem de recriar o ObjectCB antes de efetivar.
             Settings.SetBindlessMaterials(false);
+            Require(!Settings.GetBindlessTransforms(),
+                    "desligar material deixou o transform bindless ligado");
             Frames(R, 3);
             // E a volta e TRANSACIONAL: o buffer classico tem de existir de novo antes de o
             // toggle mudar, senao o raster ficaria sem de onde ler transform.
@@ -310,6 +329,21 @@ int wmain(int Argc, wchar_t** Argv) try {
             Require(PickAt(BorderX, SkewY) == BorderLeft &&
                         PickAt(BorderX + 1, SkewY) == BorderRight,
                     "voltar ao classico nao restaurou a borda");
+
+            // E o sentido que NAO cascateia: desligar transform sozinho e legal e deixa o
+            // material ligado — esse degrau da escada do A/B (material bindless + transform
+            // classico) e um estado valido, e cascatear para cima o apagaria. Sem frames: os
+            // setters sao sincronos e o que se mede aqui e a memoria, nao a imagem.
+            Settings.SetBindlessMaterials(true);
+            Settings.SetBindlessTransforms(true);
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "religar o par nao liberou o ObjectCB");
+            Settings.SetBindlessTransforms(false);
+            Require(Settings.GetBindlessMaterials(),
+                    "desligar transform derrubou o material junto (a cascata e so no outro sentido)");
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                    "desligar transform sozinho nao recriou o ObjectCB");
+            Settings.SetBindlessMaterials(false);
         }
         Settings.SetUseTAA(TAAWas);
     }

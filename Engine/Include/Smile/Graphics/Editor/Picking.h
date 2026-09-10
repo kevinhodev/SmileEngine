@@ -102,6 +102,13 @@ namespace Smile {
         // 'nada', nao 'o objeto que ocupa aquele lugar agora'.
         bool TryResolve(FPickIdentity& OutIdentity);
 
+        // PUBLICA pela mesma razao da chuva: quem libera o ObjectCB e o Renderer. Sem as duas
+        // gemeas aqui o ID pass desenha pelo caminho classico, e com o buffer liberado ele
+        // devolve OUTRO objeto — a falha mais silenciosa das sete, porque a imagem nao muda.
+        bool TransformBindlessReady() const {
+            return VsBindlessPSO && AlphaVsBindlessPSO;
+        }
+
     private:
         void CreateTargets(ID3D12Device* Device, u32 Width, u32 Height);
         void BuildRootSignature(ID3D12Device* Device);
@@ -126,9 +133,6 @@ namespace Smile {
         static constexpr u32 kDrawConstantsRootIndex = 4;
         // CBV b2 nesta root signature: ObjectCB no classico, matrizes de view no bindless.
         static constexpr u32 kObjectCBRootIndex      = 0;
-        bool TransformBindlessReady() const {
-            return VsBindlessPSO && AlphaVsBindlessPSO;
-        }
 
         EState State          = EState::Idle;
         std::vector<FPickIdentity> PickIdentities;

@@ -709,9 +709,18 @@ namespace Smile {
         C.Targets      = &Targets;
         C.FrameCB      = ConstantBuffer->GetGPUVirtualAddress() +
                          static_cast<u64>(_FrameSlot) * sizeof(FrameConstants);
-        // Zero quando o buffer nao existe (caminho bindless). Um passe que ainda tentasse o
-        // classico amarraria um CBV nulo e desenharia com MVP toda zero -- geometria colapsada num
-        // ponto, que e loud o suficiente para nao passar despercebido numa captura.
+        // RECONCILIACAO, e nao fallback. Se qualquer passe ainda puder escolher o classico e o
+        // buffer nao existir, o frame o recria AQUI — alocar nao precisa de dreno, porque ninguem
+        // pode estar lendo um buffer que nao existe. O custo e um hitch, num estado que o toggle
+        // nao produz mais; a alternativa custava silencio, e nem todo consumidor e visivel: o
+        // picking devolveria outro objeto e a oclusao de chuva perderia o telhado sem nada na
+        // imagem mudar. Este e o unico ponto do frame que le o endereco do buffer.
+        if (ObjectCBMustExist() && !ObjectCB) {
+            LogError("ObjectCB ausente com o caminho classico ainda alcancavel por algum passe; "
+                     "recriando dentro do frame");
+            AllocateObjectCB();
+        }
+        // Zero so quando o buffer foi legitimamente aposentado; ai nenhum passe le este campo.
         C.ObjectCBBase = ObjectCB ? ObjectCB->GetGPUVirtualAddress() : 0;
         C.DSV          = Targets.DSVHeap.CpuHandle(0);
 

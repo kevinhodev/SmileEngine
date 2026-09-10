@@ -117,12 +117,18 @@ namespace Smile {
         // escada do A/B fica classico -> material bindless -> material + transform bindless, e
         // cada degrau isola uma mudanca. As duas de profundidade OPACA nao tem material e por isso
         // sao independentes.
+        //
+        // A lista tem de cobrir TODAS as PSOs que o toggle passa a usar, e nao so as do caminho
+        // principal: quem responde `true` aqui autoriza a LIBERACAO do ObjectCB, e um passe cuja
+        // gemea VS-bindless faltou cairia no classico — que deixou de existir. A do ForwardBlend
+        // entrou por esse motivo, depois de ficar de fora e nao ser notada.
         bool BindlessTransformsReady() const {
             return BindlessMaterialsReady() && PipelineStateDepthOnlyVsBindless &&
                    PipelineStateDepthNormalVsBindless && PipelineStateGBufferVsBindless &&
                    PipelineStateGBufferTwoSidedVsBindless &&
                    PipelineStateDepthOnlyMaskedVsBindless &&
-                   PipelineStateDepthNormalMaskedVsBindless;
+                   PipelineStateDepthNormalMaskedVsBindless &&
+                   PipelineStateForwardBlendVsBindless;
         }
         ID3D12PipelineState* PSODepthOnlyVsBindless() const {
             return PipelineStateDepthOnlyVsBindless.Get();

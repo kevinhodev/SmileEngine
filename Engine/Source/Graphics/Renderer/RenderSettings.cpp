@@ -115,7 +115,28 @@ namespace Smile {
     void FRenderSettings::SetBindlessMaterials(bool _Use) {
         // Recusa em vez de aceitar e ignorar: um knob que aceita e nao faz nada e como uma
         // medicao de A/B sai errada sem ninguem notar. O getter devolve o estado EFETIVO.
-        R.UseBindlessMaterials = _Use && R.BindlessMaterialsReady();
+        const bool Want = _Use && R.BindlessMaterialsReady();
+        if (Want == R.UseBindlessMaterials) return;
+
+        // INVARIANTE: transform bindless => material bindless. As PSOs de transform sao gemeas
+        // das de material, entao desligar material aqui empurraria os passes com material de
+        // volta ao CBV por draw — que o toggle de transform pode ter LIBERADO. O G-buffer
+        // desenharia com `ObjectCBBase == 0`.
+        //
+        // Cascata em vez de recusa: quem desliga material esta pedindo o caminho classico, e o
+        // classico de material implica o classico de transform. O getter de transform passa a
+        // devolver false, que e a verdade.
+        if (!Want && R.UseBindlessTransforms) {
+            SetBindlessTransforms(false);
+            if (R.UseBindlessTransforms) {
+                // A unica falha possivel e nao conseguir recriar o ObjectCB. Voltar so o eixo de
+                // material deixaria exatamente o estado que esta funcao existe para impedir.
+                LogError("SetBindlessMaterials(false) RECUSADO: o transform bindless nao pode "
+                         "voltar ao classico (sem ObjectCB); os dois eixos continuam bindless");
+                return;
+            }
+        }
+        R.UseBindlessMaterials = Want;
     }
     bool FRenderSettings::GetBindlessMaterials() const { return R.UseBindlessMaterials; }
     bool FRenderSettings::BindlessMaterialsAvailable() const {
@@ -127,10 +148,13 @@ namespace Smile {
         // sobre as bindless de material, entao ligar este sem aquele nao tem PSO para onde ir. O
         // getter devolve o estado EFETIVO.
         //
-        // Ligar EXIGE a tabela de instancias construida, e nao so as PSOs. Com o buffer liberado e
-        // a tabela ausente, todo passe cairia no classico — que e onde o buffer devia estar — e o
-        // vertex shader leria um CBV nulo: geometria colapsada, sem erro de API.
-        const bool Want = _Use && R.BindlessTransformsReady() && R.InstanceTable.IsBuilt();
+        // Ligar exige TUDO que o CanRetireObjectCB exige — as PSOs das sete consumidoras, as duas
+        // tabelas construidas, o CBV de view e o eixo de MATERIAL LIGADO. E a mesma pergunta que
+        // o RecreateObjectCB faz, e por isso e a mesma funcao: uma segunda lista aqui poderia
+        // divergir daquela, e divergir para o lado permissivo libera o buffer com um passe ainda
+        // no classico. `BindlessTransformsReady` responde "as PSOs existem?"; o predicado
+        // responde "os passes vao usa-las?".
+        const bool Want = _Use && R.CanRetireObjectCB();
         if (Want == R.UseBindlessTransforms) return;
 
         // A troca mexe num buffer que frames em voo podem estar lendo. E acao de EDITOR, nao de

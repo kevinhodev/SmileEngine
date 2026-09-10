@@ -568,10 +568,19 @@ namespace Smile {
         // ficar com o modo de um e a base do outro, que desenharia o objeto errado sem erro.
         static void SetupTransformBinding(FDrawSubmitCache& Submit, bool Bindless,
                                           D3D12_GPU_VIRTUAL_ADDRESS ObjectCBBase);
+        // Exige o eixo de MATERIAL pronto porque as PSOs de transform sao construidas sobre as
+        // bindless de material (ver a nota em FPipelineState::BindlessTransformsReady).
+        //
+        // E exige os SETE consumidores, nao so os do caminho principal. Esta pergunta autoriza a
+        // LIBERACAO do ObjectCB: um subsistema sem a gemea VS-bindless nao deixa de desenhar — ele
+        // desenha pelo caminho classico, que passou a nao ter buffer. O sintoma nao e erro de API,
+        // e geometria colapsada (main view), sombra ausente (CSM/locais), oclusao de chuva errada
+        // ou picking devolvendo outro objeto, cada um num subsistema diferente do que se mexeu.
         bool BindlessTransformsReady() const {
-            // Exige o eixo de MATERIAL pronto porque as PSOs de transform sao construidas sobre as
-            // bindless de material (ver a nota em FPipelineState::BindlessTransformsReady).
-            return BindlessMaterialsReady() && PipelineState.BindlessTransformsReady();
+            return BindlessMaterialsReady() && PipelineState.BindlessTransformsReady() &&
+                   SunShadows.TransformBindlessReady() && LocalShadows.TransformBindlessReady() &&
+                   RainWetness.OcclusionTransformBindlessReady() &&
+                   ObjectPicker.TransformBindlessReady();
         }
 
         const FGpuProfiler& GetGpuProfiler() const;
@@ -890,6 +899,15 @@ namespace Smile {
         // troca de toggle transacional.
         bool AllocateObjectCB();
         void ReleaseObjectCB();
+        // A CONJUNCAO de tudo que cada passe avalia por conta propria antes de escolher entre o
+        // CBV por draw e a tabela. Existe como funcao unica porque a decisao de LIBERAR o buffer
+        // e a decisao de NAO USA-LO tem de ser a mesma condicao: enquanto qualquer passe puder
+        // cair no classico, o classico precisa existir.
+        //
+        // Nao inclui o toggle — e a pergunta "da para aposentar?", nao "esta aposentado?".
+        bool CanRetireObjectCB() const;
+        // O complemento, com o toggle: false autoriza o buffer a nao existir.
+        bool ObjectCBMustExist() const { return !(UseBindlessTransforms && CanRetireObjectCB()); }
         // Bytes RESERVADOS pelo ObjectCB. Prova de MEMORIA, distinta da de escrita
         // (`ObjectConstantBytes`): um caminho pode parar de escrever com o buffer ainda alocado.
         // Upload heap nao e itemizado pelo VramTracker, que cobre VRAM/DEFAULT — por isso o

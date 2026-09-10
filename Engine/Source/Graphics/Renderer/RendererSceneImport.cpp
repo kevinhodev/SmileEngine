@@ -65,6 +65,19 @@ namespace Smile {
         ObjectCB.Reset();
     }
 
+    // As cinco condicoes que os passes avaliam, no MESMO lugar. Cada uma ja existia espalhada:
+    //   - UseBindlessMaterials: os passes com material escolhem a PSO classica sem ele, e a
+    //     classica le o CBV por draw (invariante transform => material, ver RenderSettings);
+    //   - BindlessTransformsReady: as PSOs das SETE consumidoras, nao so as do main view;
+    //   - InstanceTable/MaterialTable construidas: sem elas o Begin* recusa e o passe cai;
+    //   - ViewMatricesCB: o b2 do caminho bindless; sem ele o BeginBindlessTransforms recusa.
+    //
+    // Faltando UMA, algum passe desenha pelo classico — e o buffer tem de estar la.
+    bool Renderer::CanRetireObjectCB() const {
+        return UseBindlessMaterials && BindlessTransformsReady() && InstanceTable.IsBuilt() &&
+               MaterialTable.IsBuilt() && ViewMatricesCB;
+    }
+
     u64 Renderer::ObjectCBReservedBytes() const {
         if (!ObjectCB) return 0;
         return static_cast<u64>(FCommandQueue::kFramesInFlight) * MaxObjects *
@@ -73,16 +86,10 @@ namespace Smile {
 
     void Renderer::RecreateObjectCB() {
         Backend->DirectQueue.Flush();
-        // Com o caminho bindless ligado ninguem le este buffer, e alocar N x 256 B por objeto so
-        // para nao usar e exatamente o custo que a fase existe para remover. A condicao e a MESMA
-        // do setter do toggle, e a tabela de instancias e reconstruida neste mesmo commit.
-        if (UseBindlessTransforms) ReleaseObjectCB();
-        else if (!AllocateObjectCB())
-            LogError("RecreateObjectCB: sem memoria para o ObjectCB; o raster classico nao tem "
-                     "de onde ler transform");
 
-        // O ring de view do caminho bindless. Criado aqui por conveniencia de ciclo de vida — e o
-        // mesmo ponto em que o ObjectCB nasce —, mas NAO e dimensionado por MaxObjects: sao
+        // O ring de view do caminho bindless vem ANTES da decisao abaixo: ele e uma das condicoes
+        // do CanRetireObjectCB, e cria-lo depois deixaria a primeira chamada decidindo com o
+        // proprio pre-requisito ainda nulo. NAO e dimensionado por MaxObjects — sao
         // kFramesInFlight slices, e so. E essa a troca que a fase persegue.
         if (!ViewMatricesCB) {
             const GpuResources::FUploadBuffer ViewUpload = GpuResources::CreateUploadBuffer(
@@ -91,6 +98,15 @@ namespace Smile {
             ViewMatricesCB       = ViewUpload.Resource;
             MappedViewMatricesCB = ViewUpload.Mapped;
         }
+
+        // Com o caminho bindless ligado ninguem le este buffer, e alocar N x 256 B por objeto so
+        // para nao usar e exatamente o custo que a fase existe para remover. A condicao e a MESMA
+        // do setter do toggle porque as duas chamam CanRetireObjectCB — e nao porque as duas
+        // repetem a mesma lista, que foi como a primeira versao errou.
+        if (!ObjectCBMustExist()) ReleaseObjectCB();
+        else if (!AllocateObjectCB())
+            LogError("RecreateObjectCB: sem memoria para o ObjectCB; o raster classico nao tem "
+                     "de onde ler transform");
 
         // O HiZ e dimensionado pela MESMA capacidade, e por isso nasceu aqui dentro — mas ele NAO
         // depende do ObjectCB. Separado desde a Fase 4: o buffer de objeto passou a ir e vir com
