@@ -2,7 +2,7 @@
 
 Data: 2026-09-10
 
-Estado: **aberta, oito consumidores migrados e três rodadas de revisão fechadas.** Release fecha
+Estado: **aberta, oito consumidores migrados e quatro rodadas de revisão fechadas.** Release fecha
 66/66, Debug compila e o cliente TypeScript compila. Três dos seis itens do gate estão fechados; o
 `ObjectCB` **já pode deixar de ser alocado** (sete consumidores migrados, alocação sob demanda,
 troca transacional), e a aposentadoria do `TransformBuffer` do TemporalMotion começou pela
@@ -12,8 +12,11 @@ A primeira revisão do Codex reprovou a fase com seis achados, três bloqueadore
 regressão de motion vector que eu tinha introduzido e um trio de checagens que eu havia
 **documentado como decisão deliberada**. A segunda não achou P1 novo e pegou um defeito no aparato
 de teste. A terceira, sobre o `ObjectCB` sob demanda, achou dois P1, um P2 **e uma afirmação de
-estado errada minha** — eu disse que faltavam "1M + documentação" com o `TransformBuffer` intacto.
-Todos corrigidos; as seções de revisão registram cada um e o que o padrão deles ensina.
+estado errada minha** — eu disse que faltavam "1M + documentação" com o `TransformBuffer` intacto. A
+quarta achou mais dois P1 (a reconciliação gravava com CBV inválido e era unilateral), um P2 no
+aparato de teste, e **parou a migração do `TransformBuffer` antes de ela começar**, exigindo a conta
+de custo que o WARP não dá. Todos corrigidos; as seções de revisão registram cada um e o que o
+padrão deles ensina.
 
 Base: Fase 3 encerrada em `3b38694`. **Nada da Fase 3 foi reaberto.**
 
@@ -247,6 +250,35 @@ u32, porque em 1M o reservado passa de 512 MB — mais uma coerência entre eles
 passar do reservado**. O caso extremo, `bytes > 0` com `reserved == 0`, descreve um renderer
 impossível, e é justamente o par que as duas provas do gate existem para manter independente.
 
+### Quarta rodada — a reconciliação, o teste que pedia 274 GB, e a conta que faltava
+
+Dois P1, um P2 e uma nota sobre honestidade de nome.
+
+**A reconciliação gravava com CBV inválido.** Ela morava no `MakePassContext`, com a command list já
+aberta: quando a recriação falhava, o frame seguia com `ObjectCBBase == 0` e os passes clássicos
+amarravam root CBV em endereço inválido. Eu tinha escrito que isso seria "geometria colapsada num
+ponto, loud o suficiente" — e não é: é erro de debug layer e page fault, com device removal como
+desfecho provável. Corrigido em `b161a9f`: a reconciliação sobe para o último ponto **antes** do
+`BeginFrame`, onde a saída honesta existe — abortar o frame com a command list ainda fechada.
+
+**E ela era unilateral.** Um hot reload que derruba uma PSO bindless faz o buffer voltar; o reload
+seguinte, que a reconstrói, deixava os ~563 MB residentes até alguém mexer num toggle. O outro
+sentido agora existe e **sem dreno**: ticket de fence e coleta no frame seguinte, ao lado dos slots
+de cena e dos ranges de descritor.
+
+**O teste da recusa pedia ~274 GB** e confiava na recusa do driver. Isso depende da máquina: com
+muita RAM, ou num driver que over-commita system memory, a mesma alocação pode demorar, criar
+pressão real ou ser **aceita** — e aí o teste passa provando o contrário do que diz. O revisor
+recusou-se a rodá-lo, com razão. Virou failpoint (`74efc07`): as próximas N criações falham com
+`E_OUTOFMEMORY` antes de tocar no device, pelo mesmo caminho de erro de uma recusa real.
+
+**`objectConstantBytesReserved` era fórmula.** `kFramesInFlight * MaxObjects * sizeof(...)` acerta a
+ordem de grandeza e prova zero, mas descreve o que foi PEDIDO — publicar isso sob o nome "reservado"
+promete uma medição que não foi feita. Agora sai de `GetResourceAllocationInfo` sobre o recurso
+criado, medido uma vez na alocação, na mesma unidade do VramTracker.
+
+O quarto ponto — não seguir para 4b–4d sem medir — está na seção da conta, mais abaixo.
+
 ### E a afirmação de estado errada
 
 Eu disse que faltavam "1M + documentação". O `TransformBuffer` do TemporalMotion continuava
@@ -405,6 +437,10 @@ declarar feito:
 | cascata material→transform removida | "desligar material deixou o transform bindless ligado" — vermelho |
 | `CreateUploadBuffer` de volta no lugar do `Try` | `HRESULT 0x8007000E` atravessando o setter — vermelho |
 | validação dos dois campos de bytes removida do bridge | 11 dos 14 payloads de borda passam a ser aceitos; os 3 restantes caem na coerência, um deles citando o campo errado |
+| `return` do aborto removido da reconciliação | "o frame sem ObjectCB não foi abortado: ele desenhou assim mesmo" — vermelho |
+| aposentadoria no frame removida | "a reconciliação é unilateral: o ObjectCB voltou e nunca mais foi liberado" — vermelho |
+| coleta dos aposentados removida | "o ObjectCB aposentado nunca foi coletado" — vermelho |
+| helper de um sentido com o produto invertido | "TemporalCurrentToPrevious é a metade de ida do par, bit a bit" — vermelho nos seis casos |
 | ordem do produto trocada no par temporal | vermelho em 3 dos 6 casos (os outros são simétricos por construção) |
 | sinal de cofator trocado na inversa HLSL | vermelho — **e verde antes de o conjunto de teste ser consertado** |
 | corte de determinante removido da inversa HLSL | "a inversa singular não produziu NaN/Inf" — vermelho |
@@ -447,13 +483,58 @@ nada, nem antes nem depois.
    esperado é ~256 MB escritos por frame contra ~563 MB reservados — são dois frames em voo sobre a
    capacidade com folga, e a razão entre os dois números é a própria evidência de que as duas provas
    medem coisas diferentes. **Exige GPU.**
-2. **Aposentar o `TransformBuffer` do TemporalMotion.** Começou em `d28cb52` pela matemática; falta
-   migrar os consumidores e apagar o buffer. Detalhe abaixo.
+2. **Decidir COMO aposentar o `TransformBuffer`**, e só então migrar. A matemática está pronta
+   (`d28cb52`, `1b7aef7`); as slices de consumidor estão **bloqueadas** na conta de custo abaixo —
+   derivar por pixel é a única saída que fecha o gate como escrito, e é a que paga ALU em toda cena,
+   inclusive naquelas em que a memória economizada não chega a 1 MB.
 3. **Ligar a lista de candidatos ao frame** e publicar os contadores dela. Hoje
    `FGpuSceneCandidates` não tem chamador; o consumidor natural chega com a Fase 5.
 4. **Exercitar a troca de toggle com cena carregada**, nas duas ordens, e capturar depois. A
    transação drena e realoca com o `MaxObjects` corrente; um erro ali aparece como raster vazio
    **depois de desligar**, não ao ligar. **Exige GPU.**
+
+### A conta que trava as slices 4b–4d
+
+A quarta revisão parou a migração antes de ela começar, e a razão é boa: derivar na leitura move
+duas inversas 4×4 de **por instância por frame** para **por pixel**, e o WARP prova correção, não
+custo. Contando os call sites (instâncias DISTINTAS por chamada, que é o que vira inversa):
+
+| consumidor | inversas por pixel que chega no código | condição |
+|---|---|---|
+| `DualMotion` | 1 (receptor) + 1 no ramo de desoclusão | atrás de três early-outs; o segundo só quando o casamento convencional falha |
+| `ReflectionMotion` | 2 (receptor + hit secundário) | o receptor aparece 2× no código, mas é a mesma matriz |
+| `ReSTIRDISpatial` | 2 (receptor + blocker) | idem |
+
+O par de helpers de um sentido só (`1b7aef7`) existe por causa desta tabela: com a função do par,
+cada leitura pagaria o dobro para usar metade.
+
+**A contagem absoluta piora, e não melhora.** A GPU paga por RESOLUÇÃO — até ~10M inversas por
+frame em 1080p com os três passes ativos —, e a CPU de hoje paga por CENA: `2 × N`. As duas se
+cruzam em N ≈ 5M instâncias, acima de qualquer cena que rodamos. O que muda é *onde* e *como*: 10M
+inversas paralelas sem tráfego custam fração de milissegundo em ALU; as 2M da CPU em 1M são um laço
+serial que também escreve 128 MB.
+
+Então o ganho é enorme em 1M (256 MB residentes, 128 MB de escrita e 2M de inversas na CPU somem) e
+**negativo em cena pequena**: na Bistro a memória economizada não chega a 1 MB, e o custo em ALU
+entra em passes de RT que já são o gargalo. Pior, um 4×4 geral segura ~32 VGPRs vivos, e ocupação é
+o que uma contagem de FLOP não captura — que é exatamente por que isto precisa ser medido.
+
+Três saídas, e nenhuma delas dispensa a medição:
+
+- **(a) derivar por pixel**, como o gate está escrito. Simples, sem memória nenhuma, e é a que paga
+  o custo acima em toda cena;
+- **(b) derivar uma vez por slot sujo, em compute**, para uma tabela em DEFAULT. Mata o custo de CPU
+  e o por pixel, mas mantém 128 B por instância residentes (metade de hoje, porque sem escrita de
+  CPU não precisa de ping-pong). **Não fecha o gate como escrito**;
+- **(c) derivar por pixel, com atalho para quem não se moveu.** `CurrentToPrevious` é identidade
+  exatamente quando `Transform == PrevTransform`, e quem sabe isso é a maquinaria de linhas sujas
+  desta fase. Um bit em `FGpuSceneInstanceMeta::Flags` — 4 B já residentes, já indexados por slot —
+  faz o caso comum custar UMA leitura de 4 B e zero inversas, contra os 64 B da matriz derivada de
+  hoje. O caso raro (objeto que se moveu) paga a inversa.
+
+Recomendação: **(c)**. Ela fecha o gate, é mais barata que hoje no caso comum, e o bit que ela
+precisa é subproduto do trabalho já feito. Mas a decisão é de medição, não de argumento — e é a
+medição em 1M que precisa acontecer primeiro de qualquer forma.
 
 ### O plano do `TransformBuffer`, slice a slice
 
@@ -472,9 +553,10 @@ transfere sem mudar de significado.
 | slice | conteúdo | risco |
 |---|---|---|
 | `d28cb52` ✔ | contrato compartilhado, inversa em HLSL, paridade em WARP | nenhum — não muda comportamento |
-| 4b | migrar `DualMotion` | baixo: já amarra identidade e remap |
-| 4c | migrar `ReflectionMotion` (trace + mirror) | **médio** — mexe em descriptor table de passe RT |
-| 4d | migrar `ReSTIRDISpatial` | **médio** — idem, e é o passe com 3 lookups por pixel |
+| `1b7aef7` ✔ | os dois sentidos separados, comparados bit a bit com o par | nenhum — não muda comportamento |
+| 4b | migrar `DualMotion` | **BLOQUEADA na decisão de custo acima** |
+| 4c | migrar `ReflectionMotion` (trace + mirror) | bloqueada; e mexe em descriptor table de passe RT |
+| 4d | migrar `ReSTIRDISpatial` | bloqueada; idem |
 | 4e | apagar buffer, SRVs e o laço da CPU; asserção de memória | baixo, depois dos três |
 
 Cada uma de 4b–4d **mexe em reprojeção temporal**, que é onde uma troca de ordem aparece como
@@ -497,6 +579,12 @@ não é o que a fase persegue: são ~200 ALU sem tráfego nenhum.
   sem consultá-lo. Como a lista vem vazia no overflow, ignorá-lo produz zero draws — falha alta, que
   é o desfecho preferível — mas continua sendo uma falha. O gate de verdade é o dimensionamento pelo
   `Stats().Candidates`, e ele só passa a ser exercitado quando a Fase 5 ligar o consumidor.
+- A reconciliação do `ObjectCB` é uma REDE, não um mecanismo: ela desfaz um estado que nenhum toggle
+  produz. Quando ela dispara, alguma outra coisa quebrou — o log diz isso, e é para ser lido como
+  sintoma. O caso conhecido é hot reload derrubando uma PSO bindless.
+- O failpoint de upload buffer é global e vive no binário de Release. O escopo restaura o valor
+  anterior no destrutor, mas nada impede alguém de chamá-lo fora de teste. A defesa é o nome e este
+  parágrafo; se algum dia houver um segundo, vale um guarda de build.
 - O canário de overflow do shader **não é lido por ninguém** hoje. Ler contador de GPU para decidir
   draw esbarraria na regra 7 do plano (nenhum readback novo decide visibilidade), então o consumo
   correto dele é telemetria/asserção de debug, não política de frame. Fica anotado como decisão a
