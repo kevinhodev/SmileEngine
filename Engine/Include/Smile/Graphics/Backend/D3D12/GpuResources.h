@@ -139,6 +139,29 @@ namespace Smile::GpuResources {
     FUploadBuffer TryCreateUploadBuffer(ID3D12Device* Device, u64 SliceBytes, u32 SliceCount = 1,
                                         bool ForConstantBuffer = true);
 
+    // === Failpoint de TESTE =========================================================
+    // Faz as proximas N criacoes de upload buffer falharem com E_OUTOFMEMORY, SEM chamar o device.
+    //
+    // Existe porque a unica alternativa era pedir uma alocacao absurda e confiar na recusa do
+    // driver — e isso depende do hardware. Numa maquina com muita RAM, ou num driver que
+    // over-commita system memory, a mesma alocacao pode demorar, criar pressao real de memoria ou
+    // ser ACEITA; e ai o teste passa provando o contrario do que diz. Um failpoint transforma "o
+    // driver provavelmente recusa" em "a falha acontece exatamente aqui".
+    //
+    // O escopo restaura o valor anterior no destrutor. `PendingUploadFailures` existe para o teste
+    // confirmar que a injecao foi CONSUMIDA pela chamada sob teste, e nao por alguma outra
+    // alocacao no meio do caminho — sem isso, uma injecao gasta no lugar errado daria verde.
+    class FUploadFailureInjection {
+    public:
+        explicit FUploadFailureInjection(u32 Count);
+        ~FUploadFailureInjection();
+        FUploadFailureInjection(const FUploadFailureInjection&)            = delete;
+        FUploadFailureInjection& operator=(const FUploadFailureInjection&) = delete;
+    private:
+        u32 Previous_ = 0;
+    };
+    u32 PendingUploadFailures();
+
     // Readback (GPU -> CPU). Nao entra no VramTracker (system memory).
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* Device, u64 Bytes);
 

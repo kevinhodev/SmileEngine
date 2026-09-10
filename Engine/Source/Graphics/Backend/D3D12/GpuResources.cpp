@@ -445,6 +445,10 @@ namespace Smile::GpuResources {
     }
 
     namespace {
+        // Failpoint de teste; ver FUploadFailureInjection no header. Zero em producao, e o custo
+        // no caminho normal e UMA leitura relaxada por criacao — ao lado de uma chamada de device.
+        std::atomic<u32> GUploadFailuresRemaining{ 0 };
+
         // O corpo unico das duas versoes. Devolve o HRESULT dos DOIS passos que podem falhar
         // (criacao e Map) e nunca entrega um `Out` meio pronto: ou vem com recurso E mapeamento,
         // ou vem vazio.
@@ -452,6 +456,15 @@ namespace Smile::GpuResources {
                                         bool ForConstantBuffer, FUploadBuffer& Out) {
             Out = FUploadBuffer{};
             if (SliceBytes == 0 || SliceCount == 0) return S_OK;
+
+            // Antes de tocar no device: o failpoint tem de exercitar o MESMO caminho de erro que
+            // uma recusa real, e nao um ramo proprio.
+            for (u32 Pendentes = GUploadFailuresRemaining.load(std::memory_order_relaxed);
+                 Pendentes != 0;) {
+                if (GUploadFailuresRemaining.compare_exchange_weak(Pendentes, Pendentes - 1,
+                                                                   std::memory_order_relaxed))
+                    return E_OUTOFMEMORY;
+            }
 
             const u64 Aligned = ForConstantBuffer
                 ? (SliceBytes + D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1) &
@@ -495,6 +508,19 @@ namespace Smile::GpuResources {
         FUploadBuffer Out{};
         TryCreateUploadBufferHr(_Device, _SliceBytes, _SliceCount, _ForConstantBuffer, Out);
         return Out;
+    }
+
+    FUploadFailureInjection::FUploadFailureInjection(u32 _Count)
+        : Previous_(GUploadFailuresRemaining.exchange(_Count, std::memory_order_relaxed)) {}
+
+    FUploadFailureInjection::~FUploadFailureInjection() {
+        // RESTAURA o anterior em vez de zerar: aninhar dois escopos nao pode deixar o de fora sem
+        // a injecao que ele pediu.
+        GUploadFailuresRemaining.store(Previous_, std::memory_order_relaxed);
+    }
+
+    u32 PendingUploadFailures() {
+        return GUploadFailuresRemaining.load(std::memory_order_relaxed);
     }
 
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* _Device, u64 _Bytes) {
