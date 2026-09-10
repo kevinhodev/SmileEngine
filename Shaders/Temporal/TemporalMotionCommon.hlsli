@@ -75,6 +75,23 @@ FTemporalInstanceTransform TemporalComposeInstanceTransform(row_major float4x4 c
     return Out;
 }
 
+// Os dois sentidos SEPARADOS, e não é redundância com o par acima.
+//
+// Nenhum consumidor precisa dos dois no mesmo ponto: o `DualMotion` usa `CurrentToPrevious` para o
+// receptor e `PreviousToCurrent` só no ramo de desoclusão; `ReflectionMotion` e `ReSTIRDISpatial`
+// usam só o primeiro. Chamar o par e descartar metade custaria uma inversa a mais POR LEITURA — e
+// contar com o compilador para eliminar a metade morta é apostar em DCE numa conta que o gate mede.
+//
+// O par continua existindo porque é ele que o C++ produz hoje, e é sobre ele que a paridade
+// compara. Cada um destes é comparado com a metade correspondente no mesmo teste.
+float4x4 TemporalCurrentToPrevious(row_major float4x4 current, row_major float4x4 previous) {
+    return mul(TemporalInvert4x4(current), previous);
+}
+
+float4x4 TemporalPreviousToCurrent(row_major float4x4 current, row_major float4x4 previous) {
+    return mul(TemporalInvert4x4(previous), current);
+}
+
 // Maior id que sobrevive ao round-trip pelo canal float da superficie.
 //
 // O valor gravado e (id + 1) num float32, que representa inteiros exatamente ate 2^24 INCLUSIVE --

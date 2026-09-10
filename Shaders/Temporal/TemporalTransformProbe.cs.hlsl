@@ -28,7 +28,9 @@ cbuffer ProbeCB : register(b0) {
 StructuredBuffer<GpuInstanceTransform> InstanceCurrent  : register(t0);
 StructuredBuffer<GpuInstanceTransform> InstancePrevious : register(t1);
 
-// Oito float4 por instancia: CurrentToPrevious e PreviousToCurrent, em ordem.
+// Dezesseis float4 por instancia: o PAR (duas matrizes) seguido dos dois sentidos calculados
+// SEPARADAMENTE. As duas metades tem de coincidir -- e o que impede os helpers de um sentido so, que
+// e o que os consumidores vao chamar, de divergirem do par que a paridade com o C++ cobre.
 RWStructuredBuffer<float4> Results : register(u0);
 
 [numthreads(64, 1, 1)]
@@ -36,12 +38,18 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const uint i = dtid.x;
     if (i >= Params.x) return;
 
-    const FTemporalInstanceTransform T = TemporalComposeInstanceTransform(
-        InstanceCurrent[i].Value, InstancePrevious[i].Value);
+    const float4x4 current  = InstanceCurrent[i].Value;
+    const float4x4 previous = InstancePrevious[i].Value;
 
-    const uint b = i * 8u;
+    const FTemporalInstanceTransform T = TemporalComposeInstanceTransform(current, previous);
+    const float4x4 SoIda   = TemporalCurrentToPrevious(current, previous);
+    const float4x4 SoVolta = TemporalPreviousToCurrent(current, previous);
+
+    const uint b = i * 16u;
     for (uint r = 0; r < 4u; ++r) {
-        Results[b + 0u + r] = T.CurrentToPrevious[r];
-        Results[b + 4u + r] = T.PreviousToCurrent[r];
+        Results[b +  0u + r] = T.CurrentToPrevious[r];
+        Results[b +  4u + r] = T.PreviousToCurrent[r];
+        Results[b +  8u + r] = SoIda[r];
+        Results[b + 12u + r] = SoVolta[r];
     }
 }

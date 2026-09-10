@@ -109,7 +109,8 @@ namespace {
     }
 
     constexpr u32 kInstancias = 6;
-    constexpr u32 kFloat4sPorInstancia = 8u; // duas matrizes
+    // O par (2 matrizes) mais os dois sentidos calculados separadamente (2) = 4 matrizes.
+    constexpr u32 kFloat4sPorInstancia = 16u;
 }
 
 int main() try {
@@ -348,6 +349,15 @@ int main() try {
               "CurrentToPrevious derivado no shader casa com o do C++");
         Check(MatrizIgual(Esperado.PreviousToCurrent, Base(I) + 16),
               "PreviousToCurrent derivado no shader casa com o do C++");
+
+        // Os helpers de UM sentido sao o que os consumidores vao chamar -- chamar o par e
+        // descartar metade custaria uma inversa a mais por leitura. Eles tem de dar EXATAMENTE o
+        // mesmo que a metade correspondente do par, senao a paridade acima cobre uma funcao e a
+        // producao usa outra. Igualdade de bits: e a mesma expressao, no mesmo shader.
+        Check(std::memcmp(Base(I) + 0,  Base(I) + 32, 16 * sizeof(f32)) == 0,
+              "TemporalCurrentToPrevious e a metade de ida do par, bit a bit");
+        Check(std::memcmp(Base(I) + 16, Base(I) + 48, 16 * sizeof(f32)) == 0,
+              "TemporalPreviousToCurrent e a metade de volta do par, bit a bit");
     }
 
     // As duas matrizes NAO podem ser iguais entre si nos casos que se moveram. Sem isto, um shader
