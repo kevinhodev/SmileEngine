@@ -5,6 +5,7 @@
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -20,10 +21,17 @@ namespace Smile {
             return R.InstanceTable.MetaFor(H, Out);
         }
         static u64 ObjectCBReserved(const Renderer& R) { return R.ObjectCBReservedBytes(); }
-        // Capacidade do ObjectCB. Escrita para forcar uma alocacao IMPOSSIVEL e exercitar o
-        // caminho de falha sem depender de a maquina estar sem memoria.
-        static u32  MaxObjects(const Renderer& R) { return R.MaxObjects; }
-        static void SetMaxObjects(Renderer& R, u32 Value) { R.MaxObjects = Value; }
+        // Ciclo de vida do ObjectCB, para o teste montar os dois estados anomalos que a
+        // reconciliacao existe para desfazer -- e que nenhum toggle produz.
+        static void   ReleaseObjectCB(Renderer& R) { R.ReleaseObjectCB(); }
+        static bool   AllocateObjectCB(Renderer& R) { return R.AllocateObjectCB(); }
+        static size_t RetiredObjectCBs(const Renderer& R) { return R.RetiredObjectCBs.size(); }
+        // O release direto acima nao drena, e frames em voo podem estar lendo o buffer. Isto e
+        // seguranca do APARATO, nao a propriedade sob teste.
+        static void Drain(Renderer& R) {
+            R.Backend->DirectQueue.Flush();
+            R.Backend->ComputeQueue.WaitIdle();
+        }
         static void CheckDevice(Renderer& R) {
             if (FAILED(R.Backend->Device.Native()->GetDeviceRemovedReason()))
                 throw std::runtime_error("device removed during identity integration");
@@ -348,25 +356,84 @@ int wmain(int Argc, wchar_t** Argv) try {
             Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
                     "desligar transform sozinho nao recriou o ObjectCB");
 
-            // FALHA DE ALOCACAO no setter: RECUSA, nunca excecao. Uma capacidade impossivel
-            // (~274 GB de upload heap) leva o AllocateObjectCB ao caminho de falha sem depender
-            // de a maquina estar sem memoria. Se ele voltar a LANCAR — e lancava, porque o
-            // CreateUploadBuffer usa SMILE_HR na criacao e no Map —, a excecao sai por aqui como
-            // sairia pelo setter do editor/MCP, e o teste inteiro vira FAIL.
+            // FALHA DE ALOCACAO no setter: RECUSA, nunca excecao.
+            //
+            // Por FAILPOINT, e nao por alocacao absurda. A versao anterior pedia ~274 GB de upload
+            // heap e confiava na recusa do driver -- o que depende da maquina: com muita RAM, ou
+            // num driver que over-commita system memory, a mesma alocacao pode demorar, criar
+            // pressao real ou ser ACEITA, e ai o teste passa provando o contrario do que diz.
+            //
+            // Se o AllocateObjectCB voltar a LANCAR -- e lancava, porque o CreateUploadBuffer usa
+            // SMILE_HR na criacao e no Map --, a excecao sai por aqui como sairia pelo setter do
+            // editor/MCP, e o teste inteiro vira FAIL.
             Settings.SetBindlessTransforms(true);
-            const u32 MaxObjectsWas = FRendererIdentityTestAccess::MaxObjects(R);
-            FRendererIdentityTestAccess::SetMaxObjects(R, 0x20000000u);
-            Settings.SetBindlessTransforms(false);
-            Require(Settings.GetBindlessTransforms(),
-                    "falha ao recriar o ObjectCB nao preservou o caminho bindless");
-            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
-                    "a recusa deixou o ObjectCB meio alocado");
-            FRendererIdentityTestAccess::SetMaxObjects(R, MaxObjectsWas);
+            {
+                GpuResources::FUploadFailureInjection Falha(1);
+                Settings.SetBindlessTransforms(false);
+                // A injecao tem de ter sido gasta AQUI. Sem esta linha, uma alocacao qualquer no
+                // meio do caminho poderia consumi-la e o resto passaria sem exercitar nada.
+                Require(GpuResources::PendingUploadFailures() == 0,
+                        "a injecao de falha nao foi consumida pela alocacao do ObjectCB");
+                Require(Settings.GetBindlessTransforms(),
+                        "falha ao recriar o ObjectCB nao preservou o caminho bindless");
+                Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                        "a recusa deixou o ObjectCB meio alocado");
+            }
             Settings.SetBindlessTransforms(false);
             Require(!Settings.GetBindlessTransforms(),
                     "com memoria de novo, desligar o transform continuou recusado");
             Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
                     "a recusa envenenou o estado: o ObjectCB nao voltou depois dela");
+
+            // RECONCILIACAO, sentido 1: o buffer sumiu com o caminho classico alcancavel. Nenhum
+            // toggle produz este estado -- um hot reload que derruba uma PSO bindless produz. O
+            // teste o monta na mao, drenando antes porque frames em voo podem estar lendo.
+            FRendererIdentityTestAccess::Drain(R);
+            FRendererIdentityTestAccess::ReleaseObjectCB(R);
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "o aparato nao conseguiu liberar o ObjectCB");
+            {
+                // Com a recriacao FALHANDO, a unica saida honesta e nao ter frame: gravar draws
+                // com `ObjectCBBase == 0` e amarrar root CBV em endereco invalido.
+                const u32 FrameAntes = R.GetFrameIndex();
+                GpuResources::FUploadFailureInjection Falha(1);
+                Frames(R, 1);
+                Require(GpuResources::PendingUploadFailures() == 0,
+                        "a injecao de falha nao foi consumida pela reconciliacao");
+                Require(R.GetFrameIndex() == FrameAntes,
+                        "o frame sem ObjectCB nao foi abortado: ele desenhou assim mesmo");
+                Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                        "o frame abortado deixou o ObjectCB meio alocado");
+            }
+            {
+                const u32 FrameAntes = R.GetFrameIndex();
+                Frames(R, 1);
+                Require(R.GetFrameIndex() == FrameAntes + 1u,
+                        "com memoria de novo, o frame continuou abortado");
+                Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                        "a reconciliacao nao recriou o ObjectCB");
+            }
+
+            // RECONCILIACAO, sentido 2: o buffer EXISTE com o bindless ligado. E o estado em que o
+            // hot reload seguinte deixa a maquina depois de reconstruir a PSO que faltava -- e sem
+            // este caminho ele ficaria residente ate alguem mexer num toggle.
+            Settings.SetBindlessTransforms(true);
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "ligar o transform bindless nao liberou o ObjectCB");
+            Require(FRendererIdentityTestAccess::AllocateObjectCB(R),
+                    "o aparato nao conseguiu realocar o ObjectCB");
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                    "o aparato realocou e o contador nao viu");
+            Frames(R, 1);
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "a reconciliacao e unilateral: o ObjectCB voltou e nunca mais foi liberado");
+            // E aposentar tem de ACABAR em liberar. Sem esta linha, uma fila que so cresce
+            // passaria como se fosse coleta.
+            Frames(R, FCommandQueue::kFramesInFlight + 1u);
+            Require(FRendererIdentityTestAccess::RetiredObjectCBs(R) == 0,
+                    "o ObjectCB aposentado nunca foi coletado");
+
+            Settings.SetBindlessTransforms(false);
             Settings.SetBindlessMaterials(false);
         }
         Settings.SetUseTAA(TAAWas);

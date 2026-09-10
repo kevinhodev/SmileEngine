@@ -898,7 +898,22 @@ namespace Smile {
         // `AllocateObjectCB` devolve false SEM tocar em nada quando falha, que e o que torna a
         // troca de toggle transacional.
         bool AllocateObjectCB();
+        // Libera IMEDIATAMENTE. So para quem ja drenou — o buffer mora em upload heap e frames em
+        // voo podem estar lendo dele.
         void ReleaseObjectCB();
+        // Aposenta SEM dreno, com ticket de fence, para o caminho de frame: mesma mecanica dos
+        // slots de cena e dos ranges de descritor. Drenar no frame violaria a regra 8 do plano.
+        void RetireObjectCB();
+        void CollectRetiredObjectCBs();
+        // Um por aposentadoria fora de dreno. Vetor, e nao um so, porque nada garante que a
+        // proxima aposentadoria espere a fence da anterior passar.
+        struct FRetiredObjectCB {
+            ComPtr<ID3D12Resource> Resource;
+            FGpuFenceSet           Required;
+        };
+        std::vector<FRetiredObjectCB> RetiredObjectCBs;
+        // Uma linha de log por episodio de falta de memoria, e nao uma por frame.
+        bool ObjectCBFailureLogged = false;
         // A CONJUNCAO de tudo que cada passe avalia por conta propria antes de escolher entre o
         // CBV por draw e a tabela. Existe como funcao unica porque a decisao de LIBERAR o buffer
         // e a decisao de NAO USA-LO tem de ser a mesma condicao: enquanto qualquer passe puder
@@ -912,7 +927,12 @@ namespace Smile {
         // (`ObjectConstantBytes`): um caminho pode parar de escrever com o buffer ainda alocado.
         // Upload heap nao e itemizado pelo VramTracker, que cobre VRAM/DEFAULT — por isso o
         // numero sai daqui e nao de la.
+        //
+        // MEDIDO no recurso (GetResourceAllocationInfo na alocacao), e nao derivado de MaxObjects:
+        // a formula acerta a ordem de grandeza, mas descreve o que foi PEDIDO, e publicar isso sob
+        // o nome "reservado" prometeria uma medicao que nao foi feita.
         u64 ObjectCBReservedBytes() const;
+        u64 ObjectCBBytes = 0;
 
         // As tres matrizes de view do frame, no lugar do ObjectCB por instancia (Fase 4).
         //

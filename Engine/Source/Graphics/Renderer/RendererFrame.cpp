@@ -709,22 +709,10 @@ namespace Smile {
         C.Targets      = &Targets;
         C.FrameCB      = ConstantBuffer->GetGPUVirtualAddress() +
                          static_cast<u64>(_FrameSlot) * sizeof(FrameConstants);
-        // RECONCILIACAO, e nao fallback. Se qualquer passe ainda puder escolher o classico e o
-        // buffer nao existir, o frame o recria AQUI — alocar nao precisa de dreno, porque ninguem
-        // pode estar lendo um buffer que nao existe. O custo e um hitch, num estado que o toggle
-        // nao produz mais; a alternativa custava silencio, e nem todo consumidor e visivel: o
-        // picking devolveria outro objeto e a oclusao de chuva perderia o telhado sem nada na
-        // imagem mudar. Este e o unico ponto do frame que le o endereco do buffer.
-        if (ObjectCBMustExist() && !ObjectCB) {
-            LogError("ObjectCB ausente com o caminho classico ainda alcancavel por algum passe; "
-                     "recriando dentro do frame");
-            // Sem excecao AQUI: o frame nao tem para onde voltar, e derrubar o loop de render por
-            // uma condicao que ja e anomala trocaria um frame errado por nenhum frame.
-            if (!AllocateObjectCB())
-                LogError("ObjectCB: a recriacao dentro do frame falhou por memoria; este frame "
-                         "desenha sem o caminho classico de transform");
-        }
-        // Zero so quando o buffer foi legitimamente aposentado; ai nenhum passe le este campo.
+        // Zero SO quando o buffer foi legitimamente aposentado, e ai nenhum passe le este campo. O
+        // caso "aposentado por engano" nao chega aqui: o RenderFrame reconcilia antes de abrir a
+        // command list e ABORTA o frame se nao conseguir — um root CBV em endereco invalido nao e
+        // um frame errado, e page fault.
         C.ObjectCBBase = ObjectCB ? ObjectCB->GetGPUVirtualAddress() : 0;
         C.DSV          = Targets.DSVHeap.CpuHandle(0);
 
@@ -763,6 +751,10 @@ namespace Smile {
         // a tabela de texturas de um material (Fase 3). Anda junto de proposito — as duas usam a
         // mesma fronteira de fence, e separa-las daria duas chances de uma parar de rodar.
         Backend->SRVHeap.CollectRetired(CompletedFenceSet());
+
+        // Terceira do mesmo grupo: o ObjectCB aposentado FORA de um dreno (Fase 4). Mesma
+        // fronteira de fence, mesma razao de andar junto.
+        CollectRetiredObjectCBs();
 
         // Dirty flags da UI sao coalescidas por dominio antes de abrir o command list.
         // ANTES do MaterialRTStateDirty: o rebake muda micro-map e BLAS e ele proprio pede o
@@ -826,6 +818,38 @@ namespace Smile {
         // trocar upscaler/render scale realoca os alvos da cena, e isso nao pode acontecer com um
         // command list aberto.
         UpdateFrameCapture();
+
+        // RECONCILIACAO do ObjectCB, e o ultimo ponto ANTES de abrir a command list (Fase 4).
+        //
+        // Aqui, e nao no MakePassContext, porque a unica saida honesta de uma falha e nao ter
+        // frame: la dentro o command list ja esta aberto e a alternativa seria gravar draws com
+        // `ObjectCBBase == 0`, isto e, amarrar root CBV em endereco invalido. Isso nao e "um frame
+        // errado" — e erro de debug layer e page fault, com device removal como desfecho provavel.
+        //
+        // Os DOIS sentidos, porque o estado pode mudar sem passar pelo setter: um hot reload que
+        // derruba uma PSO bindless faz o buffer voltar, e o reload seguinte, que a reconstroi, tem
+        // de deixa-lo ir embora de novo — senao os ~563 MB ficam residentes ate alguem mexer num
+        // toggle.
+        if (ObjectCBMustExist()) {
+            if (!ObjectCB) {
+                LogError("ObjectCB ausente com o caminho classico alcancavel por algum passe; "
+                         "recriando antes de abrir o frame");
+                if (!AllocateObjectCB()) {
+                    // Uma vez, e nao por frame: a 60 Hz isto viraria ruido em cima da causa.
+                    if (!ObjectCBFailureLogged) {
+                        LogError("ObjectCB: sem memoria para recriar; os frames sao ABORTADOS ate "
+                                 "haver memoria — o raster classico nao tem de onde ler transform");
+                        ObjectCBFailureLogged = true;
+                    }
+                    return; // command list ainda fechado: sair aqui nao deixa nada pela metade
+                }
+                ObjectCBFailureLogged = false;
+            }
+        } else if (ObjectCB) {
+            // Sem dreno: o buffer sai com ticket de fence e morre no Collect la de cima, como os
+            // slots de cena e os ranges de descritor. Drenar aqui violaria a regra 8 do plano.
+            RetireObjectCB();
+        }
 
         Backend->DirectQueue.BeginFrame();
 

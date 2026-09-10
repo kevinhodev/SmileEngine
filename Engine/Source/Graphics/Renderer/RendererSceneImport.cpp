@@ -59,6 +59,17 @@ namespace Smile {
         if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB       = Upload.Resource;
         MappedObjectCB = Upload.Mapped;
+
+        // O footprint sai do RECURSO, e uma vez: `GetResourceAllocationInfo` sobre o desc que o
+        // device de fato criou devolve o tamanho COBRADO, alinhamento incluso — a mesma medida que
+        // o VramTracker usa, senao os dois numeros nao se comparam.
+        //
+        // Antes isto era `kFramesInFlight * MaxObjects * sizeof(...)`, recalculado no getter. A
+        // formula acerta a ordem de grandeza e serve para provar zero, mas ela descreve o que foi
+        // PEDIDO; publicar isso sob o nome "reservado" promete uma medicao que nao foi feita.
+        const D3D12_RESOURCE_DESC Desc = ObjectCB->GetDesc();
+        ObjectCBBytes = Backend->Device.Native()
+                            ->GetResourceAllocationInfo(0, 1, &Desc).SizeInBytes;
         return true;
     }
 
@@ -67,6 +78,29 @@ namespace Smile {
     void Renderer::ReleaseObjectCB() {
         if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB.Reset();
+        ObjectCBBytes = 0;
+    }
+
+    // A versao do caminho de FRAME, para quando o buffer passa a poder ser aposentado sem ninguem
+    // ter drenado — um hot reload que reconstroi a PSO bindless que faltava, por exemplo. Sem este
+    // caminho a reconciliacao seria unilateral: o buffer voltaria e nunca mais iria embora.
+    //
+    // O ticket e o CurrentFenceSet (ultimos valores SUBMETIDOS), que e a fronteira certa: qualquer
+    // frame que ainda leia este buffer ja foi submetido antes desta linha.
+    void Renderer::RetireObjectCB() {
+        if (!ObjectCB) return;
+        if (MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
+        RetiredObjectCBs.push_back({ std::move(ObjectCB), CurrentFenceSet() });
+        ObjectCB.Reset();
+        ObjectCBBytes = 0;
+    }
+
+    void Renderer::CollectRetiredObjectCBs() {
+        if (RetiredObjectCBs.empty()) return;
+        const FGpuFenceSet Completed = CompletedFenceSet();
+        std::erase_if(RetiredObjectCBs, [&](const FRetiredObjectCB& Entry) {
+            return Completed.Covers(Entry.Required);
+        });
     }
 
     // As cinco condicoes que os passes avaliam, no MESMO lugar. Cada uma ja existia espalhada:
@@ -82,11 +116,12 @@ namespace Smile {
                MaterialTable.IsBuilt() && ViewMatricesCB;
     }
 
-    u64 Renderer::ObjectCBReservedBytes() const {
-        if (!ObjectCB) return 0;
-        return static_cast<u64>(FCommandQueue::kFramesInFlight) * MaxObjects *
-               sizeof(ObjectConstants);
-    }
+    // O tamanho COBRADO do recurso vivo, medido na alocacao. Zero sem buffer — e o que o gate le.
+    //
+    // NAO inclui os aposentados com ticket de fence: eles ja nao pertencem a ninguem e somem no
+    // Collect do proximo frame. Contar os dois juntos faria o numero do gate oscilar por um
+    // detalhe de ciclo de vida em vez de descrever o estado do raster.
+    u64 Renderer::ObjectCBReservedBytes() const { return ObjectCB ? ObjectCBBytes : 0; }
 
     void Renderer::RecreateObjectCB() {
         Backend->DirectQueue.Flush();
