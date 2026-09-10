@@ -885,6 +885,16 @@ namespace Smile {
         u8*                      MappedObjectCB = nullptr;
 
         void RecreateObjectCB();
+        // Par sob demanda do ObjectCB (Fase 4). Nao drenam e nao mexem no HiZ -- quem chama decide.
+        // `AllocateObjectCB` devolve false SEM tocar em nada quando falha, que e o que torna a
+        // troca de toggle transacional.
+        bool AllocateObjectCB();
+        void ReleaseObjectCB();
+        // Bytes RESERVADOS pelo ObjectCB. Prova de MEMORIA, distinta da de escrita
+        // (`ObjectConstantBytes`): um caminho pode parar de escrever com o buffer ainda alocado.
+        // Upload heap nao e itemizado pelo VramTracker, que cobre VRAM/DEFAULT — por isso o
+        // numero sai daqui e nao de la.
+        u64 ObjectCBReservedBytes() const;
 
         // As tres matrizes de view do frame, no lugar do ObjectCB por instancia (Fase 4).
         //

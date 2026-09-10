@@ -36,19 +36,50 @@ namespace Smile {
         }
     }
 
-    void Renderer::RecreateObjectCB() {
-        Backend->DirectQueue.Flush();
-        if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
-        ObjectCB.Reset();
-
+    // Aloca o ObjectCB para a capacidade corrente. NAO drena e NAO mexe no HiZ: quem chama decide
+    // as duas coisas, porque os dois usos sao diferentes — o load de cena drena e refaz tudo, a
+    // troca de toggle drena e refaz so este buffer.
+    //
+    // Devolve false sem tocar em nada quando a alocacao falha. E o que torna a troca de toggle
+    // TRANSACIONAL: o chamador que desliga o bindless precisa do buffer ANTES de efetivar, e uma
+    // falha aqui tem de deixa-lo bindless em vez de sem caminho nenhum.
+    bool Renderer::AllocateObjectCB() {
         static_assert(sizeof(ObjectConstants) % 256 == 0,
                       "o CB de objeto e indexado por sizeof(); root CBV exige 256-alinhado");
 
         const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
             Backend->Device.Native(), sizeof(ObjectConstants),
             FCommandQueue::kFramesInFlight * MaxObjects);
+        if (!Upload.Resource || !Upload.Mapped) return false;
+
+        if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
         ObjectCB       = Upload.Resource;
         MappedObjectCB = Upload.Mapped;
+        return true;
+    }
+
+    // Devolve os bytes do ObjectCB. O chamador ja drenou: o buffer mora em upload heap e frames em
+    // voo podem estar lendo dele.
+    void Renderer::ReleaseObjectCB() {
+        if (ObjectCB && MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
+        ObjectCB.Reset();
+    }
+
+    u64 Renderer::ObjectCBReservedBytes() const {
+        if (!ObjectCB) return 0;
+        return static_cast<u64>(FCommandQueue::kFramesInFlight) * MaxObjects *
+               sizeof(ObjectConstants);
+    }
+
+    void Renderer::RecreateObjectCB() {
+        Backend->DirectQueue.Flush();
+        // Com o caminho bindless ligado ninguem le este buffer, e alocar N x 256 B por objeto so
+        // para nao usar e exatamente o custo que a fase existe para remover. A condicao e a MESMA
+        // do setter do toggle, e a tabela de instancias e reconstruida neste mesmo commit.
+        if (UseBindlessTransforms) ReleaseObjectCB();
+        else if (!AllocateObjectCB())
+            LogError("RecreateObjectCB: sem memoria para o ObjectCB; o raster classico nao tem "
+                     "de onde ler transform");
 
         // O ring de view do caminho bindless. Criado aqui por conveniencia de ciclo de vida — e o
         // mesmo ponto em que o ObjectCB nasce —, mas NAO e dimensionado por MaxObjects: sao
@@ -61,7 +92,10 @@ namespace Smile {
             MappedViewMatricesCB = ViewUpload.Mapped;
         }
 
-        // ObjectCB e HiZ compartilham a mesma capacidade de objetos.
+        // O HiZ e dimensionado pela MESMA capacidade, e por isso nasceu aqui dentro — mas ele NAO
+        // depende do ObjectCB. Separado desde a Fase 4: o buffer de objeto passou a ir e vir com
+        // o toggle, e arrastar a tabela de bounds do HiZ nessa troca refaria descritores e
+        // invalidaria o readback de oclusao por um motivo que nada tem a ver com ele.
         HiZ.SetupObjects(Backend->Device.Native(), Backend->SRVHeap, MaxObjects);
     }
 

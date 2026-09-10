@@ -149,6 +149,10 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           meshes: cpuStats[0]?.scene.meshes ?? null,
         },
         objectConstantBytes: summarize(cpuStats.map((c) => c.objectConstantBytes)),
+        // Prova de MEMORIA, separada da de escrita acima.
+        objectConstantBytesReserved: summarize(
+          cpuStats.map((c) => c.objectConstantBytesReserved),
+        ),
         srvHeap: {
           used: summarize(cpuStats.map((c) => c.srvHeap.used)),
           highWater: cpuStats.at(-1)?.srvHeap.highWater ?? null,

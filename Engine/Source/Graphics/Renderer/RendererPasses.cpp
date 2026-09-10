@@ -2129,9 +2129,15 @@ namespace Smile {
                 // reproduz exatamente esta composicao, e o teste de paridade compara as duas
                 // saidas. Com uma copia solta neste laco, o teste compararia o espelho com OUTRA
                 // copia — e a que roda no frame poderia divergir das duas.
-                const ObjectConstants OC = ComposeObjectTransforms(ViewMatrices, Model, PrevModel);
-                std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
-                            &OC, sizeof(ObjectConstants));
+                // Com o caminho bindless ligado o buffer nem existe, e este memcpy e TODO o trafego
+                // que a fase persegue: 256 B por item por frame. `objectConstantBytes` mede
+                // exatamente ele.
+                if (MappedObjectCB) {
+                    const ObjectConstants OC =
+                        ComposeObjectTransforms(ViewMatrices, Model, PrevModel);
+                    std::memcpy(MappedObjectCB + static_cast<size_t>(Slot) * sizeof(ObjectConstants),
+                                &OC, sizeof(ObjectConstants));
+                }
                 if (static_cast<int>(si) == SelectedRenderable) {
                     SelectedSlot = Slot; SelectedMesh = R.Mesh; SelectedMat = Mat;
                     SelectedModel = Model;
@@ -2186,8 +2192,8 @@ namespace Smile {
         CpuStatsBuilding.Meshes           = SceneState->Scene.MeshCount();
         // Bytes REALMENTE escritos no CB do frame: um ObjectConstants por item aceito. E o
         // trafego que as tabelas paginadas da Fase 4 devem substituir por paginas sujas.
-        CpuStatsBuilding.ObjectConstantBytes =
-            static_cast<u64>(AllItems.size()) * sizeof(ObjectConstants);
+        CpuStatsBuilding.ObjectConstantBytes = MappedObjectCB
+            ? static_cast<u64>(AllItems.size()) * sizeof(ObjectConstants) : 0;
 
         if (UseTerrain && Terrain.IsLoaded())
             Terrain.UpdatePerFrame(FrameSlot, Vw.ViewProjection, Vw.ViewProjUnjittered,

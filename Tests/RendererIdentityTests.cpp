@@ -19,6 +19,7 @@ namespace Smile {
         static bool Meta(Renderer& R, FGpuSceneHandle H, FGpuSceneInstanceMeta& Out) {
             return R.InstanceTable.MetaFor(H, Out);
         }
+        static u64 ObjectCBReserved(const Renderer& R) { return R.ObjectCBReservedBytes(); }
         static void CheckDevice(Renderer& R) {
             if (FAILED(R.Backend->Device.Native()->GetDeviceRemovedReason()))
                 throw std::runtime_error("device removed during identity integration");
@@ -286,6 +287,11 @@ int wmain(int Argc, wchar_t** Argv) try {
             std::cout << "  (A/B do picking PULADO: transform bindless indisponivel neste device)\n";
         } else {
             Frames(R, 3);
+            // Prova de MEMORIA, e nao de escrita: com o bindless ligado o ObjectCB nao existe.
+            // Separada de `objectConstantBytes` de proposito -- durante seis das sete migracoes
+            // desta fase a escrita caiu por passe enquanto a memoria ficou intacta.
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "ligar transform bindless nao liberou o ObjectCB");
             Require(PickAt(SkewX, SkewY) == HitId,
                     "picking bindless resolveu outro objeto com escala nao uniforme");
             Require(PickAt(BorderX, SkewY) == BorderLeft,
@@ -295,6 +301,10 @@ int wmain(int Argc, wchar_t** Argv) try {
             Settings.SetBindlessTransforms(false);
             Settings.SetBindlessMaterials(false);
             Frames(R, 3);
+            // E a volta e TRANSACIONAL: o buffer classico tem de existir de novo antes de o
+            // toggle mudar, senao o raster ficaria sem de onde ler transform.
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                    "voltar ao classico nao recriou o ObjectCB");
             Require(PickAt(SkewX, SkewY) == HitId,
                     "voltar ao classico nao restaurou a identidade do objeto transformado");
             Require(PickAt(BorderX, SkewY) == BorderLeft &&

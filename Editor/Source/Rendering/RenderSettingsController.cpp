@@ -325,6 +325,7 @@ namespace SmileEditor {
         Out.Materials        = S.Materials;
         Out.Meshes           = S.Meshes;
         Out.ObjectConstantBytes = S.ObjectConstantBytes;
+        Out.ObjectConstantBytesReserved = S.ObjectConstantBytesReserved;
         Out.SrvHeapUsed      = S.SrvHeapUsed;
         Out.SrvHeapHighWater = S.SrvHeapHighWater;
         Out.SrvHeapCapacity  = S.SrvHeapCapacity;

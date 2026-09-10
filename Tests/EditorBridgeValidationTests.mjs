@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 11.
+// Snapshot minimo VALIDO, no formato do protocolo 12.
 function snapshotValido() {
   return {
     direct: [],
@@ -99,6 +99,7 @@ function snapshotValido() {
                  transformBinds: 0, transformSlotSets: 3 }],
       scene: { renderables: 1, drawItems: 1, visibleItems: 1, occludedItems: 0 },
       objectConstantBytes: 0,
+      objectConstantBytesReserved: 0,
       srvHeap: { used: 1, highWater: 1, capacity: 100, retired: 0, overflows: 0 },
       gpuSlots: { capacity: 8, live: 8, retired: 0, exhausted: 0 },
       materialTable: { rows: 3, residentBytes: 2240, stagingBytes: 4480, rowsDirty: 0,
@@ -142,7 +143,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 11,
+                version: 12,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -246,7 +247,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":11,"id":__ID__,"ok":true,"result":' +
+    '{"version":12,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");

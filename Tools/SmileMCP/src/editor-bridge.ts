@@ -34,7 +34,12 @@ import path from "node:path";
 // estados legitimos e o contador nao os separa. Um A/B de sombra que nao declara os dois nao
 // prova nada, e o manifesto sem `bindlessTransforms` deixa duas capturas do MESMO par sob teste
 // com procedencia identica.
-const PROTOCOL_VERSION = 11;
+// 12: `cpu.objectConstantBytesReserved`. As DUAS provas do gate do ObjectCB, separadas:
+// `objectConstantBytes == 0` diz que ninguem mais ESCREVE; esta diz que o buffer deixou de
+// EXISTIR. Durante seis das sete migracoes da fase a primeira caiu por passe enquanto a segunda
+// ficou intacta, entao uma nao substitui a outra. Upload heap nao e itemizado pelo VramTracker
+// (que cobre VRAM/DEFAULT), e por isso o numero vem do renderer e nao de la.
+const PROTOCOL_VERSION = 12;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -160,6 +165,8 @@ export interface CpuProfileStats {
     meshes: number;
   };
   objectConstantBytes: number;
+  /** Bytes RESERVADOS pelo ObjectCB. Prova de memoria, distinta da de escrita acima. */
+  objectConstantBytesReserved: number;
   /** `retired` e `overflows` entraram no protocolo 7 (Fase 3). */
   srvHeap: { used: number; highWater: number; capacity: number; retired: number;
              overflows: number };

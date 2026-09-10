@@ -709,7 +709,10 @@ namespace Smile {
         C.Targets      = &Targets;
         C.FrameCB      = ConstantBuffer->GetGPUVirtualAddress() +
                          static_cast<u64>(_FrameSlot) * sizeof(FrameConstants);
-        C.ObjectCBBase = ObjectCB->GetGPUVirtualAddress();
+        // Zero quando o buffer nao existe (caminho bindless). Um passe que ainda tentasse o
+        // classico amarraria um CBV nulo e desenharia com MVP toda zero -- geometria colapsada num
+        // ponto, que e loud o suficiente para nao passar despercebido numa captura.
+        C.ObjectCBBase = ObjectCB ? ObjectCB->GetGPUVirtualAddress() : 0;
         C.DSV          = Targets.DSVHeap.CpuHandle(0);
 
         C.Viewport.Width    = static_cast<FLOAT>(C.RenderWidth);
@@ -1045,6 +1048,7 @@ namespace Smile {
         CpuStatsBuilding.InstanceBytesDirty         = InstanceTable.LastDirtyBytes();
         CpuStatsBuilding.InstanceCopyRegions        = InstanceTable.LastCopyRegions();
         CpuStatsBuilding.InstanceRowsScanned        = InstanceTable.LastRowsScanned();
+        CpuStatsBuilding.ObjectConstantBytesReserved = ObjectCBReservedBytes();
         CpuStatsBuilding.InstanceBytesUploadedTotal = InstanceTable.TotalBytesUploaded();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.

@@ -152,6 +152,12 @@ namespace Smile {
         u32 Materials        = 0;
         u32 Meshes           = 0;
         u64 ObjectConstantBytes = 0; // escritos no CB por frame (DrawItems * sizeof)
+        // RESERVADOS pelo ObjectCB, e nao escritos. Duas provas separadas do mesmo gate: o de
+        // cima cai a zero quando ninguem mais ESCREVE, este quando o buffer deixa de EXISTIR. Um
+        // caminho pode parar de escrever com a memoria ainda alocada, e foi assim durante seis
+        // das sete migracoes desta fase. Upload heap nao e itemizado pelo VramTracker (que cobre
+        // VRAM/DEFAULT), entao o numero vem do proprio renderer.
+        u64 ObjectConstantBytesReserved = 0;
 
         // --- Descriptor heap: ocupacao e high-water. O bindless da Fase 3 consome deste
         // orcamento, entao a folga precisa ser observavel ANTES de se contar com ela.

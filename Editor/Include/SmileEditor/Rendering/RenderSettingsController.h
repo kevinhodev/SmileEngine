@@ -157,6 +157,8 @@ namespace SmileEditor {
         quint32 Materials     = 0;
         quint32 Meshes        = 0;
         quint64 ObjectConstantBytes = 0;
+        // Prova de MEMORIA, distinta da de escrita acima. Ver CpuFrameStats.h.
+        quint64 ObjectConstantBytesReserved = 0;
 
         quint32 SrvHeapUsed      = 0;
         quint32 SrvHeapHighWater = 0;

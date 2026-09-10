@@ -4,6 +4,7 @@
 #include "Smile/Graphics/Renderer/RendererFrameState.h"
 #include "Smile/Graphics/Renderer/RendererSceneState.h"
 #include "Smile/Graphics/Backend/RenderBackend.h"
+#include "Smile/Core/Logger.h"
 
 namespace Smile {
 
@@ -125,7 +126,34 @@ namespace Smile {
         // Mesma recusa do de material, mais a dependencia: as PSOs de transform sao construidas
         // sobre as bindless de material, entao ligar este sem aquele nao tem PSO para onde ir. O
         // getter devolve o estado EFETIVO.
-        R.UseBindlessTransforms = _Use && R.BindlessTransformsReady();
+        //
+        // Ligar EXIGE a tabela de instancias construida, e nao so as PSOs. Com o buffer liberado e
+        // a tabela ausente, todo passe cairia no classico — que e onde o buffer devia estar — e o
+        // vertex shader leria um CBV nulo: geometria colapsada, sem erro de API.
+        const bool Want = _Use && R.BindlessTransformsReady() && R.InstanceTable.IsBuilt();
+        if (Want == R.UseBindlessTransforms) return;
+
+        // A troca mexe num buffer que frames em voo podem estar lendo. E acao de EDITOR, nao de
+        // frame, entao drenar aqui nao viola a regra 8 do plano — que proibe dreno no caminho
+        // estavel, e nao numa mudanca de modo.
+        R.Backend->DirectQueue.Flush();
+        R.Backend->ComputeQueue.WaitIdle();
+
+        if (Want) {
+            R.UseBindlessTransforms = true;
+            R.ReleaseObjectCB();
+            return;
+        }
+
+        // DESLIGAR e a metade transacional: o buffer classico tem de existir ANTES de o toggle
+        // mudar. Se a alocacao falhar, permanece bindless — que e um estado que FUNCIONA — em vez
+        // de virar classico sem buffer, que nao desenha e nao reclama.
+        if (!R.AllocateObjectCB()) {
+            LogError("SetBindlessTransforms(false) RECUSADO: sem memoria para recriar o ObjectCB; "
+                     "o raster continua no caminho bindless");
+            return;
+        }
+        R.UseBindlessTransforms = false;
     }
     bool FRenderSettings::GetBindlessTransforms() const { return R.UseBindlessTransforms; }
     bool FRenderSettings::BindlessTransformsAvailable() const {
