@@ -20,6 +20,10 @@ namespace Smile {
             return R.InstanceTable.MetaFor(H, Out);
         }
         static u64 ObjectCBReserved(const Renderer& R) { return R.ObjectCBReservedBytes(); }
+        // Capacidade do ObjectCB. Escrita para forcar uma alocacao IMPOSSIVEL e exercitar o
+        // caminho de falha sem depender de a maquina estar sem memoria.
+        static u32  MaxObjects(const Renderer& R) { return R.MaxObjects; }
+        static void SetMaxObjects(Renderer& R, u32 Value) { R.MaxObjects = Value; }
         static void CheckDevice(Renderer& R) {
             if (FAILED(R.Backend->Device.Native()->GetDeviceRemovedReason()))
                 throw std::runtime_error("device removed during identity integration");
@@ -343,6 +347,26 @@ int wmain(int Argc, wchar_t** Argv) try {
                     "desligar transform derrubou o material junto (a cascata e so no outro sentido)");
             Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
                     "desligar transform sozinho nao recriou o ObjectCB");
+
+            // FALHA DE ALOCACAO no setter: RECUSA, nunca excecao. Uma capacidade impossivel
+            // (~274 GB de upload heap) leva o AllocateObjectCB ao caminho de falha sem depender
+            // de a maquina estar sem memoria. Se ele voltar a LANCAR — e lancava, porque o
+            // CreateUploadBuffer usa SMILE_HR na criacao e no Map —, a excecao sai por aqui como
+            // sairia pelo setter do editor/MCP, e o teste inteiro vira FAIL.
+            Settings.SetBindlessTransforms(true);
+            const u32 MaxObjectsWas = FRendererIdentityTestAccess::MaxObjects(R);
+            FRendererIdentityTestAccess::SetMaxObjects(R, 0x20000000u);
+            Settings.SetBindlessTransforms(false);
+            Require(Settings.GetBindlessTransforms(),
+                    "falha ao recriar o ObjectCB nao preservou o caminho bindless");
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "a recusa deixou o ObjectCB meio alocado");
+            FRendererIdentityTestAccess::SetMaxObjects(R, MaxObjectsWas);
+            Settings.SetBindlessTransforms(false);
+            Require(!Settings.GetBindlessTransforms(),
+                    "com memoria de novo, desligar o transform continuou recusado");
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                    "a recusa envenenou o estado: o ObjectCB nao voltou depois dela");
             Settings.SetBindlessMaterials(false);
         }
         Settings.SetUseTAA(TAAWas);

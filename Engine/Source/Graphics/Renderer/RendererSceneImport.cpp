@@ -43,11 +43,15 @@ namespace Smile {
     // Devolve false sem tocar em nada quando a alocacao falha. E o que torna a troca de toggle
     // TRANSACIONAL: o chamador que desliga o bindless precisa do buffer ANTES de efetivar, e uma
     // falha aqui tem de deixa-lo bindless em vez de sem caminho nenhum.
+    //
+    // `Try`, e nao o `CreateUploadBuffer` normal: aquele usa SMILE_HR na criacao E no Map, entao
+    // a falha nunca chegava ao `if` abaixo — ela saia como excecao pelo setter do editor/MCP, e o
+    // "recusa e preserva o estado" desta funcao existia so no comentario.
     bool Renderer::AllocateObjectCB() {
         static_assert(sizeof(ObjectConstants) % 256 == 0,
                       "o CB de objeto e indexado por sizeof(); root CBV exige 256-alinhado");
 
-        const GpuResources::FUploadBuffer Upload = GpuResources::CreateUploadBuffer(
+        const GpuResources::FUploadBuffer Upload = GpuResources::TryCreateUploadBuffer(
             Backend->Device.Native(), sizeof(ObjectConstants),
             FCommandQueue::kFramesInFlight * MaxObjects);
         if (!Upload.Resource || !Upload.Mapped) return false;
@@ -103,10 +107,21 @@ namespace Smile {
         // para nao usar e exatamente o custo que a fase existe para remover. A condicao e a MESMA
         // do setter do toggle porque as duas chamam CanRetireObjectCB — e nao porque as duas
         // repetem a mesma lista, que foi como a primeira versao errou.
+        //
+        // Aqui a falha ABORTA, e nao recusa: este e o caminho de load/setup, onde nao existe
+        // estado anterior para preservar — seguir sem buffer entregaria um renderer que nao
+        // desenha e nao reclama. E o comportamento que o `CreateUploadBuffer` direto tinha antes
+        // de a alocacao virar sob demanda; a recusa e do SETTER, que tem bindless para onde
+        // voltar.
         if (!ObjectCBMustExist()) ReleaseObjectCB();
-        else if (!AllocateObjectCB())
-            LogError("RecreateObjectCB: sem memoria para o ObjectCB; o raster classico nao tem "
-                     "de onde ler transform");
+        else if (!AllocateObjectCB()) {
+            const std::string Bytes = std::to_string(
+                static_cast<u64>(FCommandQueue::kFramesInFlight) * MaxObjects *
+                sizeof(ObjectConstants));
+            LogError("RecreateObjectCB: sem memoria para o ObjectCB (" + Bytes +
+                     " B); o raster classico nao tem de onde ler transform");
+            throw std::runtime_error("ObjectCB: alocacao de " + Bytes + " B recusada pelo device");
+        }
 
         // O HiZ e dimensionado pela MESMA capacidade, e por isso nasceu aqui dentro — mas ele NAO
         // depende do ObjectCB. Separado desde a Fase 4: o buffer de objeto passou a ir e vir com

@@ -718,7 +718,11 @@ namespace Smile {
         if (ObjectCBMustExist() && !ObjectCB) {
             LogError("ObjectCB ausente com o caminho classico ainda alcancavel por algum passe; "
                      "recriando dentro do frame");
-            AllocateObjectCB();
+            // Sem excecao AQUI: o frame nao tem para onde voltar, e derrubar o loop de render por
+            // uma condicao que ja e anomala trocaria um frame errado por nenhum frame.
+            if (!AllocateObjectCB())
+                LogError("ObjectCB: a recriacao dentro do frame falhou por memoria; este frame "
+                         "desenha sem o caminho classico de transform");
         }
         // Zero so quando o buffer foi legitimamente aposentado; ai nenhum passe le este campo.
         C.ObjectCBBase = ObjectCB ? ObjectCB->GetGPUVirtualAddress() : 0;

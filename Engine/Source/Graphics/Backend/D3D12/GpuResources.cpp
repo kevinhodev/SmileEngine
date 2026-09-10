@@ -444,25 +444,56 @@ namespace Smile::GpuResources {
         return Hr;
     }
 
+    namespace {
+        // O corpo unico das duas versoes. Devolve o HRESULT dos DOIS passos que podem falhar
+        // (criacao e Map) e nunca entrega um `Out` meio pronto: ou vem com recurso E mapeamento,
+        // ou vem vazio.
+        HRESULT TryCreateUploadBufferHr(ID3D12Device* Device, u64 SliceBytes, u32 SliceCount,
+                                        bool ForConstantBuffer, FUploadBuffer& Out) {
+            Out = FUploadBuffer{};
+            if (SliceBytes == 0 || SliceCount == 0) return S_OK;
+
+            const u64 Aligned = ForConstantBuffer
+                ? (SliceBytes + D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1) &
+                  ~static_cast<u64>(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1)
+                : SliceBytes;
+
+            const D3D12_RESOURCE_DESC Desc = BufferDesc(Aligned * SliceCount);
+            ComPtr<ID3D12Resource> Resource;
+            const HRESULT Hr = TryCreateResource(Device, D3D12_HEAP_TYPE_UPLOAD, Desc,
+                                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                 Resource);
+            if (FAILED(Hr)) return Hr;
+
+            // Range de leitura vazio: a CPU so escreve aqui. Sem Unmap — o mapeamento vive o
+            // tempo todo do recurso, que e o ponto do upload heap persistente.
+            const D3D12_RANGE NoRead{ 0, 0 };
+            u8* Mapped = nullptr;
+            const HRESULT MapHr = Resource->Map(0, &NoRead, reinterpret_cast<void**>(&Mapped));
+            // O recurso morre com o ComPtr local: um buffer sem mapeamento nao serve para nada
+            // aqui, e devolve-lo faria o chamador achar que tem memoria onde escrever.
+            if (FAILED(MapHr)) return MapHr;
+
+            Out.Resource   = std::move(Resource);
+            Out.Mapped     = Mapped;
+            Out.SliceBytes = Aligned;
+            Out.SliceCount = SliceCount;
+            return S_OK;
+        }
+    }
+
     FUploadBuffer CreateUploadBuffer(ID3D12Device* _Device, u64 _SliceBytes, u32 _SliceCount,
                                      bool _ForConstantBuffer) {
         FUploadBuffer Out{};
-        if (_SliceBytes == 0 || _SliceCount == 0) return Out;
+        SMILE_HR(TryCreateUploadBufferHr(_Device, _SliceBytes, _SliceCount, _ForConstantBuffer,
+                                         Out));
+        return Out;
+    }
 
-        Out.SliceBytes = _ForConstantBuffer
-            ? (_SliceBytes + D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1) &
-              ~static_cast<u64>(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1)
-            : _SliceBytes;
-        Out.SliceCount = _SliceCount;
-
-        const D3D12_RESOURCE_DESC Desc = BufferDesc(Out.SliceBytes * _SliceCount);
-        Out.Resource = CreateResource(_Device, D3D12_HEAP_TYPE_UPLOAD, Desc,
-                                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr);
-
-        // Range de leitura vazio: a CPU so escreve aqui. Sem Unmap — o mapeamento vive o
-        // tempo todo do recurso, que e o ponto do upload heap persistente.
-        const D3D12_RANGE NoRead{ 0, 0 };
-        SMILE_HR(Out.Resource->Map(0, &NoRead, reinterpret_cast<void**>(&Out.Mapped)));
+    FUploadBuffer TryCreateUploadBuffer(ID3D12Device* _Device, u64 _SliceBytes, u32 _SliceCount,
+                                        bool _ForConstantBuffer) {
+        FUploadBuffer Out{};
+        TryCreateUploadBufferHr(_Device, _SliceBytes, _SliceCount, _ForConstantBuffer, Out);
         return Out;
     }
 

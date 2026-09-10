@@ -128,6 +128,17 @@ namespace Smile::GpuResources {
     FUploadBuffer CreateUploadBuffer(ID3D12Device* Device, u64 SliceBytes, u32 SliceCount = 1,
                                      bool ForConstantBuffer = true);
 
+    // A mesma coisa, sem LANCAR: devolve o buffer vazio quando a criacao ou o Map falham.
+    //
+    // Existe porque `CreateUploadBuffer` usa SMILE_HR nos dois passos, e um chamador que precisa
+    // RECUSAR uma operacao — em vez de propagar — nunca via a falha: a excecao atravessava o
+    // `if (!Resource)` e saia pelo setter do editor/MCP. Quem quer a excecao continua chamando o
+    // de cima; quem tem estado para preservar chama este e olha o resultado.
+    //
+    // Vazio tambem para SliceBytes/SliceCount zero, igual ao de cima: nao e falha de alocacao.
+    FUploadBuffer TryCreateUploadBuffer(ID3D12Device* Device, u64 SliceBytes, u32 SliceCount = 1,
+                                        bool ForConstantBuffer = true);
+
     // Readback (GPU -> CPU). Nao entra no VramTracker (system memory).
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* Device, u64 Bytes);
 
