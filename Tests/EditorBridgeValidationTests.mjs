@@ -408,11 +408,54 @@ for (const campo of ["used", "highWater", "capacity", "retired", "overflows"]) {
   await esperaOk(p, "used + retired exatamente na capacidade e aceito");
 }
 
+// 7d. Os DOIS numeros do gate do ObjectCB (protocolo 12). Eles entraram no tipo e no resumo sem
+//     entrar na validacao: apagar `objectConstantBytesReserved` do payload atravessava a borda e
+//     o resumo publicava `undefined` no campo que decide a fase.
+//
+//     Contrato u64 (isSafeInteger), e nao u32: no 1M o reservado passa de 512 MB.
+for (const campo of ["objectConstantBytes", "objectConstantBytesReserved"]) {
+  for (const valor of [undefined, "0", null, true, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const p = snapshotValido();
+    if (valor === undefined) delete p.cpu[campo];
+    else p.cpu[campo] = valor;
+    await esperaErro(p, campo, `${campo} = ${String(valor)}`);
+  }
+}
+{
+  // O caso que o teto de u32 recusaria: 1M objetos x 256 B x 2 frames em voo.
+  const p = snapshotValido();
+  p.cpu.objectConstantBytesReserved = 536870912;
+  p.cpu.objectConstantBytes = 268435456;
+  await esperaOk(p, "os bytes do ObjectCB na escala de 1M sao aceitos");
+}
+{
+  // ESCRITA acima do RESERVADO descreve um renderer impossivel. O caso extremo -- escrever com
+  // reserva zero -- e o que as duas provas do gate existem para separar; aceitar isso poria a
+  // contradicao dentro da agregacao em vez de recusa-la na borda.
+  const p = snapshotValido();
+  p.cpu.objectConstantBytes = 256;
+  p.cpu.objectConstantBytesReserved = 0;
+  await esperaErro(p, "objectConstantBytes", "escrita com reserva zero");
+}
+{
+  const p = snapshotValido();
+  p.cpu.objectConstantBytes = 512;
+  p.cpu.objectConstantBytesReserved = 512;
+  await esperaOk(p, "escrita exatamente no reservado e aceita");
+}
+{
+  // O ESTADO-ALVO da fase: bindless ligado, ninguem escreve e nada esta reservado.
+  const p = snapshotValido();
+  p.cpu.objectConstantBytes = 0;
+  p.cpu.objectConstantBytesReserved = 0;
+  await esperaOk(p, "zero nos dois (ObjectCB aposentado) e aceito");
+}
+
 rmSync(outDir, { recursive: true, force: true });
 
 if (failures > 0) {
   console.error(`[BRIDGE] ${failures} falha(s)`);
   process.exit(1);
 }
-console.log("[BRIDGE] ok - cpu.gpuSlots, as tres tabelas canonicas e os contadores por passe " +
-            "exigidos, validados no contrato u32 e coerentes");
+console.log("[BRIDGE] ok - cpu.gpuSlots, as tres tabelas canonicas, os contadores por passe e os " +
+            "dois numeros do ObjectCB exigidos, validados no contrato e coerentes");

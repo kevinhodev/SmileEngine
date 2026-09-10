@@ -689,6 +689,33 @@ export class SmileEditorBridge {
         }
       }
     }
+    // Os DOIS numeros do gate do ObjectCB (protocolo 12). Entraram no tipo e no resumo sem
+    // entrar aqui: apagar `objectConstantBytesReserved` do payload atravessava o cast, e o
+    // resumo publicava `undefined` no campo que decide a fase. Mesma falha que fez o gpuSlots
+    // virar exigencia na v4.
+    //
+    // BYTES, entao u64/isSafeInteger e nao u32: no 1M o reservado passa de 512 MB, e o acumulado
+    // por frame nao cabe no teto de 32 bits.
+    for (const campo of ["objectConstantBytes", "objectConstantBytesReserved"] as const) {
+      const valor = (cpu as unknown as Record<string, unknown>)[campo];
+      if (!Number.isSafeInteger(valor) || (valor as number) < 0) {
+        throw new Error(
+          `Snapshot de perfil com cpu.${campo} invalido ` +
+            `(esperado inteiro em [0, ${kU64Max}], veio ${typeof valor} ${String(valor)}).`,
+        );
+      }
+    }
+    // ESCRITA nao pode passar do RESERVADO -- e escrever num buffer que nao existe e a
+    // incoerencia que interessa, porque as duas provas do gate sao independentes justamente
+    // para poderem discordar. Um snapshot com `bytes > 0` e `reserved == 0` descreve um
+    // renderer impossivel, e aceita-lo colocaria essa mentira dentro da agregacao.
+    if ((cpu.objectConstantBytes as number) > (cpu.objectConstantBytesReserved as number)) {
+      throw new Error(
+        `Snapshot incoerente: cpu.objectConstantBytes = ${cpu.objectConstantBytes} acima do ` +
+          `reservado ${cpu.objectConstantBytesReserved} (escrita num buffer que nao existe).`,
+      );
+    }
+
     // Heap de descritores: `retired` e `overflows` entraram no protocolo 7 pela mesma razao dos
     // contadores por passe — o resumo os le, e um editor anterior a Fase 3 os traria ausentes.
     const heap = cpu.srvHeap as Partial<CpuProfileStats["srvHeap"]> | undefined;
