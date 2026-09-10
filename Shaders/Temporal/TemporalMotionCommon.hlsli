@@ -6,6 +6,75 @@ struct FTemporalInstanceTransform {
     row_major float4x4 PreviousToCurrent;
 };
 
+// Inversa 4x4 GERAL, transcrita linha a linha do `Smile::TMat44::Inverse` (Mat44.h), inclusive o
+// corte de determinante e o retorno IDENTIDADE para matriz singular. A transcricao usa um array
+// plano com os MESMOS indices do C++ de proposito: e o unico jeito de conferir dezesseis linhas de
+// cofator a olho, e um sinal trocado numa delas nao daria erro em lugar nenhum — daria reprojecao
+// errada so em movimento.
+//
+// Geral, e nao a forma afim barata. As duas dao o mesmo resultado para TRS, mas a afim depende de
+// uma garantia que nada aqui verifica; especializar e um passo de MEDICAO, com a paridade em WARP
+// como rede. O custo nao e o de memoria que a fase persegue: sao ~200 ALU sem trafego nenhum.
+float4x4 TemporalInvert4x4(row_major float4x4 M) {
+    float m[16];
+    m[ 0] = M[0][0]; m[ 1] = M[0][1]; m[ 2] = M[0][2]; m[ 3] = M[0][3];
+    m[ 4] = M[1][0]; m[ 5] = M[1][1]; m[ 6] = M[1][2]; m[ 7] = M[1][3];
+    m[ 8] = M[2][0]; m[ 9] = M[2][1]; m[10] = M[2][2]; m[11] = M[2][3];
+    m[12] = M[3][0]; m[13] = M[3][1]; m[14] = M[3][2]; m[15] = M[3][3];
+
+    float inv[16];
+    inv[ 0] =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+    inv[ 4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+    inv[ 8] =  m[4]*m[ 9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[ 9];
+    inv[12] = -m[4]*m[ 9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[ 9];
+    inv[ 1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+    inv[ 5] =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+    inv[ 9] = -m[0]*m[ 9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[ 9];
+    inv[13] =  m[0]*m[ 9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[ 9];
+    inv[ 2] =  m[1]*m[ 6]*m[15] - m[1]*m[ 7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[ 7] - m[13]*m[3]*m[ 6];
+    inv[ 6] = -m[0]*m[ 6]*m[15] + m[0]*m[ 7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[ 7] + m[12]*m[3]*m[ 6];
+    inv[10] =  m[0]*m[ 5]*m[15] - m[0]*m[ 7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[ 7] - m[12]*m[3]*m[ 5];
+    inv[14] = -m[0]*m[ 5]*m[14] + m[0]*m[ 6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[ 6] + m[12]*m[2]*m[ 5];
+    inv[ 3] = -m[1]*m[ 6]*m[11] + m[1]*m[ 7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[ 9]*m[2]*m[ 7] + m[ 9]*m[3]*m[ 6];
+    inv[ 7] =  m[0]*m[ 6]*m[11] - m[0]*m[ 7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[ 8]*m[2]*m[ 7] - m[ 8]*m[3]*m[ 6];
+    inv[11] = -m[0]*m[ 5]*m[11] + m[0]*m[ 7]*m[ 9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[ 9] - m[ 8]*m[1]*m[ 7] + m[ 8]*m[3]*m[ 5];
+    inv[15] =  m[0]*m[ 5]*m[10] - m[0]*m[ 6]*m[ 9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[ 9] + m[ 8]*m[1]*m[ 6] - m[ 8]*m[2]*m[ 5];
+
+    const float det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+    // MESMO corte do C++ (1e-8). Identidade para singular nao e defesa cosmetica: escala zero e um
+    // estado que o editor produz, e um NaN daqui contaminaria a reprojecao do frame inteiro.
+    if (abs(det) < 1.0e-8f) {
+        return float4x4(1.0f, 0.0f, 0.0f, 0.0f,
+                        0.0f, 1.0f, 0.0f, 0.0f,
+                        0.0f, 0.0f, 1.0f, 0.0f,
+                        0.0f, 0.0f, 0.0f, 1.0f);
+    }
+    const float invDet = 1.0f / det;
+
+    float4x4 R;
+    R[0] = float4(inv[ 0], inv[ 1], inv[ 2], inv[ 3]) * invDet;
+    R[1] = float4(inv[ 4], inv[ 5], inv[ 6], inv[ 7]) * invDet;
+    R[2] = float4(inv[ 8], inv[ 9], inv[10], inv[11]) * invDet;
+    R[3] = float4(inv[12], inv[13], inv[14], inv[15]) * invDet;
+    return R;
+}
+
+// O par derivado, a partir das DUAS colunas canonicas da tabela de instancias (Fase 4).
+//
+// Era uma tabela propria de 128 B por instancia, em ping-pong, reescrita inteira por frame na CPU
+// -- com duas inversas 4x4 POR INSTANCIA POR FRAME. Os dados de entrada ja moravam na tabela
+// canonica: o que existia aqui era uma VISAO derivada deles, e derivada no lugar errado.
+//
+// A ordem do produto e a mesma do C++: `A * B` do Mat44 e o produto linha-major, identico a
+// `mul(A, B)` sobre `row_major`. Trocar compila, executa, e reprojeta para o lugar errado.
+FTemporalInstanceTransform TemporalComposeInstanceTransform(row_major float4x4 current,
+                                                            row_major float4x4 previous) {
+    FTemporalInstanceTransform Out;
+    Out.CurrentToPrevious = mul(TemporalInvert4x4(current), previous);
+    Out.PreviousToCurrent = mul(TemporalInvert4x4(previous), current);
+    return Out;
+}
+
 // Maior id que sobrevive ao round-trip pelo canal float da superficie.
 //
 // O valor gravado e (id + 1) num float32, que representa inteiros exatamente ate 2^24 INCLUSIVE --

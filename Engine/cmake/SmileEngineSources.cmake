@@ -151,6 +151,7 @@ smile_graphics_domain(Scene
     GpuSceneCandidates
     GpuSceneTables
     HiZOcclusion
+    TemporalInstanceTransform
     Terrain
 )
 

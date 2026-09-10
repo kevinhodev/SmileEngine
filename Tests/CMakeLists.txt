@@ -346,6 +346,40 @@ set_tests_properties(Smile.InstanceTransformWarp PROPERTIES
     TIMEOUT 180
 )
 
+# Paridade do par temporal derivado (Fase 4). Mesma estrutura da de cima e pelo mesmo motivo: o
+# TransformBuffer do TemporalMotion esta sendo aposentado em favor de derivar CurrentToPrevious e
+# PreviousToCurrent na leitura, e o que pode dar errado ali e a INVERSA e a ordem do produto.
+add_executable(SmileTemporalTransformWarpTests
+    TemporalTransformWarpTests.cpp
+)
+
+target_compile_features(SmileTemporalTransformWarpTests PRIVATE cxx_std_20)
+target_include_directories(SmileTemporalTransformWarpTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+target_compile_definitions(SmileTemporalTransformWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_TEMPORAL_TRANSFORM_PROBE_CSO="${SMILE_SHADER_OUTPUT_DIR}/TemporalTransformProbe.cs_6_0.cso"
+)
+target_link_libraries(SmileTemporalTransformWarpTests PRIVATE d3d12 dxgi)
+add_dependencies(SmileTemporalTransformWarpTests Shaders)
+set_target_properties(SmileTemporalTransformWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.TemporalTransformWarp
+    COMMAND SmileTemporalTransformWarpTests
+)
+
+set_tests_properties(Smile.TemporalTransformWarp PROPERTIES
+    LABELS "scene;gpu-driven;abi;warp;temporal"
+    TIMEOUT 180
+)
+
 # Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
 # usar WARP: o FDrawSubmitCache grava numa command list de verdade.
 add_executable(SmileSubmitStatsTests

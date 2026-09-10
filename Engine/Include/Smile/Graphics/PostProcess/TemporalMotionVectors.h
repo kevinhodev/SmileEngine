@@ -8,6 +8,7 @@
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
+#include "Smile/Graphics/Scene/TemporalInstanceTransform.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <vector>
@@ -18,13 +19,10 @@ namespace Smile {
     class FTextureSRVHeap;
     class FGpuSceneInstanceTable;
 
-    // Dados compartilhados pelos vetores temporais especificos do cap. 25 de Ray Tracing Gems II.
-    // O buffer e indexado pelo InstanceID da TLAS (que, na Smile, e o indice do FRenderable).
-    struct FTemporalInstanceTransformGPU {
-        Mat44 CurrentToPrevious;
-        Mat44 PreviousToCurrent;
-    };
-    static_assert(sizeof(FTemporalInstanceTransformGPU) == 128);
+    // O par derivado e a sua composicao moram no contrato compartilhado (Fase 4): o teste de
+    // paridade em WARP compara a funcao de la com o espelho HLSL, e nao pode arrastar este passe
+    // — nem o renderer — para dentro do executavel de teste. O buffer abaixo e indexado pelo
+    // InstanceID da TLAS (que, na Smile, e o indice do FRenderable).
 
     // Contadores que o shader compara com indices. Ficam em u32 porque sao CAPACIDADES, e
     // capacidade nao herda o teto de 24 bits do id.

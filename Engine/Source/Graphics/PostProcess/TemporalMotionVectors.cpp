@@ -292,8 +292,9 @@ namespace Smile {
             // reciclado: herdar o transform do ocupante anterior inventaria um passado.
             if (HistoryValid) Instances.TransformsFor(R.GpuHandle, Current, Previous);
 
-            Dst[i].CurrentToPrevious = Current.Inverse() * Previous;
-            Dst[i].PreviousToCurrent = Previous.Inverse() * Current;
+            // Pela funcao compartilhada: e ela que o teste de paridade compara com o espelho HLSL,
+            // e uma copia solta aqui deixaria a que roda no frame divergir das duas.
+            Dst[i] = ComposeTemporalInstanceTransform(Current, Previous);
         }
 
         // Tabela de identidades DESTE frame, no staging. A CPU escreve aqui e nunca na memoria
