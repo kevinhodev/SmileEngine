@@ -22,6 +22,11 @@ StructuredBuffer<FTemporalInstanceTransform> InstanceTransforms : register(t3);
 StructuredBuffer<FGpuIdentityEntry> PreviousIdentity   : register(t4);
 StructuredBuffer<FGpuIdentityEntry> CurrentIdentity    : register(t5);
 StructuredBuffer<uint>              SlotToCurrentIndex : register(t6);
+#if SMILE_TEMPORAL_DERIVED
+StructuredBuffer<GpuInstanceMeta>      CanonicalMeta      : register(t7);
+StructuredBuffer<GpuInstanceTransform> CanonicalCurrent   : register(t8);
+StructuredBuffer<GpuInstanceTransform> CanonicalPrevious  : register(t9);
+#endif
 RWTexture2D<float2> ReliableMotion : register(u0);
 
 bool InBounds(float2 uv) { return all(uv > 0.0f) && all(uv < 1.0f); }
@@ -48,8 +53,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const float2 prevUv = uv - baseMotion;
     if (!InBounds(prevUv)) return;
 
-    const float3 expectedPrevious = TemporalTransformPoint(
-        current.xyz, InstanceTransforms[currentId].CurrentToPrevious);
+    row_major float4x4 currentToPrevious;
+#if SMILE_TEMPORAL_DERIVED
+    if (!TemporalCanonicalCurrentToPrevious(
+            currentId, CurrentIdentity, CanonicalMeta, CanonicalCurrent, CanonicalPrevious,
+            IdentityParams.z, IdentityParams.w, currentToPrevious)) return;
+#else
+    currentToPrevious = InstanceTransforms[currentId].CurrentToPrevious;
+#endif
+    const float3 expectedPrevious = TemporalTransformPoint(current.xyz, currentToPrevious);
     const float4 previousAtBase = LoadSurfaceAtUv(PreviousSurface, prevUv);
     uint occluderId;
     // Contagem ANTERIOR, e nao a de agora: um id gravado quando a cena tinha mais objetos
@@ -71,8 +83,15 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                       CurrentIdentity, IdentityParams.y, (uint)Params.w,
                                       occluderIndex)) return;
 
-    const float3 occluderCurrent = TemporalTransformPoint(
-        previousAtBase.xyz, InstanceTransforms[occluderIndex].PreviousToCurrent);
+    row_major float4x4 previousToCurrent;
+#if SMILE_TEMPORAL_DERIVED
+    if (!TemporalCanonicalPreviousToCurrent(
+            occluderIndex, CurrentIdentity, CanonicalMeta, CanonicalCurrent, CanonicalPrevious,
+            IdentityParams.z, IdentityParams.w, previousToCurrent)) return;
+#else
+    previousToCurrent = InstanceTransforms[occluderIndex].PreviousToCurrent;
+#endif
+    const float3 occluderCurrent = TemporalTransformPoint(previousAtBase.xyz, previousToCurrent);
     float2 zUv;
     if (!TemporalProjectUv(occluderCurrent, ViewProj, zUv)) return;
     const float2 dualPrevUv = prevUv + (uv - zUv);

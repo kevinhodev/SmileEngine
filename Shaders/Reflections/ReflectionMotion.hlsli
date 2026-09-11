@@ -17,12 +17,24 @@ float4 ComputeGlossyMotion(uint2 px, float3 receiverPos, float3 receiverNormal,
         secondaryInstance >= instanceCount)
         return 0.0f;
 
-    const float3 prevS = TemporalTransformPoint(
-        receiverPos, TemporalTransforms[receiverInstance].CurrentToPrevious);
-    const float3 prevN = TemporalTransformDirection(
-        receiverNormal, TemporalTransforms[receiverInstance].CurrentToPrevious);
-    const float3 prevH = TemporalTransformPoint(
-        secondaryHit, TemporalTransforms[secondaryInstance].CurrentToPrevious);
+    row_major float4x4 receiverToPrevious;
+    row_major float4x4 secondaryToPrevious;
+#if SMILE_TEMPORAL_DERIVED
+    if (!TemporalCanonicalCurrentToPrevious(
+            receiverInstance, CurrentIdentity, CanonicalMeta, CanonicalCurrent,
+            CanonicalPrevious, IdentityParams.z, IdentityParams.w, receiverToPrevious) ||
+        !TemporalCanonicalCurrentToPrevious(
+            secondaryInstance, CurrentIdentity, CanonicalMeta, CanonicalCurrent,
+            CanonicalPrevious, IdentityParams.z, IdentityParams.w, secondaryToPrevious))
+        return 0.0f;
+#else
+    receiverToPrevious = TemporalTransforms[receiverInstance].CurrentToPrevious;
+    secondaryToPrevious = TemporalTransforms[secondaryInstance].CurrentToPrevious;
+#endif
+
+    const float3 prevS = TemporalTransformPoint(receiverPos, receiverToPrevious);
+    const float3 prevN = TemporalTransformDirection(receiverNormal, receiverToPrevious);
+    const float3 prevH = TemporalTransformPoint(secondaryHit, secondaryToPrevious);
 
     const float3 virtualH = prevH - 2.0f * prevN * dot(prevH - prevS, prevN);
     const float3 viewRay = virtualH - PrevCameraPos.xyz;

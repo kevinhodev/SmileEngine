@@ -825,7 +825,9 @@ namespace Smile {
         // atlas/probes. Se o snapshot ainda nao existe, o passe degenera para not-ready por conta
         // propria; assim uma troca de cena nunca deixa um alvo direto antigo aparentemente valido.
         TemporalMotion.SetupForResize(Backend->Device.Native(), Backend->SRVHeap, RenderWidth(), RenderHeight(),
-                                      Targets.DepthSRVSlot, Targets.VelocitySRVSlot);
+                                      Targets.DepthSRVSlot, Targets.VelocitySRVSlot,
+                                      InstanceTable.MetaSrv(), InstanceTable.TransformSrv(),
+                                      InstanceTable.PrevTransformSrv());
         const u32 ReliableVelocitySlot = TemporalMotion.IsReady()
             ? TemporalMotion.MotionSRV() : Targets.VelocitySRVSlot;
         const u32 TemporalTransformSlots[FCommandQueue::kFramesInFlight] = {
@@ -839,7 +841,9 @@ namespace Smile {
             GBuffer.SRVSlot(0), GBuffer.SRVSlot(1), GBuffer.SRVSlot(2), Targets.DepthSRVSlot,
             ReliableVelocitySlot, RaytracingScene.TlasSRVSlot(), RaytracingScene.InstanceGeoSRV(),
             MeshLights.LightSRVSlot(), MeshLights.AliasSRVSlot(),
-            DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots, TemporalIdentitySlots, TemporalMotion.RemapSRV());
+            DirectLightSRVSlot, TemporalTransformSlots, TemporalSurfaceSlots,
+            TemporalIdentitySlots, TemporalMotion.RemapSRV(), InstanceTable.MetaSrv(),
+            InstanceTable.TransformSrv(), InstanceTable.PrevTransformSrv());
         // A direta nao depende do volume DDGI. Ela ja vinha antes do early-out que existia aqui;
         // agora ninguem depende, e a ordem so reflete que o pack dela le o TemporalMotion acima.
         SetupNrdDirect();
@@ -858,7 +862,9 @@ namespace Smile {
             Targets.VelocitySRVSlot,
             Targets.SceneCopyTableStart, Targets.SceneCopyTableStart + 1, Targets.SceneColorMipCount,
             Atmosphere.SkyReflectionSRV(), HDREnv.SpecularSRV(),
-            TemporalTransformSlots, TemporalSurfaceSlots, TemporalIdentitySlots, TemporalMotion.RemapSRV());
+            TemporalTransformSlots, TemporalSurfaceSlots, TemporalIdentitySlots,
+            TemporalMotion.RemapSRV(), InstanceTable.MetaSrv(), InstanceTable.TransformSrv(),
+            InstanceTable.PrevTransformSrv());
 
         ReSTIRGI.SetGIParams(DDGI.GridMin(), DDGI.Spacing(), DDGI.GridCount(),
                              DDGI.TileSizeF(), DDGI.AtlasW(), DDGI.AtlasH(), DDGI.MaxRayDistance());

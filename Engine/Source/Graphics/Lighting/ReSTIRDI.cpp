@@ -25,7 +25,7 @@ namespace Smile {
         // de superficie do frame anterior (t12).
         constexpr u32 kInitialSRVs = 13;
         constexpr u32 kInitialUAVs = 2;
-        constexpr u32 kSpatialSRVs = 16;
+        constexpr u32 kSpatialSRVs = 19;
         constexpr u32 kSpatialUAVs = 5;
 
         // Posicao dos descritores de MESH LIGHT dentro de cada tabela. Existem com nome porque o
@@ -57,6 +57,8 @@ namespace Smile {
                                       kInitialSRVs, kInitialUAVs, true);
         SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_9.cso",
                               kSpatialSRVs, kSpatialUAVs, true);
+        SpatialDerivedPSO.Initialize(Device, "ReSTIRDISpatialDerived.cs_6_9.cso",
+                                     kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
                               kNrdPackSRVs, kNrdPackUAVs, false);
         NrdCompositePSO.Initialize(Device, "ReSTIRDINrdComposite.cs_6_6.cso",
@@ -71,6 +73,8 @@ namespace Smile {
                                       kInitialSRVs, kInitialUAVs, true);
         SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_9.cso",
                               kSpatialSRVs, kSpatialUAVs, true);
+        SpatialDerivedPSO.Initialize(Device, "ReSTIRDISpatialDerived.cs_6_9.cso",
+                                     kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
                               kNrdPackSRVs, kNrdPackUAVs, false);
         NrdCompositePSO.Initialize(Device, "ReSTIRDINrdComposite.cs_6_6.cso",
@@ -135,7 +139,9 @@ namespace Smile {
                                    const u32 LightSlots[FCommandQueue::kFramesInFlight],
                                    const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                                    const u32 SurfaceSlots[FCommandQueue::kFramesInFlight],
-                                   const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot) {
+                                   const u32 IdentitySlots[FCommandQueue::kFramesInFlight],
+                                   u32 RemapSlot, u32 InstanceMetaSlot,
+                                   u32 InstanceTransformSlot, u32 InstancePrevTransformSlot) {
         if (!Initialized) return;
         ReleaseResize(SRVHeap);
         if (NewWidth == 0 || NewHeight == 0 ||
@@ -143,7 +149,9 @@ namespace Smile {
             GBufferCSlot == kInvalidSlot || DepthSlot == kInvalidSlot ||
             VelocitySlot == kInvalidSlot || TlasSlot == kInvalidSlot ||
             InstanceSlot == kInvalidSlot || MeshLightSlot == kInvalidSlot ||
-            MeshAliasSlot == kInvalidSlot) return;
+            MeshAliasSlot == kInvalidSlot || InstanceMetaSlot == kInvalidSlot ||
+            InstanceTransformSlot == kInvalidSlot ||
+            InstancePrevTransformSlot == kInvalidSlot) return;
         for (u32 f = 0; f < FCommandQueue::kFramesInFlight; ++f)
             if (LightSlots[f] == kInvalidSlot || TransformSlots[f] == kInvalidSlot ||
                 SurfaceSlots[f] == kInvalidSlot || IdentitySlots[f] == kInvalidSlot || RemapSlot == kInvalidSlot) return;
@@ -216,7 +224,8 @@ namespace Smile {
                     ResWSRV[p], ResBSRV[p], LightSlots[f], TransformSlots[f],
                     SurfaceSlots[f], SurfaceSlots[1u - f],
                     // t12: pool de mesh lights — ver kSpatialMeshLightIdx.
-                    MeshLightSlot, IdentitySlots[1u - f], RemapSlot, IdentitySlots[f] };
+                    MeshLightSlot, IdentitySlots[1u - f], RemapSlot, IdentitySlots[f],
+                    InstanceMetaSlot, InstanceTransformSlot, InstancePrevTransformSlot };
                 CopyTable(SpatialTable[p][f], SpatialSlots, kSpatialSRVs);
             }
         }
@@ -466,7 +475,7 @@ namespace Smile {
         Transition(CL, ResB[P].Get(), ResBState[P], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         if (Profiler) Profiler->Begin(CL, "Espacial + visibilidade");
-        SpatialPSO.Bind(CL);
+        (UseDerivedTemporalTransforms ? SpatialDerivedPSO : SpatialPSO).Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr());
         CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(SpatialTable[P][FrameSlot]));
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(SpatialUAVTable));

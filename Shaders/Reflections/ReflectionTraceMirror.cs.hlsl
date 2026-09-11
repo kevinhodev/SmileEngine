@@ -75,6 +75,11 @@ Texture2D<float4> PrevTemporalSurface : register(t11);
 StructuredBuffer<FGpuIdentityEntry> PreviousIdentity : register(t12);
 StructuredBuffer<uint> SlotToCurrentIndex : register(t13);
 StructuredBuffer<FGpuIdentityEntry> CurrentIdentity : register(t14);
+#if SMILE_TEMPORAL_DERIVED
+StructuredBuffer<GpuInstanceMeta>      CanonicalMeta     : register(t15);
+StructuredBuffer<GpuInstanceTransform> CanonicalCurrent  : register(t16);
+StructuredBuffer<GpuInstanceTransform> CanonicalPrevious : register(t17);
+#endif
 
 RWTexture2D<float4>             RWResolved : register(u0);
 RWTexture2D<float4>             RWResolvedMotion : register(u1);

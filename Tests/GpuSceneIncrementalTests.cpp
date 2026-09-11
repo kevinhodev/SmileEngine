@@ -154,6 +154,10 @@ int main() {
         CheckEq(Rig.Instances.LastDirtyRows(), 1u, "mover um objeto suja uma linha");
         CheckEq(Rig.Instances.LastRowsScanned(), FGpuSceneInstanceTable::kColumns,
                 "mover um objeto visita uma linha, nao a capacidade");
+        FGpuSceneInstanceMeta Meta{};
+        Check(Rig.Instances.MetaFor(R.GpuHandle, Meta), "a linha movida continua resolvivel");
+        Check((Meta.Flags & GpuSceneInstanceTransformChanged) != 0,
+              "mover marca o caminho temporal caro somente para aquela residencia");
     }
 
     // O frame seguinte assenta o previous transform daquele objeto — uma linha outra vez, nunca a
@@ -161,6 +165,13 @@ int main() {
     Rig.Frame();
     CheckEq(Rig.Instances.LastRowsScanned(), FGpuSceneInstanceTable::kColumns,
             "o assentamento visita a mesma unica linha");
+    {
+        const FRenderable& R = Rig.Scene.Renderables()[1234];
+        FGpuSceneInstanceMeta Meta{};
+        Check(Rig.Instances.MetaFor(R.GpuHandle, Meta), "a linha assentada continua resolvivel");
+        Check((Meta.Flags & GpuSceneInstanceTransformChanged) == 0,
+              "assentar limpa o bit no mesmo frame em que Previous alcanca Current");
+    }
     Rig.Frame();
     CheckEq(Rig.Instances.LastRowsScanned(), 0u, "depois do assentamento a tabela volta a zero");
 

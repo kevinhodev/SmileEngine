@@ -46,6 +46,11 @@ StructuredBuffer<FTriangleLightGPU> TriLights : register(t12);
 StructuredBuffer<FGpuIdentityEntry> PreviousIdentity : register(t13);
 StructuredBuffer<uint> SlotToCurrentIndex : register(t14);
 StructuredBuffer<FGpuIdentityEntry> CurrentIdentity : register(t15);
+#if SMILE_TEMPORAL_DERIVED
+StructuredBuffer<GpuInstanceMeta>      CanonicalMeta     : register(t16);
+StructuredBuffer<GpuInstanceTransform> CanonicalCurrent  : register(t17);
+StructuredBuffer<GpuInstanceTransform> CanonicalPrevious : register(t18);
+#endif
 
 SamplerState LinearWrap : register(s1);
 RWTexture2D<float4> OutDirect : register(u0);
@@ -137,12 +142,24 @@ float4 ComputeShadowMotion(int2 px, float3 receiverPos, float3 receiverNormal,
                                 instanceCount, receiverId) || blockerId >= instanceCount)
         return 0.0f;
 
-    const float3 prevReceiver = TemporalTransformPoint(
-        receiverPos, TemporalTransforms[receiverId].CurrentToPrevious);
-    const float3 prevNormal = TemporalTransformDirection(
-        receiverNormal, TemporalTransforms[receiverId].CurrentToPrevious);
-    const float3 prevBlocker = TemporalTransformPoint(
-        blockerPos, TemporalTransforms[blockerId].CurrentToPrevious);
+    row_major float4x4 receiverToPrevious;
+    row_major float4x4 blockerToPrevious;
+#if SMILE_TEMPORAL_DERIVED
+    if (!TemporalCanonicalCurrentToPrevious(
+            receiverId, CurrentIdentity, CanonicalMeta, CanonicalCurrent, CanonicalPrevious,
+            IdentityParams.z, IdentityParams.w, receiverToPrevious) ||
+        !TemporalCanonicalCurrentToPrevious(
+            blockerId, CurrentIdentity, CanonicalMeta, CanonicalCurrent, CanonicalPrevious,
+            IdentityParams.z, IdentityParams.w, blockerToPrevious))
+        return 0.0f;
+#else
+    receiverToPrevious = TemporalTransforms[receiverId].CurrentToPrevious;
+    blockerToPrevious = TemporalTransforms[blockerId].CurrentToPrevious;
+#endif
+
+    const float3 prevReceiver = TemporalTransformPoint(receiverPos, receiverToPrevious);
+    const float3 prevNormal = TemporalTransformDirection(receiverNormal, receiverToPrevious);
+    const float3 prevBlocker = TemporalTransformPoint(blockerPos, blockerToPrevious);
     const float3 prevLight = light.PrevPosInvRadius.xyz;
 
     const float3 blockerLine = prevBlocker - prevLight;

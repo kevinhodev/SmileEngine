@@ -1,6 +1,8 @@
 #ifndef SMILE_TEMPORAL_MOTION_COMMON
 #define SMILE_TEMPORAL_MOTION_COMMON
 
+#include "../Scene/GpuSceneTables.hlsli"
+
 struct FTemporalInstanceTransform {
     row_major float4x4 CurrentToPrevious;
     row_major float4x4 PreviousToCurrent;
@@ -92,6 +94,13 @@ float4x4 TemporalPreviousToCurrent(row_major float4x4 current, row_major float4x
     return mul(TemporalInvert4x4(previous), current);
 }
 
+float4x4 TemporalIdentity4x4() {
+    return float4x4(1.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 1.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, 1.0f, 0.0f,
+                    0.0f, 0.0f, 0.0f, 1.0f);
+}
+
 // Maior id que sobrevive ao round-trip pelo canal float da superficie.
 //
 // O valor gravado e (id + 1) num float32, que representa inteiros exatamente ate 2^24 INCLUSIVE --
@@ -122,6 +131,80 @@ struct FGpuIdentityEntry {
     uint Slot;
     uint Generation;
 };
+
+// Resolve o endereco canonico do objeto ATUAL e valida a generation antes de tocar nas matrizes.
+// A leitura de Meta e inevitavel; ela tambem carrega o bit que evita duas matrizes e uma inversa
+// para o caso estatico, que domina cenas de editor.
+bool TemporalResolveCanonicalSlot(uint instanceIndex,
+                                  StructuredBuffer<FGpuIdentityEntry> currentIdentity,
+                                  StructuredBuffer<GpuInstanceMeta> instanceMeta,
+                                  uint currentCount,
+                                  uint instanceTableCapacity,
+                                  out uint slot,
+                                  out bool transformChanged) {
+    slot = 0u;
+    transformChanged = false;
+    if (instanceIndex >= currentCount) return false;
+
+    const FGpuIdentityEntry identity = currentIdentity[instanceIndex];
+    if (identity.Generation == 0u || identity.Slot >= instanceTableCapacity) return false;
+    const GpuInstanceMeta meta = instanceMeta[identity.Slot];
+    if (meta.Generation != identity.Generation) return false;
+
+    slot = identity.Slot;
+    transformChanged = (meta.Flags & SMILE_INSTANCE_FLAG_TRANSFORM_CHANGED) != 0u;
+    return true;
+}
+
+bool TemporalCanonicalCurrentToPrevious(
+    uint instanceIndex,
+    StructuredBuffer<FGpuIdentityEntry> currentIdentity,
+    StructuredBuffer<GpuInstanceMeta> instanceMeta,
+    StructuredBuffer<GpuInstanceTransform> currentTransforms,
+    StructuredBuffer<GpuInstanceTransform> previousTransforms,
+    uint currentCount,
+    uint instanceTableCapacity,
+    out row_major float4x4 result) {
+    uint slot;
+    bool changed;
+    if (!TemporalResolveCanonicalSlot(instanceIndex, currentIdentity, instanceMeta,
+                                      currentCount, instanceTableCapacity, slot, changed)) {
+        result = TemporalIdentity4x4();
+        return false;
+    }
+    if (!changed) {
+        result = TemporalIdentity4x4();
+        return true;
+    }
+    result = TemporalCurrentToPrevious(currentTransforms[slot].Value,
+                                       previousTransforms[slot].Value);
+    return true;
+}
+
+bool TemporalCanonicalPreviousToCurrent(
+    uint instanceIndex,
+    StructuredBuffer<FGpuIdentityEntry> currentIdentity,
+    StructuredBuffer<GpuInstanceMeta> instanceMeta,
+    StructuredBuffer<GpuInstanceTransform> currentTransforms,
+    StructuredBuffer<GpuInstanceTransform> previousTransforms,
+    uint currentCount,
+    uint instanceTableCapacity,
+    out row_major float4x4 result) {
+    uint slot;
+    bool changed;
+    if (!TemporalResolveCanonicalSlot(instanceIndex, currentIdentity, instanceMeta,
+                                      currentCount, instanceTableCapacity, slot, changed)) {
+        result = TemporalIdentity4x4();
+        return false;
+    }
+    if (!changed) {
+        result = TemporalIdentity4x4();
+        return true;
+    }
+    result = TemporalPreviousToCurrent(currentTransforms[slot].Value,
+                                       previousTransforms[slot].Value);
+    return true;
+}
 
 // Traduz um id gravado no frame ANTERIOR para o indice do MESMO objeto no frame ATUAL.
 //

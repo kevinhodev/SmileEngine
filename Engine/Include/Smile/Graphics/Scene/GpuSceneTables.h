@@ -116,6 +116,9 @@ namespace Smile {
         GpuSceneInstanceVisible        = 1u << 0,
         GpuSceneInstanceRaytracingOnly = 1u << 1,
         GpuSceneInstanceDynamic        = 1u << 2,
+        // Current e Previous ainda divergem. O bit habilita o caminho temporal caro somente
+        // enquanto o objeto realmente se move; o assentamento o limpa junto de Previous.
+        GpuSceneInstanceTransformChanged = 1u << 3,
     };
 
     struct FGpuSceneInstanceMeta {

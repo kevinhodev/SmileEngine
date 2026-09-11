@@ -108,6 +108,7 @@ struct GpuMeshRecord {
 #define SMILE_INSTANCE_FLAG_VISIBLE        1u
 #define SMILE_INSTANCE_FLAG_RT_ONLY        2u
 #define SMILE_INSTANCE_FLAG_DYNAMIC        4u
+#define SMILE_INSTANCE_FLAG_TRANSFORM_CHANGED 8u
 
 // Colunas SoA da tabela canonica de instancias, indexadas por slot de residencia. Generation 0
 // marca linha vazia; todo leitor de dado persistente valida a generation capturada.

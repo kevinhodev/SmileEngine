@@ -26,7 +26,9 @@ namespace Smile {
         u32 PreviousInstanceCount = 0;
         u32 SlotCapacity          = 0;
         u32 CurrentInstanceCount  = 0;
-        u32 Reserved1             = 0;
+        // Capacidade REAL das colunas canonicas. SlotCapacity pode ser maior porque o remap tem
+        // folga propria; usar aquela grandeza para indexar Meta/Transform aceitaria OOB.
+        u32 InstanceTableCapacity = 0;
     };
     static_assert(sizeof(FTemporalIdentityParams) == 16, "uint4 no HLSL");
 

@@ -46,7 +46,7 @@ namespace Smile {
             Free(SurfaceSRVSlot[i], 1);
             Free(SurfaceUAVSlot[i], 1);
             Free(SurfaceTable[i], 3);
-            Free(DualTable[i], 7);
+            Free(DualTable[i], 10);
             Surface[i].Reset();
             SurfaceState[i] = D3D12_RESOURCE_STATE_COMMON;
         }
@@ -185,11 +185,16 @@ namespace Smile {
 
     void FTemporalMotionVectors::SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                                  u32 NewWidth, u32 NewHeight,
-                                                 u32 DepthSlot, u32 VelocitySlot) {
+                                                 u32 DepthSlot, u32 VelocitySlot,
+                                                 u32 InstanceMetaSlot,
+                                                 u32 InstanceTransformSlot,
+                                                 u32 InstancePrevTransformSlot) {
         if (!Initialized) return;
         ReleaseResize(SRVHeap);
         if (!SceneReady || NewWidth == 0 || NewHeight == 0 ||
-            DepthSlot == kInvalidSlot || VelocitySlot == kInvalidSlot) return;
+            DepthSlot == kInvalidSlot || VelocitySlot == kInvalidSlot ||
+            InstanceMetaSlot == kInvalidSlot || InstanceTransformSlot == kInvalidSlot ||
+            InstancePrevTransformSlot == kInvalidSlot) return;
 
         Width = NewWidth; Height = NewHeight;
         constexpr DXGI_FORMAT SurfaceFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -245,10 +250,11 @@ namespace Smile {
             // t4/t5 seguem a mesma alternancia das superficies: o frame le a tabela ANTERIOR
             // para traduzir o id antigo e a ATUAL para confirmar que a traducao aterrissou no
             // mesmo objeto.
-            DualTable[f] = SRVHeap.Allocate(7);
-            const std::array<u32, 7> DualSlots{
+            DualTable[f] = SRVHeap.Allocate(10);
+            const std::array<u32, 10> DualSlots{
                 VelocitySlot, SurfaceSRVSlot[f], SurfaceSRVSlot[1u - f], TransformSRVSlot[f],
-                IdentitySRVSlot[1u - f], IdentitySRVSlot[f], SlotRemapSRVSlot };
+                IdentitySRVSlot[1u - f], IdentitySRVSlot[f], SlotRemapSRVSlot,
+                InstanceMetaSlot, InstanceTransformSlot, InstancePrevTransformSlot };
             CopyTable(DualTable[f], DualSlots);
         }
 
@@ -340,7 +346,8 @@ namespace Smile {
         CPU.Params = { static_cast<f32>(FrameSlot), HistoryValid ? 1.0f : 0.0f,
                        PositionRejectScale, static_cast<f32>(Count) };
         // PreviousCount_ ainda e o do frame passado aqui -- ele so avanca depois do memcpy.
-        CPU.IdentityParams = FTemporalIdentityParams{ PreviousCount_, SlotCapacity_, Count, 0u };
+        CPU.IdentityParams = FTemporalIdentityParams{
+            PreviousCount_, SlotCapacity_, Count, Instances.Capacity() };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(FTemporalMotionConstants),
                     &CPU, sizeof(CPU));
         PreviousCount_ = Count;
@@ -444,7 +451,7 @@ namespace Smile {
         if (Profiler) Profiler->Begin(CL, "Dual motion");
         Transition(CL, ReliableMotion.Get(), ReliableMotionState,
                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        DualPSO.Bind(CL);
+        (UseDerivedTransforms ? DualDerivedPSO : DualPSO).Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr());
         CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(DualTable[Curr]));
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(ReliableMotionUAV));
@@ -457,7 +464,8 @@ namespace Smile {
 
     void FTemporalMotionVectors::CreatePipelines(ID3D12Device* _Device) {
         SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_9.cso", 3, 1, true);
-        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 7, 1, false);
+        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 10, 1, false);
+        DualDerivedPSO.Initialize(_Device, "DualMotionDerived.cs_6_0.cso", 10, 1, false);
     }
 
 

@@ -34,8 +34,11 @@ namespace Smile {
     }
 
     void FReflections::RecreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_9.cso", 15, 3, true);
-        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_9.cso", 15, 2, true);
+        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_9.cso", 18, 3, true);
+        TraceDerivedPSO.Initialize(_Device, "ReflectionTraceDerived.cs_6_9.cso", 18, 3, true);
+        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_9.cso", 18, 2, true);
+        TraceMirrorDerivedPSO.Initialize(
+            _Device, "ReflectionTraceMirrorDerived.cs_6_9.cso", 18, 2, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
         TemporalPSO.Initialize(_Device, "ReflectionTemporal.cs_6_0.cso", 5, 1, false);
         SpatialPSO.Initialize(_Device, "ReflectionSpatial.cs_6_0.cso", 4, 1, false);
@@ -47,7 +50,9 @@ namespace Smile {
         TraceTimed = false;
         if (FShaderTimer::IsAvailable()) {
             try {
-                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_9.cso", 15, 3, true, true);
+                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_9.cso", 18, 3, true, true);
+                TracePSOTimedDerived.Initialize(
+                    _Device, "ReflectionTraceTimedDerived.cs_6_9.cso", 18, 3, true, true);
                 TraceTimed = true;
             } catch (const std::exception&) {
                 LogWarning("ReflectionTraceTimed.cso ausente — timer das reflexoes indisponivel.");
@@ -267,7 +272,7 @@ namespace Smile {
         Free(ResolvedMotionUAVSlot, 1);
         Free(TraceUAVTable, 3);
         Free(ResolvedUAVTable, 2);
-        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 15);
+        for (u32 i = 0; i < kTraceTables; ++i) Free(TraceTable[i], 18);
         Free(ResolveTableStart, 5);
         Free(SpecPackSrvTable, 3);
         Free(SpecPackUAVSlot, 1);
@@ -313,7 +318,9 @@ namespace Smile {
                                        u32 _AtmosphereSpecularSlot, u32 _HDRSpecularSlot,
                                       const u32 _TransformSlots[FCommandQueue::kFramesInFlight],
                                       const u32 _SurfaceSlots[FCommandQueue::kFramesInFlight],
-                                      const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot) {
+                                      const u32 IdentitySlots[FCommandQueue::kFramesInFlight],
+                                      u32 RemapSlot, u32 InstanceMetaSlot,
+                                      u32 InstanceTransformSlot, u32 InstancePrevTransformSlot) {
         if (!Initialized) return;
         ReleaseResize(_SRVHeap);
         const u32 _IrradSlot     = _Fallback.IrradianceAtlasSRV;
@@ -325,6 +332,8 @@ namespace Smile {
             _SkyViewSlot == kInvalidSlot || _InstanceSlot == kInvalidSlot ||
             _DepthSlot == kInvalidSlot || _GBufferSlot == kInvalidSlot ||
             _GBufferCSlot == kInvalidSlot || _BRDFLutSlot == kInvalidSlot ||
+            InstanceMetaSlot == kInvalidSlot || InstanceTransformSlot == kInvalidSlot ||
+            InstancePrevTransformSlot == kInvalidSlot ||
             _GBufferASlot == kInvalidSlot || _VelocitySlot == kInvalidSlot ||
             _SceneColorSlot == kInvalidSlot || _SceneDepthSlot == kInvalidSlot ||
             _AtmosphereSpecularSlot == kInvalidSlot || _HDRSpecularSlot == kInvalidSlot ||
@@ -427,7 +436,7 @@ namespace Smile {
         };
         UINT TDstCount = 8; UINT TSrcCounts[8] = { 1,1,1,1,1,1,1,1 };
         for (u32 i = 0; i < kTraceTables; ++i) {
-            TraceTable[i] = _SRVHeap.Allocate(15);
+            TraceTable[i] = _SRVHeap.Allocate(18);
             D3D12_CPU_DESCRIPTOR_HANDLE TDst = _SRVHeap.CpuHandle(TraceTable[i]);
             _Device->CopyDescriptors(1, &TDst, &TDstCount, 8, TSrc, TSrcCounts,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -442,6 +451,16 @@ namespace Smile {
             };
             UINT MotionCount = 6; UINT MotionOnes[6] = { 1,1,1,1,1,1 };
             _Device->CopyDescriptors(1, &MotionDst, &MotionCount, 6, MotionSrc, MotionOnes,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_CPU_DESCRIPTOR_HANDLE CanonicalDst = _SRVHeap.CpuHandle(TraceTable[i] + 15);
+            D3D12_CPU_DESCRIPTOR_HANDLE CanonicalSrc[3] = {
+                _SRVHeap.CpuHandleStaging(InstanceMetaSlot),
+                _SRVHeap.CpuHandleStaging(InstanceTransformSlot),
+                _SRVHeap.CpuHandleStaging(InstancePrevTransformSlot),
+            };
+            UINT CanonicalCount = 3; UINT CanonicalOnes[3] = { 1,1,1 };
+            _Device->CopyDescriptors(1, &CanonicalDst, &CanonicalCount, 3,
+                                     CanonicalSrc, CanonicalOnes,
                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             // A agua nao pertence ao snapshot temporal dos opacos. Seu trace usa t0..t7 iguais,
@@ -752,7 +771,12 @@ namespace Smile {
         Transition(_CL, RayData.Get(),  RayDataState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, RayMotion.Get(), RayMotionState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const bool Timed = TraceTimed && TimerSlot != kInvalidSlot;
-        (Timed ? TracePSOTimed : TracePSO).Bind(_CL);
+        if (UseDerivedTemporalTransforms) {
+            const bool TimedDerived = Timed && TracePSOTimedDerived.GetPSO() != nullptr;
+            (TimedDerived ? TracePSOTimedDerived : TraceDerivedPSO).Bind(_CL);
+        } else {
+            (Timed ? TracePSOTimed : TracePSO).Bind(_CL);
+        }
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable));
@@ -790,7 +814,7 @@ namespace Smile {
             UB[1].UAV.pResource = ResolvedMotion.Get();
             _CL->ResourceBarrier(2, UB);
         }
-        TraceMirrorPSO.Bind(_CL);
+        (UseDerivedTemporalTransforms ? TraceMirrorDerivedPSO : TraceMirrorPSO).Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVTable));

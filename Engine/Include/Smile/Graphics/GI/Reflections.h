@@ -112,7 +112,9 @@ namespace Smile {
                             u32 AtmosphereSpecularSlot, u32 HDRSpecularSlot,
                             const u32 TransformSlots[FCommandQueue::kFramesInFlight],
                             const u32 SurfaceSlots[FCommandQueue::kFramesInFlight],
-                            const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot);
+                            const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot,
+                            u32 InstanceMetaSlot, u32 InstanceTransformSlot,
+                            u32 InstancePrevTransformSlot);
 
         // Params estaticos do volume DDGI (grid/atlas) p/ o CB. Chamar quando o volume e (re)criado.
         void SetGIParams(const Vec3& GridMin, f32 Spacing, const Vec3& GridCount,
@@ -246,6 +248,13 @@ namespace Smile {
         u32  GetDebugMode() const     { return DebugMode; }
         void SetWaterReflectionScale(f32 V) { WaterReflectionScale = V; }
         void SetWaterWindDirection(f32 Radians) { WaterWindDirection = Radians; }
+        void SetDerivedTemporalTransforms(bool Enabled) {
+            UseDerivedTemporalTransforms = Enabled && DerivedTemporalTransformsAvailable();
+        }
+        bool GetDerivedTemporalTransforms() const { return UseDerivedTemporalTransforms; }
+        bool DerivedTemporalTransformsAvailable() const {
+            return TraceDerivedPSO.GetPSO() != nullptr && TraceMirrorDerivedPSO.GetPSO() != nullptr;
+        }
 
     private:
         void ReleaseResize(FTextureSRVHeap& SRVHeap);
@@ -256,10 +265,13 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FComputePipeline TracePSO;       // 12 SRV, 3 UAV [radiance, raydata, motion]
+        FComputePipeline TracePSO;
+        FComputePipeline TraceDerivedPSO;
         // Variante instrumentada separada para nao onerar registradores do passe normal.
         FComputePipeline TracePSOTimed;
-        FComputePipeline TraceMirrorPSO; // 12 SRV, 2 UAV [resolved, motion]
+        FComputePipeline TracePSOTimedDerived;
+        FComputePipeline TraceMirrorPSO;
+        FComputePipeline TraceMirrorDerivedPSO;
         FComputePipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
         FComputePipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
         FComputePipeline SpatialPSO;  // 4 SRV [histCurr, gbuf, depth, resolved], 1 UAV [histOther]
@@ -362,6 +374,7 @@ namespace Smile {
         u32  HalfWidth = 0, HalfHeight = 0;  // dominio half-res do trace
         u32  TimerSlot  = kInvalidSlot;      // alvo de timer vigente (kInvalidSlot = captura off)
         bool TraceTimed = false;             // permutacao instrumentada criada com sucesso
+        bool UseDerivedTemporalTransforms = false;
         bool Initialized = false;
         bool Ready       = false;
         bool LocalDenoiserReady = false;

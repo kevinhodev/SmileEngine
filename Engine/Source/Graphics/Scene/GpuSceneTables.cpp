@@ -470,11 +470,14 @@ namespace Smile {
             const Mat44 Current = R.Transform.Matrix();
             const Mat44 Previous = OldMeta.Generation == Handle.Generation
                                  ? TransformRows_[Slot].Value : Current;
+            const bool TransformChanged =
+                FGpuSceneInstanceTransform{ Current } != FGpuSceneInstanceTransform{ Previous };
 
             u32 Flags = 0;
             if (R.Visible)        Flags |= GpuSceneInstanceVisible;
             if (R.RaytracingOnly) Flags |= GpuSceneInstanceRaytracingOnly;
             if (R.Mobility == EMobility::Dynamic) Flags |= GpuSceneInstanceDynamic;
+            if (TransformChanged) Flags |= GpuSceneInstanceTransformChanged;
             MetaRows_[Slot] = {
                 _Meshes.RowOf(R.Mesh), _Materials.RowOf(R.Material), 0u, Flags, Handle.Generation
             };
@@ -489,7 +492,7 @@ namespace Smile {
             BoundsRows_[Slot] = Bounds;
             TransformRows_[Slot].Value = Current;
             PrevTransformRows_[Slot].Value = Previous;
-            if (TransformRows_[Slot] != PrevTransformRows_[Slot])
+            if (TransformChanged)
                 NextSettleSlots_.push_back(Slot);
 
             SeenEpoch_[Slot] = Epoch;
@@ -534,6 +537,9 @@ namespace Smile {
         for (u32 Slot : SettleSlots_) {
             if (Slot >= SeenEpoch_.size() || SeenEpoch_[Slot] == Epoch) continue;
             PrevTransformRows_[Slot] = TransformRows_[Slot];
+            // O fast path temporal depende desta limpeza. Sem ela, um objeto que parou continua
+            // pagando inversas por pixel para sempre, embora as duas matrizes ja sejam iguais.
+            MetaRows_[Slot].Flags &= ~GpuSceneInstanceTransformChanged;
             SeenEpoch_[Slot] = Epoch;
             TouchedSlots_.push_back(Slot);
         }

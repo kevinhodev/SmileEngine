@@ -68,7 +68,9 @@ namespace Smile {
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                            const FScene& Scene, u32 TlasSlot, u32 InstanceGeoSlot);
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
-                            u32 Width, u32 Height, u32 DepthSlot, u32 VelocitySlot);
+                            u32 Width, u32 Height, u32 DepthSlot, u32 VelocitySlot,
+                            u32 InstanceMetaSlot, u32 InstanceTransformSlot,
+                            u32 InstancePrevTransformSlot);
 
         // Sobe a tabela de identidades do frame para a copia em DEFAULT.
         //
@@ -94,6 +96,11 @@ namespace Smile {
         void InvalidateHistory() { HistoryValid = false; }
         bool HasHistory() const  { return HistoryValid; }
         bool IsReady() const     { return Ready; }
+        void SetDerivedTransforms(bool Enabled) {
+            UseDerivedTransforms = Enabled && DualDerivedPSO.GetPSO() != nullptr;
+        }
+        bool GetDerivedTransforms() const { return UseDerivedTransforms; }
+        bool DerivedTransformsAvailable() const { return DualDerivedPSO.GetPSO() != nullptr; }
 
         u32 MotionSRV() const { return ReliableMotionSRV; }
         u32 TransformSRV(u32 Slot) const {
@@ -123,6 +130,7 @@ namespace Smile {
 
         FComputePipeline SurfacePSO; // depth + TLAS + InstanceGeo -> surface history
         FComputePipeline DualPSO;    // raster MV + surface histories + transforms -> reliable MV
+        FComputePipeline DualDerivedPSO; // idem, derivando das colunas canonicas por slot
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB = nullptr;
@@ -182,6 +190,7 @@ namespace Smile {
         bool SceneReady = false;
         bool Ready = false;
         bool HistoryValid = false;
+        bool UseDerivedTransforms = false;
         f32 PositionRejectScale = 0.02f;
     };
 }
