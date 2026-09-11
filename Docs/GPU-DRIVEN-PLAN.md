@@ -1477,6 +1477,13 @@ permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dado
 > eixo único escondia um sinal de cofator trocado. Irmã da regra acima — **código de teste merece a
 > mesma desconfiança que código de produção**, e um `Require` que não fica vermelho em estado nenhum
 > é indistinguível de nenhum `Require`.
+>
+> E a regra original apareceu mais três vezes, sempre no mesmo formato: um comentário meu explicando
+> por que aquele caminho bastava. Um CBV nulo seria "loud o suficiente" (era page fault), a
+> reconciliação só precisava de um sentido (deixava 563 MB residentes), e os aposentados não deviam
+> entrar na telemetria "para o número não oscilar" (era o que impedia o gate de ficar vermelho
+> quando a coleta parasse). **Quando o comentário explica por que NÃO verificar, o comentário é o
+> defeito** — e vale para o que eu escrevo defendendo uma decisão, não só para o código.
 
 ### Objetivo
 

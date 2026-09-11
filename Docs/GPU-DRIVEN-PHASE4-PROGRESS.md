@@ -2,7 +2,7 @@
 
 Data: 2026-09-10
 
-Estado: **aberta, oito consumidores migrados e quatro rodadas de revisão fechadas.** Release fecha
+Estado: **aberta, oito consumidores migrados e cinco rodadas de revisão fechadas.** Release fecha
 66/66, Debug compila e o cliente TypeScript compila. Três dos seis itens do gate estão fechados; o
 `ObjectCB` **já pode deixar de ser alocado** (sete consumidores migrados, alocação sob demanda,
 troca transacional), e a aposentadoria do `TransformBuffer` do TemporalMotion começou pela
@@ -15,8 +15,9 @@ de teste. A terceira, sobre o `ObjectCB` sob demanda, achou dois P1, um P2 **e u
 estado errada minha** — eu disse que faltavam "1M + documentação" com o `TransformBuffer` intacto. A
 quarta achou mais dois P1 (a reconciliação gravava com CBV inválido e era unilateral), um P2 no
 aparato de teste, e **parou a migração do `TransformBuffer` antes de ela começar**, exigindo a conta
-de custo que o WARP não dá. Todos corrigidos; as seções de revisão registram cada um e o que o
-padrão deles ensina.
+de custo que o WARP não dá. A quinta achou dois no mecanismo que a quarta criou: aposentar podia
+liberar o recurso embaixo da GPU, e a telemetria declarava zero com o aposentado ainda alocado.
+Todos corrigidos; as seções de revisão registram cada um e o que o padrão deles ensina.
 
 Base: Fase 3 encerrada em `3b38694`. **Nada da Fase 3 foi reaberto.**
 
@@ -250,6 +251,27 @@ u32, porque em 1M o reservado passa de 512 MB — mais uma coerência entre eles
 passar do reservado**. O caso extremo, `bytes > 0` com `reserved == 0`, descreve um renderer
 impossível, e é justamente o par que as duas provas do gate existem para manter independente.
 
+### Quinta rodada — o ciclo de vida da aposentadoria
+
+Dois achados, os dois no mecanismo que a quarta rodada acabou de criar.
+
+**Aposentar podia liberar o recurso embaixo da GPU.** O `push_back` na fila de aposentados podia
+realocar e lançar **depois** de o buffer ter sido desmapeado e movido para o temporário — e a pilha
+destruiria o temporário com o recurso dentro. A correção não é tratar a falha: é **não ter a
+alocação**. A capacidade é reservada no `Initialize` (onde lançar é o contrato) e o teto é
+estrutural, porque aposentar exige `ObjectCB` não nulo e no máximo uma realocação por frame o traz
+de volta. A guarda de fila cheia fica de rede, falhando para o lado seguro: o buffer continua vivo,
+mapeado e válido.
+
+O `reserve` é **carga, não decoração**: removido, a guarda passa a recusar toda aposentadoria e o
+teste da reconciliação bilateral fica vermelho.
+
+**E a telemetria declarava zero com o aposentado ainda alocado** — terceira vez no mesmo padrão. Eu
+havia escrito que os aposentados *não* deviam contar, "para o número do gate não oscilar por um
+detalhe de ciclo de vida". Este é um gate de MEMÓRIA: memória retida é memória retida, e
+excluindo-os o número chegaria a zero antes da fence e ficaria zero **para sempre** se a coleta
+quebrasse. `reserved` agora soma ativo + aposentados.
+
 ### Quarta rodada — a reconciliação, o teste que pedia 274 GB, e a conta que faltava
 
 Dois P1, um P2 e uma nota sobre honestidade de nome.
@@ -441,6 +463,8 @@ declarar feito:
 | aposentadoria no frame removida | "a reconciliação é unilateral: o ObjectCB voltou e nunca mais foi liberado" — vermelho |
 | coleta dos aposentados removida | "o ObjectCB aposentado nunca foi coletado" — vermelho |
 | helper de um sentido com o produto invertido | "TemporalCurrentToPrevious é a metade de ida do par, bit a bit" — vermelho nos seis casos |
+| telemetria ignorando os aposentados | "o ObjectCB aposentado desapareceu da telemetria antes da fence" — vermelho |
+| `reserve` removido do `Initialize` | a guarda recusa toda aposentadoria e "a reconciliação é unilateral" fica vermelho |
 | ordem do produto trocada no par temporal | vermelho em 3 dos 6 casos (os outros são simétricos por construção) |
 | sinal de cofator trocado na inversa HLSL | vermelho — **e verde antes de o conjunto de teste ser consertado** |
 | corte de determinante removido da inversa HLSL | "a inversa singular não produziu NaN/Inf" — vermelho |
@@ -535,6 +559,30 @@ Três saídas, e nenhuma delas dispensa a medição:
 Recomendação: **(c)**. Ela fecha o gate, é mais barata que hoje no caso comum, e o bit que ela
 precisa é subproduto do trabalho já feito. Mas a decisão é de medição, não de argumento — e é a
 medição em 1M que precisa acontecer primeiro de qualquer forma.
+
+#### O que (c) exige, e o que a medição dela NÃO pode ser
+
+A revisão acrescentou três condições, e a segunda é uma correção de verdade:
+
+1. o bit é marcado quando `Transform != PrevTransform`;
+2. **e limpo no ASSENTAMENTO**, junto do `PrevTransformRows_[Slot] = TransformRows_[Slot]`
+   ([`GpuSceneTables.cpp`](../Engine/Source/Graphics/Scene/GpuSceneTables.cpp#L531)). Marcar só no
+   `WriteRow` deixaria um objeto que PAROU de se mover preso no caminho caro para sempre: o
+   `WriteRow` não roda mais para ele, e o assentamento é a única coisa que ainda toca aquela linha.
+   Sem isso, (c) degrada monotonicamente para (a) — cada objeto que se moveu uma vez fica caro até a
+   próxima troca de cena;
+3. medida em **1M estática, Bistro/Emerald e transform storm**, observando resolução e cobertura de
+   pixels móveis.
+
+A terceira condição é o ponto que faltava na minha proposta de medição: **1M estática sozinha
+esconde exatamente o caminho que (c) existe para otimizar.** Numa cena estática nenhum bit está
+marcado, então a medida seria "zero inversas" — o melhor caso, apresentado como se fosse o caso. O
+transform storm é o que revela o custo real, e Bistro/Emerald são onde o ganho de memória é
+irrelevante e só sobra o custo.
+
+E (c) entra como **permutação experimental, com A/B**, antes de migrar 4b–4d definitivamente. Pela
+regra 2 do plano, e porque é a única forma de atribuir uma diferença de tempo ao acesso a dados em
+vez de à cena.
 
 ### O plano do `TransformBuffer`, slice a slice
 
