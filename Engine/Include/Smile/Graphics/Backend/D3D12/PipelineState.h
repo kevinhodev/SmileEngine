@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
+#include "Smile/Graphics/Scene/GpuIndirectDraw.h"
 
 namespace Smile {
     class FTextureSRVHeap;
@@ -101,12 +102,29 @@ namespace Smile {
         //
         // Quatro sao por PASSE e uma e por DRAW: `MaterialRow` muda por grupo de material,
         // `InstanceSlot` muda por item. As outras tres sao descritores publicados uma vez.
-        static constexpr u32 kRootConstMaterialTable  = 0;
-        static constexpr u32 kRootConstMaterialRow    = 1;
-        static constexpr u32 kRootConstTransformTable = 2;
-        static constexpr u32 kRootConstPrevTransform  = 3;
-        static constexpr u32 kRootConstInstanceSlot   = 4;
-        static constexpr u32 kRootConstCount          = 5;
+        //
+        // ALIAS: os valores moram no contrato compartilhado (Scene/GpuIndirectDraw.h) desde a Fase
+        // 5, porque a command signature os usa como `DestOffsetIn32BitValues` e o teste que executa
+        // o comando de verdade precisa dos MESMOS numeros sem linkar a engine. Os nomes daqui
+        // ficaram: eles aparecem em call sites de tres subsistemas.
+        static constexpr u32 kRootConstMaterialTable  = GpuDrawConstants::kMaterialTable;
+        static constexpr u32 kRootConstMaterialRow    = GpuDrawConstants::kMaterialRow;
+        static constexpr u32 kRootConstTransformTable = GpuDrawConstants::kTransformTable;
+        static constexpr u32 kRootConstPrevTransform  = GpuDrawConstants::kPrevTransform;
+        static constexpr u32 kRootConstInstanceSlot   = GpuDrawConstants::kInstanceSlot;
+        static constexpr u32 kRootConstCount          = GpuDrawConstants::kCount;
+
+        // A command signature do main view, criada JUNTO da root signature a que ela esta amarrada
+        // — `CreateCommandSignature` exige a root signature quando o comando escreve constantes, e
+        // no ExecuteIndirect a que estiver ligada tem de ser a MESMA. Morando as duas nesta classe,
+        // no mesmo Initialize, elas nao tem como divergir.
+        //
+        // Uma so basta para o main view inteiro: as 22 PSOs de raster saem do mesmo
+        // `PSODesc.pRootSignature`. Sombras, chuva e picking tem root signatures proprias e
+        // ganharao as suas quando forem migradas — compartilhando a struct, nao o objeto.
+        ID3D12CommandSignature* IndirectDrawSignature() const {
+            return IndirectDrawCommandSignature.Get();
+        }
 
         // "As PSOs de transform bindless existem?" — mesma pergunta que BindlessMaterialsReady,
         // pelo mesmo motivo: capability ligada com .cso ausente daria PSO nula.
@@ -162,6 +180,7 @@ namespace Smile {
 
     private:
         ComPtr<ID3D12RootSignature> RootSignature;
+        ComPtr<ID3D12CommandSignature> IndirectDrawCommandSignature;
         ComPtr<ID3D12PipelineState> PipelineStateDepthOnly;
         ComPtr<ID3D12PipelineState> PipelineStateDepthNormal;
         ComPtr<ID3D12PipelineState> PipelineStateDepthOnlyMasked;

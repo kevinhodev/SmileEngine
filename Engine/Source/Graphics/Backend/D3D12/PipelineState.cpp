@@ -265,6 +265,22 @@ namespace Smile {
                                               RootBlob->GetBufferSize(),
                                               IID_PPV_ARGS(&RootSignature)));
 
+        // AQUI, coladas: a command signature so e valida com a root signature que acabou de nascer
+        // — o comando escreve constantes de root, entao `CreateCommandSignature` a exige, e no
+        // ExecuteIndirect a que estiver amarrada tem de ser a MESMA. Criar as duas no mesmo ponto e
+        // o que impede uma de ser recriada sem a outra.
+        //
+        // A DESCRICAO vem do contrato compartilhado (Scene/GpuIndirectDraw.h), e nao e montada
+        // aqui: a ordem das entradas define o layout da struct, e duas listas dessas em arquivos
+        // diferentes divergem sem erro de compilacao — divergem em geometria errada.
+        {
+            D3D12_INDIRECT_ARGUMENT_DESC ArgumentDescs[3]{};
+            const D3D12_COMMAND_SIGNATURE_DESC SignatureDesc =
+                MakeIndirectDrawSignatureDesc(ArgumentDescs, kMaterialRootIndex);
+            SMILE_HR(_Device->CreateCommandSignature(&SignatureDesc, RootSignature.Get(),
+                                                     IID_PPV_ARGS(&IndirectDrawCommandSignature)));
+        }
+
         RecreatePSO(_Device);
     }
 

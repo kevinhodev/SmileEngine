@@ -381,6 +381,41 @@ set_tests_properties(Smile.TemporalTransformWarp PROPERTIES
     TIMEOUT 180
 )
 
+# Contrato do comando indireto (Fase 5). Diferente das outras sondas de ABI: esta EXECUTA um
+# ExecuteIndirect de verdade, porque o leitor do outro lado e o command processor e nao um shader --
+# reler o buffer provaria so o produtor. Precisa das duas sondas (compute produz, vertex observa).
+add_executable(SmileGpuIndirectArgsWarpTests
+    GpuIndirectArgsWarpTests.cpp
+)
+
+target_compile_features(SmileGpuIndirectArgsWarpTests PRIVATE cxx_std_20)
+target_include_directories(SmileGpuIndirectArgsWarpTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/Engine/Include
+)
+target_compile_definitions(SmileGpuIndirectArgsWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_INDIRECT_ARGS_PROBE_CS_CSO="${SMILE_SHADER_OUTPUT_DIR}/IndirectArgsProbe.cs_6_0.cso"
+    SMILE_INDIRECT_ARGS_PROBE_VS_CSO="${SMILE_SHADER_OUTPUT_DIR}/IndirectArgsProbe.vs_6_0.cso"
+)
+target_link_libraries(SmileGpuIndirectArgsWarpTests PRIVATE d3d12 dxgi)
+add_dependencies(SmileGpuIndirectArgsWarpTests Shaders)
+set_target_properties(SmileGpuIndirectArgsWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuIndirectArgsWarp
+    COMMAND SmileGpuIndirectArgsWarpTests
+)
+
+set_tests_properties(Smile.GpuIndirectArgsWarp PROPERTIES
+    LABELS "scene;gpu-driven;abi;warp;indirect"
+    TIMEOUT 180
+)
+
 # Contadores de submissao (Fase 3). Mesmo motivo do teste de ciclo de vida para linkar a engine e
 # usar WARP: o FDrawSubmitCache grava numa command list de verdade.
 add_executable(SmileSubmitStatsTests

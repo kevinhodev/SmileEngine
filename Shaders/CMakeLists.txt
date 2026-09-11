@@ -33,6 +33,12 @@ smile_compile_shader(Triangle.vs.hlsl vs_6_6 main SHADER_OUTPUTS
 # que o VS usa, e devolve o resultado para o teste comparar com a composicao do C++. A ordem do
 # produto e o erro classico desta migracao, e ela compila e desenha dos dois jeitos.
 smile_compile_shader(Scene/InstanceTransformProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+# Sonda do COMANDO INDIRETO (Fase 5): o compute monta o argumento pela struct espelhada, e o vertex
+# shader relata o que o command processor entregou. Sao duas porque releitura do buffer provaria so
+# o produtor -- o layout e ditado pela ordem das entradas da command signature, e nada do lado do
+# shader valida isso.
+smile_compile_shader(Scene/IndirectArgsProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(Scene/IndirectArgsProbe.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
