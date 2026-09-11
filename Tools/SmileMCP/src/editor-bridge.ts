@@ -165,7 +165,15 @@ export interface CpuProfileStats {
     meshes: number;
   };
   objectConstantBytes: number;
-  /** Bytes RESERVADOS pelo ObjectCB. Prova de memoria, distinta da de escrita acima. */
+  /**
+   * Bytes RESERVADOS pelo ObjectCB. Prova de memoria, distinta da de escrita acima, e MEDIDA no
+   * recurso (GetResourceAllocationInfo) em vez de derivada da capacidade.
+   *
+   * Inclui os buffers aposentados que ainda esperam a fence: memoria retida e memoria retida, e so
+   * assim o numero fica vermelho se a coleta parar de rodar. Isso acontece apenas depois de uma
+   * aposentadoria FORA de dreno (hot reload derrubando uma PSO bindless) e dura kFramesInFlight
+   * frames; a troca de toggle drena e libera na hora, entao a medicao da fase le zero limpo.
+   */
   objectConstantBytesReserved: number;
   /** `retired` e `overflows` entraram no protocolo 7 (Fase 3). */
   srvHeap: { used: number; highWater: number; capacity: number; retired: number;

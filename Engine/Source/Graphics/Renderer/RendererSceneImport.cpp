@@ -87,10 +87,38 @@ namespace Smile {
     //
     // O ticket e o CurrentFenceSet (ultimos valores SUBMETIDOS), que e a fronteira certa: qualquer
     // frame que ainda leia este buffer ja foi submetido antes desta linha.
+    //
+    // Esta funcao NAO PODE alocar, e a razao e o desfecho de uma falha: um `push_back` que
+    // realocasse e lancasse destruiria o temporario com o recurso dentro — liberando memoria que a
+    // GPU ainda pode estar lendo —, com `ObjectCB` ja movido e desmapeado. Perder o buffer por
+    // falta de espaco para UM elemento de vetor e o pior desfecho possivel daqui.
+    //
+    // A capacidade e reservada no Initialize e o teto e ESTRUTURAL: aposentar exige `ObjectCB` nao
+    // nulo, e depois de aposentar ele e nulo — so uma realocacao o traz de volta, e no caminho de
+    // frame ela acontece no maximo uma vez por frame. A coleta roda TODO frame (antes do ponto de
+    // aborto, de proposito), e nenhum ticket sobrevive a kFramesInFlight frames. Logo a fila nunca
+    // passa de kFramesInFlight + 1.
+    //
+    // A guarda existe mesmo assim, e falha para o lado seguro: sem espaco, o buffer continua vivo,
+    // mapeado e valido, e a proxima tentativa e no frame seguinte. Memoria a mais, nunca recurso
+    // liberado embaixo da GPU.
     void Renderer::RetireObjectCB() {
         if (!ObjectCB) return;
+        if (RetiredObjectCBs.size() >= RetiredObjectCBs.capacity()) {
+            if (!ObjectCBRetireFailureLogged) {
+                LogError("ObjectCB: fila de aposentados cheia (o teto e estrutural, entao isto e "
+                         "sintoma); o buffer continua alocado e a aposentadoria sera tentada de novo");
+                ObjectCBRetireFailureLogged = true;
+            }
+            return; // estado INTACTO: nada foi desmapeado nem movido
+        }
+        ObjectCBRetireFailureLogged = false;
+
         if (MappedObjectCB) { ObjectCB->Unmap(0, nullptr); MappedObjectCB = nullptr; }
-        RetiredObjectCBs.push_back({ std::move(ObjectCB), CurrentFenceSet() });
+        // COPIA o ComPtr, e so depois solta o nosso. Com capacidade garantida o push_back nao
+        // realoca e nao lanca — e mesmo assim a copia mantem a invariante "o recurso pertence a
+        // alguem em TODO ponto" valida linha por linha, e nao por argumento.
+        RetiredObjectCBs.push_back({ ObjectCB, CurrentFenceSet(), ObjectCBBytes });
         ObjectCB.Reset();
         ObjectCBBytes = 0;
     }
@@ -116,12 +144,22 @@ namespace Smile {
                MaterialTable.IsBuilt() && ViewMatricesCB;
     }
 
-    // O tamanho COBRADO do recurso vivo, medido na alocacao. Zero sem buffer — e o que o gate le.
+    // Bytes que o ObjectCB AINDA OCUPA: o recurso ativo mais os aposentados que esperam a fence.
     //
-    // NAO inclui os aposentados com ticket de fence: eles ja nao pertencem a ninguem e somem no
-    // Collect do proximo frame. Contar os dois juntos faria o numero do gate oscilar por um
-    // detalhe de ciclo de vida em vez de descrever o estado do raster.
-    u64 Renderer::ObjectCBReservedBytes() const { return ObjectCB ? ObjectCBBytes : 0; }
+    // Os aposentados CONTAM. Eu havia escrito que nao, para o numero do gate nao oscilar por um
+    // detalhe de ciclo de vida — e isso era exatamente o defeito: este e um gate de MEMORIA, e
+    // memoria ainda retida e memoria ainda retida. Excluindo-os, o numero chegaria a zero antes da
+    // fence, e continuaria zero PARA SEMPRE se a coleta quebrasse. Um gate que nao consegue ficar
+    // vermelho quando a coleta para nao esta medindo a coleta.
+    //
+    // A oscilacao existe e e curta: so depois de uma aposentadoria fora de dreno, pelos
+    // kFramesInFlight frames ate a coleta. A troca de toggle nao passa por ali — ela drena e libera
+    // na hora —, entao a medicao da fase le zero limpo.
+    u64 Renderer::ObjectCBReservedBytes() const {
+        u64 Total = ObjectCB ? ObjectCBBytes : 0;
+        for (const FRetiredObjectCB& Entry : RetiredObjectCBs) Total += Entry.Bytes;
+        return Total;
+    }
 
     void Renderer::RecreateObjectCB() {
         Backend->DirectQueue.Flush();

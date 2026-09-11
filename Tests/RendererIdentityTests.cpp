@@ -425,13 +425,20 @@ int wmain(int Argc, wchar_t** Argv) try {
             Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
                     "o aparato realocou e o contador nao viu");
             Frames(R, 1);
-            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+            Require(FRendererIdentityTestAccess::RetiredObjectCBs(R) == 1,
                     "a reconciliacao e unilateral: o ObjectCB voltou e nunca mais foi liberado");
-            // E aposentar tem de ACABAR em liberar. Sem esta linha, uma fila que so cresce
-            // passaria como se fosse coleta.
+            // APOSENTADO NAO E LIBERADO. Enquanto a fence nao passa, a memoria continua retida, e
+            // a telemetria do gate tem de dizer isso -- senao ela chega a zero antes da hora, e
+            // continua em zero para sempre se a coleta quebrar.
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) > 0,
+                    "o ObjectCB aposentado desapareceu da telemetria antes da fence");
+            // E aposentar tem de ACABAR em liberar. Sem estas duas, uma fila que so cresce passaria
+            // como se fosse coleta.
             Frames(R, FCommandQueue::kFramesInFlight + 1u);
             Require(FRendererIdentityTestAccess::RetiredObjectCBs(R) == 0,
                     "o ObjectCB aposentado nunca foi coletado");
+            Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
+                    "depois da coleta a telemetria continua contando os bytes do aposentado");
 
             Settings.SetBindlessTransforms(false);
             Settings.SetBindlessMaterials(false);

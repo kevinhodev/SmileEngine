@@ -907,13 +907,24 @@ namespace Smile {
         void CollectRetiredObjectCBs();
         // Um por aposentadoria fora de dreno. Vetor, e nao um so, porque nada garante que a
         // proxima aposentadoria espere a fence da anterior passar.
+        //
+        // `Bytes` viaja com o recurso porque a telemetria SOMA os aposentados: enquanto a fence nao
+        // passa, esta memoria continua retida, e um gate de memoria que a ignorasse nao conseguiria
+        // ficar vermelho se a coleta parasse de rodar.
         struct FRetiredObjectCB {
             ComPtr<ID3D12Resource> Resource;
             FGpuFenceSet           Required;
+            u64                    Bytes = 0;
         };
         std::vector<FRetiredObjectCB> RetiredObjectCBs;
+        // Teto ESTRUTURAL da fila (ver RetireObjectCB): no maximo uma aposentadoria por frame, e a
+        // coleta roda todo frame liberando tudo com mais de kFramesInFlight de idade. A capacidade e
+        // reservada no Initialize para que o caminho de frame nunca aloque — uma realocacao que
+        // lancasse destruiria o recurso embaixo da GPU.
+        static constexpr size_t kMaxRetiredObjectCBs = FCommandQueue::kFramesInFlight + 2;
         // Uma linha de log por episodio de falta de memoria, e nao uma por frame.
-        bool ObjectCBFailureLogged = false;
+        bool ObjectCBFailureLogged       = false;
+        bool ObjectCBRetireFailureLogged = false;
         // A CONJUNCAO de tudo que cada passe avalia por conta propria antes de escolher entre o
         // CBV por draw e a tabela. Existe como funcao unica porque a decisao de LIBERAR o buffer
         // e a decisao de NAO USA-LO tem de ser a mesma condicao: enquanto qualquer passe puder
@@ -931,6 +942,9 @@ namespace Smile {
         // MEDIDO no recurso (GetResourceAllocationInfo na alocacao), e nao derivado de MaxObjects:
         // a formula acerta a ordem de grandeza, mas descreve o que foi PEDIDO, e publicar isso sob
         // o nome "reservado" prometeria uma medicao que nao foi feita.
+        //
+        // SOMA os aposentados que esperam a fence: memoria ainda retida e memoria ainda retida, e
+        // so assim o numero fica vermelho se a coleta parar de rodar.
         u64 ObjectCBReservedBytes() const;
         u64 ObjectCBBytes = 0;
 

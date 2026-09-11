@@ -121,6 +121,12 @@ namespace Smile {
     void Renderer::Initialize(HWND _hWnd, u32 _Width, u32 _Height) {
         if (Initialized) return;
 
+        // ANTES de qualquer coisa que possa alocar um ObjectCB: a fila de aposentados tem de ter
+        // capacidade desde o inicio, porque o caminho de frame que a usa nao pode alocar — uma
+        // realocacao que lancasse destruiria o recurso embaixo da GPU (ver RetireObjectCB). Aqui
+        // lancar e o contrato do Initialize; la nao e.
+        RetiredObjectCBs.reserve(kMaxRetiredObjectCBs);
+
         const auto InitStarted = std::chrono::steady_clock::now();
 
     #ifdef _DEBUG
