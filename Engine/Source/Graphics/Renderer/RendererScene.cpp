@@ -831,7 +831,7 @@ namespace Smile {
         const u32 ReliableVelocitySlot = TemporalMotion.IsReady()
             ? TemporalMotion.MotionSRV() : Targets.VelocitySRVSlot;
         const u32 TemporalTransformSlots[FCommandQueue::kFramesInFlight] = {
-            TemporalMotion.TransformSRV(0), TemporalMotion.TransformSRV(1) };
+            InstanceTable.TransformSrv(), InstanceTable.TransformSrv() };
         const u32 TemporalIdentitySlots[FCommandQueue::kFramesInFlight] = {
             TemporalMotion.IdentitySRV(0), TemporalMotion.IdentitySRV(1) };
         const u32 TemporalSurfaceSlots[FCommandQueue::kFramesInFlight] = {

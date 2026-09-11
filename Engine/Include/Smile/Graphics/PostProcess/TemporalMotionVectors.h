@@ -86,8 +86,7 @@ namespace Smile {
             return IdentitySRVSlot[FrameSlot % kFrames];
         }
 
-        void UpdatePerFrame(u32 FrameSlot, const FScene& Scene,
-                            const FGpuSceneInstanceTable& Instances,
+        void UpdatePerFrame(u32 FrameSlot, const FScene& Scene, u32 InstanceTableCapacity,
                             const Mat44& InvViewProj, const Mat44& ViewProj,
                             const Mat44& PrevViewProj, const Vec3& CameraPos);
         void Record(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap,
@@ -96,16 +95,9 @@ namespace Smile {
         void InvalidateHistory() { HistoryValid = false; }
         bool HasHistory() const  { return HistoryValid; }
         bool IsReady() const     { return Ready; }
-        void SetDerivedTransforms(bool Enabled) {
-            UseDerivedTransforms = Enabled && DualDerivedPSO.GetPSO() != nullptr;
-        }
-        bool GetDerivedTransforms() const { return UseDerivedTransforms; }
         bool DerivedTransformsAvailable() const { return DualDerivedPSO.GetPSO() != nullptr; }
 
         u32 MotionSRV() const { return ReliableMotionSRV; }
-        u32 TransformSRV(u32 Slot) const {
-            return TransformSRVSlot[Slot % FCommandQueue::kFramesInFlight];
-        }
         u32 SurfaceSRV(u32 Slot) const {
             return SurfaceSRVSlot[Slot % FCommandQueue::kFramesInFlight];
         }
@@ -129,17 +121,15 @@ namespace Smile {
         static_assert(kFrames == 2, "surface history assume ping-pong de dois frames");
 
         FComputePipeline SurfacePSO; // depth + TLAS + InstanceGeo -> surface history
-        FComputePipeline DualPSO;    // raster MV + surface histories + transforms -> reliable MV
-        FComputePipeline DualDerivedPSO; // idem, derivando das colunas canonicas por slot
+        // Caminho definitivo: deriva da tabela canonica por slot. O TransformBuffer classico foi
+        // removido depois do A/B de Bistro, Emerald e 1M.
+        FComputePipeline DualDerivedPSO;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> CB;
         u8* MappedCB = nullptr;
         FTemporalMotionConstants CPU{};
         u32 FrameSlot = 0;
 
-        Microsoft::WRL::ComPtr<ID3D12Resource> TransformBuffer;
-        u8* MappedTransforms = nullptr;
-        u32 TransformSRVSlot[kFrames] = { kInvalidSlot, kInvalidSlot };
         // Tabela de identidades: id de instancia -> {slot, generation}.
         //
         // DEFAULT em ping-pong, e nao UPLOAD com dois slices. A tabela de F e lida por F+1, e o
@@ -190,7 +180,6 @@ namespace Smile {
         bool SceneReady = false;
         bool Ready = false;
         bool HistoryValid = false;
-        bool UseDerivedTransforms = false;
         f32 PositionRejectScale = 0.02f;
     };
 }

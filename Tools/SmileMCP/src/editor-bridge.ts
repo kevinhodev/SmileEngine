@@ -39,7 +39,8 @@ import path from "node:path";
 // EXISTIR. Durante seis das sete migracoes da fase a primeira caiu por passe enquanto a segunda
 // ficou intacta, entao uma nao substitui a outra. Upload heap nao e itemizado pelo VramTracker
 // (que cobre VRAM/DEFAULT), e por isso o numero vem do renderer e nao de la.
-// 13: derivedTemporalTransforms controls all three temporal consumers as one A/B arm.
+// 13: derivedTemporalTransforms introduced the three-consumer A/B. After promotion, true is the
+// only executable arm; false is refused because the classic TransformBuffer no longer exists.
 const PROTOCOL_VERSION = 13;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;

@@ -55,8 +55,6 @@ namespace Smile {
     void FReSTIRDI::Initialize(ID3D12Device* Device) {
         InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_9.cso",
                                       kInitialSRVs, kInitialUAVs, true);
-        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_9.cso",
-                              kSpatialSRVs, kSpatialUAVs, true);
         SpatialDerivedPSO.Initialize(Device, "ReSTIRDISpatialDerived.cs_6_9.cso",
                                      kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
@@ -71,8 +69,6 @@ namespace Smile {
         if (!Initialized) return;
         InitialTemporalPSO.Initialize(Device, "ReSTIRDIInitialTemporal.cs_6_9.cso",
                                       kInitialSRVs, kInitialUAVs, true);
-        SpatialPSO.Initialize(Device, "ReSTIRDISpatial.cs_6_9.cso",
-                              kSpatialSRVs, kSpatialUAVs, true);
         SpatialDerivedPSO.Initialize(Device, "ReSTIRDISpatialDerived.cs_6_9.cso",
                                      kSpatialSRVs, kSpatialUAVs, true);
         NrdPackPSO.Initialize(Device, "ReSTIRDINrdPack.cs_6_6.cso",
@@ -475,7 +471,7 @@ namespace Smile {
         Transition(CL, ResB[P].Get(), ResBState[P], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
         if (Profiler) Profiler->Begin(CL, "Espacial + visibilidade");
-        (UseDerivedTemporalTransforms ? SpatialDerivedPSO : SpatialPSO).Bind(CL);
+        SpatialDerivedPSO.Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr());
         CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(SpatialTable[P][FrameSlot]));
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(SpatialUAVTable));

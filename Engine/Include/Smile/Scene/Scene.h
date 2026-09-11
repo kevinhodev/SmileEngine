@@ -17,22 +17,21 @@ namespace Smile {
 
     // Capacidade a alocar para uma cena de N renderaveis.
     //
-    // Cinco estruturas sao dimensionadas pelo tamanho da cena: o ObjectCB (`MaxObjects`), a
-    // tabela de bounds do HiZ, a TLAS + uploads de instancia, o buffer de transforms do
-    // TemporalMotion e o snapshot InstanceGeo da cena de RT. Dimensionar pelo N EXATO fazia o
-    // primeiro objeto criado no editor estourar todas de uma vez e cair no re-setup completo
-    // (rebuild de todos os BLAS + DDGI + MeshLights) a cada Ctrl+D.
+    // Quatro grupos permanentes sao dimensionados pelo tamanho da cena: bounds/resultados do HiZ,
+    // TLAS + uploads de instancia, identidade/remap temporal e o snapshot InstanceGeo da cena de
+    // RT. O ObjectCB classico e um quinto grupo somente enquanto o fallback de transform esta
+    // ativo. Dimensionar pelo N EXATO fazia o primeiro objeto criado no editor estourar todos de
+    // uma vez e cair no re-setup completo (rebuild de BLAS + DDGI + MeshLights) a cada Ctrl+D.
     //
-    // A folga tem de ser a MESMA nas cinco: se uma ficar mais apertada, ela vira o gargalo e a
-    // folga das outras nao serve para nada — o `NeedsResize` do Renderer dispara pela primeira
-    // que estourar. Por isso a conta mora aqui, e nao replicada em cada SetupForScene.
+    // A folga tem de ser a MESMA nos consumidores desta politica: se um ficar mais apertado, ele
+    // vira o gargalo e a folga dos outros nao serve para nada — o `NeedsResize` do Renderer
+    // dispara pelo primeiro que estourar. Por isso a conta mora aqui, e nao replicada em cada
+    // SetupForScene.
     //
-    // Custo por entrada de capacidade: 512 B de ObjectCB (256 x 2 frames), 256 B de transform do
-    // TemporalMotion (128 x 2), 128 B de instance desc da TLAS (64 x 2 slots), 20 B de InstanceGeo
-    // (ver o static_assert do FGpuInstanceGeo; eram 100 B antes de o material sair dele na Fase 2)
-    // e 76 B do HiZ = 992 B. A folga de uma cena de 1591
-    // objetos sai na casa das centenas de KB, contra ~200 MB de pool de BLAS que o re-setup
-    // reconstroi. Tabela por escala e por HEAP em Docs/GPU-DRIVEN-PLAN.md, Fase 0.
+    // O ObjectCB (512 B/entrada, com dois frames) e o antigo TransformBuffer temporal
+    // (256 B/entrada) foram aposentados no caminho final da Fase 4. Nao os some ao footprint
+    // corrente: a tabela canonica tem capacidade e telemetria proprias. A tabela historica por
+    // escala e por HEAP continua em Docs/GPU-DRIVEN-PLAN.md, Fase 0.
     constexpr u32 SceneCapacityFor(u32 RenderableCount) {
         const u32 Slack = RenderableCount / 16u;
         return RenderableCount + (Slack > 64u ? Slack : 64u);

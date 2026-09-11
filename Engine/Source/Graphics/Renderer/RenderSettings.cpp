@@ -186,31 +186,19 @@ namespace Smile {
 
     void FRenderSettings::SetDerivedTemporalTransforms(bool _Use) {
         const bool Available = DerivedTemporalTransformsAvailable();
-        const bool Want = _Use && Available;
-        if (Want == GetDerivedTemporalTransforms()) return;
-        if (_Use && !Available) {
+        if (!_Use) {
+            LogError("SetDerivedTemporalTransforms(false) RECUSADO: o TransformBuffer classico "
+                     "foi aposentado depois do A/B da Fase 4");
+            return;
+        }
+        if (!Available) {
             LogError("SetDerivedTemporalTransforms(true) RECUSADO: uma das tres permutacoes "
                      "temporais derivadas nao esta disponivel");
             return;
         }
-
-        // This is one experiment, not three independent knobs. A mixed frame could look
-        // plausible while comparing different reprojection paths in different consumers.
-        R.TemporalMotion.SetDerivedTransforms(Want);
-        R.Reflections.SetDerivedTemporalTransforms(Want);
-        R.ReSTIRDI.SetDerivedTemporalTransforms(Want);
-
-        // The math is intended to be equivalent, but the A/B must not accumulate history
-        // produced by the other arm. Otherwise a one-frame mismatch is smeared and attributed
-        // to the new path rather than to mixed provenance.
-        Invalidate(EHistoryTarget::TemporalMotion | EHistoryTarget::Reflections |
-                   EHistoryTarget::ReSTIRDI | EHistoryTarget::NrdIndirect |
-                   EHistoryTarget::NrdDirect);
     }
     bool FRenderSettings::GetDerivedTemporalTransforms() const {
-        return R.TemporalMotion.GetDerivedTransforms() &&
-               R.Reflections.GetDerivedTemporalTransforms() &&
-               R.ReSTIRDI.GetDerivedTemporalTransforms();
+        return DerivedTemporalTransformsAvailable();
     }
     bool FRenderSettings::DerivedTemporalTransformsAvailable() const {
         return R.TemporalMotion.DerivedTransformsAvailable() &&

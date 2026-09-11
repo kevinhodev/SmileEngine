@@ -239,7 +239,7 @@ namespace Smile {
         DDGI.SetSkyIntensity(Lt.RainSkyDim); // reflexoes e ReSTIR recebem no proprio UpdatePerFrame
 
         if (Modes.ReliableMotionActive) {
-            TemporalMotion.UpdatePerFrame(FrameSlot, SceneState->Scene, InstanceTable,
+            TemporalMotion.UpdatePerFrame(FrameSlot, SceneState->Scene, InstanceTable.Capacity(),
                                           Vw.InvViewProjFull,
                                           Vw.ViewProjUnjittered, FrameState->PrevViewProj,
                                           Vw.CameraPosition);

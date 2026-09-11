@@ -34,9 +34,7 @@ namespace Smile {
     }
 
     void FReflections::RecreatePipelines(ID3D12Device* _Device) {
-        TracePSO.Initialize(_Device, "ReflectionTrace.cs_6_9.cso", 18, 3, true);
         TraceDerivedPSO.Initialize(_Device, "ReflectionTraceDerived.cs_6_9.cso", 18, 3, true);
-        TraceMirrorPSO.Initialize(_Device, "ReflectionTraceMirror.cs_6_9.cso", 18, 2, true);
         TraceMirrorDerivedPSO.Initialize(
             _Device, "ReflectionTraceMirrorDerived.cs_6_9.cso", 18, 2, true);
         ResolvePSO.Initialize(_Device, "ReflectionResolve.cs_6_0.cso", 5, 2, false);
@@ -50,7 +48,6 @@ namespace Smile {
         TraceTimed = false;
         if (FShaderTimer::IsAvailable()) {
             try {
-                TracePSOTimed.Initialize(_Device, "ReflectionTraceTimed.cs_6_9.cso", 18, 3, true, true);
                 TracePSOTimedDerived.Initialize(
                     _Device, "ReflectionTraceTimedDerived.cs_6_9.cso", 18, 3, true, true);
                 TraceTimed = true;
@@ -771,12 +768,8 @@ namespace Smile {
         Transition(_CL, RayData.Get(),  RayDataState,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         Transition(_CL, RayMotion.Get(), RayMotionState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const bool Timed = TraceTimed && TimerSlot != kInvalidSlot;
-        if (UseDerivedTemporalTransforms) {
-            const bool TimedDerived = Timed && TracePSOTimedDerived.GetPSO() != nullptr;
-            (TimedDerived ? TracePSOTimedDerived : TraceDerivedPSO).Bind(_CL);
-        } else {
-            (Timed ? TracePSOTimed : TracePSO).Bind(_CL);
-        }
+        const bool TimedDerived = Timed && TracePSOTimedDerived.GetPSO() != nullptr;
+        (TimedDerived ? TracePSOTimedDerived : TraceDerivedPSO).Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(TraceUAVTable));
@@ -814,7 +807,7 @@ namespace Smile {
             UB[1].UAV.pResource = ResolvedMotion.Get();
             _CL->ResourceBarrier(2, UB);
         }
-        (UseDerivedTemporalTransforms ? TraceMirrorDerivedPSO : TraceMirrorPSO).Bind(_CL);
+        TraceMirrorDerivedPSO.Bind(_CL);
         _CL->SetComputeRootConstantBufferView(0, CBAddr());
         _CL->SetComputeRootDescriptorTable(1, _SRVHeap.GpuHandle(TraceTable[FrameSlot]));
         _CL->SetComputeRootDescriptorTable(2, _SRVHeap.GpuHandle(ResolvedUAVTable));

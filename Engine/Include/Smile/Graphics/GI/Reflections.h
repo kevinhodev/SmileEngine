@@ -248,10 +248,6 @@ namespace Smile {
         u32  GetDebugMode() const     { return DebugMode; }
         void SetWaterReflectionScale(f32 V) { WaterReflectionScale = V; }
         void SetWaterWindDirection(f32 Radians) { WaterWindDirection = Radians; }
-        void SetDerivedTemporalTransforms(bool Enabled) {
-            UseDerivedTemporalTransforms = Enabled && DerivedTemporalTransformsAvailable();
-        }
-        bool GetDerivedTemporalTransforms() const { return UseDerivedTemporalTransforms; }
         bool DerivedTemporalTransformsAvailable() const {
             return TraceDerivedPSO.GetPSO() != nullptr && TraceMirrorDerivedPSO.GetPSO() != nullptr;
         }
@@ -265,12 +261,9 @@ namespace Smile {
                         D3D12_RESOURCE_STATES& State, D3D12_RESOURCE_STATES After);
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
-        FComputePipeline TracePSO;
         FComputePipeline TraceDerivedPSO;
         // Variante instrumentada separada para nao onerar registradores do passe normal.
-        FComputePipeline TracePSOTimed;
         FComputePipeline TracePSOTimedDerived;
-        FComputePipeline TraceMirrorPSO;
         FComputePipeline TraceMirrorDerivedPSO;
         FComputePipeline ResolvePSO;  // 5 SRV, 2 UAV [resolved, motion]
         FComputePipeline TemporalPSO; // 5 SRV [resolved, gbuf, depth, histPrev, motion], 1 UAV
@@ -374,7 +367,6 @@ namespace Smile {
         u32  HalfWidth = 0, HalfHeight = 0;  // dominio half-res do trace
         u32  TimerSlot  = kInvalidSlot;      // alvo de timer vigente (kInvalidSlot = captura off)
         bool TraceTimed = false;             // permutacao instrumentada criada com sucesso
-        bool UseDerivedTemporalTransforms = false;
         bool Initialized = false;
         bool Ready       = false;
         bool LocalDenoiserReady = false;

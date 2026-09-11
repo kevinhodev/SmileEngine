@@ -61,11 +61,6 @@ namespace Smile {
 
     void FTemporalMotionVectors::ReleaseScene(FTextureSRVHeap& SRVHeap) {
         ReleaseResize(SRVHeap);
-        for (u32& Slot : TransformSRVSlot) {
-            if (Slot != kInvalidSlot) { SRVHeap.Free(Slot, 1); Slot = kInvalidSlot; }
-        }
-        TransformBuffer.Reset();
-        MappedTransforms = nullptr;
         for (u32 f = 0; f < kFrames; ++f) {
             if (IdentitySRVSlot[f] != kInvalidSlot) {
                 SRVHeap.Free(IdentitySRVSlot[f], 1);
@@ -99,17 +94,12 @@ namespace Smile {
 
         // Capacidade com folga (SceneCapacityFor), nao o tamanho exato da cena: assim um objeto
         // criado no editor cabe sem refazer buffer e SRVs. InstanceCount_ passa a ser a
-        // CAPACIDADE, e e ele que o UpdatePerFrame usa como stride do slice por frame.
-        //
-        // O historico CPU agora pertence a FGpuSceneInstanceTable; este passe guarda apenas a
-        // visao DERIVADA CurrentToPrevious/PreviousToCurrent que evita inversao por pixel.
+        // CAPACIDADE da identidade/remap. O historico e os transforms pertencem a
+        // FGpuSceneInstanceTable; este passe nao mantem mais uma copia derivada por instancia.
         const u32 Capacity = SceneCapacityFor(Count);
         InstanceCount_ = Capacity;
         TlasSRVSlot = TlasSlot;
         InstanceGeoSRVSlot = InstanceGeoSlot;
-        TransformBuffer = CreateUploadBuffer(Device,
-            static_cast<UINT64>(kFrames) * Capacity * sizeof(FTemporalInstanceTransformGPU),
-            &MappedTransforms);
 
         // Tabela de identidades: uma por frame em voo, em DEFAULT, mais um staging UPLOAD com
         // um slice por frame. O custo e 8 B por instancia em cada uma -- na capacidade de 1M,
@@ -166,18 +156,6 @@ namespace Smile {
             SRVHeap.CreateSRV(Device, SlotRemap.Get(), S, SlotRemapSRVSlot);
 
             SlotRemapStaging = GpuResources::CreateUploadBuffer(Device, RemapBytes, kFrames);
-        }
-
-        for (u32 f = 0; f < kFrames; ++f) {
-            TransformSRVSlot[f] = SRVHeap.Allocate(1);
-            D3D12_SHADER_RESOURCE_VIEW_DESC S{};
-            S.Format                     = DXGI_FORMAT_UNKNOWN;
-            S.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            S.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
-            S.Buffer.FirstElement        = static_cast<UINT64>(f) * Capacity;
-            S.Buffer.NumElements         = Capacity;
-            S.Buffer.StructureByteStride = sizeof(FTemporalInstanceTransformGPU);
-            SRVHeap.CreateSRV(Device, TransformBuffer.Get(), S, TransformSRVSlot[f]);
         }
 
         SceneReady = true;
@@ -252,7 +230,9 @@ namespace Smile {
             // mesmo objeto.
             DualTable[f] = SRVHeap.Allocate(10);
             const std::array<u32, 10> DualSlots{
-                VelocitySlot, SurfaceSRVSlot[f], SurfaceSRVSlot[1u - f], TransformSRVSlot[f],
+                // t3 era o TransformBuffer classico. Mantemos o range estavel e publicamos a
+                // coluna atual como descritor valido; o shader definitivo nao le t3.
+                VelocitySlot, SurfaceSRVSlot[f], SurfaceSRVSlot[1u - f], InstanceTransformSlot,
                 IdentitySRVSlot[1u - f], IdentitySRVSlot[f], SlotRemapSRVSlot,
                 InstanceMetaSlot, InstanceTransformSlot, InstancePrevTransformSlot };
             CopyTable(DualTable[f], DualSlots);
@@ -263,45 +243,15 @@ namespace Smile {
     }
 
     void FTemporalMotionVectors::UpdatePerFrame(u32 NewFrameSlot, const FScene& Scene,
-                                                 const FGpuSceneInstanceTable& Instances,
+                                                 u32 InstanceTableCapacity,
                                                  const Mat44& InvViewProj,
                                                  const Mat44& ViewProj,
                                                  const Mat44& PrevViewProj,
                                                  const Vec3& CameraPos) {
         FrameSlot = NewFrameSlot % kFrames;
-        if (!Ready || !MappedTransforms || !MappedCB) return;
+        if (!Ready || !MappedCB) return;
 
         const u32 Count = std::min(InstanceCount_, static_cast<u32>(Scene.Renderables().size()));
-        auto* Dst = reinterpret_cast<FTemporalInstanceTransformGPU*>(MappedTransforms) +
-                    static_cast<size_t>(FrameSlot) * InstanceCount_;
-        // O que deixou de ser posicional aqui e o HISTORICO de CPU. O DESTINO continua indexado
-        // pelo InstanceID da TLAS, que hoje e o indice na lista: o TemporalSurface.cs.hlsl
-        // (linhas 52-53) grava CommittedInstanceID() + 1 na superficie, e o DualMotion le esse da
-        // ANTERIOR para indexar InstanceTransforms do frame ATUAL.
-        //
-        // IDs antigos sao resolvidos pela tabela anterior + remap atual + generation,
-        // compartilhados por DualMotion, ReflectionMotion e ReSTIRDI. A posicao abaixo
-        // continua sendo so o endereco dos transforms DESTE frame.
-        for (u32 i = 0; i < Count; ++i) {
-            const FRenderable& R       = Scene.Renderables()[i];
-            Mat44 Current = R.Transform.Matrix();
-            Mat44 Previous = Current;
-            if (!Scene.GpuSlots().IsAlive(R.RaytracingHandle())) {
-                Dst[i].CurrentToPrevious = Mat44::Identity();
-                Dst[i].PreviousToCurrent = Mat44::Identity();
-                continue;
-            }
-
-            // Sem historico daquele objeto, Previous = Current, o que zera o movimento DO
-            // OBJETO -- nao o motion vector de tela, que continua carregando o movimento da
-            // camera. E o desfecho certo para quem acabou de nascer ou cujo slot foi
-            // reciclado: herdar o transform do ocupante anterior inventaria um passado.
-            if (HistoryValid) Instances.TransformsFor(R.GpuHandle, Current, Previous);
-
-            // Pela funcao compartilhada: e ela que o teste de paridade compara com o espelho HLSL,
-            // e uma copia solta aqui deixaria a que roda no frame divergir das duas.
-            Dst[i] = ComposeTemporalInstanceTransform(Current, Previous);
-        }
 
         // Tabela de identidades DESTE frame, no staging. A CPU escreve aqui e nunca na memoria
         // que os shaders consultam -- a copia para DEFAULT e ordenada na GPU (ver
@@ -331,11 +281,6 @@ namespace Smile {
                 return Scene.GpuSlots().IsAlive(Handle) ? Handle : FGpuSceneHandle{};
             });
         }
-        for (u32 i = Count; i < InstanceCount_; ++i) {
-            Dst[i].CurrentToPrevious = Mat44::Identity();
-            Dst[i].PreviousToCurrent = Mat44::Identity();
-        }
-
         CPU.InvViewProj = InvViewProj;
         CPU.ViewProj = ViewProj;
         CPU.PrevViewProj = PrevViewProj;
@@ -347,7 +292,7 @@ namespace Smile {
                        PositionRejectScale, static_cast<f32>(Count) };
         // PreviousCount_ ainda e o do frame passado aqui -- ele so avanca depois do memcpy.
         CPU.IdentityParams = FTemporalIdentityParams{
-            PreviousCount_, SlotCapacity_, Count, Instances.Capacity() };
+            PreviousCount_, SlotCapacity_, Count, InstanceTableCapacity };
         std::memcpy(MappedCB + static_cast<size_t>(FrameSlot) * sizeof(FTemporalMotionConstants),
                     &CPU, sizeof(CPU));
         PreviousCount_ = Count;
@@ -451,7 +396,7 @@ namespace Smile {
         if (Profiler) Profiler->Begin(CL, "Dual motion");
         Transition(CL, ReliableMotion.Get(), ReliableMotionState,
                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        (UseDerivedTransforms ? DualDerivedPSO : DualPSO).Bind(CL);
+        DualDerivedPSO.Bind(CL);
         CL->SetComputeRootConstantBufferView(0, CBAddr());
         CL->SetComputeRootDescriptorTable(1, SRVHeap.GpuHandle(DualTable[Curr]));
         CL->SetComputeRootDescriptorTable(2, SRVHeap.GpuHandle(ReliableMotionUAV));
@@ -464,7 +409,6 @@ namespace Smile {
 
     void FTemporalMotionVectors::CreatePipelines(ID3D12Device* _Device) {
         SurfacePSO.Initialize(_Device, "TemporalSurface.cs_6_9.cso", 3, 1, true);
-        DualPSO.Initialize(_Device, "DualMotion.cs_6_0.cso", 10, 1, false);
         DualDerivedPSO.Initialize(_Device, "DualMotionDerived.cs_6_0.cso", 10, 1, false);
     }
 

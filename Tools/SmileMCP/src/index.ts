@@ -929,7 +929,7 @@ server.registerTool(
         .boolean()
         .nullish()
         .describe(
-          "A/B temporal da Fase 4: os tres consumidores derivam transforms das colunas canonicas por slot (true) ou leem o TransformBuffer classico (false). Os tres mudam juntos e o readback confirma o estado efetivo.",
+          "Caminho temporal promovido na Fase 4. O valor efetivo e true quando as tres permutacoes derivadas estao disponiveis; false e recusado porque o TransformBuffer classico foi removido. O campo permanece para proveniencia e compatibilidade do protocolo 13.",
         ),
     },
     annotations: {

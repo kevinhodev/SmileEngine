@@ -131,7 +131,6 @@ smile_compile_shader(GI/DDGIDebugPoint.cs.hlsl  cs_6_0 main SHADER_OUTPUTS)
 
 # ReSTIR DI: candidatas uniformes + temporal, depois spatial + um shadow ray final.
 smile_compile_shader(Lighting/ReSTIRDIInitialTemporal.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
-smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(Lighting/ReSTIRDISpatial.cs.hlsl         cs_6_9 main SHADER_OUTPUTS
     OUTPUT_NAME ReSTIRDISpatialDerived -D SMILE_TEMPORAL_DERIVED=1)
 # Instancia RELAX dedicada ao direto: pack demodulado e composite remodulado.
@@ -141,16 +140,12 @@ smile_compile_shader(Lighting/ReSTIRDINrdComposite.cs.hlsl     cs_6_6 main SHADE
 smile_compile_shader(Lighting/MeshLightExtract.cs.hlsl         cs_6_6 main SHADER_OUTPUTS)
 
 # Specular GI (reflexoes RT, estilo Lumen) — trace (DXR 1.2 inline + OMM, SM 6.9)
-smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl       cs_6_9 main SHADER_OUTPUTS
     OUTPUT_NAME ReflectionTraceDerived -D SMILE_TEMPORAL_DERIVED=1)
 if(SMILE_SHADER_TIMER_AVAILABLE)
     smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl cs_6_9 main SHADER_OUTPUTS
-        OUTPUT_NAME ReflectionTraceTimed ${SMILE_TIMER_FLAGS})
-    smile_compile_shader(Reflections/ReflectionTrace.cs.hlsl cs_6_9 main SHADER_OUTPUTS
         OUTPUT_NAME ReflectionTraceTimedDerived ${SMILE_TIMER_FLAGS} -D SMILE_TEMPORAL_DERIVED=1)
 endif()
-smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
 smile_compile_shader(Reflections/ReflectionTraceMirror.cs.hlsl cs_6_9 main SHADER_OUTPUTS
     OUTPUT_NAME ReflectionTraceMirrorDerived -D SMILE_TEMPORAL_DERIVED=1)
 smile_compile_shader(Reflections/WaterReflectionTrace.cs.hlsl  cs_6_9 main SHADER_OUTPUTS)
@@ -175,7 +170,6 @@ smile_compile_shader(Upscale/BackgroundVelocity.cs.hlsl cs_6_0 main SHADER_OUTPU
 
 # Vetores temporais confiaveis (RT Gems II, cap. 25): historico de superficie + vetor dual.
 smile_compile_shader(Temporal/TemporalSurface.cs.hlsl cs_6_9 main SHADER_OUTPUTS)
-smile_compile_shader(Temporal/DualMotion.cs.hlsl      cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Temporal/DualMotion.cs.hlsl      cs_6_0 main SHADER_OUTPUTS
     OUTPUT_NAME DualMotionDerived -D SMILE_TEMPORAL_DERIVED=1)
 # Sonda de teste: expoe TemporalResolvePreviousIndex para execucao em WARP. Nao entra em passe

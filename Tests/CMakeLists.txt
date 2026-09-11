@@ -360,6 +360,7 @@ target_include_directories(SmileTemporalTransformWarpTests PRIVATE
 target_compile_definitions(SmileTemporalTransformWarpTests PRIVATE
     NOMINMAX WIN32_LEAN_AND_MEAN
     SMILE_TEMPORAL_TRANSFORM_PROBE_CSO="${SMILE_SHADER_OUTPUT_DIR}/TemporalTransformProbe.cs_6_0.cso"
+    SMILE_TEMPORAL_MOTION_CPP_PATH="${PROJECT_SOURCE_DIR}/Engine/Source/Graphics/PostProcess/TemporalMotionVectors.cpp"
 )
 target_link_libraries(SmileTemporalTransformWarpTests PRIVATE d3d12 dxgi)
 add_dependencies(SmileTemporalTransformWarpTests Shaders)

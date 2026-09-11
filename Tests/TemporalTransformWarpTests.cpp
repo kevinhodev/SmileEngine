@@ -32,6 +32,7 @@
 
 #include "Smile/Graphics/Scene/TemporalInstanceTransform.h"
 #include "Smile/Graphics/Scene/GpuSceneTables.h"
+#include "Smile/Scene/Scene.h"
 
 namespace wrl = Microsoft::WRL;
 using namespace Smile;
@@ -116,6 +117,14 @@ namespace {
 int main() try {
     std::cout << "Smile.TemporalTransformWarp\n";
 
+    const std::vector<u8> ProductionSource = LerArquivo(SMILE_TEMPORAL_MOTION_CPP_PATH);
+    const std::string ProductionText(ProductionSource.begin(), ProductionSource.end());
+    Check(!ProductionText.empty(), "fonte do passe temporal foi encontrado");
+    Check(ProductionText.find("MappedTransforms") == std::string::npos,
+          "o upload mapeado de transforms aposentado nao voltou");
+    Check(ProductionText.find("FTemporalInstanceTransformGPU") == std::string::npos,
+          "a tabela derivada por instancia aposentada nao voltou");
+
     const std::vector<u8> Bytecode = LerArquivo(SMILE_TEMPORAL_TRANSFORM_PROBE_CSO);
     Check(!Bytecode.empty(), "a sonda compilada foi encontrada");
     if (Bytecode.empty()) {
@@ -166,6 +175,30 @@ int main() try {
         Hr(Factory->EnumWarpAdapter(IID_PPV_ARGS(&Warp)), "EnumWarpAdapter");
         Hr(D3D12CreateDevice(Warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&Device)),
            "D3D12CreateDevice");
+    }
+
+    // Memory gate for the retired resource. Query the allocation footprint on the same D3D12
+    // device without creating the buffer: the final production source guard above proves that
+    // this allocation no longer exists, while this query records what was removed at the exact
+    // capacity used by the 1M scene.
+    {
+        constexpr u32 kOneMillion = 1'000'000u;
+        constexpr u64 kLegacyBytes =
+            2ull * SceneCapacityFor(kOneMillion) * sizeof(FTemporalInstanceTransformGPU);
+        D3D12_RESOURCE_DESC Legacy{};
+        Legacy.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        Legacy.Width = kLegacyBytes;
+        Legacy.Height = 1;
+        Legacy.DepthOrArraySize = 1;
+        Legacy.MipLevels = 1;
+        Legacy.SampleDesc.Count = 1;
+        Legacy.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        const D3D12_RESOURCE_ALLOCATION_INFO Info =
+            Device->GetResourceAllocationInfo(0, 1, &Legacy);
+        Check(Info.SizeInBytes >= kLegacyBytes,
+              "footprint D3D12 do TransformBuffer classico cobre os bytes pedidos");
+        std::cout << "  legacy TransformBuffer @1M: " << Info.SizeInBytes
+                  << " bytes reserved\n";
     }
 
     auto Buffer = [&](D3D12_HEAP_TYPE _Tipo, u64 _Bytes, bool _ComUAV,

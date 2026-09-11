@@ -181,9 +181,11 @@ async function runScene(scene) {
     startupTimeoutSeconds: 300,
   });
   const result = { ...scene, launch, cases: [] };
-  for (const derived of [false, true, false]) {
-    const mode = derived ? "derived" : "classic";
-    const configured = await configure(scene, derived);
+  // The classic TransformBuffer was removed after the A/B recorded by commit b8d724b. HEAD
+  // validates only the promoted path; reproduce the comparison from that commit if needed.
+  for (const derived of [true]) {
+    const mode = "derived";
+    const configured = await configure(scene, true);
     const image = await capture(scene, mode);
     const staticProfile = await profile(scene, mode);
     const stormProfile = scene.storm ? await transformStorm(scene, mode, staticProfile) : null;

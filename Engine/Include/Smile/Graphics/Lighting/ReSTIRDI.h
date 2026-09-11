@@ -78,10 +78,6 @@ namespace Smile {
                             const u32 IdentitySlots[FCommandQueue::kFramesInFlight], u32 RemapSlot,
                             u32 InstanceMetaSlot, u32 InstanceTransformSlot,
                             u32 InstancePrevTransformSlot);
-        void SetDerivedTemporalTransforms(bool Enabled) {
-            UseDerivedTemporalTransforms = Enabled && SpatialDerivedPSO.GetPSO() != nullptr;
-        }
-        bool GetDerivedTemporalTransforms() const { return UseDerivedTemporalTransforms; }
         bool DerivedTemporalTransformsAvailable() const {
             return SpatialDerivedPSO.GetPSO() != nullptr;
         }
@@ -189,7 +185,6 @@ namespace Smile {
         D3D12_GPU_VIRTUAL_ADDRESS CBAddr() const;
 
         FComputePipeline InitialTemporalPSO; // 10 SRV, 2 UAV, bindless alpha-test
-        FComputePipeline SpatialPSO;         // 13 SRV, 5 UAV, bindless alpha-test
         FComputePipeline SpatialDerivedPSO;
         FComputePipeline NrdPackPSO;          // 8 SRV, 5 UAV
         FComputePipeline NrdCompositePSO;     // 7 SRV, 1 UAV
@@ -256,7 +251,6 @@ namespace Smile {
         bool NeedsClear = true;
         bool Initialized = false;
         bool Ready = false;
-        bool UseDerivedTemporalTransforms = false;
         bool NrdReady = false;
 
         // Orcamento do pool ANALITICO. Era o orcamento dos DOIS pools; a separacao entrou com a
