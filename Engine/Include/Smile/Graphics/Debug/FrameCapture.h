@@ -110,6 +110,9 @@ namespace Smile {
         // Fase 4: o segundo eixo do A/B. Sem ele, duas capturas com submissao de TRANSFORM
         // diferente teriam manifestos identicos — que e exatamente o par que esta sob teste.
         bool BindlessTransforms = false;
+        // The three temporal consumers are one A/B arm; recording only the raster toggle
+        // would give identical provenance to captures produced by different reprojection paths.
+        bool DerivedTemporalTransforms = false;
         // PRE-REQUISITOS da leitura dos contadores de sombra, e nao decoracao. Com o cache das
         // cascatas ligado, `sunShadows.draws == 0` e ambiguo entre "nao desenhou" e "reusou o
         // mapa": os dois sao estados legitimos e o contador nao os distingue. Um A/B de sombra

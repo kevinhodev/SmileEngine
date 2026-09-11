@@ -92,6 +92,11 @@ namespace Smile {
         void SetBindlessTransforms(bool Use);
         bool GetBindlessTransforms() const;
         bool BindlessTransformsAvailable() const;
+        // Experimental A/B for Phase 4 temporal reprojection. The three consumers move
+        // together so a mixed frame cannot be mistaken for a valid comparison.
+        void SetDerivedTemporalTransforms(bool Use);
+        bool GetDerivedTemporalTransforms() const;
+        bool DerivedTemporalTransformsAvailable() const;
         void SetDepthPrepass(bool Use);
         bool GetDepthPrepass() const;
         void SetUseAsyncCompute(bool V);

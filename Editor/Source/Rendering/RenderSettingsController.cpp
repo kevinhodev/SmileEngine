@@ -71,6 +71,9 @@ namespace SmileEditor {
         Out.BindlessMaterialsAvailable = Settings.BindlessMaterialsAvailable();
         Out.BindlessTransforms          = Settings.GetBindlessTransforms();
         Out.BindlessTransformsAvailable = Settings.BindlessTransformsAvailable();
+        Out.DerivedTemporalTransforms = Settings.GetDerivedTemporalTransforms();
+        Out.DerivedTemporalTransformsAvailable =
+            Settings.DerivedTemporalTransformsAvailable();
         Out.SunShadows         = Settings.GetUseSunShadows();
         Out.ShadowCascadeCache = Settings.GetShadowCascadeCache();
         Out.DIAnalyticCandidates      = static_cast<int>(Settings.GetDIInitialCandidates());
@@ -270,6 +273,8 @@ namespace SmileEditor {
             // ordem. Inverter passaria no teste com os dois ja ligados e falharia do frio.
             if (_Overrides.BindlessTransforms)
                 Settings.SetBindlessTransforms(*_Overrides.BindlessTransforms);
+            if (_Overrides.DerivedTemporalTransforms)
+                Settings.SetDerivedTemporalTransforms(*_Overrides.DerivedTemporalTransforms);
             if (_Overrides.SunShadows)
                 Settings.SetUseSunShadows(*_Overrides.SunShadows);
             // `SetCascadeCache` INVALIDA o cache ao ser chamado, inclusive para ligar. Desligar

@@ -543,6 +543,7 @@ namespace Smile {
         S.UseTAA = _Modes.TAAActive;
         S.BindlessMaterials = UseBindlessMaterials;
         S.BindlessTransforms = UseBindlessTransforms;
+        S.DerivedTemporalTransforms = Settings().GetDerivedTemporalTransforms();
         // Pre-requisitos da leitura dos contadores de sombra. Ver a nota no FrameCapture.h.
         S.UseSunShadows      = UseSunShadows;
         S.ShadowCascadeCache = SunShadows.GetCascadeCache();

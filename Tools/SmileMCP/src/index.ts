@@ -925,6 +925,12 @@ server.registerTool(
         .describe(
           "A/B da Fase 4: transform lido da tabela canonica pelo vertex shader (true) ou CBV de 256 B por draw (false). EXIGE bindlessMaterials ligado — as PSOs sao construidas sobre as dele —, e ligar os dois na mesma chamada funciona porque a aplicacao respeita essa ordem. O readback em settings confirma o estado efetivo; quem prova qual caminho executou e passes[].transformBinds.",
         ),
+      derivedTemporalTransforms: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B temporal da Fase 4: os tres consumidores derivam transforms das colunas canonicas por slot (true) ou leem o TransformBuffer classico (false). Os tres mudam juntos e o readback confirma o estado efetivo.",
+        ),
     },
     annotations: {
       readOnlyHint: false,

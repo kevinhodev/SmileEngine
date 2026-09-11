@@ -66,6 +66,8 @@ namespace SmileEditor {
         // acoplamento e deliberado, ver FPipelineState::BindlessTransformsReady.
         bool   BindlessTransforms          = false;
         bool   BindlessTransformsAvailable = false;
+        bool   DerivedTemporalTransforms          = false;
+        bool   DerivedTemporalTransformsAvailable = false;
         // PRE-REQUISITOS da leitura dos contadores de sombra. Com o cache das cascatas ligado,
         // `sunShadows.draws == 0` e ambiguo entre "nao desenhou" e "reusou o mapa" — os dois sao
         // estados legitimos e o contador nao os separa. Sem declarar os dois, um A/B de sombra
@@ -104,6 +106,7 @@ namespace SmileEditor {
         std::optional<bool> DIMeshCompactSupport;
         std::optional<bool> BindlessMaterials;
         std::optional<bool> BindlessTransforms;
+        std::optional<bool> DerivedTemporalTransforms;
         std::optional<bool> SunShadows;
         std::optional<bool> ShadowCascadeCache;
         // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
