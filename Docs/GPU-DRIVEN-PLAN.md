@@ -1436,14 +1436,18 @@ permite atribuir qualquer diferença visual exclusivamente ao novo acesso a dado
 
 ## Fase 4 — GPU Scene persistente e ranges
 
-> **Estado em 2026-09-10 — ABERTA, oito consumidores migrados.** Release fecha 66/66, Debug compila e
-> o cliente TypeScript compila. Três dos seis itens do gate estão fechados; o de escala está provado
-> em 4.096 objetos e **falta medir em 1M**. O `ObjectCB` **já pode deixar de ser alocado** — os sete
-> consumidores leem o transform da tabela, a alocação é sob demanda e a troca de toggle é
-> transacional nos dois sentidos —, e o `TransformBuffer` do TemporalMotion tem só a matemática
-> pronta, com paridade provada em WARP. **Nenhum dos dois foi medido**, e é a medição que o gate
-> exige. Detalhe, evidência, casos negativos e a fila do que falta em
-> [GPU-DRIVEN-PHASE4-PROGRESS.md](GPU-DRIVEN-PHASE4-PROGRESS.md).
+> **Estado em 2026-09-11 — FECHADA.** Release fecha 66/66, Debug compila inteiro e o cliente
+> TypeScript compila. Os seis itens do gate estão fechados. Bistro, Emerald e a sintética de 1M
+> passaram no caminho bindless/temporal final em GPU, sem erro fatal de D3D12/DXGI. Na 1M, a tabela estática teve
+> `rowsScanned.max = 0`, e `ObjectCB` escrito/reservado ficou em 0/0 B. O
+> `TransformBuffer` clássico, seus SRVs, o upload integral e as PSOs clássicas dos três
+> consumidores foram removidos depois de um A/B/A; a consulta D3D12 do footprint aposentado na
+> capacidade exata de 1M registra 272.039.936 B.
+>
+> Implementação final em `7eb84cf`; A/B/A preservado em `b8d724b`. Relatórios, tempos, comparação
+> de pixels, casos negativos e histórico das cinco rodadas de revisão estão em
+> [GPU-DRIVEN-PHASE4-PROGRESS.md](GPU-DRIVEN-PHASE4-PROGRESS.md). A Fase 5 está destravada, mas este
+> fechamento não a inicia automaticamente.
 >
 > A terceira revisão achou dois P1 no `ObjectCB` sob demanda — liberar o buffer não exigia que o eixo
 > de material estivesse LIGADO (só que as PSOs existissem), e a falha de alocação lançava em vez de

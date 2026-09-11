@@ -1,12 +1,12 @@
 # Fase 4 — estado da implementação
 
-Data: 2026-09-10
+Data: 2026-09-11
 
-Estado: **aberta, oito consumidores migrados e cinco rodadas de revisão fechadas.** Release fecha
-66/66, Debug compila e o cliente TypeScript compila. Três dos seis itens do gate estão fechados; o
-`ObjectCB` **já pode deixar de ser alocado** (sete consumidores migrados, alocação sob demanda,
-troca transacional), e a aposentadoria do `TransformBuffer` do TemporalMotion começou pela
-matemática. Falta a medição em 1M, que é o que fecha os dois.
+Estado: **fechada.** Release fecha 66/66, Debug compila inteiro e o cliente TypeScript compila. Os
+seis itens do gate estão fechados. O `ObjectCB` fica com escrita e reserva em zero no caminho
+bindless validado; o `TransformBuffer` do TemporalMotion, seus dois SRVs, o upload integral e as PSOs
+clássicas dos três consumidores foram removidos. A sintética de 1M, Bistro e Emerald passaram no
+caminho final em GPU, sem erro fatal de D3D12/DXGI.
 
 A primeira revisão do Codex reprovou a fase com seis achados, três bloqueadores — entre eles uma
 regressão de motion vector que eu tinha introduzido e um trio de checagens que eu havia
@@ -21,7 +21,9 @@ Todos corrigidos; as seções de revisão registram cada um e o que o padrão de
 
 Base: Fase 3 encerrada em `3b38694`. **Nada da Fase 3 foi reaberto.**
 
-O default não mudou. Nenhum consumidor de frame lê a lista de candidatos ainda — ela é contrato,
+O default do raster não mudou: o clássico continua sendo o fallback inicial da Fase 3 (regra 3).
+O caminho bindless validado aposenta o `ObjectCB`; o temporal derivado foi promovido e não tem
+mais braço clássico. Nenhum consumidor de frame lê a lista de candidatos ainda — ela é contrato,
 não caminho quente.
 
 ## O que foi entregue
@@ -52,6 +54,11 @@ não caminho quente.
 | `092e0c0` | alocação do `ObjectCB` que recusa de verdade (`TryCreateUploadBuffer`) |
 | `f4f84c5` | MCP valida os dois números do `ObjectCB` na borda (protocolo 12) |
 | `d28cb52` | derivação do par temporal, com paridade provada em WARP |
+| `1b7aef7` | helpers temporais de um sentido, sem pagar a metade não usada |
+| `7dbfe62` | aposentadoria do `ObjectCB` sem alocação no caminho e telemetria até a fence |
+| `3f24e10` | caminho temporal derivado experimental nos três consumidores |
+| `b8d724b` | A/B/A temporal e régua GPU versionada para Bistro, Emerald e 1M |
+| `7eb84cf` | promoção do derivado e remoção física do `TransformBuffer` clássico |
 
 ### Os sete consumidores do `ObjectCB`
 
@@ -75,9 +82,43 @@ seguinte. A ordem não foi arbitrária: do mais visível para o mais silencioso.
 | 1 | cena estática envia zero dirty pages depois do assentamento | **fechado** — já valia pela saída antecipada por versão; agora está sob teste (`Smile.GpuSceneIncremental`) |
 | 2 | mover um objeto não faz upload proporcional ao total | **fechado** — e o custo de *descobrir* também deixou de ser |
 | 3 | remover/reusar slot respeita generation e fences | **fechado** — herdado da Fase 1; o teste novo cobre a linha zerada na remoção |
-| 4 | 1M instâncias não exigem reconstrução/upload integral por frame | **provado em 4.096, não medido em 1M.** Falta a medição na sintética |
-| 5 | `ObjectCB` e `TransformBuffer` do TemporalMotion deixaram de ser alocados | **metade pronta, nenhuma medida.** `ObjectCB`: sete consumidores migrados e alocação sob demanda — com o toggle ligado ele não existe. `TransformBuffer`: só a matemática (`d28cb52`); o buffer continua alocado e reescrito por frame |
+| 4 | 1M instâncias não exigem reconstrução/upload integral por frame | **fechado em GPU.** Na amostra estática da 1M: `rowsScanned.max = 0`, `rowsDirty.max = 0`; no storm da Bistro, 129 edições produziram no máximo 4 linhas consultadas e 1 linha suja por amostra |
+| 5 | `ObjectCB` e `TransformBuffer` do TemporalMotion deixaram de ser alocados | **fechado.** Na 1M final, `objectConstantBytes.max = 0` e `objectConstantBytesReserved.max = 0`. O footprint D3D12 do buffer temporal removido, consultado em WARP para a capacidade exata de 1M, era 272.039.936 B; o recurso, os SRVs e o upload não existem no caminho final |
 | 6 | range único e múltiplos ranges sintéticos produzem a mesma lista expandida | **fechado** — na CPU e na GPU |
+
+## Validação final em GPU (2026-09-11)
+
+O A/B/A anterior à remoção está em
+`build/bin/Release/Captures/Validation/phase4/phase4-validation-2026-09-11T16-02-56-494Z.json`.
+O `b8d724b` mantém a régua que o produziu.
+
+| cena | braço | DualMotion | ReSTIRDI spatial | reflexos |
+|---|---|---:|---:|---:|
+| Bistro | clássico / derivado / clássico | 0,091 / 0,092 / 0,091 ms | 0,461 / 0,466 / 0,469 ms | 0,318 / 0,326 / 0,322 ms |
+| Emerald | clássico / derivado / clássico | 0,096 / 0,098 / 0,096 ms | 0,494 / 0,498 / 0,498 ms | 1,149 / 1,171 / 1,162 ms |
+| 1M | clássico / derivado / clássico | 2,369 / 0,123 / 2,366 ms | 0,161 / 0,164 / 0,160 ms | 2,380 / 1,573 / 2,319 ms |
+
+Depois da remoção física, a mesma régua rodou o HEAD final. Relatório:
+`build/bin/Release/Captures/Validation/phase4/phase4-validation-2026-09-11T16-20-31-772Z.json`.
+As três cenas passaram, com zero linha fatal de D3D12/DXGI:
+
+| cena | DualMotion | ReSTIRDI spatial | reflexos | ObjectCB escrito/reservado | rowsScanned máximo |
+|---|---:|---:|---:|---:|---:|
+| Bistro | 0,092 ms | 0,464 ms | 0,323 ms | 0 / 0 B | 0 |
+| Emerald | 0,096 ms | 0,490 ms | 1,177 ms | 0 / 0 B | 0 |
+| 1M | 0,123 ms | 0,161 ms | 1,437 ms | 0 / 0 B | 0 |
+
+O transform storm moveu o mesmo objeto 129 vezes durante a janela de amostragem: no máximo 4 linhas
+consultadas, 1 linha suja e 23.156 B publicados. A captura final não divergiu além da variação
+natural do próprio renderer: usando o primeiro braço clássico como referência, a diferença média
+RGB foi 0,133 nível/canal na Bistro e 0,326 na Emerald, abaixo do drift clássico↔clássico de 0,156
+e 0,369, respectivamente.
+
+O footprint retirado do TemporalMotion não é estimativa de fonte: o teste WARP consulta
+`GetResourceAllocationInfo` para o buffer antigo na capacidade exata de 1M e registra
+272.039.936 B. O teste também lê o fonte de produção e recusa a volta do upload mapeado/tabela
+derivada. O `ObjectCB` é a outra metade do gate e tem prova de runtime: escrito e reservado ficam
+em zero nas três cenas.
 
 ## Revisão do Codex (2026-09-08) — seis achados, três bloqueadores
 
@@ -483,7 +524,7 @@ guarda explícita de que a lista de candidatos **não** é a identidade.
 
 ## Protocolo do MCP
 
-Foi a **12**, em três degraus:
+Foi a **13**, em quatro degraus:
 
 - **10** — `transformBinds`/`transformSlotSets` por passe e o toggle `bindlessTransforms`. Os dois
   contadores entram no resumo porque `transformBinds == 0` é a prova de **qual caminho executou**, e
@@ -494,6 +535,9 @@ Foi a **12**, em três degraus:
 - **12** — `objectConstantBytesReserved`. As duas provas do gate, separadas: `objectConstantBytes ==
   0` diz que ninguém mais **escreve**; esta diz que o buffer deixou de **existir**. Durante seis das
   sete migrações a primeira caiu por passe enquanto a segunda ficou intacta.
+- **13** — `derivedTemporalTransforms` introduziu o A/B conjunto dos três consumidores. Depois da
+  promoção, `true` é o único braço executável e `false` é recusado: o campo permanece para
+  proveniência e compatibilidade, não como toggle de produção.
 
 O número de memória sai do **renderer**, e não do VramTracker: upload heap não é itemizado lá (o
 tracker cobre VRAM/DEFAULT). Procurar a ausência do `ObjectCB` no breakdown por recurso não acharia
@@ -501,23 +545,14 @@ nada, nem antes nem depois.
 
 ## O que falta
 
-1. **Medir na sintética de 1M.** Fecha os gates 4 e 5 de uma vez. Com
-   `bindlessMaterials + bindlessTransforms` ligados: `objectConstantBytes == 0` **e**
-   `objectConstantBytesReserved == 0`, com `transformBinds == 0` nos sete passes. No clássico, o
-   esperado é ~256 MB escritos por frame contra ~563 MB reservados — são dois frames em voo sobre a
-   capacidade com folga, e a razão entre os dois números é a própria evidência de que as duas provas
-   medem coisas diferentes. **Exige GPU.**
-2. **Decidir COMO aposentar o `TransformBuffer`**, e só então migrar. A matemática está pronta
-   (`d28cb52`, `1b7aef7`); as slices de consumidor estão **bloqueadas** na conta de custo abaixo —
-   derivar por pixel é a única saída que fecha o gate como escrito, e é a que paga ALU em toda cena,
-   inclusive naquelas em que a memória economizada não chega a 1 MB.
-3. **Ligar a lista de candidatos ao frame** e publicar os contadores dela. Hoje
-   `FGpuSceneCandidates` não tem chamador; o consumidor natural chega com a Fase 5.
-4. **Exercitar a troca de toggle com cena carregada**, nas duas ordens, e capturar depois. A
-   transação drena e realoca com o `MaxObjects` corrente; um erro ali aparece como raster vazio
-   **depois de desligar**, não ao ligar. **Exige GPU.**
+Nada para o gate da Fase 4. A lista `FGpuSceneCandidates` continua deliberadamente sem consumidor:
+ela é a entrada contratual que a Fase 5 liga ao `ExecuteIndirect`, e antecipar esse consumo aqui
+misturaria persistência de dados com submissão indireta.
 
-### A conta que trava as slices 4b–4d
+O A/B temporal clássico/derivado fica reproduzível no commit `b8d724b`; o HEAD valida apenas o
+caminho promovido, porque manter o buffer clássico alocado anularia o gate de memória.
+
+### A conta que travou as slices 4b–4d
 
 A quarta revisão parou a migração antes de ela começar, e a razão é boa: derivar na leitura move
 duas inversas 4×4 de **por instância por frame** para **por pixel**, e o WARP prova correção, não
@@ -556,9 +591,11 @@ Três saídas, e nenhuma delas dispensa a medição:
   faz o caso comum custar UMA leitura de 4 B e zero inversas, contra os 64 B da matriz derivada de
   hoje. O caso raro (objeto que se moveu) paga a inversa.
 
-Recomendação: **(c)**. Ela fecha o gate, é mais barata que hoje no caso comum, e o bit que ela
-precisa é subproduto do trabalho já feito. Mas a decisão é de medição, não de argumento — e é a
-medição em 1M que precisa acontecer primeiro de qualquer forma.
+Decisão executada: **(c)**. O bit móvel entrou na linha canônica, foi limpo no assentamento e os
+três consumidores passaram pelo A/B/A antes da remoção do caminho clássico. Na cena 1M, o
+`DualMotion` caiu de ~2,37 ms para ~0,12 ms; o spatial ficou em ~0,16 ms e reflexos caíram de
+2,38/2,32 ms nos controles para 1,57 ms no braço derivado. Bistro e Emerald ficaram dentro do
+ruído dos dois controles.
 
 #### O que (c) exige, e o que a medição dela NÃO pode ser
 
@@ -580,16 +617,16 @@ marcado, então a medida seria "zero inversas" — o melhor caso, apresentado co
 transform storm é o que revela o custo real, e Bistro/Emerald são onde o ganho de memória é
 irrelevante e só sobra o custo.
 
-E (c) entra como **permutação experimental, com A/B**, antes de migrar 4b–4d definitivamente. Pela
-regra 2 do plano, e porque é a única forma de atribuir uma diferença de tempo ao acesso a dados em
-vez de à cena.
+E (c) entrou como **permutação experimental, com A/B**, antes da migração definitiva. Pela regra 2
+do plano, essa era a única forma de atribuir uma diferença de tempo ao acesso a dados em vez de à
+cena.
 
 ### O plano do `TransformBuffer`, slice a slice
 
-O que ele guarda (`Current⁻¹·Previous` e `Previous⁻¹·Current`) é **derivado** de duas matrizes que
-já moram na tabela canônica — e as entradas saem literalmente de lá, via `TransformsFor`. O custo
-não é só a memória: o `UpdatePerFrame` faz **duas inversas 4x4 por instância por frame**, na CPU, em
-cima da cena inteira. Em 1M isso é 2M inversas e 128 MB de escrita por frame.
+O que ele guardava (`Current⁻¹·Previous` e `Previous⁻¹·Current`) é **derivado** de duas matrizes
+que já moram na tabela canônica — e as entradas saíam literalmente de lá, via `TransformsFor`. O
+custo não era só a memória: o `UpdatePerFrame` fazia **duas inversas 4x4 por instância por frame**,
+na CPU, em cima da cena inteira. Em 1M eram 2M inversas e 128 MB de escrita por frame.
 
 A tensão anotada antes — "a tabela existe para evitar inversão por pixel, e os consumidores indexam
 por `InstanceID`, não por slot" — se resolve por um caminho que já existe: os três consumidores já
@@ -602,13 +639,13 @@ transfere sem mudar de significado.
 |---|---|---|
 | `d28cb52` ✔ | contrato compartilhado, inversa em HLSL, paridade em WARP | nenhum — não muda comportamento |
 | `1b7aef7` ✔ | os dois sentidos separados, comparados bit a bit com o par | nenhum — não muda comportamento |
-| 4b | migrar `DualMotion` | **BLOQUEADA na decisão de custo acima** |
-| 4c | migrar `ReflectionMotion` (trace + mirror) | bloqueada; e mexe em descriptor table de passe RT |
-| 4d | migrar `ReSTIRDISpatial` | bloqueada; idem |
-| 4e | apagar buffer, SRVs e o laço da CPU; asserção de memória | baixo, depois dos três |
+| `3f24e10` ✔ | migrar `DualMotion`, `ReflectionMotion` (trace + mirror) e `ReSTIRDISpatial` sob um A/B único | reprojeção temporal e custo em GPU |
+| `b8d724b` ✔ | A/B/A em Bistro, Emerald e 1M, incluindo transform storm | validação visual/temporal e atribuição de custo |
+| `7eb84cf` ✔ | apagar buffer, SRVs, PSOs clássicas e o laço de duas inversas por instância na CPU | caminho clássico deixa de existir |
 
-Cada uma de 4b–4d **mexe em reprojeção temporal**, que é onde uma troca de ordem aparece como
-ghosting/shimmer e o suspeito natural é o denoiser. Vão atrás de A/B em GPU, uma por vez.
+Cada uma das três migrações **mexe em reprojeção temporal**, que é onde uma troca de ordem aparece
+como ghosting/shimmer e o suspeito natural é o denoiser. Por isso passaram pelo mesmo A/B em GPU
+antes da promoção.
 
 Decisão registrada: a inversa em HLSL é a **geral**, transcrita linha a linha do `Mat44::Inverse`, e
 não a forma afim barata. As duas coincidem para TRS, mas a afim depende de uma garantia que nada

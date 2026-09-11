@@ -11,10 +11,10 @@
 //
 // Os dois lados sao os de PRODUCAO: `Smile::ComposeTemporalInstanceTransform`, que o UpdatePerFrame
 // chama, e `TemporalComposeInstanceTransform` do TemporalMotionCommon.hlsli, que os consumidores
-// vao chamar. Nenhum dos dois e reescrito aqui.
+// chamam. Nenhum dos dois e reescrito aqui.
 //
-// WARP nao exige placa. O que ele NAO cobre e o efeito visual da troca nos tres consumidores, que
-// fica para o A/B em GPU.
+// WARP nao exige placa. O efeito visual da troca nos tres consumidores foi coberto pelo A/B/A em
+// GPU registrado no documento de fechamento da Fase 4.
 
 #include <cmath>
 #include <cstdio>
@@ -383,7 +383,7 @@ int main() try {
         Check(MatrizIgual(Esperado.PreviousToCurrent, Base(I) + 16),
               "PreviousToCurrent derivado no shader casa com o do C++");
 
-        // Os helpers de UM sentido sao o que os consumidores vao chamar -- chamar o par e
+        // Os helpers de UM sentido sao o que os consumidores chamam -- chamar o par e
         // descartar metade custaria uma inversa a mais por leitura. Eles tem de dar EXATAMENTE o
         // mesmo que a metade correspondente do par, senao a paridade acima cobre uma funcao e a
         // producao usa outra. Igualdade de bits: e a mesma expressao, no mesmo shader.

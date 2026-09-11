@@ -347,7 +347,7 @@ set_tests_properties(Smile.InstanceTransformWarp PROPERTIES
 )
 
 # Paridade do par temporal derivado (Fase 4). Mesma estrutura da de cima e pelo mesmo motivo: o
-# TransformBuffer do TemporalMotion esta sendo aposentado em favor de derivar CurrentToPrevious e
+# TransformBuffer do TemporalMotion foi aposentado em favor de derivar CurrentToPrevious e
 # PreviousToCurrent na leitura, e o que pode dar errado ali e a INVERSA e a ordem do produto.
 add_executable(SmileTemporalTransformWarpTests
     TemporalTransformWarpTests.cpp
