@@ -190,7 +190,7 @@ namespace Smile {
         //
         // O acumulado existe porque o instantaneo e quase sempre zero: um vazamento de um punhado
         // de linhas por frame nao aparece no instantaneo e aparece na soma.
-        u64 MaterialTableBytes       = 0; // VRAM: capacidade x 112 B (64 lidos pelo RT + 48 do raster)
+        u64 MaterialTableBytes       = 0; // VRAM: capacidade x 116 B (64 do RT + 48 do raster + classe)
         u64 MaterialStagingBytes     = 0; // host: os slices de staging, um por frame em voo
         u32 MaterialTableRows        = 0; // linhas em uso (1 default + materiais da cena)
         u32 MaterialRowsDirty        = 0; // linhas subidas NESTE frame

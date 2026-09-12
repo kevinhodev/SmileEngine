@@ -5,7 +5,7 @@
 // Espelho HLSL das tabelas canonicas da GPU scene (Fase 2 do GPU-DRIVEN-PLAN).
 //
 // Espelha, byte a byte:
-//   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 112 B)
+//   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 116 B)
 //   GpuMeshRecord     <- Smile::FGpuMeshRecord      (Graphics/Scene/GpuSceneTables.h, 68 B)
 //   GpuInstanceMeta   <- Smile::FGpuSceneInstanceMeta (20 B)
 //   GpuInstanceBounds <- Smile::FGpuSceneInstanceBounds (32 B)
@@ -46,6 +46,18 @@
 #define SMILE_MAT_FLAG_NORMALRECONZ    16384u // normal BC5 (so RG): reconstruir Z
 #define SMILE_MAT_FLAG_PARALLAXREFINE  32768u // busca binaria no hit do POM
 
+// Classe de PIPELINE do material (Fase 5). Espelha EGpuPipelineClass (GpuMaterialRecord.h).
+//
+// VALOR, nao bit: sao quatro classes mutuamente exclusivas, resolvidas por precedencia
+// (Blend > AlphaTest > TwoSided > OpaqueOneSided) no lado C++. Renumerar uma delas aqui mantem o
+// layout certo e troca o LOTE em que a malha cai — por isso a sonda devolve as quatro constantes
+// para o teste conferir, como ja faz com os SMILE_MAT_FLAG_*.
+#define SMILE_PIPELINE_CLASS_OPAQUE_ONESIDED 0u
+#define SMILE_PIPELINE_CLASS_OPAQUE_TWOSIDED 1u
+#define SMILE_PIPELINE_CLASS_MASKED          2u
+#define SMILE_PIPELINE_CLASS_BLEND           3u
+#define SMILE_PIPELINE_CLASS_COUNT           4u
+
 // Deslocamentos na tabela contigua de descritores do material (FMaterial reserva oito).
 #define SMILE_MAT_TEX_ALBEDO   0u
 #define SMILE_MAT_TEX_NORMAL   1u
@@ -82,6 +94,10 @@ struct GpuMaterialRecord {
     float  ParallaxFadeRange;
     uint   ParallaxRefineSteps;
     uint   ShadingModel;    // SMILE_SHADINGMODEL_*; VALOR, nao bit (sao quatro modelos)
+
+    // --- Classe de PIPELINE (Fase 5), 4 B. Derivada dos Flags acima no lado C++ e guardada aqui;
+    //     o classify a le por candidato. SMILE_PIPELINE_CLASS_*. ---
+    uint   PipelineClass;
 };
 
 // Indice bindless de um mapa. Sem tabela, devolve a propria base invalida em vez de um vizinho
@@ -113,6 +129,22 @@ struct GpuMeshRecord {
 // A malha nao pode ir pelo caminho INDIRETO (offset fora do contrato do argumento). Ela continua
 // valida para todo o resto; quem a desenha e o fallback CPU.
 #define SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE 1u
+
+// As duas portas do caminho indireto, espelhando GpuPipelineClassIndirectEligible e
+// GpuIndirectEligible (GpuMaterialRecord.h / GpuSceneTables.h).
+//
+// Existem aqui porque o classify roda na GPU e a resposta tem de ser a MESMA dos dois lados: se o
+// espelho esquecesse o termo da flag, a malha irrepresentavel receberia comando com offset poison e
+// o command processor leria bytes de vertice como indices. A sonda de ABI chama as duas para que
+// isso seja um teste, e nao um comentario.
+bool GpuPipelineClassIndirectEligible(uint _PipelineClass) {
+    return _PipelineClass == SMILE_PIPELINE_CLASS_OPAQUE_ONESIDED;
+}
+
+bool GpuIndirectEligible(uint _PipelineClass, uint _MeshFlags) {
+    return GpuPipelineClassIndirectEligible(_PipelineClass) &&
+           (_MeshFlags & SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE) == 0u;
+}
 
 #define SMILE_INSTANCE_FLAG_VISIBLE        1u
 #define SMILE_INSTANCE_FLAG_RT_ONLY        2u

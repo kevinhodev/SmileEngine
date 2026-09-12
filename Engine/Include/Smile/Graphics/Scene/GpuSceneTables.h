@@ -5,7 +5,7 @@
 // Tres: materiais, meshes e instancias. A tabela de instancias nasce na Fase 2 como fonte
 // canonica; as fases seguintes migram os consumidores raster/indirect sem mudar sua ABI.
 //
-// O que a de MATERIAIS resolve, em uma frase: editar um material passa a tocar UMA linha de 112 B
+// O que a de MATERIAIS resolve, em uma frase: editar um material passa a tocar UMA linha de 116 B
 // em vez de reescrever o snapshot inteiro da cena (2.479 registros de 100 B na Emerald) com as
 // duas filas drenadas.
 //
@@ -216,6 +216,25 @@ namespace Smile {
             if (_Pools[Id] == _Pool) return Id;
         _Pools.push_back(_Pool);
         return static_cast<u32>(_Pools.size() - 1);
+    }
+
+    // === A porta do caminho indireto ============================================================
+    //
+    // As DUAS condicoes, num predicado so: a classe do material tem de ser elegivel (Fase 5: apenas
+    // `OpaqueOneSided`) e a linha da malha tem de ter endereco representavel no argumento.
+    //
+    // Junto, e nao duas checagens espalhadas, porque quem emite o comando e quem CONTA o fallback
+    // tem de usar a mesma resposta. Duas copias da condicao dariam, no dia em que uma delas
+    // esquecesse um termo, um objeto desenhado duas vezes (aceitavel) ou nenhuma (nao e) — e o
+    // contador diria que esta tudo certo.
+    //
+    // ⚠️ O que este predicado prova e o que ele NAO prova. Ele e a unica definicao de elegibilidade,
+    // e o teste cobre as oito combinacoes de (classe, flag). Que o EMISSOR de comandos o consulte —
+    // ou seja, que a flag de offset irrepresentavel de fato impeca a escrita do argumento — so pode
+    // ser provado pela slice que escreve o classify/scatter, porque hoje nao existe emissor nenhum.
+    inline bool GpuIndirectEligible(u32 _PipelineClass, u32 _MeshFlags) {
+        return GpuPipelineClassIndirectEligible(_PipelineClass) &&
+               (_MeshFlags & GpuMeshOffsetsUnrepresentable) == 0u;
     }
 
     inline bool operator==(const FGpuMeshRecord& A, const FGpuMeshRecord& B) {

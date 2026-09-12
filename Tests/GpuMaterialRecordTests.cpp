@@ -245,7 +245,7 @@ int main() {
     // --- ABI ---------------------------------------------------------------------------------
     // Os static_assert do header ja travam isto em compilacao; repetir aqui e o que faz um
     // relaxamento acidental deles aparecer como teste vermelho, e nao como header que compila.
-    Check(sizeof(FGpuMaterialRecord) == 112, "a linha tem de ter 112 B");
+    Check(sizeof(FGpuMaterialRecord) == 116, "a linha tem de ter 116 B");
     Check(offsetof(FGpuMaterialRecord, BaseColor) == 0, "BaseColor no offset 0");
     Check(offsetof(FGpuMaterialRecord, EmissiveFactor) == 16, "EmissiveFactor no offset 16");
     Check(offsetof(FGpuMaterialRecord, SubsurfaceColor) == 32, "SubsurfaceColor no offset 32");
@@ -435,6 +435,88 @@ int main() {
         const FGpuMaterialRecord R = FGpuMaterialRecord::FromParts(C, false, false, 0u);
         Check(R.EmissiveFactor.X == 6.0f, "emissivo do RT = fator * forca * escala");
         Check(R.EmissiveFactor.W == 0.25f, "MetallicFactor viaja no .w do emissivo");
+    }
+
+    // --- Classe de PIPELINE: as oito combinacoes de Blend/AlphaTest/TwoSided ------------------
+    //
+    // Este e o eixo pelo qual a Fase 5 agrupa comandos, e ele nasce de tres propriedades que NAO
+    // sao independentes: o `IsTwoSidedForRT()` do FMaterial ja vale
+    // `TwoSided || AlphaTest || Blend`. Por isso a matriz varre as tres FONTES e passa por um
+    // FMaterial de verdade — usar o predicado da engine e o que impede o teste de concordar consigo
+    // mesmo.
+    //
+    // A expectativa e uma TABELA literal, e nao a precedencia recalculada: reescrever a precedencia
+    // no oraculo faria o teste passar junto com o bug.
+    {
+        // Bits da mascara: 1 = Blend, 2 = AlphaTest, 4 = TwoSided.
+        constexpr u32 kEsperado[8] = {
+            GpuPipelineClassOpaqueOneSided, // - - -
+            GpuPipelineClassBlend,          // B - -
+            GpuPipelineClassMasked,         // - A -
+            GpuPipelineClassBlend,          // B A -   Blend tem precedencia sobre AlphaTest
+            GpuPipelineClassOpaqueTwoSided, // - - T
+            GpuPipelineClassBlend,          // B - T
+            GpuPipelineClassMasked,         // - A T   AlphaTest tem precedencia sobre TwoSided
+            GpuPipelineClassBlend,          // B A T
+        };
+        u32 Elegiveis = 0;
+        for (u32 Mask = 0; Mask < 8u; ++Mask) {
+            const std::string Onde = "classe mask=" + std::to_string(Mask);
+            FMaterial M;
+            M.Blend               = (Mask & 1u) != 0;
+            M.Constants.AlphaTest = (Mask & 2u) ? 1u : 0u;
+            M.TwoSided            = (Mask & 4u) != 0;
+
+            const FGpuMaterialRecord R = FGpuMaterialRecord::FromMaterial(&M);
+            Check(R.PipelineClass == kEsperado[Mask], Onde + ": classe pela precedencia declarada");
+            // A classe e funcao dos Flags que a GPU LE, e nao das fontes. Se as duas discordarem, o
+            // lote sai com a PSO de uma classe e o shader lendo os bits de outra.
+            Check(R.PipelineClass == GpuPipelineClassFromFlags(R.Flags),
+                  Onde + ": a classe da linha == a classe derivada dos Flags da linha");
+
+            // Elegibilidade == a familia one-sided de PSO que o G-buffer JA escolhe hoje. O loop do
+            // G-buffer (RendererPasses.cpp) exclui Blend e depois pergunta IsTwoSidedForRT: a
+            // exclusao e transcrita aqui, o predicado e o da engine.
+            const bool LegacyNoGBuffer   = !M.Blend;
+            const bool LegacyOneSidedPSO = LegacyNoGBuffer && !M.IsTwoSidedForRT();
+            Check(GpuPipelineClassIndirectEligible(R.PipelineClass) == LegacyOneSidedPSO,
+                  Onde + ": elegivel ao indireto == familia one-sided do G-buffer de hoje");
+            if (LegacyOneSidedPSO) ++Elegiveis;
+
+            // A linha FINALIZADA tem de sair com a mesma classe. Nenhum bit de mapa participa dela,
+            // mas a derivacao mora depois do bloco de descritores: com um early return ali, todo
+            // material nao finalizado sairia com a classe default (zero) em silencio.
+            MaterialConstants CF = M.Constants;
+            CF.HasAlbedoMap = CF.HasNormalMap = CF.HasMetallicRoughnessMap = 1u;
+            const FGpuMaterialRecord F =
+                FGpuMaterialRecord::FromParts(CF, M.IsTwoSidedForRT(), M.Blend, 2048u);
+            Check(F.PipelineClass == R.PipelineClass,
+                  Onde + ": finalizado e nao finalizado dao a mesma classe");
+        }
+        // Uma das oito, e exatamente a que nao tem nenhuma das tres propriedades.
+        Check(Elegiveis == 1u, "das oito combinacoes, uma unica entra no indireto da Fase 5");
+        std::cout << "  precedencia Blend > AlphaTest > TwoSided > OpaqueOneSided: 8 casos\n";
+    }
+
+    // --- A classe entra na comparacao que decide o upload -------------------------------------
+    // Mesma regra do resto da linha: campo que a GPU le e campo que participa da igualdade. Uma
+    // linha com a classe errada nao pode passar por "igual" a correta.
+    {
+        FGpuMaterialRecord A{};
+        FGpuMaterialRecord B = A;
+        B.PipelineClass = GpuPipelineClassMasked;
+        Check(A != B, "duas linhas que diferem SO na classe nao sao iguais");
+        Check(A.Flags == B.Flags, "e elas tem os mesmos Flags: a classe sozinha decidiu");
+    }
+
+    // --- A linha default e a classe do material default ---------------------------------------
+    // Flags zero tem de cair em OpaqueOneSided, que e a classe de valor 0 justamente para que uma
+    // linha zerada por acidente nao entre num lote que nao e o dela.
+    {
+        Check(FGpuMaterialRecord{}.PipelineClass == GpuPipelineClassOpaqueOneSided,
+              "a linha default nasce opaca one-sided");
+        Check(GpuPipelineClassFromFlags(0u) == GpuPipelineClassOpaqueOneSided,
+              "Flags == 0 classifica como opaco one-sided");
     }
 
     if (Failures == 0) std::cout << "  OK\n";

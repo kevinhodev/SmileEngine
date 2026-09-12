@@ -70,6 +70,67 @@ namespace Smile {
     static_assert(kMaterialTexRough < kMaterialTextureSlots,
                   "os deslocamentos tem de caber na tabela que o FMaterial reserva");
 
+    // === Classe de PIPELINE do material (Fase 5) ================================================
+    //
+    // O eixo pelo qual o caminho indireto agrupa comandos. Propriedade ESTAVEL do material: nao
+    // depende do passe, da camera nem do frame. O eixo do PASSE (depth-only, depth-normal,
+    // G-buffer) e separado e NAO entra nesta linha — cruzar os dois aqui daria o produto cartesiano
+    // das duas familias numa tabela que toda edicao de material reescreve.
+    //
+    // Deriva dos `Flags` JA MONTADOS da linha, e nao das tres propriedades do FMaterial. A razao e
+    // concreta: os bits sao o que a GPU le, e uma classe que reconsultasse as fontes poderia
+    // discordar deles — o lote sairia com a PSO de uma classe e o shader lendo os bits de outra.
+    //
+    // A precedencia e TOTAL e explicita, para que combinacao estranha (Blend junto com AlphaTest,
+    // por exemplo) continue deterministica em vez de depender da ordem em que alguem escreveu os
+    // ifs:
+    //
+    //     Blend > AlphaTest > TwoSided > OpaqueOneSided
+    //
+    // Ela tambem desarma uma armadilha real: `kMaterialFlagTwoSided` NAO e o `TwoSided` cru do
+    // material — e o `FMaterial::IsTwoSidedForRT()`, que ja vale `TwoSided || AlphaTest || Blend`.
+    // Como Blend e AlphaTest sao testados ANTES, quando a terceira linha e alcancada o bit fundido
+    // vale exatamente o `TwoSided` cru. Trocar duas dessas linhas de lugar compila e passa a
+    // classificar toda folhagem como opaco two-sided.
+    //
+    // Os VALORES sao arbitrarios, mas congelados e espelhados no HLSL: eles indexam os contadores
+    // por classe e os lotes do classify. `OpaqueOneSided` e 0 porque e a classe de `Flags == 0` —
+    // uma linha default-construida tem de sair com a classe do material DEFAULT, e nao com uma
+    // classe qualquer que o zero acabou apontando.
+    enum EGpuPipelineClass : u32 {
+        GpuPipelineClassOpaqueOneSided = 0u,
+        GpuPipelineClassOpaqueTwoSided = 1u,
+        GpuPipelineClassMasked         = 2u,
+        GpuPipelineClassBlend          = 3u,
+    };
+    inline constexpr u32 kGpuPipelineClassCount = 4u;
+
+    inline u32 GpuPipelineClassFromFlags(u32 _Flags) {
+        if (_Flags & kMaterialFlagTranslucent) return GpuPipelineClassBlend;
+        if (_Flags & kMaterialFlagAlphaTest)   return GpuPipelineClassMasked;
+        if (_Flags & kMaterialFlagTwoSided)    return GpuPipelineClassOpaqueTwoSided;
+        return GpuPipelineClassOpaqueOneSided;
+    }
+
+    // Esta classe entra no `ExecuteIndirect` da Fase 5?
+    //
+    // So `OpaqueOneSided`, e isso NAO e um agrupamento novo: `OpaqueOneSided` e exatamente o
+    // conjunto que o G-buffer de hoje manda para a familia one-sided de PSO. O loop do G-buffer
+    // exclui `Blend` e depois consulta `IsTwoSidedForRT()` (RendererPasses.cpp), entao a familia
+    // one-sided e `!Blend && !TwoSided && !AlphaTest` — os tres bits que as tres primeiras linhas da
+    // precedencia derrubam. A classificacao aqui e mais EXPLICITA que a ordenacao atual, nao
+    // diferente dela.
+    //
+    // As outras tres continuam no fallback CPU: masked e two-sided ate a Fase 7, Blend nunca —
+    // transparencia segue ordenada na CPU.
+    //
+    // Predicado UNICO para que o classify e o contador de fallback nao possam discordar sobre quem
+    // ficou de fora. Regra 6 do plano: o que nao entra tem de ser desenhado por outro caminho, e
+    // contado.
+    inline bool GpuPipelineClassIndirectEligible(u32 _PipelineClass) {
+        return _PipelineClass == GpuPipelineClassOpaqueOneSided;
+    }
+
     struct FGpuMaterialRecord {
         // Base invalida de descritor. Vale quando o material ainda nao foi finalizado (nao ha
         // tabela de SRV) ou quando a instancia nao tem material nenhum. Nesses casos TODOS os
@@ -110,12 +171,12 @@ namespace Smile {
         // dos oito shaders que incluem MaterialCB.hlsli). Copia-los para ca seria serializar
         // consumidor imaginario.
         //
-        // ⚠️ A linha passou de 64 para 112 B, e com isso perde a garantia — declarada quando ela
-        // tinha 64 B — de que uma linha inteira cabe numa cache line de 64 B. Nunca foi medida,
-        // nem antes nem agora; 112 e multiplo de 16, entao toda linha ainda comeca alinhada a 16,
-        // e a tabela inteira continua cabendo em dezenas de KB (214 materiais na Emerald = 24 KB).
-        // Se algum dia isso aparecer num perfil, a saida e alinhar o stride a 128 e pagar 16 B
-        // mortos por material — nao dividir a linha em duas tabelas.
+        // ⚠️ A linha passou de 64 para 112 B — e para 116 com a classe de pipeline da Fase 5, logo
+        // abaixo. Com isso perde a garantia, declarada quando ela tinha 64 B, de que uma linha
+        // inteira cabe numa cache line de 64 B. Nunca foi medida, nem antes nem agora; a tabela
+        // inteira continua cabendo em dezenas de KB (214 materiais na Emerald = 24 KB). Se algum dia
+        // isso aparecer num perfil, a saida e alinhar o stride a 128 e pagar 12 B mortos por
+        // material — nao dividir a linha em duas tabelas.
 
         // rgb = EmissiveFactor * EmissiveStrength, o produto que o G-buffer escreve. Separado do
         // EmissiveFactor de cima porque aquele leva tambem o RTEmissiveScale, que existe
@@ -135,6 +196,27 @@ namespace Smile {
         // dois bits de alpha do RGB10A2. O kMaterialFlagFoliage de cima continua existindo porque
         // e o que o ray tracing pergunta, e responde outra coisa ("este material e folhagem?").
         u32  ShadingModel        = 0;
+
+        // ---- Classe de PIPELINE (Fase 5) ----------------------------------------------------
+        //
+        // DERIVADA, nao autorada: vale sempre `GpuPipelineClassFromFlags(Flags)`, estampado num
+        // lugar so (o fim do `FromParts`). Guardada na linha, e nao derivada pelo consumidor, por
+        // duas razoes: e assim que a secao 5.4 do plano descreve a tabela de materiais, e o eixo de
+        // agrupamento tem de poder deixar de ser funcao dos bits — uma permutacao de PSO, por
+        // exemplo — sem obrigar todo shader que classifica a mudar junto.
+        //
+        // Sendo exato sobre o que NAO e razao: nao e localidade. O `Flags` mora no offset 56, dentro
+        // dos 64 B que o RT ja le; a classe mora no 112. Ler a classe pronta custa o mesmo dword que
+        // derivar dos bits custaria, e numa linha de cache pior.
+        //
+        // ⚠️ A linha passa de 112 para 116 B e o stride deixa de ser multiplo de 16. Os offsets de 0
+        // a 108 nao se movem, entao nenhum shader de hit muda uma letra, e StructuredBuffer nao
+        // exige stride alinhado (ja dito acima). O que se perde e o alinhamento no INICIO de cada
+        // linha: a linha N comeca em 116*N, e os 64 B que o ray tracing le passam a cruzar cache
+        // line em parte das linhas. Padding para 128 devolveria as duas coisas por 12 B mortos por
+        // material (2,5 KB na Emerald) — nao foi feito porque seria otimizacao sem perfil, e a nota
+        // de cima ja registra 128 como a saida no dia em que um perfil pedir.
+        u32  PipelineClass       = GpuPipelineClassOpaqueOneSided;
 
         // Deriva a linha do material da engine. Estatica e sem estado: a linha e funcao PURA do
         // FMaterial, e e isso que torna "material mudou" equivalente a "a linha mudou".
@@ -181,23 +263,31 @@ namespace Smile {
                    A.ParallaxFadeStart == B.ParallaxFadeStart &&
                    A.ParallaxFadeRange == B.ParallaxFadeRange &&
                    A.ParallaxRefineSteps == B.ParallaxRefineSteps &&
-                   A.ShadingModel == B.ShadingModel;
+                   A.ShadingModel == B.ShadingModel &&
+                   // A classe entra mesmo sendo funcao de `Flags`, que ja esta comparado acima — e
+                   // nao e redundancia inutil. Esta comparacao e o que decide quais linhas SOBEM, e
+                   // ela recebe dois registros QUAISQUER, nao apenas dois saidos do FromParts: uma
+                   // linha montada a mao com a classe errada continuaria "igual" a correta e a GPU
+                   // ficaria com a classe velha. E exatamente a divergencia classe/flags que a
+                   // derivacao unica existe para impedir; deixar o campo de fora daqui seria abrir
+                   // uma segunda porta para ela.
+                   A.PipelineClass == B.PipelineClass;
         }
         friend bool operator!=(const FGpuMaterialRecord& A, const FGpuMaterialRecord& B) {
             return !(A == B);
         }
     };
 
-    // 112 B: quatro Vec4 alinhados em 4 (a Smile nao usa alignas em Vec4) mais doze escalares de
-    // 4 B. StructuredBuffer nao exige stride multiplo de 16, mas o multiplo sai de graca aqui e
-    // mantem toda linha comecando alinhada a 16.
+    // 116 B: quatro Vec4 alinhados em 4 (a Smile nao usa alignas em Vec4) mais treze escalares de
+    // 4 B. StructuredBuffer nao exige stride multiplo de 16 — e, desde a classe de pipeline, este
+    // nao e mais um: ver a nota do campo `PipelineClass`.
     //
     // Os OFFSETS DE 0 A 60 sao os mesmos de quando a linha tinha 64 B, e continuar assim e o que
     // torna esta mudanca invisivel para o ray tracing: nenhum shader de hit precisou mudar uma
     // letra. As asseracoes abaixo existem para que reordenar um campo antigo para "arrumar" o
     // layout falhe na compilacao em vez de trocar o significado de um byte em todo hit.
-    static_assert(sizeof(FGpuMaterialRecord) == 112,
-                  "FGpuMaterialRecord e layout de GPU: 112 B, espelhado no HLSL");
+    static_assert(sizeof(FGpuMaterialRecord) == 116,
+                  "FGpuMaterialRecord e layout de GPU: 116 B, espelhado no HLSL");
     static_assert(alignof(FGpuMaterialRecord) == 4, "sem alinhamento implicito surpresa");
     static_assert(offsetof(FGpuMaterialRecord, BaseColor)       ==  0);
     static_assert(offsetof(FGpuMaterialRecord, EmissiveFactor)  == 16);
@@ -216,4 +306,7 @@ namespace Smile {
     static_assert(offsetof(FGpuMaterialRecord, ParallaxFadeRange)   == 100);
     static_assert(offsetof(FGpuMaterialRecord, ParallaxRefineSteps) == 104);
     static_assert(offsetof(FGpuMaterialRecord, ShadingModel)        == 108);
+    // A classe de pipeline (Fase 5) entra no FIM, depois do bloco de raster, pela mesma razao que
+    // aquele bloco entrou depois dos 64 B do RT: nada acima dela se move.
+    static_assert(offsetof(FGpuMaterialRecord, PipelineClass)       == 112);
 }

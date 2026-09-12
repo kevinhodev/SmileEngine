@@ -27,7 +27,7 @@ StructuredBuffer<GpuInstanceBounds> InstanceBounds    : register(t4);
 StructuredBuffer<GpuInstanceTransform> InstanceCurrent  : register(t5);
 StructuredBuffer<GpuInstanceTransform> InstancePrevious : register(t6);
 
-// Vinte e oito uint4 por instancia: todos os campos das sete structs mais os derivados que provam
+// Trinta uint4 por instancia: todos os campos das sete structs mais os derivados que provam
 // que as CONSTANTES tambem casam (deslocamentos de textura e bits de flag).
 RWStructuredBuffer<uint4> Results : register(u0);
 
@@ -46,7 +46,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const GpuInstanceTransform ic = InstanceCurrent[i];
     const GpuInstanceTransform ip = InstancePrevious[i];
 
-    const uint b = i * 28u;
+    const uint b = i * 30u;
     Results[b + 0u] = asuint(m.BaseColor);
     Results[b + 1u] = asuint(m.EmissiveFactor);
     Results[b + 2u] = asuint(m.SubsurfaceColor);
@@ -103,4 +103,20 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     Results[b + 27u] = uint4(
         (h.Flags & SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE) != 0u ? 1u : 0u,
         h.VirtualGeometryId, 0u, 0u);
+
+    // A CLASSE DE PIPELINE (Fase 5) e as duas portas do caminho indireto.
+    //
+    // A linha 28 e o valor lido da tabela mais as duas respostas CALCULADAS pelo espelho HLSL: sem
+    // elas, um mirror que esquecesse o termo da flag da malha passaria verde, porque o campo em si
+    // continuaria no offset certo. A linha 29 sao as quatro constantes cruas, pela mesma razao dos
+    // bits de flag: renumerar uma delas mantem todo o layout correto e troca o lote em que o
+    // material cai.
+    Results[b + 28u] = uint4(m.PipelineClass,
+                             GpuPipelineClassIndirectEligible(m.PipelineClass) ? 1u : 0u,
+                             GpuIndirectEligible(m.PipelineClass, h.Flags) ? 1u : 0u,
+                             SMILE_PIPELINE_CLASS_COUNT);
+    Results[b + 29u] = uint4(SMILE_PIPELINE_CLASS_OPAQUE_ONESIDED,
+                             SMILE_PIPELINE_CLASS_OPAQUE_TWOSIDED,
+                             SMILE_PIPELINE_CLASS_MASKED,
+                             SMILE_PIPELINE_CLASS_BLEND);
 }

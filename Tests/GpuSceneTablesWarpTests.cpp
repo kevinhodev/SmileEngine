@@ -206,6 +206,10 @@ namespace {
             { "AlphaCutoff",       [](FGpuMaterialRecord& R) { R.AlphaCutoff += 1.0f; } },
             { "Flags",             [](FGpuMaterialRecord& R) { R.Flags ^= kMaterialFlagFoliage; } },
             { "TextureBase",       [](FGpuMaterialRecord& R) { R.TextureBase += 8u; } },
+            // A classe de pipeline, mutada SOZINHA. A linha de cima mexe em `Flags`, mas no bit de
+            // folhagem, que nao participa da classe — entao as duas provas sao independentes: um
+            // operator== que comparasse so os Flags passaria naquela e falharia nesta.
+            { "PipelineClass",     [](FGpuMaterialRecord& R) { R.PipelineClass ^= 1u; } },
         };
         for (const FCampo& C : kCampos) {
             C.Aplicar(Fresh[1]);
@@ -306,6 +310,46 @@ namespace {
               "e o par misto continua estavel");
         Check(Pools[0] == FGpuGeometryPool{ A, A } && Pools[2] == FGpuGeometryPool{ A, B },
               "a lista publicada indexa pelo id que a funcao devolveu");
+    }
+
+    // ---- a PORTA do caminho indireto: classe x flag da malha ----------------------------------
+    //
+    // Duas condicoes independentes num predicado so, e e essa independencia que o teste fixa: as
+    // oito combinacoes de (quatro classes) x (flag ligada/desligada), com uma unica abrindo.
+    //
+    // Um predicado que esquecesse o termo da MALHA passaria pelos quatro casos de flag limpa e
+    // deixaria a linha irrepresentavel receber comando com offset poison — indices lidos da regiao
+    // de vertice do pool. Um que esquecesse a CLASSE mandaria folhagem masked para o indireto sem o
+    // clip, e ela apareceria como cartao opaco.
+    //
+    // O que este teste NAO prova: que o emissor de comandos consulte a porta. Nao existe emissor
+    // ainda; a prova pertence a slice que escrever o classify/scatter.
+    void TestarPorteiroIndireto() {
+        const u32 kClasses[4] = { GpuPipelineClassOpaqueOneSided, GpuPipelineClassOpaqueTwoSided,
+                                  GpuPipelineClassMasked, GpuPipelineClassBlend };
+        u32 Abertas = 0;
+        for (u32 C = 0; C < 4u; ++C) {
+            for (u32 ComFlag = 0; ComFlag < 2u; ++ComFlag) {
+                const u32 Flags = ComFlag ? static_cast<u32>(GpuMeshOffsetsUnrepresentable) : 0u;
+                const bool Esperado =
+                    kClasses[C] == GpuPipelineClassOpaqueOneSided && ComFlag == 0u;
+                const bool Obtido = GpuIndirectEligible(kClasses[C], Flags);
+                Check(Obtido == Esperado,
+                      "porta do indireto: classe " + std::to_string(kClasses[C]) +
+                          (ComFlag ? " com flag de offset" : " sem flag de offset"));
+                if (Obtido) ++Abertas;
+            }
+        }
+        Check(Abertas == 1u, "das oito combinacoes, uma unica abre a porta do indireto");
+
+        // O termo da malha, isolado: a classe MAIS elegivel que existe, barrada so pela flag.
+        Check(!GpuIndirectEligible(GpuPipelineClassOpaqueOneSided, GpuMeshOffsetsUnrepresentable),
+              "classe elegivel com offset irrepresentavel fica fora do indireto");
+        // E o contrario: bit reservado da malha NAO fecha a porta. Os outros bits do `Flags` pertencem
+        // a trilha de virtual geometry; confundir "tem outro bit" com "nao cabe no argumento" tiraria
+        // a cena inteira do caminho indireto no dia em que o segundo bit nascer.
+        Check(GpuIndirectEligible(GpuPipelineClassOpaqueOneSided, 1u << 3),
+              "bit reservado da malha nao fecha a porta do indireto");
     }
 
     // ---- o diff da linha de MALHA -------------------------------------------------------------
@@ -415,8 +459,9 @@ int main() try {
     TestarDiffInstancias();
     TestarEnderecoNoPool();
     TestarDiffMalhas();
+    TestarPorteiroIndireto();
 
-    // ---- dados: quatro instancias apontando para tres linhas de material ---------------------
+    // ---- dados: cinco instancias apontando para tres linhas de material ----------------------
     // A terceira e a quarta compartilham a linha 2 de proposito: e a situacao que a fase existe
     // para permitir (N instancias, um material), e ela tambem prova que MaterialId de verdade
     // enderaca a tabela em vez de coincidir com o indice da instancia.
@@ -465,8 +510,8 @@ int main() try {
     // A linha 1 carrega a FLAG, a 2 nao: sem as duas, um espelho que ignorasse `Flags` passaria.
     Malhas[1].Flags = GpuMeshOffsetsUnrepresentable;
 
-    std::vector<FGpuInstanceGeo> Instancias(4);
-    for (u32 I = 0; I < 4; ++I) {
+    std::vector<FGpuInstanceGeo> Instancias(5);
+    for (u32 I = 0; I < Instancias.size(); ++I) {
         Instancias[I].TriangleSrv = 12u + I * 3u;
         Instancias[I].MaterialSrv = 777u;
         Instancias[I].MeshSrv     = 888u;
@@ -474,10 +519,15 @@ int main() try {
     Instancias[0].MaterialId = 0u; Instancias[0].MeshId = 0u; // sem material e sem malha
     Instancias[1].MaterialId = 1u; Instancias[1].MeshId = 1u;
     Instancias[2].MaterialId = 2u; Instancias[2].MeshId = 2u;
-    // As duas ultimas compartilham material E malha: e a situacao que a fase existe para permitir
-    // (N instancias, uma linha de cada), e ela prova que os ids enderecam as tabelas em vez de
-    // coincidirem com o indice da instancia.
+    // A terceira e a quarta compartilham material E malha: e a situacao que a fase existe para
+    // permitir (N instancias, uma linha de cada), e ela prova que os ids enderecam as tabelas em vez
+    // de coincidirem com o indice da instancia.
     Instancias[3].MaterialId = 2u; Instancias[3].MeshId = 2u;
+    // A quinta existe por causa da PORTA do caminho indireto: classe ELEGIVEL (o material default e
+    // opaco one-sided) sobre a malha que carrega a flag de offset irrepresentavel. Sem ela nenhuma
+    // instancia fecharia a porta pelo lado da MALHA — a 1 e a 2 ja estao fora pela classe —, e um
+    // espelho HLSL que esquecesse o termo da flag passaria verde.
+    Instancias[4].MaterialId = 0u; Instancias[4].MeshId = 1u;
     const u32 kInstancias = static_cast<u32>(Instancias.size());
 
     std::vector<FGpuSceneInstanceMeta> Meta(kInstancias);
@@ -560,7 +610,7 @@ int main() try {
     auto BufBounds = S.Upload(Bounds.data(), Bounds.size() * sizeof(FGpuSceneInstanceBounds));
     auto BufCurrent = S.Upload(Current.data(), Current.size() * sizeof(FGpuSceneInstanceTransform));
     auto BufPrevious = S.Upload(Previous.data(), Previous.size() * sizeof(FGpuSceneInstanceTransform));
-    constexpr u32 kResultRows = 28u;
+    constexpr u32 kResultRows = 30u;
     constexpr u32 kResultStride = kResultRows * 4u;
     const u64 SaidaBytes = static_cast<u64>(kInstancias) * kResultStride * sizeof(u32);
     auto BufSaida   = S.Buffer(D3D12_HEAP_TYPE_DEFAULT, SaidaBytes, true,
@@ -772,6 +822,28 @@ int main() try {
               Onde + ": MaterialTextureIndex(NORMAL) casa com o C++");
         Check(R[103] == M.TextureIndex(kMaterialTexHeight),
               Onde + ": MaterialTextureIndex(HEIGHT) casa com o C++");
+
+        // Classe de pipeline e as duas portas do indireto (Fase 5).
+        //
+        // A classe e comparada contra a FUNCAO, e nao contra um numero escrito a mao: o que precisa
+        // casar e o campo lido pelo HLSL com a derivacao do C++. As tres linhas de material dao
+        // classes 0, 1 e 3 (default, two-sided, blend), entao um espelho que lesse o offset errado
+        // nao cairia num "tudo zero" por coincidencia.
+        Check(R[112] == GpuPipelineClassFromFlags(M.Flags),
+              Onde + ": PipelineClass no offset 112 = classe derivada dos Flags");
+        Check(R[112] == M.PipelineClass,
+              Onde + ": e a classe que o FromParts estampou na linha");
+        Check((R[113] != 0u) == GpuPipelineClassIndirectEligible(M.PipelineClass),
+              Onde + ": GpuPipelineClassIndirectEligible do HLSL casa com o C++");
+        Check((R[114] != 0u) == GpuIndirectEligible(M.PipelineClass, H.Flags),
+              Onde + ": GpuIndirectEligible do HLSL casa com o C++ (classe E flag da malha)");
+        Check(R[115] == kGpuPipelineClassCount,
+              Onde + ": SMILE_PIPELINE_CLASS_COUNT casa com o C++");
+        Check(R[116] == GpuPipelineClassOpaqueOneSided &&
+              R[117] == GpuPipelineClassOpaqueTwoSided &&
+              R[118] == GpuPipelineClassMasked &&
+              R[119] == GpuPipelineClassBlend,
+              Onde + ": as quatro SMILE_PIPELINE_CLASS_* casam com o EGpuPipelineClass");
     }
     BufLeitura->Unmap(0, nullptr);
 

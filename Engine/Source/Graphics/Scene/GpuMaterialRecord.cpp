@@ -35,7 +35,7 @@ namespace Smile {
 
         // ---- Bloco de raster (Fase 3) --------------------------------------------------------
         //
-        // Fica ANTES do early-return da tabela de descritores porque nenhum destes campos depende
+        // Fica ANTES do bloco da tabela de descritores porque nenhum destes campos depende
         // dela: sao fatores e passos do MaterialCB, validos com ou sem textura. So os tres BITS
         // de mapa deste bloco (normal, AO, height) descem para o outro lado.
         //
@@ -61,28 +61,40 @@ namespace Smile {
 
         // Sem tabela de descritores nao ha mapa nenhum: ligar o bit aqui faria o shader somar um
         // deslocamento a uma base invalida e amostrar um descritor de outro dono.
-        if (_TextureBase == kInvalidTextureBase) return R;
-
-        R.TextureBase = _TextureBase;
-        if (_C.HasAlbedoMap)   R.Flags |= kMaterialFlagAlbedoMap;
-        if (_C.HasEmissiveMap) R.Flags |= kMaterialFlagEmissiveMap;
-        if (_C.HasMetallicRoughnessMap) {
-            R.Flags |= kMaterialFlagMRMap;
-            // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem este bit o RT
-            // leria o canal errado e um material viraria metal (ou dieletrico) por engano no
-            // bounce. Fica sob o bit do mapa porque sem mapa ele nao descreve nada.
-            if (_C.SpecularPacking) R.Flags |= kMaterialFlagSpecPacked;
+        //
+        // Um IF, e nao um early return, porque esta funcao passou a precisar de UMA saida: a classe
+        // de pipeline e estampada no fim, e uma segunda saida a deixaria de fora justamente no
+        // caminho do material NAO finalizado — por onde passa todo material recem-carregado.
+        if (_TextureBase != kInvalidTextureBase) {
+            R.TextureBase = _TextureBase;
+            if (_C.HasAlbedoMap)   R.Flags |= kMaterialFlagAlbedoMap;
+            if (_C.HasEmissiveMap) R.Flags |= kMaterialFlagEmissiveMap;
+            if (_C.HasMetallicRoughnessMap) {
+                R.Flags |= kMaterialFlagMRMap;
+                // Empacotamento do mapa: "Specular" poe metal em B, glTF poe em R. Sem este bit o RT
+                // leria o canal errado e um material viraria metal (ou dieletrico) por engano no
+                // bounce. Fica sob o bit do mapa porque sem mapa ele nao descreve nada.
+                if (_C.SpecularPacking) R.Flags |= kMaterialFlagSpecPacked;
+            }
+            // Mapa Metalness SEPARADO. Precisa existir porque o loader deixa MetallicFactor = 1
+            // quando ha mapa — sem enxergar o mapa, o RT leria "metal puro" e zeraria o difuso de um
+            // material que e quase todo dieletrico.
+            if (_C.HasMetalnessMap) R.Flags |= kMaterialFlagMetalMap;
+            if (_C.HasRoughnessMap) R.Flags |= kMaterialFlagRoughMap;
+            // Os tres mapas que so o raster consulta. Mesma regra dos de cima: sob a base valida,
+            // porque um bit ligado com base invalida faria o shader amostrar descritor de outro dono.
+            if (_C.HasNormalMap)    R.Flags |= kMaterialFlagNormalMap;
+            if (_C.HasAOMap)        R.Flags |= kMaterialFlagAOMap;
+            if (_C.HasHeightMap)    R.Flags |= kMaterialFlagHeightMap;
         }
-        // Mapa Metalness SEPARADO. Precisa existir porque o loader deixa MetallicFactor = 1
-        // quando ha mapa — sem enxergar o mapa, o RT leria "metal puro" e zeraria o difuso de um
-        // material que e quase todo dieletrico.
-        if (_C.HasMetalnessMap) R.Flags |= kMaterialFlagMetalMap;
-        if (_C.HasRoughnessMap) R.Flags |= kMaterialFlagRoughMap;
-        // Os tres mapas que so o raster consulta. Mesma regra dos de cima: sob a base valida,
-        // porque um bit ligado com base invalida faria o shader amostrar descritor de outro dono.
-        if (_C.HasNormalMap)    R.Flags |= kMaterialFlagNormalMap;
-        if (_C.HasAOMap)        R.Flags |= kMaterialFlagAOMap;
-        if (_C.HasHeightMap)    R.Flags |= kMaterialFlagHeightMap;
+
+        // A CLASSE, por ultimo e num lugar so.
+        //
+        // Depois de todos os bits porque ela e funcao deles; num lugar so porque duas estampagens
+        // seriam duas chances de a linha sair com uma classe que nao corresponde aos proprios
+        // `Flags`. Nenhum bit ligado no bloco acima participa da classe — sao todos bits de MAPA —,
+        // mas depender disso seria depender de uma coincidencia que a proxima flag pode desfazer.
+        R.PipelineClass = GpuPipelineClassFromFlags(R.Flags);
         return R;
     }
 
