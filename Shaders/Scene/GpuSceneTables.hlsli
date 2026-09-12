@@ -126,9 +126,18 @@ struct GpuMeshRecord {
     uint   GeometryPoolId; // um ExecuteIndirect amarra UM par VB/IB: lote nao cruza pool
 };
 
-// A malha nao pode ir pelo caminho INDIRETO (offset fora do contrato do argumento). Ela continua
-// valida para todo o resto; quem a desenha e o fallback CPU.
-#define SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE 1u
+// A malha nao pode ir pelo caminho INDIRETO. Ela continua valida para todo o resto; quem a desenha e
+// o fallback CPU.
+#define SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE 1u // offset fora do contrato do argumento
+#define SMILE_MESH_FLAG_INDEX_COUNT_UNUSABLE    2u // IndexCount nao descreve triangulos inteiros
+
+// Tudo que bloqueia o indireto, numa mascara so. Espelha kGpuMeshIndirectBlocked.
+//
+// MASCARA, e nao uma lista de ifs: a contagem por lote reserva a posicao do comando, entao o
+// classify e o scatter tem de recusar exatamente o mesmo conjunto. Um bit que um conhecesse e o
+// outro nao deixaria posicao reservada sem argumento escrito.
+#define SMILE_MESH_FLAG_INDIRECT_BLOCKED (SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE | \
+                                          SMILE_MESH_FLAG_INDEX_COUNT_UNUSABLE)
 
 // As duas portas do caminho indireto, espelhando GpuPipelineClassIndirectEligible e
 // GpuIndirectEligible (GpuMaterialRecord.h / GpuSceneTables.h).
@@ -143,7 +152,7 @@ bool GpuPipelineClassIndirectEligible(uint _PipelineClass) {
 
 bool GpuIndirectEligible(uint _PipelineClass, uint _MeshFlags) {
     return GpuPipelineClassIndirectEligible(_PipelineClass) &&
-           (_MeshFlags & SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE) == 0u;
+           (_MeshFlags & SMILE_MESH_FLAG_INDIRECT_BLOCKED) == 0u;
 }
 
 #define SMILE_INSTANCE_FLAG_VISIBLE        1u

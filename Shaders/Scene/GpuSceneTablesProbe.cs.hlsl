@@ -102,7 +102,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     Results[b + 26u] = uint4(h.Flags, asuint(h.VertexOffset), h.IndexOffset, h.GeometryPoolId);
     Results[b + 27u] = uint4(
         (h.Flags & SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE) != 0u ? 1u : 0u,
-        h.VirtualGeometryId, 0u, 0u);
+        h.VirtualGeometryId,
+        (h.Flags & SMILE_MESH_FLAG_INDEX_COUNT_UNUSABLE) != 0u ? 1u : 0u,
+        SMILE_MESH_FLAG_INDIRECT_BLOCKED);
 
     // A CLASSE DE PIPELINE (Fase 5) e as duas portas do caminho indireto.
     //

@@ -283,6 +283,7 @@ namespace Smile {
         Fresh_.assign(RowMeshes_.size(), FGpuMeshRecord{});
         GeometryPools_.clear();
         UnrepresentableOffsets_ = 0;
+        UnusableIndexCounts_    = 0;
         for (u32 I = 0; I < NumMeshes; ++I) {
             const FGpuMesh* M = UniqueMeshes_[I];
             FGpuMeshRecord& Row = Fresh_[I + 1];
@@ -292,7 +293,14 @@ namespace Smile {
             Row.IndexSrv      = Row.VertexSrv + 1;
             Row.TriangleSrv   = Row.VertexSrv + 2;
             Row.VertexCount   = M->VertexCount();
-            Row.IndexCount    = M->GetIndexCount();
+            // Ver GpuMeshIndexCountUsable: contagem que nao descreve triangulos inteiros sai do
+            // caminho indireto, e nao do raster. TRIANGLELIST descarta primitiva incompleta em
+            // silencio, entao sem esta marca o defeito apareceria como pedaco de malha faltando.
+            if (!GpuMeshFillIndexCount(Row, M->GetIndexCount())) {
+                ++UnusableIndexCounts_;
+                LogError("GpuMeshTable: IndexCount " + std::to_string(M->GetIndexCount()) +
+                         " nao descreve triangulos inteiros; a malha fica no fallback CPU");
+            }
             Row.TriangleCount = M->RTTriangleCount();
 
             // O PAR de recursos, e nao so o vertex buffer. No `AddMeshesBatch` os dois sao o mesmo
@@ -328,6 +336,7 @@ namespace Smile {
         UniqueMeshes_.clear();
         GeometryPools_.clear();
         UnrepresentableOffsets_ = 0;
+        UnusableIndexCounts_    = 0;
         RowMeshes_.clear();
         RowByMesh_.clear();
         Shadow_.clear();

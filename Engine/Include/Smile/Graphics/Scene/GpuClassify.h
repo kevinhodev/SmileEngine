@@ -91,7 +91,10 @@ namespace Smile {
         GpuClassifyInvalidMeshId     = 4, // CANARIO
         GpuClassifyInvalidPoolId     = 5, // pool fora da lista publicada — CANARIO
         GpuClassifyNotEligible       = 6, // classe fora do indireto nesta fase — POLITICA
-        GpuClassifyUnrepresentable   = 7, // offset da malha fora do contrato do argumento — POLITICA
+        // A linha da malha nao serve ao indireto: qualquer bit de kGpuMeshIndirectBlocked. Cobre
+        // offset irrepresentavel E IndexCount que nao descreve triangulos inteiros — os dois saem
+        // pelo mesmo lugar porque a porta e uma mascara so. POLITICA.
+        GpuClassifyMeshUnusable   = 7,
         GpuClassifyOverflow          = 8, // lote fora da capacidade de BatchCounts — CANARIO
         GpuClassifyOutcomeCount      = 9,
     };
@@ -179,7 +182,7 @@ namespace Smile {
             // Com os dois termos fechados, a CLASSE tem precedencia no relato. O desfecho e o mesmo
             // (fallback CPU); o que isto garante e que o motivo seja deterministico.
             return GpuPipelineClassIndirectEligible(Material.PipelineClass)
-                       ? GpuClassifyUnrepresentable
+                       ? GpuClassifyMeshUnusable
                        : GpuClassifyNotEligible;
         }
 

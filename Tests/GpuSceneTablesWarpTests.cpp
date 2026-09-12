@@ -313,6 +313,53 @@ namespace {
     }
 
     // ---- a PORTA do caminho indireto: classe x flag da malha ----------------------------------
+
+    // ---- IndexCount que nao descreve triangulos inteiros (Fase 5) ----------------------------
+    //
+    // TRIANGLELIST descarta primitiva incompleta em SILENCIO: cinco indices desenham um triangulo e
+    // somem com dois, sem erro de API. A decisao mora na CLASSIFICACAO e nao no scatter porque a
+    // contagem por lote reserva a posicao do comando — recusar depois deixaria posicao reservada sem
+    // argumento escrito, e o ExecuteIndirect executaria ali o comando do frame passado.
+    void TestarContagemDeIndices() {
+        Check(!GpuMeshIndexCountUsable(0u), "zero nao descreve triangulo nenhum");
+        Check(!GpuMeshIndexCountUsable(1u), "um indice, nao");
+        Check(!GpuMeshIndexCountUsable(2u), "dois, nao");
+        Check(GpuMeshIndexCountUsable(3u),  "tres: um triangulo");
+        Check(!GpuMeshIndexCountUsable(4u), "quatro descarta um pedaco");
+        Check(!GpuMeshIndexCountUsable(5u), "cinco tambem");
+        Check(GpuMeshIndexCountUsable(6u),  "seis: dois triangulos");
+        Check(GpuMeshIndexCountUsable(0xFFFFFFFCu), "e o maior multiplo de 3 que cabe em u32");
+        // ZERO pela funcao de PREENCHIMENTO, e nao so pelo predicado. Testar os dois separadamente
+        // deixa escapar exatamente o ramo que os liga: um `% 3 == 0` escrito aqui aceita o zero, e
+        // uma malha vazia entraria no indireto com um comando de zero indices.
+        FGpuMeshRecord Z{};
+        Check(!GpuMeshFillIndexCount(Z, 0u), "contagem zero recusa pela funcao de preenchimento");
+        Check((Z.Flags & GpuMeshIndexCountUnusable) != 0u, "e marca a linha");
+
+        // A funcao de preenchimento escreve o campo nos DOIS ramos: a linha continua valida para o
+        // raster e para o RT; o que ela perde e o indireto.
+        FGpuMeshRecord R{};
+        R.Flags = 1u << 3; // bit de outro dono, para provar que a limpeza e cirurgica
+        Check(!GpuMeshFillIndexCount(R, 5u), "cinco indices recusa");
+        Check(R.IndexCount == 5u, "e mesmo assim o campo e escrito");
+        Check((R.Flags & GpuMeshIndexCountUnusable) != 0u, "com a flag ligada");
+        Check((R.Flags & (1u << 3)) != 0u, "sem tocar no bit do outro dono");
+
+        // invalido -> valido: acontece de verdade quando a malha e recozinhada.
+        Check(GpuMeshFillIndexCount(R, 9u), "nove indices passa");
+        Check((R.Flags & GpuMeshIndexCountUnusable) == 0u, "e a flag anterior foi limpa");
+        Check((R.Flags & (1u << 3)) != 0u, "o bit do outro dono continua la");
+
+        // A MASCARA e a porta: os dois bits fecham o indireto, e sozinhos.
+        Check(!GpuIndirectEligible(GpuPipelineClassOpaqueOneSided, GpuMeshIndexCountUnusable),
+              "so a contagem quebrada ja fecha a porta");
+        Check(!GpuIndirectEligible(GpuPipelineClassOpaqueOneSided, GpuMeshOffsetsUnrepresentable),
+              "so o offset irrepresentavel tambem");
+        Check(!GpuIndirectEligible(GpuPipelineClassOpaqueOneSided, kGpuMeshIndirectBlocked),
+              "e os dois juntos");
+        Check(GpuIndirectEligible(GpuPipelineClassOpaqueOneSided, 1u << 3),
+              "bit reservado, nao");
+    }
     //
     // Duas condicoes independentes num predicado so, e e essa independencia que o teste fixa: as
     // oito combinacoes de (quatro classes) x (flag ligada/desligada), com uma unica abrindo.
@@ -460,8 +507,9 @@ int main() try {
     TestarEnderecoNoPool();
     TestarDiffMalhas();
     TestarPorteiroIndireto();
+    TestarContagemDeIndices();
 
-    // ---- dados: cinco instancias apontando para tres linhas de material ----------------------
+    // ---- dados: seis instancias apontando para tres linhas de material -----------------------
     // A terceira e a quarta compartilham a linha 2 de proposito: e a situacao que a fase existe
     // para permitir (N instancias, um material), e ela tambem prova que MaterialId de verdade
     // enderaca a tabela em vez de coincidir com o indice da instancia.
@@ -507,10 +555,14 @@ int main() try {
         Malhas[I].GeometryPoolId  = 6000u + I;
         Malhas[I].VirtualGeometryId = 7000u + I;
     }
-    // A linha 1 carrega a FLAG, a 2 nao: sem as duas, um espelho que ignorasse `Flags` passaria.
+    // A linha 1 carrega o bit de OFFSET, a 0 nenhum: sem as duas, um espelho que ignorasse `Flags`
+    // passaria.
     Malhas[1].Flags = GpuMeshOffsetsUnrepresentable;
+    // E a 2 carrega o OUTRO bit. Sem uma linha com cada um, um espelho que confundisse os dois
+    // passaria: com o mesmo bit em todas, trocar 1u por 2u nao mudaria resposta nenhuma.
+    Malhas[2].Flags = GpuMeshIndexCountUnusable;
 
-    std::vector<FGpuInstanceGeo> Instancias(5);
+    std::vector<FGpuInstanceGeo> Instancias(6);
     for (u32 I = 0; I < Instancias.size(); ++I) {
         Instancias[I].TriangleSrv = 12u + I * 3u;
         Instancias[I].MaterialSrv = 777u;
@@ -528,6 +580,11 @@ int main() try {
     // instancia fecharia a porta pelo lado da MALHA — a 1 e a 2 ja estao fora pela classe —, e um
     // espelho HLSL que esquecesse o termo da flag passaria verde.
     Instancias[4].MaterialId = 0u; Instancias[4].MeshId = 1u;
+    // A sexta faz o mesmo pelo OUTRO bit bloqueante: classe elegivel sobre a malha cuja contagem de
+    // indices nao serve. Cada termo da mascara precisa da sua propria instancia — com a classe
+    // fechando antes, um espelho que esquecesse o termo passa verde, e foi assim que este teste
+    // deixou o bit de offset escapar uma vez.
+    Instancias[5].MaterialId = 0u; Instancias[5].MeshId = 2u;
     const u32 kInstancias = static_cast<u32>(Instancias.size());
 
     std::vector<FGpuSceneInstanceMeta> Meta(kInstancias);
@@ -764,8 +821,12 @@ int main() try {
         Check(R[106] == H.IndexOffset,    Onde + ": IndexOffset no offset 60");
         Check(R[107] == H.GeometryPoolId, Onde + ": GeometryPoolId no offset 64");
         Check((R[108] != 0u) ==
-                  ((H.Flags & GpuMeshOffsetsUnrepresentable) != 0u),
+              ((H.Flags & GpuMeshOffsetsUnrepresentable) != 0u),
               Onde + ": SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE casa com o C++");
+        Check((R[110] != 0u) == ((H.Flags & GpuMeshIndexCountUnusable) != 0u),
+              Onde + ": SMILE_MESH_FLAG_INDEX_COUNT_UNUSABLE casa com o C++");
+        Check(R[111] == kGpuMeshIndirectBlocked,
+              Onde + ": a mascara SMILE_MESH_FLAG_INDIRECT_BLOCKED casa com o C++");
         Check(R[109] == H.VirtualGeometryId, Onde + ": VirtualGeometryId no offset 52");
 
         Check(R[36] == IM.MeshId && R[37] == IM.MaterialId && R[38] == IM.CellId &&

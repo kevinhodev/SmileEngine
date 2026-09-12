@@ -22,7 +22,7 @@
 #define SMILE_CLASSIFY_INVALID_MESH_ID     4u
 #define SMILE_CLASSIFY_INVALID_POOL_ID     5u
 #define SMILE_CLASSIFY_NOT_ELIGIBLE        6u
-#define SMILE_CLASSIFY_UNREPRESENTABLE     7u
+#define SMILE_CLASSIFY_MESH_UNUSABLE     7u
 #define SMILE_CLASSIFY_OVERFLOW            8u
 #define SMILE_CLASSIFY_OUTCOME_COUNT       9u
 
@@ -109,7 +109,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // Com os dois termos fechados, a CLASSE tem precedencia no relato: o desfecho e o mesmo
         // (fallback CPU), e isto so torna o motivo deterministico.
         const uint Motivo = GpuPipelineClassIndirectEligible(Material.PipelineClass)
-                                ? SMILE_CLASSIFY_UNREPRESENTABLE
+                                ? SMILE_CLASSIFY_MESH_UNUSABLE
                                 : SMILE_CLASSIFY_NOT_ELIGIBLE;
         InterlockedAdd(Counters[Motivo], 1u);
         return;

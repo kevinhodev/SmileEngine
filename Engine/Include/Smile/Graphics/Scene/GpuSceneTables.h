@@ -133,7 +133,51 @@ namespace Smile {
         // INDIRETO, e quem a desenha e o fallback CPU. Regra 6 do plano: desenhar pela CPU e
         // aceitavel, geometria sumir nao e.
         GpuMeshOffsetsUnrepresentable = 1u << 0,
+        // O `IndexCount` nao descreve triangulos inteiros. Mesma politica: sai do indireto, fica no
+        // raster. Ver `GpuMeshIndexCountUsable` para o porque.
+        GpuMeshIndexCountUnusable = 1u << 1,
     };
+
+    // Tudo que impede o caminho indireto, numa mascara so.
+    //
+    // Existe para que um bit novo entre em UM lugar. A alternativa — cada consumidor listando os
+    // bits que conhece — ja tem nome: o dia em que o terceiro bit nascer, o consumidor que nao for
+    // atualizado emite comando para uma linha que os outros recusam.
+    inline constexpr u32 kGpuMeshIndirectBlocked =
+        GpuMeshOffsetsUnrepresentable | GpuMeshIndexCountUnusable;
+
+    // O `IndexCount` descreve triangulos INTEIROS?
+    //
+    // TRIANGLELIST descarta primitiva incompleta em SILENCIO. Cinco indices desenham um triangulo e
+    // somem com os outros dois: sem erro de API, sem warning, sem nada — so um pedaco de malha que
+    // nao aparece. E zero nao descreve triangulo nenhum.
+    //
+    // ⚠️ Isto tem de ser decidido na CLASSIFICACAO, e nao no scatter. A contagem por lote RESERVA a
+    // posicao do comando; se o scatter rejeitasse depois, `DrawCounts` diria N e existiriam N-1
+    // argumentos escritos, e o `ExecuteIndirect` executaria a posicao restante com o comando do
+    // frame passado. Por isso a recusa vira FLAG na linha, que o `GpuIndirectEligible` ja consulta:
+    // contagem e emissao passam a olhar o mesmo bit.
+    inline bool GpuMeshIndexCountUsable(u32 _IndexCount) {
+        return _IndexCount >= 3u && (_IndexCount % 3u) == 0u;
+    }
+
+    // Preenche `IndexCount` e marca a linha quando ele nao serve ao indireto.
+    //
+    // Pura e separada pelo mesmo motivo das outras: o ramo invalido exige uma malha com contagem
+    // quebrada, que nenhuma cena cozida vai fornecer sob demanda. Aqui basta um inteiro.
+    //
+    // A flag e LIMPA no ramo valido, pela mesma razao do `GpuMeshFillPoolAddress`: `true` significa
+    // "utilizavel pelo caminho indireto", e uma marca de uma chamada anterior contradiria o retorno.
+    // So este bit — os outros tem donos diferentes.
+    inline bool GpuMeshFillIndexCount(FGpuMeshRecord& _Row, u32 _IndexCount) {
+        _Row.IndexCount = _IndexCount;
+        if (GpuMeshIndexCountUsable(_IndexCount)) {
+            _Row.Flags &= ~static_cast<u32>(GpuMeshIndexCountUnusable);
+            return true;
+        }
+        _Row.Flags |= GpuMeshIndexCountUnusable;
+        return false;
+    }
 
     // Offsets POISON da linha irrepresentavel.
     //
@@ -220,21 +264,26 @@ namespace Smile {
 
     // === A porta do caminho indireto ============================================================
     //
-    // As DUAS condicoes, num predicado so: a classe do material tem de ser elegivel (Fase 5: apenas
-    // `OpaqueOneSided`) e a linha da malha tem de ter endereco representavel no argumento.
+    // As duas condicoes, num predicado so: a classe do material tem de ser elegivel (Fase 5: apenas
+    // `OpaqueOneSided`) e a linha da malha nao pode carregar nenhum bit de `kGpuMeshIndirectBlocked`
+    // — hoje offset irrepresentavel e `IndexCount` que nao descreve triangulos inteiros.
     //
     // Junto, e nao duas checagens espalhadas, porque quem emite o comando e quem CONTA o fallback
     // tem de usar a mesma resposta. Duas copias da condicao dariam, no dia em que uma delas
     // esquecesse um termo, um objeto desenhado duas vezes (aceitavel) ou nenhuma (nao e) — e o
     // contador diria que esta tudo certo.
     //
+    // ⚠️ E por isso que o termo da malha e uma MASCARA e nao uma lista de bits: a contagem por lote
+    // reserva a posicao do comando, entao o classify e o scatter tem de recusar exatamente o mesmo
+    // conjunto. Um bit que um conhecesse e o outro nao deixaria uma posicao reservada sem argumento
+    // escrito, e o `ExecuteIndirect` executaria ali o comando do frame passado.
+    //
     // ⚠️ O que este predicado prova e o que ele NAO prova. Ele e a unica definicao de elegibilidade,
-    // e o teste cobre as oito combinacoes de (classe, flag). Que o EMISSOR de comandos o consulte —
-    // ou seja, que a flag de offset irrepresentavel de fato impeca a escrita do argumento — so pode
-    // ser provado pela slice que escreve o classify/scatter, porque hoje nao existe emissor nenhum.
+    // e o teste cobre as combinacoes de (classe, flags). Que o EMISSOR de comandos o consulte — ou
+    // seja, que a linha bloqueada de fato nao receba argumento — e obrigacao da slice do scatter.
     inline bool GpuIndirectEligible(u32 _PipelineClass, u32 _MeshFlags) {
         return GpuPipelineClassIndirectEligible(_PipelineClass) &&
-               (_MeshFlags & GpuMeshOffsetsUnrepresentable) == 0u;
+               (_MeshFlags & kGpuMeshIndirectBlocked) == 0u;
     }
 
     inline bool operator==(const FGpuMeshRecord& A, const FGpuMeshRecord& B) {
@@ -633,12 +682,17 @@ namespace Smile {
         // Malhas que ficaram fora do caminho indireto por offset inalcancavel. Contador, e nao
         // booleano: o numero diz quantas, e zero e o estado esperado em toda cena de hoje.
         u32 UnrepresentableOffsets() const { return UnrepresentableOffsets_; }
+        // Malhas fora do indireto por IndexCount que nao descreve triangulos inteiros. Separado do
+        // de cima porque as causas sao diferentes: offset e o pool tendo crescido, contagem e o
+        // cozido. Zero e o estado esperado nas cenas de hoje.
+        u32 UnusableIndexCounts() const { return UnusableIndexCounts_; }
 
     private:
         FGpuTableStorage Storage_;
         std::vector<const FGpuMesh*>              UniqueMeshes_;
         std::vector<FGpuGeometryPool>             GeometryPools_;
         u32                                       UnrepresentableOffsets_ = 0;
+        u32                                       UnusableIndexCounts_    = 0;
         std::vector<const FGpuMesh*>              RowMeshes_;   // [0] = nullptr (linha ausente)
         std::unordered_map<const FGpuMesh*, u32>  RowByMesh_;
         std::vector<FGpuMeshRecord>               Shadow_;

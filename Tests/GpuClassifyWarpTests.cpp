@@ -93,7 +93,7 @@ namespace {
             case GpuClassifyInvalidMeshId:     return "InvalidMeshId";
             case GpuClassifyInvalidPoolId:     return "InvalidPoolId";
             case GpuClassifyNotEligible:       return "NotEligible";
-            case GpuClassifyUnrepresentable:   return "Unrepresentable";
+            case GpuClassifyMeshUnusable:   return "Unrepresentable";
             case GpuClassifyOverflow:          return "Overflow";
             default:                           return "?";
         }
@@ -247,7 +247,7 @@ namespace {
             GpuClassifyNotEligible,       // 3: two-sided
             GpuClassifyNotEligible,       // 4: masked
             GpuClassifyNotEligible,       // 5: blend
-            GpuClassifyUnrepresentable,   // 6: classe elegivel, malha com a flag
+            GpuClassifyMeshUnusable,   // 6: classe elegivel, malha com a flag
             GpuClassifyNotEligible,       // 7: os DOIS termos fechados -> a classe tem precedencia
             GpuClassifyInvalidPoolId,     // 8: pool fora da lista
             GpuClassifyInvalidMaterialId, // 9
@@ -360,7 +360,7 @@ namespace {
             const u32 O = GpuClassifyCandidate(Slot, Metas, Mats, Meshs, kPoolCount, Key);
             // Politica: alguem desenha, e nao ha exposicao.
             if (O == GpuClassifyIndirect || O == GpuClassifyNotEligible ||
-                O == GpuClassifyUnrepresentable)
+                O == GpuClassifyMeshUnusable)
                 continue;
             // Canario. A classe so e conhecida quando slot e os dois ids sao validos — sem ela nao
             // da nem para dizer se o candidato estava exposto, que e o pior caso.
@@ -1118,7 +1118,7 @@ int main() try {
     Querido[GpuClassifyInvalidMeshId]     = 1u;
     Querido[GpuClassifyInvalidPoolId]     = 1u;
     Querido[GpuClassifyNotEligible]       = 4u; // two-sided, masked, blend, e o de dois termos
-    Querido[GpuClassifyUnrepresentable]   = 1u;
+    Querido[GpuClassifyMeshUnusable]   = 1u;
     Querido[GpuClassifyOverflow]          = 0u;
 
     u32 SomaGpu = 0;
