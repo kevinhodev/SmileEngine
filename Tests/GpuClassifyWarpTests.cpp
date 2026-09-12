@@ -20,6 +20,7 @@
 // fence — antes dela a validacao da execucao ainda nao existe.
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -58,6 +59,16 @@ namespace {
         }
     }
 
+
+    // Versao u64 do CheckEq. Existe porque `GpuBatchSlotCount` devolve u64 de proposito: comparar o
+    // produto depois de espremer em u32 seria testar exatamente o bug que ele evita.
+    void CheckEq64(u64 _Got, u64 _Want, std::string_view _Message) {
+        if (_Got != _Want) {
+            ++Failures;
+            std::cerr << "  FAIL: " << _Message << " (obtido " << _Got << ", esperado " << _Want
+                      << ")\n";
+        }
+    }
     void Hr(HRESULT _H, const char* _Onde) {
         if (FAILED(_H)) {
             char Buf[32];
@@ -175,7 +186,7 @@ namespace {
 
     // ---- parte CPU pura: o indice do lote -----------------------------------------------------
     void TestarIndiceDeLote() {
-        CheckEq(GpuBatchSlotCount(kPoolCount), kGpuPipelineClassCount * kPoolCount,
+        CheckEq(static_cast<u32>(GpuBatchSlotCount(kPoolCount)), kGpuPipelineClassCount * kPoolCount,
                 "a tabela de lotes reserva as quatro classes");
         // CLASS-MAJOR: os lotes de uma classe sao contiguos, e classes diferentes nunca colidem.
         CheckEq(GpuBatchIndex({ GpuPipelineClassOpaqueOneSided, 0u }, kPoolCount), 0u, "lote {0,0}");
@@ -209,7 +220,8 @@ namespace {
 
         FGpuClassifyInput In{};
         In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
-        In.PoolCount = kPoolCount; In.BatchCapacity = GpuBatchSlotCount(kPoolCount);
+        In.PoolCount = kPoolCount;
+        In.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount));
 
         std::vector<u32> Lotes, Contadores;
         const u32 Indiretos = ClassifyCandidates(In, Lotes, Contadores);
@@ -294,13 +306,14 @@ namespace {
 
         FGpuClassifyInput In{};
         In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
-        In.PoolCount = kPoolCount; In.BatchCapacity = GpuBatchSlotCount(kPoolCount);
+        In.PoolCount = kPoolCount;
+        In.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount));
         CheckEq(GpuClassifyPreflight(In), GpuClassifyPreflightOk, "a cena do teste passa");
 
         // A CAPACIDADE EXATA passa, e uma abaixo dela nao. E este limite que torna o overflow
         // inalcancavel: nao existe folga a descobrir depois do dispatch.
         FGpuClassifyInput Curta = In;
-        Curta.BatchCapacity = GpuBatchSlotCount(kPoolCount) - 1u;
+        Curta.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount)) - 1u;
         CheckEq(GpuClassifyPreflight(Curta), GpuClassifyPreflightSmallBatchBuffer,
                 "um slot a menos ja reprova");
         Curta.BatchCapacity = 1u;
@@ -310,6 +323,47 @@ namespace {
         FGpuClassifyInput SemPool = In;
         SemPool.PoolCount = 0u;
         CheckEq(GpuClassifyPreflight(SemPool), GpuClassifyPreflightNoPools, "sem pool, reprova");
+
+        // ---- a fronteira em que o produto nao cabe mais em u32 --------------------------------
+        //
+        // `kGpuPipelineClassCount * PoolCount` em u32 da a volta a partir de 2^30, e da a volta para
+        // ZERO: sem o calculo em u64, uma capacidade qualquer passaria e o overflow que o preflight
+        // promete eliminar voltaria a ser alcancavel.
+        {
+            constexpr u32 kUltimoValido = UINT32_MAX / kGpuPipelineClassCount; // 2^30 - 1
+            constexpr u32 kPrimeiroInvalido = kUltimoValido + 1u;              // 2^30
+
+            // O produto exato, sem truncar. Em u32 o segundo daria ZERO.
+            CheckEq64(GpuBatchSlotCount(kUltimoValido), 4294967292ull,
+                      "o ultimo PoolCount valido pede 4.294.967.292 slots");
+            CheckEq64(GpuBatchSlotCount(kPrimeiroInvalido), 4294967296ull,
+                      "o primeiro invalido pede 2^32 — que em u32 seria zero");
+
+            FGpuClassifyInput Lim = In;
+            Lim.PoolCount     = kUltimoValido;
+            Lim.BatchCapacity = 4294967292u;
+            CheckEq(GpuClassifyPreflight(Lim), GpuClassifyPreflightOk,
+                    "a ultima entrada valida passa, com a capacidade exata");
+            Lim.BatchCapacity = 4294967291u;
+            CheckEq(GpuClassifyPreflight(Lim), GpuClassifyPreflightSmallBatchBuffer,
+                    "e um slot abaixo dela reprova por buffer pequeno");
+
+            Lim.PoolCount     = kPrimeiroInvalido;
+            Lim.BatchCapacity = UINT32_MAX;
+            CheckEq(GpuClassifyPreflight(Lim), GpuClassifyPreflightTooManyPools,
+                    "o primeiro invalido reprova mesmo com a maior capacidade que existe");
+            // E o caso que o produto truncado deixaria passar: capacidade ZERO contra um necessario
+            // que, em u32, tambem seria zero.
+            Lim.BatchCapacity = 0u;
+            CheckEq(GpuClassifyPreflight(Lim), GpuClassifyPreflightTooManyPools,
+                    "e com capacidade zero, que e o que o produto truncado aprovaria");
+
+            // O indice continua cabendo em u32 na ultima entrada valida: o maior possivel e
+            // exatamente `GpuBatchSlotCount - 1`.
+            const u32 Maior = GpuBatchIndex({ kGpuPipelineClassCount - 1u, kUltimoValido - 1u },
+                                            kUltimoValido);
+            CheckEq(Maior, 4294967291u, "o maior indice sob preflight aprovado nao da a volta");
+        }
 
         for (int Qual = 0; Qual < 3; ++Qual) {
             FGpuClassifyInput Vazia = In;
@@ -642,7 +696,8 @@ int main() try {
 
     FGpuClassifyInput In{};
     In.Slots = Slot; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
-    In.PoolCount = kPoolCount; In.BatchCapacity = GpuBatchSlotCount(kPoolCount);
+    In.PoolCount = kPoolCount;
+        In.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount));
 
     std::vector<u32> LotesCpu, ContCpu;
     ClassifyCandidates(In, LotesCpu, ContCpu);

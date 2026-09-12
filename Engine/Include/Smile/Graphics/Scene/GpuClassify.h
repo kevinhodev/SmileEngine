@@ -71,6 +71,7 @@
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
 #include "Smile/Graphics/Scene/GpuSceneTables.h"
 
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -113,10 +114,28 @@ namespace Smile {
     // (pools sao chunks de 256 MB, nao milhares), poupa uma troca de formato na Fase 7, e da ao
     // teste uma asseracao util: as faixas das classes 1..3 tem de ficar em ZERO, o que prova que a
     // elegibilidade barrou de fato, em vez de o dado nao ter aparecido.
+    //
+    // ⚠️ A aritmetica e u32 e so e segura DEPOIS de o preflight aprovar. Sob preflight aprovado o
+    // maior indice possivel e `(kGpuPipelineClassCount - 1) * PoolCount + (PoolCount - 1)`, que e
+    // exatamente `GpuBatchSlotCount(PoolCount) - 1` — e o preflight ja garantiu que aquele total
+    // cabe em u32. Chamada com um `PoolCount` que nao passou por ele, esta conta pode dar a volta.
     inline u32 GpuBatchIndex(const FGpuBatchKey& _Key, u32 _PoolCount) {
         return _Key.PipelineClass * _PoolCount + _Key.GeometryPoolId;
     }
-    inline u32 GpuBatchSlotCount(u32 _PoolCount) { return kGpuPipelineClassCount * _PoolCount; }
+
+    // Quantos slots `BatchCounts` precisa ter, em u64 e sem truncar.
+    //
+    // O u64 nao e zelo. `kGpuPipelineClassCount * PoolCount` em u32 da a volta a partir de
+    // `PoolCount == 2^30`, e da a volta para ZERO — que passa por QUALQUER capacidade. O preflight
+    // compararia contra o produto truncado e prometeria overflow inalcancavel enquanto o tornava
+    // alcancavel, que e o oposto do que ele existe para fazer.
+    //
+    // Essa quantidade de pool e fisicamente inviavel hoje (cada pool e um chunk de ate 256 MB), e e
+    // justamente por isso que a checagem tem de morar aqui: esta funcao e o CONTRATO DE
+    // DIMENSIONAMENTO, e quem aloca o buffer vai chama-la sem revisar a aritmetica.
+    inline u64 GpuBatchSlotCount(u32 _PoolCount) {
+        return static_cast<u64>(kGpuPipelineClassCount) * _PoolCount;
+    }
 
     // Desfecho de UM candidato.
     //
@@ -187,6 +206,11 @@ namespace Smile {
         // `InvalidSlot`; material ou malha vazios fazem todo candidato virar id invalido. Em
         // qualquer dos tres o dispatch so produziria canario.
         GpuClassifyPreflightEmptyTable = 3,
+        // Mais pools do que `BatchCounts` pode enderecar: `kGpuPipelineClassCount * PoolCount`
+        // passa de UINT32_MAX. Nao existe `BatchCapacity` capaz de cobrir — ela propria e u32 —, e o
+        // `GpuBatchIndex` passaria a dar a volta. Motivo SEPARADO do buffer pequeno porque a acao e
+        // outra: aqui nao ha o que alocar, e o que quebrou foi a cena.
+        GpuClassifyPreflightTooManyPools = 4,
     };
 
     // O que o dispatch recebe. Espelha o ClassifyCB do shader.
@@ -211,8 +235,11 @@ namespace Smile {
         if (_In.Meta.empty() || _In.Materials.empty() || _In.Meshes.empty())
             return GpuClassifyPreflightEmptyTable;
         if (_In.PoolCount == 0u) return GpuClassifyPreflightNoPools;
-        if (_In.BatchCapacity < GpuBatchSlotCount(_In.PoolCount))
-            return GpuClassifyPreflightSmallBatchBuffer;
+        // Em u64 e nesta ordem: primeiro se o total CABE em u32, depois se a capacidade o cobre.
+        // Invertido, a comparacao de capacidade usaria um numero que ja deu a volta.
+        const u64 Necessario = GpuBatchSlotCount(_In.PoolCount);
+        if (Necessario > UINT32_MAX) return GpuClassifyPreflightTooManyPools;
+        if (_In.BatchCapacity < Necessario) return GpuClassifyPreflightSmallBatchBuffer;
         return GpuClassifyPreflightOk;
     }
 
