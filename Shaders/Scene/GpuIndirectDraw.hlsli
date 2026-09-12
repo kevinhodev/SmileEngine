@@ -36,4 +36,10 @@ struct GpuIndirectDrawArgs {
     uint PrevTransformSrv;         \
     uint InstanceSlot;
 
+// Teto de instancias da SONDA de teste, espelhado em `kProbeMaxInstances` no lado C++.
+//
+// O espelho se AUTO-VERIFICA: o teste confere o conjunto exato de posicoes escritas, e uma constante
+// diferente aqui desloca todas elas. Nao ha como divergir em silencio.
+#define SMILE_PROBE_MAX_INSTANCES 4u
+
 #endif // SMILE_SCENE_GPUINDIRECTDRAW_HLSLI

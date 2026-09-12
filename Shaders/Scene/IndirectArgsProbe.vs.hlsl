@@ -6,17 +6,23 @@
 // constante trocadas, o codigo compila, o comando executa, e a linha do material chega no slot da
 // instancia.
 //
-// TRES observaveis, e cada um prova um grupo de campos:
+// CINCO observaveis, e cada um prova um campo:
 //
-//   SV_VertexID      — vem do INDEX BUFFER. Prova `StartIndexLocation` e, pelo numero de invocacoes,
-//                      `IndexCountPerInstance`. NAO carrega `BaseVertexLocation`: medido em WARP, o
-//                      valor chega sem ele.
-//   VertexValue      — vem do VERTEX BUFFER, onde `VB[k] == k`. Como o fetch e
-//                      `VB[IndexBuffer[i] + BaseVertexLocation]`, a diferenca para o SV_VertexID E
-//                      o `BaseVertexLocation`. Sem vertex buffer o campo seria inobservavel, e o
-//                      teste estaria declarando uma cobertura que nao tem.
-//   as constantes    — provam as duas entradas de CONSTANT e a sobrevivencia das outras tres, que o
-//                      passe amarra uma vez.
+//   SV_VertexID    — vem do INDEX BUFFER. Prova `StartIndexLocation`, e pelo conjunto de invocacoes,
+//                    `IndexCountPerInstance`. NAO carrega `BaseVertexLocation`: medido em WARP.
+//   SV_InstanceID  — 0-based DENTRO do comando. Prova `InstanceCount` pelo conjunto. NAO carrega
+//                    `StartInstanceLocation`, pela mesma razao do de cima.
+//   VertexValue    — vem do vertex buffer PER_VERTEX, onde `VB[k] == k`. O fetch e
+//                    `VB[IndexBuffer[i] + BaseVertexLocation]`, entao a diferenca para o SV_VertexID
+//                    E o campo.
+//   InstanceValue  — vem do vertex buffer PER_INSTANCE, onde `IB[k] == k`. O fetch e
+//                    `IB[SV_InstanceID + StartInstanceLocation]`, entao a diferenca para o
+//                    SV_InstanceID E o campo.
+//   as constantes  — provam as duas entradas de CONSTANT e a sobrevivencia das outras tres, que o
+//                    passe amarra uma vez.
+//
+// Os dois buffers de atributo existem porque sem eles `BaseVertexLocation` e `StartInstanceLocation`
+// nao tem efeito OBSERVAVEL nenhum, e o teste estaria declarando uma cobertura que nao tem.
 //
 // Este shader nao entra em nenhum passe.
 
@@ -29,12 +35,18 @@ cbuffer DrawConstantsCB : register(b4) {
 RWStructuredBuffer<uint4> Observed : register(u0);
 
 struct FVertexIn {
-    uint Value : TEXCOORD0;
+    uint VertexValue   : TEXCOORD0; // per-vertex
+    uint InstanceValue : TEXCOORD1; // per-instance
 };
 
-float4 main(FVertexIn In, uint VertexId : SV_VertexID) : SV_Position {
-    Observed[VertexId * 2u + 0u] = uint4(MaterialRow, InstanceSlot, In.Value, 1u);
-    Observed[VertexId * 2u + 1u] = uint4(MaterialTableSrv, TransformSrv, PrevTransformSrv, VertexId);
+float4 main(FVertexIn In, uint VertexId : SV_VertexID, uint InstanceId : SV_InstanceID)
+    : SV_Position {
+    // Endereco por (vertice, instancia): o conjunto de posicoes escritas E o conjunto de invocacoes,
+    // entao `IndexCountPerInstance` e `InstanceCount` errados nao produzem valor errado — produzem
+    // escrita em outro lugar, ou a falta dela.
+    const uint Base = (VertexId * SMILE_PROBE_MAX_INSTANCES + InstanceId) * 2u;
+    Observed[Base + 0u] = uint4(MaterialRow, InstanceSlot, In.VertexValue, 1u);
+    Observed[Base + 1u] = uint4(MaterialTableSrv, TransformSrv, PrevTransformSrv, In.InstanceValue);
     // Fora do frustum: a sonda so existe pelo efeito colateral do UAV, e rasterizar nao acrescenta
     // nada ao que ela mede.
     return float4(2.0f, 2.0f, 0.5f, 1.0f);

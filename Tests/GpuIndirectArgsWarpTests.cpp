@@ -11,19 +11,27 @@
 // ler. Aqui o caminho inteiro roda — compute monta pela struct HLSL, `ExecuteIndirect` consome pela
 // command signature de PRODUCAO, e um vertex shader relata o que recebeu.
 //
-// O endereco de escrita do observador e o proprio `SV_VertexID`, que num draw indexado e o valor
-// lido do index buffer. Entao um `StartIndexLocation` errado nao produz valor errado: produz escrita
-// em OUTRO lugar, e o teste confere o CONJUNTO de posicoes escritas, nao so o conteudo delas.
+// A unidade de observacao e o par (vertice, instancia), e o endereco de escrita vem dos system
+// values. Entao um campo de DRAW errado nao produz valor errado: produz invocacao em OUTRO lugar, ou
+// a falta dela — e o teste confere o CONJUNTO EXATO de invocacoes, nao so o conteudo.
 //
-// `BaseVertexLocation` NAO chega no SV_VertexID — medido em WARP. Quem o prova e o atributo buscado
-// do vertex buffer, onde `VB[k] == k`: o fetch e `VB[IndexBuffer[i] + BaseVertexLocation]`, entao a
-// diferenca para o SV_VertexID E o campo. Sem esse vertex buffer o campo seria inobservavel, e o
-// teste estaria declarando uma cobertura que nao tem.
+// `BaseVertexLocation` e `StartInstanceLocation` NAO chegam nos system values (medido em WARP). Quem
+// os prova sao os dois buffers de atributo, `VB[k] == k` por vertice e por instancia: os fetches sao
+// `VB[IndexBuffer[i] + BaseVertexLocation]` e `IB[SV_InstanceID + StartInstanceLocation]`, entao a
+// diferenca para o system value E o campo. Sem esses dois buffers os campos seriam inobservaveis, e
+// o teste estaria declarando uma cobertura que nao tem.
+//
+// A camada de debug PARTICIPA do resultado, drenada DEPOIS da fence: imprimir sem reprovar seria um
+// teste que le a propria falha e segue em frente.
 //
 // ⚠️ A topologia e TRIANGLELIST e `IndexCountPerInstance` tem de ser multiplo de 3: o resto de uma
 // primitiva incompleta e descartado em silencio. A primeira versao deste teste usava 2 e 4 indices,
 // e os comandos com 2 nao produziam vertice nenhum — o sintoma apontava para a command signature,
 // que nao tinha nada a ver com isso.
+//
+// O ultimo bloco mede o RESET das root constants depois do ExecuteIndirect, com um draw direto que
+// nao reamarra nada. E o risco de integracao da fase, e esta aqui para ser fato medido em vez de
+// nota de rodape.
 //
 // WARP nao exige placa. O que ele nao cobre e o comportamento sob as PSOs de producao, que fica
 // para o A/B da slice que trocar o passe.
@@ -36,6 +44,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <d3d12.h>
@@ -87,11 +96,16 @@ namespace {
     // maior que o recurso. Entao o buffer e dimensionado pelo maximo, e quem limita a execucao e o
     // count buffer. Os dois ultimos comandos existem justamente para PROVAR isso: eles sao validos
     // e escreveriam em posicoes proprias se fossem executados.
+    //
+    // (Isto NAO diz que o stride tem de ser o tamanho do payload: o D3D12 aceita stride maior, com
+    // padding entre comandos. Diz que o buffer se dimensiona pelo stride declarado.)
     constexpr u32 kCommandCount   = 4;
     constexpr u32 kExecutedCount  = 2;
     constexpr u32 kIndexCount     = 64;   // valores sequenciais: IB[i] == i
     constexpr u32 kVertexCount    = 1024; // valores sequenciais: VB[k] == k
-    constexpr u32 kObservedSlots  = 1024; // dois uint4 por vertice
+    constexpr u32 kInstanceDataCount = 64; // idem, com passo por INSTANCIA
+    // dois uint4 por INVOCACAO, e uma invocacao e um par (vertice, instancia)
+    constexpr u32 kObservedSlots  = 1024;
     constexpr u32 kSentinela      = 0xFFFFFFFFu;
 
     // Veneno nas DUAS constantes que o comando escreve. Sem isto, uma command signature que nao
@@ -104,12 +118,18 @@ namespace {
     constexpr u32 kPasseTransformSrv   = 0x000000B2u;
     constexpr u32 kPassePrevTransform  = 0x000000C3u;
 
+    // Espelho de SMILE_PROBE_MAX_INSTANCES. AUTO-VERIFICAVEL: a sonda endereca a saida com esta
+    // conta, e um valor diferente aqui desloca o conjunto inteiro de posicoes esperadas.
+    constexpr u32 kProbeMaxInstances = 4u;
+
     struct FComando {
         u32 MaterialRow;
         u32 InstanceSlot;
         u32 IndexCountPerInstance;
+        u32 InstanceCount;
         u32 StartIndexLocation;
         i32 BaseVertexLocation;
+        u32 StartInstanceLocation;
     };
 
     // Valores TODOS distintos entre si e entre campos: com 1 e 0 espalhados, trocar dois campos
@@ -122,13 +142,25 @@ namespace {
     //
     // Faixas de indice DISJUNTAS: se dois comandos escrevessem nos mesmos vertices, o ultimo
     // venceria e o teste leria um comando no lugar do outro.
+    //
+    // `InstanceCount` e `StartInstanceLocation` DISTINTOS por comando. Com os dois fixos em 1/0 -- e
+    // era assim na primeira versao -- um `InstanceCount` maior repetiria as MESMAS escritas e o teste
+    // ficaria verde sem observar nem um dos dois campos.
+    //                                  row  slot  idx  inst  start  base  startInst
     constexpr FComando kComandos[kCommandCount] = {
-        { 3u,  7u,  3u,  0u, 100 },
-        { 11u, 41u, 6u,  6u, 200 },
+        { 3u,  7u,  3u, 1u,  0u, 100,  0u },
+        { 11u, 41u, 6u, 3u,  6u, 200,  5u },
         // Alem do count: validos, e tem de NAO executar.
-        { 23u, 71u, 3u, 24u, 300 },
-        { 29u, 83u, 3u, 30u, 400 },
+        { 23u, 71u, 3u, 2u, 24u, 300,  9u },
+        { 29u, 83u, 3u, 4u, 30u, 400, 11u },
     };
+    static_assert(kComandos[1].InstanceCount <= kProbeMaxInstances);
+    static_assert(kComandos[3].InstanceCount <= kProbeMaxInstances);
+
+    // Draw DIRETO depois do ExecuteIndirect, para medir o RESET das root constants. Faixa de indice
+    // propria, fora de todos os comandos.
+    constexpr u32 kDiretoStartIndex = 36u;
+    constexpr u32 kDiretoIndexCount = 3u;
 }
 
 int main() try {
@@ -158,10 +190,18 @@ int main() try {
            "D3D12CreateDevice");
     }
 
-    // Despeja o que a camada tiver a dizer. Chamado no fim e tambem quando algo falha.
+    // A camada de debug PARTICIPA DO RESULTADO: ERROR e CORRUPTION reprovam o teste, e nao apenas
+    // aparecem no log. Um ExecuteIndirect com estado invalido pode executar, produzir numeros que
+    // batem, e ainda assim ter sido recusado pela validacao — imprimir sem reprovar seria um teste
+    // que le a propria falha e segue em frente.
+    //
+    // Tem de ser drenada DEPOIS da fence: a validacao da execucao so existe quando a execucao
+    // aconteceu, e uma drenagem so antes do ExecuteCommandLists nunca ve nada dela.
     wrl::ComPtr<ID3D12InfoQueue> InfoQueue;
     Device.As(&InfoQueue);
-    auto DespejarMensagens = [&]() {
+    Check(InfoQueue != nullptr,
+          "a camada de debug esta ativa (sem ela o teste perde metade da cobertura)");
+    auto DrenarCamada = [&](const char* _Quando) {
         if (!InfoQueue) return;
         const UINT64 N = InfoQueue->GetNumStoredMessages();
         for (UINT64 I = 0; I < N; ++I) {
@@ -170,8 +210,13 @@ int main() try {
             std::vector<u8> Buf(Bytes);
             auto* Msg = reinterpret_cast<D3D12_MESSAGE*>(Buf.data());
             if (FAILED(InfoQueue->GetMessage(I, Msg, &Bytes))) continue;
-            if (Msg->Severity <= D3D12_MESSAGE_SEVERITY_WARNING)
-                std::cerr << "  [D3D12] " << Msg->pDescription << "\n";
+            if (Msg->Severity > D3D12_MESSAGE_SEVERITY_WARNING) continue;
+            std::cerr << "  [D3D12/" << _Quando << "] " << Msg->pDescription << "\n";
+            if (Msg->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
+                ++Failures;
+                std::cerr << "  FAIL: a camada de debug reprovou (severidade "
+                          << static_cast<int>(Msg->Severity) << ")\n";
+            }
         }
         InfoQueue->ClearStoredMessages();
     };
@@ -213,10 +258,10 @@ int main() try {
         Specs[I * 8u + 0u] = C.MaterialRow;
         Specs[I * 8u + 1u] = C.InstanceSlot;
         Specs[I * 8u + 2u] = C.IndexCountPerInstance;
-        Specs[I * 8u + 3u] = 1u; // InstanceCount
+        Specs[I * 8u + 3u] = C.InstanceCount;
         Specs[I * 8u + 4u] = C.StartIndexLocation;
         std::memcpy(&Specs[I * 8u + 5u], &C.BaseVertexLocation, sizeof(i32));
-        Specs[I * 8u + 6u] = 0u; // StartInstanceLocation
+        Specs[I * 8u + 6u] = C.StartInstanceLocation;
         Specs[I * 8u + 7u] = 0u;
     }
     auto BufSpecs = Upload(Specs.data(), Specs.size() * sizeof(u32));
@@ -232,6 +277,12 @@ int main() try {
     std::vector<u32> Vertices(kVertexCount);
     for (u32 I = 0; I < kVertexCount; ++I) Vertices[I] = I;
     auto BufVertices = Upload(Vertices.data(), Vertices.size() * sizeof(u32));
+
+    // O par PER_INSTANCE do de cima, e pelo mesmo motivo: `StartInstanceLocation` nao chega no
+    // SV_InstanceID, entao sem um buffer com passo por instancia o campo e inobservavel.
+    std::vector<u32> Instancias(kInstanceDataCount);
+    for (u32 I = 0; I < kInstanceDataCount; ++I) Instancias[I] = I;
+    auto BufInstancias = Upload(Instancias.data(), Instancias.size() * sizeof(u32));
 
     const u32 Contagem = kExecutedCount;
     auto BufCount = Upload(&Contagem, sizeof(u32));
@@ -389,13 +440,23 @@ int main() try {
         D.SampleMask            = UINT_MAX;
         D.SampleDesc.Count      = 1;
         D.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        // Um atributo por vertice, so para tornar `BaseVertexLocation` observavel.
+        // Dois atributos: um por VERTICE e um por INSTANCIA, so para tornar `BaseVertexLocation` e
+        // `StartInstanceLocation` observaveis. Sem eles os dois campos nao tem efeito visivel.
         D3D12_INPUT_ELEMENT_DESC Elemento{};
-        Elemento.SemanticName      = "TEXCOORD";
-        Elemento.Format            = DXGI_FORMAT_R32_UINT;
-        Elemento.InputSlotClass    = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-        D.InputLayout.pInputElementDescs = &Elemento;
-        D.InputLayout.NumElements        = 1;
+        D3D12_INPUT_ELEMENT_DESC Elementos[2]{};
+        Elementos[0].SemanticName   = "TEXCOORD";
+        Elementos[0].SemanticIndex  = 0;
+        Elementos[0].Format         = DXGI_FORMAT_R32_UINT;
+        Elementos[0].InputSlot      = 0;
+        Elementos[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+        Elementos[1].SemanticName   = "TEXCOORD";
+        Elementos[1].SemanticIndex  = 1;
+        Elementos[1].Format         = DXGI_FORMAT_R32_UINT;
+        Elementos[1].InputSlot      = 1;
+        Elementos[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA;
+        Elementos[1].InstanceDataStepRate = 1;
+        D.InputLayout.pInputElementDescs = Elementos;
+        D.InputLayout.NumElements        = 2;
         D.NumRenderTargets      = 0;
         D.DSVFormat             = DXGI_FORMAT_UNKNOWN;
         D.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
@@ -474,22 +535,35 @@ int main() try {
     IBV.SizeInBytes    = kIndexCount * static_cast<u32>(sizeof(u32));
     IBV.Format         = DXGI_FORMAT_R32_UINT;
     List->IASetIndexBuffer(&IBV);
-    D3D12_VERTEX_BUFFER_VIEW VBV{};
-    VBV.BufferLocation = BufVertices->GetGPUVirtualAddress();
-    VBV.SizeInBytes    = kVertexCount * static_cast<u32>(sizeof(u32));
-    VBV.StrideInBytes  = static_cast<u32>(sizeof(u32));
-    List->IASetVertexBuffers(0, 1, &VBV);
+    D3D12_VERTEX_BUFFER_VIEW VBVs[2]{};
+    VBVs[0].BufferLocation = BufVertices->GetGPUVirtualAddress();
+    VBVs[0].SizeInBytes    = kVertexCount * static_cast<u32>(sizeof(u32));
+    VBVs[0].StrideInBytes  = static_cast<u32>(sizeof(u32));
+    VBVs[1].BufferLocation = BufInstancias->GetGPUVirtualAddress();
+    VBVs[1].SizeInBytes    = kInstanceDataCount * static_cast<u32>(sizeof(u32));
+    VBVs[1].StrideInBytes  = static_cast<u32>(sizeof(u32));
+    List->IASetVertexBuffers(0, 2, VBVs);
     // MaxCommandCount e a CAPACIDADE (4); quem limita a execucao e o count buffer (2), que e como o
-    // frame vai usar isto. Os comandos 2 e 3 estao escritos e validos: se o count fosse ignorado,
-    // eles escreveriam nas posicoes 300+ e 400+, e o teste ve isso.
+    // frame vai usar isto. Os comandos 2 e 3 estao escritos e validos e tem faixa de indice propria:
+    // se o count fosse ignorado, o teste veria escrita nas posicoes deles.
     List->ExecuteIndirect(CommandSignature.Get(), kCommandCount, BufArgs.Get(), 0,
                           BufCount.Get(), 0);
+
+    // DRAW DIRETO, imediatamente depois, e SEM reamarrar constante nenhuma.
+    //
+    // O ExecuteIndirect RESETA as root constants que a signature modifica (documentado no contrato
+    // de indirect drawing do D3D12). Isso e um risco de integracao real: o `FDrawSubmitCache` acredita
+    // que `MaterialRow` e `InstanceSlot` continuam amarrados, e o primeiro draw direto depois de um
+    // indireto sairia com zero nos dois — material da linha 0 (o cinza sem textura) e transform do
+    // slot 0. O proposito deste draw e transformar isso de nota de rodape em fato medido, agora, e
+    // nao depois de alguem perseguir um objeto cinza no lugar errado.
+    List->DrawIndexedInstanced(kDiretoIndexCount, 1, kDiretoStartIndex, 0, 0);
 
     Transicao(BufObserved.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
               D3D12_RESOURCE_STATE_COPY_SOURCE);
     List->CopyResource(BufLeitura.Get(), BufObserved.Get());
     const HRESULT CloseHr = List->Close();
-    DespejarMensagens();
+    DrenarCamada("gravacao");
     Hr(CloseHr, "Close");
 
     ID3D12CommandList* Listas[] = { List.Get() };
@@ -506,6 +580,9 @@ int main() try {
             throw std::runtime_error("a sonda nao terminou");
     }
 
+    // DEPOIS da fence: e a unica janela em que a validacao da EXECUCAO ja existe.
+    DrenarCamada("execucao");
+
     std::vector<u32> Observado(static_cast<size_t>(kObservedSlots) * 4u);
     {
         void* P = nullptr;
@@ -515,54 +592,73 @@ int main() try {
     }
 
     // --- verificacao --------------------------------------------------------------------------
-    auto Vertice = [&](u32 _Vid) { return Observado.data() + static_cast<size_t>(_Vid) * 8u; };
-    auto Escrito = [&](u32 _Vid) { return Vertice(_Vid)[3] == 1u; };
+    //
+    // A unidade e o par (vertice, instancia), como no endereco que a sonda usa. Era so o vertice, e
+    // com isso `InstanceCount` e `StartInstanceLocation` ficavam invisiveis: um InstanceCount maior
+    // reescreveria as MESMAS posicoes e passaria verde.
+    constexpr u32 kMaxVid = kObservedSlots / (kProbeMaxInstances * 2u);
+    auto Invocacao = [&](u32 _Vid, u32 _Iid) {
+        return Observado.data() +
+               (static_cast<size_t>(_Vid) * kProbeMaxInstances + _Iid) * 8u;
+    };
+    auto Escrito = [&](u32 _Vid, u32 _Iid) { return Invocacao(_Vid, _Iid)[3] == 1u; };
 
-    // O CONJUNTO de posicoes escritas prova `StartIndexLocation` e `IndexCountPerInstance`: o IB e
-    // sequencial, entao o SV_VertexID de cada invocacao e o proprio indice lido. `BaseVertexLocation`
-    // NAO entra aqui — medido em WARP, ele nao chega no SV_VertexID; quem o prova e o atributo
-    // buscado do vertex buffer, abaixo.
-    std::vector<u32> Esperados;
+    // O CONJUNTO de invocacoes prova `StartIndexLocation`, `IndexCountPerInstance` e
+    // `InstanceCount`: o IB e sequencial, o SV_VertexID e o indice lido, e o SV_InstanceID e 0-based
+    // dentro do comando. `BaseVertexLocation` e `StartInstanceLocation` nao entram aqui — nenhum dos
+    // dois chega nos system values; quem os prova sao os atributos buscados, abaixo.
+    std::vector<std::pair<u32, u32>> Esperadas;
     for (u32 C = 0; C < kExecutedCount; ++C)
         for (u32 I = 0; I < kComandos[C].IndexCountPerInstance; ++I)
-            Esperados.push_back(kComandos[C].StartIndexLocation + I);
+            for (u32 N = 0; N < kComandos[C].InstanceCount; ++N)
+                Esperadas.emplace_back(kComandos[C].StartIndexLocation + I, N);
+    // O draw DIRETO depois do indireto: uma instancia, faixa propria.
+    for (u32 I = 0; I < kDiretoIndexCount; ++I)
+        Esperadas.emplace_back(kDiretoStartIndex + I, 0u);
 
-    for (u32 Vid = 0; Vid < kObservedSlots / 2u; ++Vid) {
-        const bool DeviaEscrever =
-            std::find(Esperados.begin(), Esperados.end(), Vid) != Esperados.end();
-        if (DeviaEscrever) {
-            Check(Escrito(Vid), "o vertice esperado pelos campos de DRAW foi processado");
-        } else {
-            // Cobre tambem os comandos ALEM do count: eles estao escritos no buffer e as faixas de
-            // indice deles sao disjuntas, entao "intocado" aqui e a prova de que o count limitou.
-            Check(Vertice(Vid)[0] == kSentinela && Vertice(Vid)[3] == kSentinela,
-                  "nenhum vertice fora do conjunto executado foi tocado");
+    for (u32 Vid = 0; Vid < kMaxVid; ++Vid) {
+        for (u32 Iid = 0; Iid < kProbeMaxInstances; ++Iid) {
+            const bool Devia = std::find(Esperadas.begin(), Esperadas.end(),
+                                         std::make_pair(Vid, Iid)) != Esperadas.end();
+            if (Devia) {
+                Check(Escrito(Vid, Iid), "a invocacao esperada pelos campos de DRAW aconteceu");
+            } else {
+                // Cobre os comandos ALEM do count -- escritos, validos, com faixa propria -- e as
+                // instancias alem do InstanceCount de cada comando executado.
+                Check(Invocacao(Vid, Iid)[0] == kSentinela && Invocacao(Vid, Iid)[3] == kSentinela,
+                      "nenhuma invocacao fora do conjunto executado aconteceu");
+            }
         }
     }
 
-    // O CONTEUDO prova as duas constantes por comando, o BaseVertexLocation e a sobrevivencia das
-    // outras tres constantes.
+    // O CONTEUDO prova as duas constantes por comando, os dois offsets de fetch e a sobrevivencia
+    // das outras tres constantes.
     for (u32 C = 0; C < kExecutedCount; ++C) {
         const FComando& Cmd = kComandos[C];
         for (u32 I = 0; I < Cmd.IndexCountPerInstance; ++I) {
             const u32 Vid = Cmd.StartIndexLocation + I;
-            if (Vid >= kObservedSlots / 2u || !Escrito(Vid)) continue;
-            const u32* V = Vertice(Vid);
-            Check(V[0] == Cmd.MaterialRow,
-                  "a linha do material chegou no offset de MaterialRow");
-            Check(V[1] == Cmd.InstanceSlot,
-                  "o slot da instancia chegou no offset de InstanceSlot");
-            // `VB[k] == k`, e o fetch e `VB[IndexBuffer[i] + BaseVertexLocation]`: a diferenca para o
-            // SV_VertexID E o campo. E a unica assercao do teste que cobre BaseVertexLocation.
-            Check(V[2] == Vid + static_cast<u32>(Cmd.BaseVertexLocation),
-                  "o atributo buscado reflete o BaseVertexLocation do comando");
-            Check(V[7] == Vid, "SV_VertexID casa com StartIndexLocation + i");
-            Check(V[4] == kPasseMaterialTable,
-                  "o descritor da tabela de materiais sobreviveu ao ExecuteIndirect");
-            Check(V[5] == kPasseTransformSrv,
-                  "o descritor da coluna Transform sobreviveu ao ExecuteIndirect");
-            Check(V[6] == kPassePrevTransform,
-                  "o descritor da coluna PrevTransform sobreviveu ao ExecuteIndirect");
+            if (Vid >= kMaxVid) continue;
+            for (u32 Iid = 0; Iid < Cmd.InstanceCount; ++Iid) {
+                if (!Escrito(Vid, Iid)) continue;
+                const u32* V = Invocacao(Vid, Iid);
+                Check(V[0] == Cmd.MaterialRow,
+                      "a linha do material chegou no offset de MaterialRow");
+                Check(V[1] == Cmd.InstanceSlot,
+                      "o slot da instancia chegou no offset de InstanceSlot");
+                // `VB[k] == k`, e o fetch e `VB[IndexBuffer[i] + BaseVertexLocation]`: a diferenca
+                // para o SV_VertexID E o campo.
+                Check(V[2] == Vid + static_cast<u32>(Cmd.BaseVertexLocation),
+                      "o atributo por vertice reflete o BaseVertexLocation do comando");
+                // Idem para o passo por instancia: `IB[SV_InstanceID + StartInstanceLocation]`.
+                Check(V[7] == Iid + Cmd.StartInstanceLocation,
+                      "o atributo por instancia reflete o StartInstanceLocation do comando");
+                Check(V[4] == kPasseMaterialTable,
+                      "o descritor da tabela de materiais sobreviveu ao ExecuteIndirect");
+                Check(V[5] == kPasseTransformSrv,
+                      "o descritor da coluna Transform sobreviveu ao ExecuteIndirect");
+                Check(V[6] == kPassePrevTransform,
+                      "o descritor da coluna PrevTransform sobreviveu ao ExecuteIndirect");
+            }
         }
     }
 
@@ -571,12 +667,35 @@ int main() try {
     {
         const u32 Vid0 = kComandos[0].StartIndexLocation;
         const u32 Vid1 = kComandos[1].StartIndexLocation;
-        if (Escrito(Vid0) && Escrito(Vid1)) {
-            Check(Vertice(Vid0)[0] != Vertice(Vid1)[0],
+        if (Escrito(Vid0, 0u) && Escrito(Vid1, 0u)) {
+            Check(Invocacao(Vid0, 0u)[0] != Invocacao(Vid1, 0u)[0],
                   "o avanco de um stride trouxe outra linha de material");
-            Check(Vertice(Vid0)[1] != Vertice(Vid1)[1],
+            Check(Invocacao(Vid0, 0u)[1] != Invocacao(Vid1, 0u)[1],
                   "o avanco de um stride trouxe outro slot de instancia");
         }
+    }
+
+    // O RESET pos-ExecuteIndirect, medido no draw direto que veio depois sem reamarrar nada.
+    //
+    // As duas constantes que a signature modifica NAO sobrevivem, e as outras tres sim. E o risco de
+    // integracao da fase: o `FDrawSubmitCache` acredita que continuam amarradas, e o primeiro draw
+    // direto depois de um indireto sairia com material da linha 0 e transform do slot 0 — cinza sem
+    // textura, no lugar errado, sem erro de API.
+    for (u32 I = 0; I < kDiretoIndexCount; ++I) {
+        const u32 Vid = kDiretoStartIndex + I;
+        if (Vid >= kMaxVid || !Escrito(Vid, 0u)) {
+            Check(false, "o draw direto depois do indireto nao aconteceu");
+            continue;
+        }
+        const u32* V = Invocacao(Vid, 0u);
+        Check(V[0] != kVenenoMaterialRow && V[1] != kVenenoInstanceSlot,
+              "as constantes do comando NAO sobrevivem ao ExecuteIndirect (invalidar o cache "
+              "de submissao antes do primeiro draw direto)");
+        Check(V[0] == 0u && V[1] == 0u,
+              "o reset pos-ExecuteIndirect zera as constantes modificadas, como o contrato diz");
+        Check(V[4] == kPasseMaterialTable && V[5] == kPasseTransformSrv &&
+                  V[6] == kPassePrevTransform,
+              "as constantes que a signature NAO modifica sobrevivem ao ExecuteIndirect");
     }
 
     if (Failures == 0) std::cout << "  OK\n";

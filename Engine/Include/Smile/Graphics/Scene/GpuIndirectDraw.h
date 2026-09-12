@@ -34,6 +34,16 @@ namespace Smile {
     // (`MaterialRow` e `InstanceSlot`) e as outras tres continuam amarradas uma vez pelo passe. Que
     // elas SOBREVIVAM ao ExecuteIndirect e propriedade testada: um `DestOffset` errado sobrescreve
     // o descritor da tabela de transform e a geometria colapsa sem erro de API.
+    //
+    // ⚠️ RISCO DE INTEGRACAO, medido no teste em WARP: depois do `ExecuteIndirect`, as constantes
+    // que a command signature modifica voltam a ZERO. As outras tres sobrevivem.
+    //
+    // Ou seja: o primeiro draw DIRETO depois de um indireto sai com `MaterialRow = 0` e
+    // `InstanceSlot = 0` — material da linha 0 (o cinza sem textura) e transform do slot 0 —, e o
+    // `FDrawSubmitCache` acredita que os dois continuam amarrados, porque foi ele quem os amarrou.
+    // Quem misturar indireto e fallback no mesmo passe TEM de invalidar o cache (ou forcar os dois
+    // binds) antes do primeiro draw direto. Nao ha erro de API nesse caminho: ha um objeto cinza no
+    // lugar errado.
     namespace GpuDrawConstants {
         inline constexpr u32 kMaterialTable  = 0;
         inline constexpr u32 kMaterialRow    = 1;
@@ -63,8 +73,17 @@ namespace Smile {
         u32 StartInstanceLocation;
     };
 
-    // 28 B, e nao 32: o payload e exatamente isto. Um quarto dword de padding so se justificaria
-    // como canario, e canario sem leitor e padding com nome bonito.
+    // 28 B: o payload e exatamente isto, e o stride do comando e o proprio `sizeof`.
+    //
+    // NAO porque seja o unico valor legal — o D3D12 aceita `ByteStride` maior que a soma dos
+    // argumentos, com padding livre entre comandos (o contrato de indirect drawing traz um exemplo
+    // de payload de 20 B com stride de 36 B). E uma decisao de COMPACTACAO: um quarto dword so se
+    // justificaria como canario, e canario sem leitor e padding com nome bonito.
+    //
+    // O que e obrigatorio: o stride nao pode ser MENOR que o payload (a criacao da signature recusa),
+    // e o buffer tem de ser dimensionado por `stride * MaxCommandCount`, nao pelo numero de comandos
+    // que se espera escrever — o `ExecuteIndirect` valida contra o tamanho do recurso, e nao contra o
+    // count buffer.
     static_assert(sizeof(FGpuIndirectDrawArgs) == 28);
     static_assert(alignof(FGpuIndirectDrawArgs) == 4);
     static_assert(offsetof(FGpuIndirectDrawArgs, MaterialRow)  == 0);
