@@ -586,7 +586,8 @@ namespace {
             Hr(Device->CreateComputePipelineState(&PSO, IID_PPV_ARGS(&Pipeline)),
                "CreateComputePipelineState");
 
-            // O prefixo tem root signature PROPRIA: uma SRV e duas UAVs. Reaproveitar a do classify
+            // O prefixo tem root signature PROPRIA: uma SRV e TRES UAVs (offsets, contadores e o
+            // count buffer sanitizado). Reaproveitar a do classify
             // deixaria tres SRVs do range ligados sem descritor inicializado, que e coisa que a
             // camada de debug reclama e que nao tem nada a ver com o que esta sob teste.
             D3D12_DESCRIPTOR_RANGE RangesP[2]{};

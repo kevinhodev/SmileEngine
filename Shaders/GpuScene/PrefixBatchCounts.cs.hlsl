@@ -13,9 +13,12 @@
 // de grandeza (multi-submesh, virtual geometry), este e o lugar de trocar por um scan em blocos —
 // e o teste WARP que compara com a referencia CPU continua servindo.
 //
-// ⚠️ NAO e in-place. `BatchCounts` e tambem o COUNT BUFFER do `ExecuteIndirect` (ele le um uint32 em
-// `CountBufferOffset`, entao o lote b usa `b * 4`); acumular por cima destruiria as contagens de que
-// os draws dependem.
+// ⚠️ NAO e in-place: `BatchOffsets` e separado de `BatchCounts`, e acumular por cima destruiria as
+// contagens de que o `DrawCounts` depende.
+//
+// ⚠️ `BatchCounts` NAO alimenta o `ExecuteIndirect`. O count buffer e o `DrawCounts`, sanitizado
+// aqui mesmo: ele le um uint32 em `CountBufferOffset`, entao o lote b usa `b * 4`. Ligar o draw no
+// `BatchCounts` faria o command processor executar comandos velhos sempre que o prefixo estourasse.
 
 // Indices dos contadores, espelhando EGpuPrefixCounter.
 #define SMILE_PREFIX_TOTAL    0u

@@ -271,10 +271,13 @@ namespace Smile {
     // readback, e readback nao entra no caminho do frame (regra 7). Nao e a mesma situacao do
     // `BuildRangeOutputBases` da Fase 4, que prefixa dados que a CPU produziu.
     //
-    // ⚠️ `BatchCounts` serve tambem de COUNT BUFFER do `ExecuteIndirect`: ele le um uint32 em
-    // `CountBufferOffset`, entao o lote b usa offset `b * 4`. Por isso o prefixo escreve num buffer
-    // SEPARADO em vez de acumular no lugar — um prefixo in-place destruiria as contagens de que os
-    // draws dependem.
+    // ⚠️ O prefixo NAO e in-place: `BatchOffsets` e um buffer separado de `BatchCounts`. Acumular
+    // por cima destruiria as contagens, que continuam servindo para duas coisas — alimentar o
+    // `DrawCounts` sanitizado logo abaixo, e ser o diagnostico de quantos comandos cada lote teria.
+    //
+    // ⚠️ `BatchCounts` NAO e o count buffer do `ExecuteIndirect`. Quem vai para o command processor e
+    // o `DrawCounts` (ver abaixo): `BatchCounts` e escrito pelo classify, que nao sabe se o prefixo
+    // vai fechar, e uma contagem nao zero sob estouro faria o draw executar argumentos velhos.
 
     // Offset POISON, gravado em toda entrada que o prefixo nao conseguiu calcular.
     //
