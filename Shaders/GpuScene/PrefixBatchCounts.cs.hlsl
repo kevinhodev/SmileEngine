@@ -1,0 +1,56 @@
+// Prefixo exclusivo das contagens por lote (Fase 5 do GPU-DRIVEN-PLAN, passo 4 da secao 6.2).
+//
+// `BatchOffsets[b]` = onde os comandos do lote b comecam em `IndirectArgs`. Consome o `BatchCounts`
+// que o ClassifyCandidates acabou de escrever.
+//
+// Na GPU porque a entrada e da GPU: soma-la na CPU exigiria readback no caminho do frame, que a
+// regra 7 proibe. Nao e a situacao do `BuildRangeOutputBases` da Fase 4, que prefixa dados da CPU.
+//
+// UMA THREAD, em serie, e isso e deliberado. O array tem `kGpuPipelineClassCount * PoolCount`
+// entradas — quatro vezes o numero de chunks de geometria, ou seja, unidades a poucas centenas. Um
+// scan paralelo em groupshared aqui seria cerimonia: mais codigo, mais para errar, e o custo real
+// e o do lancamento do dispatch, nao o dos oito ADDs. Se um dia o numero de lotes crescer uma ordem
+// de grandeza (multi-submesh, virtual geometry), este e o lugar de trocar por um scan em blocos —
+// e o teste WARP que compara com a referencia CPU continua servindo.
+//
+// ⚠️ NAO e in-place. `BatchCounts` e tambem o COUNT BUFFER do `ExecuteIndirect` (ele le um uint32 em
+// `CountBufferOffset`, entao o lote b usa `b * 4`); acumular por cima destruiria as contagens de que
+// os draws dependem.
+
+// Indices dos contadores, espelhando EGpuPrefixCounter.
+#define SMILE_PREFIX_TOTAL    0u
+#define SMILE_PREFIX_OVERFLOW 1u
+#define SMILE_PREFIX_COUNT    2u
+
+cbuffer PrefixCB : register(b0) {
+    uint4 PrefixParams; // x = slots de BatchCounts; yzw reservados
+};
+
+StructuredBuffer<uint> BatchCounts : register(t0);
+
+RWStructuredBuffer<uint> BatchOffsets : register(u0);
+RWStructuredBuffer<uint> Counters     : register(u1);
+
+[numthreads(1, 1, 1)]
+void main() {
+    const uint Slots = PrefixParams.x;
+
+    uint Acc = 0u;
+    uint Estourou = 0u;
+    for (uint I = 0u; I < Slots; ++I) {
+        BatchOffsets[I] = Acc;
+        // Deteccao de volta ANTES de somar, escrita como subtracao no lado seguro. Um
+        // `BatchCounts` vindo do classify nao consegue estourar — cada candidato contribui no
+        // maximo 1, e candidatos sao contados em u32 —, mas este shader nao sabe quem escreveu o
+        // buffer que esta somando, e um prefixo que da a volta aponta comandos para dentro dos
+        // comandos de outro lote.
+        if (Acc > 0xFFFFFFFFu - BatchCounts[I]) {
+            Estourou = 1u;
+            break;
+        }
+        Acc += BatchCounts[I];
+    }
+
+    Counters[SMILE_PREFIX_TOTAL]    = Acc;
+    Counters[SMILE_PREFIX_OVERFLOW] = Estourou;
+}

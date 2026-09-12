@@ -148,6 +148,70 @@ namespace {
         return S;
     }
 
+
+    // ---- parte CPU pura: a porta de DIMENSIONAMENTO -------------------------------------------
+    //
+    // Ela existe para ser o unico lugar onde a conversao para u32 e escrita. O teste fixa que ela
+    // recusa ANTES de converter, e que uma recusa nao deixa numero plausivel na saida.
+    void TestarPortaDeDimensionamento() {
+        u32 Slots = 0xDEADBEEFu;
+        CheckEq(GpuClassifyBatchBufferSlots(kPoolCount, Slots), GpuClassifyPreflightOk,
+                "dois pools passam");
+        CheckEq(Slots, kGpuPipelineClassCount * kPoolCount, "e devolvem quatro slots por pool");
+
+        Slots = 0xDEADBEEFu;
+        CheckEq(GpuClassifyBatchBufferSlots(0u, Slots), GpuClassifyPreflightNoPools,
+                "sem pool nao ha dimensionamento");
+        CheckEq(Slots, 0xDEADBEEFu, "recusa NAO escreve a saida");
+
+        Slots = 0xDEADBEEFu;
+        CheckEq(GpuClassifyBatchBufferSlots(UINT32_MAX / kGpuPipelineClassCount + 1u, Slots),
+                GpuClassifyPreflightTooManyPools, "acima do limite recusa antes de converter");
+        CheckEq(Slots, 0xDEADBEEFu, "e tambem nao escreve a saida");
+
+        Slots = 0u;
+        CheckEq(GpuClassifyBatchBufferSlots(UINT32_MAX / kGpuPipelineClassCount, Slots),
+                GpuClassifyPreflightOk, "o ultimo valido passa");
+        CheckEq(Slots, 4294967292u, "com o total exato, ja em u32");
+    }
+
+    // ---- parte CPU pura: o prefixo ------------------------------------------------------------
+    //
+    // Exclusivo: `Offsets[b]` e onde o lote b comeca, e o total e a soma. O oraculo e escrito a mao,
+    // e nao a propria funcao rodada de novo.
+    void TestarPrefixo() {
+        {
+            const u32 Contagens[6]{ 2u, 0u, 5u, 1u, 0u, 3u };
+            const u32 Esperado[6]{ 0u, 2u, 2u, 7u, 8u, 8u };
+            std::vector<u32> Offsets; u32 Estourou = 0u;
+            const u32 Total = PrefixBatchCounts(Contagens, Offsets, Estourou);
+            CheckEq(Total, 11u, "o total e a soma das contagens");
+            CheckEq(Estourou, 0u, "e nao estourou");
+            Check(Offsets.size() == 6, "uma entrada por lote");
+            for (u32 I = 0; I < 6u; ++I)
+                CheckEq(Offsets[I], Esperado[I], "offset do lote " + std::to_string(I));
+            // Lotes VAZIOS nao consomem espaco: o offset do lote 2 e o mesmo do 1. Se o prefixo
+            // fosse inclusivo, cada lote apontaria para dentro do seguinte.
+            CheckEq(Offsets[1], Offsets[2], "lote vazio nao avanca o offset");
+        }
+        {
+            // Lista vazia: nada a prefixar, total zero, sem tocar em nada.
+            std::vector<u32> Offsets{ 7u, 7u }; u32 Estourou = 1u;
+            CheckEq(PrefixBatchCounts({}, Offsets, Estourou), 0u, "lista vazia soma zero");
+            CheckEq(Estourou, 0u, "e nao marca estouro");
+            Check(Offsets.empty(), "e a saida fica vazia, e nao com o conteudo anterior");
+        }
+        {
+            // A volta em u32. Inalcancavel a partir do classify — cada candidato contribui no
+            // maximo 1 —, mas o shader nao sabe quem escreveu o buffer que ele soma. Um prefixo que
+            // da a volta aponta comandos para dentro dos comandos de outro lote.
+            const u32 Contagens[3]{ 0xFFFFFFF0u, 0x20u, 1u };
+            std::vector<u32> Offsets; u32 Estourou = 0u;
+            PrefixBatchCounts(Contagens, Offsets, Estourou);
+            CheckEq(Estourou, 1u, "a soma que daria a volta e marcada");
+            CheckEq(Offsets[1], 0xFFFFFFF0u, "o offset ate o estouro continua valido");
+        }
+    }
     // ---- parte CPU pura: o desfecho de cada candidato -----------------------------------------
     //
     // O oraculo e uma TABELA escrita a mao, e nao a funcao rodada de novo: a referencia CPU e o
@@ -392,6 +456,10 @@ namespace {
     struct FResultado {
         std::vector<u32> Lotes;
         std::vector<u32> Contadores;
+        // Saida do prefixo, produzida no MESMO command list, a partir do BatchCounts que o classify
+        // acabou de escrever. Encadear na GPU e o ponto: na producao nao ha readback entre os dois.
+        std::vector<u32> Offsets;
+        std::vector<u32> PrefixCont;
     };
 
     // A sonda. Mesma forma da do expand; o que muda sao as views e o CB.
@@ -399,7 +467,9 @@ namespace {
         wrl::ComPtr<ID3D12Device>        Device;
         wrl::ComPtr<ID3D12CommandQueue>  Queue;
         wrl::ComPtr<ID3D12RootSignature> Root;
+        wrl::ComPtr<ID3D12RootSignature> RootPrefixo;
         wrl::ComPtr<ID3D12PipelineState> Pipeline;
+        wrl::ComPtr<ID3D12PipelineState> PipelinePrefixo;
         wrl::ComPtr<ID3D12Fence>         Fence;
         wrl::ComPtr<ID3D12InfoQueue>     Info;
         u64  FenceValue = 0;
@@ -458,7 +528,7 @@ namespace {
             Info->ClearStoredMessages();
         }
 
-        void Construir(const std::vector<u8>& _Bytecode) {
+        void Construir(const std::vector<u8>& _Bytecode, const std::vector<u8>& _Prefixo) {
             wrl::ComPtr<ID3D12Debug> Debug;
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&Debug)))) Debug->EnableDebugLayer();
 
@@ -497,6 +567,36 @@ namespace {
             PSO.CS             = { _Bytecode.data(), _Bytecode.size() };
             Hr(Device->CreateComputePipelineState(&PSO, IID_PPV_ARGS(&Pipeline)),
                "CreateComputePipelineState");
+
+            // O prefixo tem root signature PROPRIA: uma SRV e duas UAVs. Reaproveitar a do classify
+            // deixaria tres SRVs do range ligados sem descritor inicializado, que e coisa que a
+            // camada de debug reclama e que nao tem nada a ver com o que esta sob teste.
+            D3D12_DESCRIPTOR_RANGE RangesP[2]{};
+            RangesP[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            RangesP[0].NumDescriptors = 1;
+            RangesP[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+            RangesP[1].NumDescriptors = 2;
+            D3D12_ROOT_PARAMETER ParamsP[3]{};
+            ParamsP[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            for (int I = 0; I < 2; ++I) {
+                ParamsP[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                ParamsP[I + 1].DescriptorTable.NumDescriptorRanges = 1;
+                ParamsP[I + 1].DescriptorTable.pDescriptorRanges   = &RangesP[I];
+            }
+            D3D12_ROOT_SIGNATURE_DESC SigDescP{};
+            SigDescP.NumParameters = 3;
+            SigDescP.pParameters   = ParamsP;
+            wrl::ComPtr<ID3DBlob> SerialP, ErroP;
+            Hr(D3D12SerializeRootSignature(&SigDescP, D3D_ROOT_SIGNATURE_VERSION_1, &SerialP,
+                                           &ErroP), "SerializeRootSignature (prefixo)");
+            Hr(Device->CreateRootSignature(0, SerialP->GetBufferPointer(), SerialP->GetBufferSize(),
+                                           IID_PPV_ARGS(&RootPrefixo)),
+               "CreateRootSignature (prefixo)");
+            D3D12_COMPUTE_PIPELINE_STATE_DESC PSOP{};
+            PSOP.pRootSignature = RootPrefixo.Get();
+            PSOP.CS             = { _Prefixo.data(), _Prefixo.size() };
+            Hr(Device->CreateComputePipelineState(&PSOP, IID_PPV_ARGS(&PipelinePrefixo)),
+               "CreateComputePipelineState (prefixo)");
 
             D3D12_COMMAND_QUEUE_DESC QD{};
             Hr(Device->CreateCommandQueue(&QD, IID_PPV_ARGS(&Queue)), "CreateCommandQueue");
@@ -543,10 +643,24 @@ namespace {
             auto LeituraCont  = Buffer(D3D12_HEAP_TYPE_READBACK, ContBytes, false,
                                        D3D12_RESOURCE_STATE_COPY_DEST);
 
+            // Buffers do PREFIXO. Criados aqui junto dos outros para que todas as copias de zeros
+            // aconteçam antes de qualquer dispatch.
+            const u64 PrefContBytes = GpuPrefixCounterCount * sizeof(u32);
+            auto BufOffsets  = Buffer(D3D12_HEAP_TYPE_DEFAULT, LoteBytes, true,
+                                      D3D12_RESOURCE_STATE_COMMON);
+            auto BufPrefCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, PrefContBytes, true,
+                                      D3D12_RESOURCE_STATE_COMMON);
+            const u32 ZerosPref[GpuPrefixCounterCount]{};
+            auto BufZerosPref = Upload(ZerosPref, PrefContBytes);
+            auto LeituraOffsets  = Buffer(D3D12_HEAP_TYPE_READBACK, LoteBytes, false,
+                                          D3D12_RESOURCE_STATE_COPY_DEST);
+            auto LeituraPrefCont = Buffer(D3D12_HEAP_TYPE_READBACK, PrefContBytes, false,
+                                          D3D12_RESOURCE_STATE_COPY_DEST);
+
             wrl::ComPtr<ID3D12DescriptorHeap> Heap;
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 6;
+            HD.NumDescriptors = 9;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
 
@@ -578,6 +692,10 @@ namespace {
             SRV(BufMesh.Get(), _In.Meshes.size(), sizeof(FGpuMeshRecord), 3);
             UAV(BufLotes.Get(), _In.BatchCapacity, 4);
             UAV(BufCont.Get(), GpuClassifyOutcomeCount, 5);
+            // Do prefixo: o MESMO BufLotes, agora como SRV, mais as duas saidas.
+            SRV(BufLotes.Get(), _In.BatchCapacity, sizeof(u32), 6);
+            UAV(BufOffsets.Get(), _In.BatchCapacity, 7);
+            UAV(BufPrefCont.Get(), GpuPrefixCounterCount, 8);
 
             alignas(16) u8 CB[256]{};
             const u32 P8[8]{ static_cast<u32>(_In.Slots.size()),
@@ -607,9 +725,15 @@ namespace {
             };
             List->CopyBufferRegion(BufLotes.Get(), 0, BufZerosLote.Get(), 0, LoteBytes);
             List->CopyBufferRegion(BufCont.Get(), 0, BufZerosCont.Get(), 0, ContBytes);
+            List->CopyBufferRegion(BufOffsets.Get(), 0, BufZerosLote.Get(), 0, LoteBytes);
+            List->CopyBufferRegion(BufPrefCont.Get(), 0, BufZerosPref.Get(), 0, PrefContBytes);
             Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Transicao(BufPrefCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
@@ -626,7 +750,47 @@ namespace {
             const u32 Total = static_cast<u32>(_In.Slots.size());
             if (Total > 0) List->Dispatch((Total + 63u) / 64u, 1, 1);
 
+            // ---- prefixo, NO MESMO command list -------------------------------------------------
+            //
+            // Encadeado na GPU porque e assim que o frame vai fazer: `BatchCounts` e escrito pelo
+            // classify e lido pelo prefixo sem nenhum readback no meio.
+            //
+            // A transicao UAV -> NON_PIXEL_SHADER_RESOURCE e o contrato da secao 6.4 do plano e e
+            // ela que serve de ponto de sincronizacao entre os dois dispatches.
+            //
+            // ⚠️ Este teste NAO prova que ela e necessaria, e eu verifiquei: removendo-a, tudo
+            // continua verde. Dois motivos, os dois do ambiente e nao do codigo — buffers em D3D12
+            // tem promocao e decaimento implicitos de estado, entao a camada de debug nao reprova a
+            // leitura por SRV de um buffer "em" UAV; e o WARP completa o primeiro dispatch antes do
+            // segundo, o que esconde a corrida. A ausencia da barreira e uma CORRIDA, e corrida nao
+            // se prova por teste deterministico. Ela fica porque o contrato exige, nao porque algo
+            // aqui a exija — e essa distincao esta escrita para nao ser confundida depois.
             Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+            alignas(16) u8 CBP[256]{};
+            const u32 P4[4]{ _In.BatchCapacity, 0u, 0u, 0u };
+            std::memcpy(CBP, P4, sizeof(P4));
+            auto BufCBP = Upload(CBP, sizeof(CBP));
+
+            List->SetPipelineState(PipelinePrefixo.Get());
+            List->SetComputeRootSignature(RootPrefixo.Get());
+            List->SetComputeRootConstantBufferView(0, BufCBP->GetGPUVirtualAddress());
+            List->SetComputeRootDescriptorTable(1, GpuAt(6));
+            List->SetComputeRootDescriptorTable(2, GpuAt(7));
+            List->Dispatch(1, 1, 1);
+
+            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Transicao(BufPrefCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_COPY_SOURCE);
+            List->CopyResource(LeituraOffsets.Get(), BufOffsets.Get());
+            List->CopyResource(LeituraPrefCont.Get(), BufPrefCont.Get());
+
+            // `BufLotes` ja saiu de UAV na transicao para o prefixo: parte de
+            // NON_PIXEL_SHADER_RESOURCE. Um `StateBefore` errado aqui e recusado pela camada de
+            // debug, que este teste trata como reprovacao.
+            Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -667,6 +831,24 @@ namespace {
                 std::memcpy(Saida.Contadores.data(), P, ContBytes);
                 LeituraCont->Unmap(0, nullptr);
             }
+            Saida.Offsets.resize(_In.BatchCapacity);
+            Saida.PrefixCont.resize(GpuPrefixCounterCount);
+            if (_In.BatchCapacity > 0) {
+                const u32* P = nullptr;
+                Hr(LeituraOffsets->Map(0, nullptr,
+                                       reinterpret_cast<void**>(const_cast<u32**>(&P))),
+                   "Map offsets");
+                std::memcpy(Saida.Offsets.data(), P, _In.BatchCapacity * sizeof(u32));
+                LeituraOffsets->Unmap(0, nullptr);
+            }
+            {
+                const u32* P = nullptr;
+                Hr(LeituraPrefCont->Map(0, nullptr,
+                                        reinterpret_cast<void**>(const_cast<u32**>(&P))),
+                   "Map cont prefixo");
+                std::memcpy(Saida.PrefixCont.data(), P, PrefContBytes);
+                LeituraPrefCont->Unmap(0, nullptr);
+            }
             return Saida;
         }
     };
@@ -677,6 +859,8 @@ int main() try {
 
     TestarDesfechos();
     TestarIndiceDeLote();
+    TestarPortaDeDimensionamento();
+    TestarPrefixo();
     TestarUmResultadoPorCandidato();
     TestarParticoes();
     TestarPreflight();
@@ -687,9 +871,15 @@ int main() try {
         std::cerr << "  (esperado em " << SMILE_CLASSIFY_CANDIDATES_CSO << ")\n";
         return 1;
     }
+    const std::vector<u8> BytecodePrefixo = LerArquivo(SMILE_PREFIX_BATCH_COUNTS_CSO);
+    Check(!BytecodePrefixo.empty(), "a sonda do prefixo foi encontrada");
+    if (BytecodePrefixo.empty()) {
+        std::cerr << "  (esperado em " << SMILE_PREFIX_BATCH_COUNTS_CSO << ")\n";
+        return 1;
+    }
 
     FSonda S;
-    S.Construir(Bytecode);
+    S.Construir(Bytecode, BytecodePrefixo);
 
     const auto Mats = Materiais(); const auto Meshs = Malhas();
     const auto Metas = Meta();     const auto Slot = Slots();
@@ -741,6 +931,32 @@ int main() try {
         for (u32 P = 0; P < kPoolCount; ++P)
             CheckEq(Gpu.Lotes[GpuBatchIndex({ C, P }, kPoolCount)], 0u,
                     "classe " + std::to_string(C) + " nao emite comando nesta fase");
+
+    // O prefixo, sobre o `BatchCounts` que o classify acabou de escrever — sem readback entre os
+    // dois, como sera na producao. O oraculo continua escrito a mao.
+    {
+        const u32 QueridoOffset[8]{ 0u, 2u, 3u, 3u, 3u, 3u, 3u, 3u };
+        for (u32 B = 0; B < In.BatchCapacity; ++B)
+            CheckEq(Gpu.Offsets[B], QueridoOffset[B],
+                    "offset do lote " + std::to_string(B) + " na GPU");
+        CheckEq(Gpu.PrefixCont[GpuPrefixCounterTotal], 3u, "o total do prefixo e o de comandos");
+        CheckEq(Gpu.PrefixCont[GpuPrefixCounterOverflow], 0u, "e o prefixo nao estourou");
+
+        // E a referencia CPU sobre as MESMAS contagens.
+        std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
+        const u32 TotalCpu = PrefixBatchCounts(LotesCpu, OffCpu, EstourouCpu);
+        CheckEq(TotalCpu, Gpu.PrefixCont[GpuPrefixCounterTotal], "GPU e CPU somam o mesmo total");
+        for (u32 B = 0; B < In.BatchCapacity; ++B)
+            CheckEq(OffCpu[B], Gpu.Offsets[B], "offset do lote " + std::to_string(B) + ": CPU x GPU");
+
+        // A propriedade que o scatter vai depender: o intervalo de cada lote nao invade o do
+        // seguinte. `Offset[b] + Count[b] <= Offset[b+1]`, com igualdade porque o prefixo e denso.
+        for (u32 B = 0; B + 1 < In.BatchCapacity; ++B)
+            CheckEq(Gpu.Offsets[B] + Gpu.Lotes[B], Gpu.Offsets[B + 1],
+                    "o lote " + std::to_string(B) + " termina onde o seguinte comeca");
+        CheckEq(Gpu.Offsets[In.BatchCapacity - 1u] + Gpu.Lotes[In.BatchCapacity - 1u],
+                Gpu.PrefixCont[GpuPrefixCounterTotal], "e o ultimo termina no total");
+    }
 
     // Capacidade curta: a DEFESA de ultima instancia do shader, sob uma entrada que o preflight
     // reprova (TestarPreflight confere que reprova). Ela nao deveria acontecer em producao — quem a

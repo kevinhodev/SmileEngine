@@ -34,4 +34,24 @@ namespace Smile {
         }
         return _OutCounters[GpuClassifyIndirect];
     }
+
+    u32 PrefixBatchCounts(std::span<const u32> _Counts, std::vector<u32>& _OutOffsets,
+                          u32& _OutOverflow) {
+        _OutOffsets.assign(_Counts.size(), 0u);
+        _OutOverflow = 0u;
+
+        u32 Acc = 0;
+        for (size_t I = 0; I < _Counts.size(); ++I) {
+            _OutOffsets[I] = Acc;
+            // Deteccao de volta ANTES de somar. Custa uma comparacao num laco que roda unidades de
+            // vezes, e e a unica defesa contra um `BatchCounts` que nao veio do classify — o shader
+            // nao tem como saber quem escreveu o buffer que ele soma.
+            if (Acc > UINT32_MAX - _Counts[I]) {
+                _OutOverflow = 1u;
+                break;
+            }
+            Acc += _Counts[I];
+        }
+        return Acc;
+    }
 }

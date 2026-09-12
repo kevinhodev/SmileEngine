@@ -223,6 +223,23 @@ namespace Smile {
         u32 BatchCapacity = 0; // slots de BatchCounts; ver GpuBatchSlotCount
     };
 
+
+    // A porta do DIMENSIONAMENTO: quantos slots alocar para `BatchCounts` e `BatchOffsets`.
+    //
+    // Existe para que a conversao para u32 nao seja escrita em lugar nenhum fora daqui. A sequencia
+    // correta e u64 -> porta -> converte, e um `static_cast<u32>(GpuBatchSlotCount(...))` no chamador
+    // a inverte em silencio: converte primeiro e so depois pergunta. Com a conversao dentro da porta,
+    // a sequencia certa e a unica disponivel.
+    //
+    // `_OutSlots` so e escrito quando o retorno e `Ok` — um dimensionamento recusado nao pode deixar
+    // um numero plausivel na variavel do chamador.
+    inline u32 GpuClassifyBatchBufferSlots(u32 _PoolCount, u32& _OutSlots) {
+        if (_PoolCount == 0u) return GpuClassifyPreflightNoPools;
+        const u64 Necessario = GpuBatchSlotCount(_PoolCount);
+        if (Necessario > UINT32_MAX) return GpuClassifyPreflightTooManyPools;
+        _OutSlots = static_cast<u32>(Necessario);
+        return GpuClassifyPreflightOk;
+    }
     // A porta do FRAME. Chamada pela CPU ANTES do dispatch; reprovada, o frame inteiro desenha pelo
     // caminho classico e nenhum comando indireto e gravado.
     //
@@ -234,15 +251,49 @@ namespace Smile {
         if (_In.Slots.empty()) return GpuClassifyPreflightOk;
         if (_In.Meta.empty() || _In.Materials.empty() || _In.Meshes.empty())
             return GpuClassifyPreflightEmptyTable;
-        if (_In.PoolCount == 0u) return GpuClassifyPreflightNoPools;
-        // Em u64 e nesta ordem: primeiro se o total CABE em u32, depois se a capacidade o cobre.
-        // Invertido, a comparacao de capacidade usaria um numero que ja deu a volta.
-        const u64 Necessario = GpuBatchSlotCount(_In.PoolCount);
-        if (Necessario > UINT32_MAX) return GpuClassifyPreflightTooManyPools;
+        // A mesma porta do dimensionamento, e nao uma segunda copia da aritmetica: se as duas
+        // divergissem, o buffer seria alocado por um criterio e aprovado por outro.
+        u32 Necessario = 0;
+        const u32 Motivo = GpuClassifyBatchBufferSlots(_In.PoolCount, Necessario);
+        if (Motivo != GpuClassifyPreflightOk) return Motivo;
+        // Aqui `Necessario` ja passou pela porta, entao a comparacao e u32 contra u32 sem risco.
         if (_In.BatchCapacity < Necessario) return GpuClassifyPreflightSmallBatchBuffer;
         return GpuClassifyPreflightOk;
     }
 
+
+    // === Prefixo dos lotes ======================================================================
+    //
+    // `BatchOffsets[b]` = onde os comandos do lote b comecam em `IndirectArgs`. Prefixo EXCLUSIVO
+    // sobre `BatchCounts`, que e o que o classify acabou de produzir.
+    //
+    // Na GPU, e nao na CPU, porque `BatchCounts` e escrito pela GPU: soma-lo na CPU exigiria
+    // readback, e readback nao entra no caminho do frame (regra 7). Nao e a mesma situacao do
+    // `BuildRangeOutputBases` da Fase 4, que prefixa dados que a CPU produziu.
+    //
+    // ⚠️ `BatchCounts` serve tambem de COUNT BUFFER do `ExecuteIndirect`: ele le um uint32 em
+    // `CountBufferOffset`, entao o lote b usa offset `b * 4`. Por isso o prefixo escreve num buffer
+    // SEPARADO em vez de acumular no lugar — um prefixo in-place destruiria as contagens de que os
+    // draws dependem.
+    enum EGpuPrefixCounter : u32 {
+        // Total de comandos. Nao e `BatchOffsets[Slots]`: manter o total num contador, e nao numa
+        // entrada extra do array, evita que o array de offsets precise de `Slots + 1` entradas —
+        // e `Slots` ja e o numero que a porta de dimensionamento devolveu.
+        GpuPrefixCounterTotal = 0,
+        // A soma passou de u32. NAO e alcancavel a partir de um `BatchCounts` produzido pelo
+        // classify — cada candidato contribui no maximo 1, e os candidatos sao contados em u32 —,
+        // mas o shader nao tem como saber quem escreveu o buffer que ele esta somando.
+        GpuPrefixCounterOverflow = 1,
+        GpuPrefixCounterCount    = 2,
+    };
+
+    // Referencia CPU do prefixo. Devolve o total; `_OutOffsets` fica com o prefixo exclusivo.
+    //
+    // `_OutOverflow` recebe 1 quando a soma daria a volta. Nesse caso as entradas seguintes ficam
+    // com o acumulado ANTES do estouro, e nao com lixo: o shader faz o mesmo, e o teste compara os
+    // dois elemento a elemento.
+    u32 PrefixBatchCounts(std::span<const u32> Counts, std::vector<u32>& OutOffsets,
+                          u32& OutOverflow);
     // Referencia CPU do dispatch. E o oraculo do teste WARP e, depois, o braco A/B.
     //
     // NAO consulta o `GpuClassifyPreflight`, e isso e deliberado: ela espelha o SHADER, que executa o
