@@ -146,6 +146,7 @@ smile_graphics_domain(Resources
 smile_graphics_domain(Scene
     Camera
     GBuffer
+    GpuClassify
     GpuIndirectDraw
     GpuInstanceTransform
     GpuMaterialRecord

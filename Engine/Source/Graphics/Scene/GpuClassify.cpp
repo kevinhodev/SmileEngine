@@ -1,0 +1,37 @@
+#include "Smile/Graphics/Scene/GpuClassify.h"
+
+namespace Smile {
+    u32 ClassifyCandidates(const FGpuClassifyInput& _In, std::vector<u32>& _OutBatchCounts,
+                           std::vector<u32>& _OutCounters) {
+        // Dimensionadas e zeradas aqui. O `assign` e deliberado sobre `resize`: uma chamada anterior
+        // deixaria contagens vivas nos slots que esta nao toca, e o teste compararia acumulado da
+        // CPU com zerado da GPU.
+        _OutCounters.assign(GpuClassifyOutcomeCount, 0u);
+        _OutBatchCounts.assign(_In.BatchCapacity, 0u);
+
+        for (const u32 Slot : _In.Slots) {
+            FGpuBatchKey Key{};
+            const u32 Outcome = GpuClassifyCandidate(Slot, _In.Meta, _In.Materials, _In.Meshes,
+                                                     _In.PoolCount, Key);
+            if (Outcome != GpuClassifyIndirect) {
+                ++_OutCounters[Outcome];
+                continue;
+            }
+
+            // O indice do lote e limitado por construcao depois do `PoolCount` validado, entao este
+            // teste so dispara quando `BatchCapacity` foi dimensionada abaixo de
+            // `GpuBatchSlotCount(PoolCount)` — erro de quem alocou, e nao dado de cena. Ele existe
+            // porque a capacidade viaja separada do `PoolCount` ate o shader, e la os dois podem
+            // discordar sem que nada reclame.
+            const u32 Batch = GpuBatchIndex(Key, _In.PoolCount);
+            if (Batch >= _In.BatchCapacity) {
+                ++_OutCounters[GpuClassifyOverflow];
+                continue;
+            }
+
+            ++_OutBatchCounts[Batch];
+            ++_OutCounters[GpuClassifyIndirect];
+        }
+        return _OutCounters[GpuClassifyIndirect];
+    }
+}

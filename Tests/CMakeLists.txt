@@ -313,6 +313,36 @@ set_tests_properties(Smile.GpuSceneExpandWarp PROPERTIES
     TIMEOUT 240
 )
 
+# Classificacao e contagem por lote (Fase 5). Roda o shader de PRODUCAO em WARP e compara com a
+# referencia CPU do mesmo header, contra um oraculo escrito a mao.
+add_executable(SmileGpuClassifyWarpTests
+    GpuClassifyWarpTests.cpp
+)
+
+target_compile_features(SmileGpuClassifyWarpTests PRIVATE cxx_std_20)
+target_compile_definitions(SmileGpuClassifyWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_CLASSIFY_CANDIDATES_CSO="${SMILE_SHADER_OUTPUT_DIR}/ClassifyCandidates.cs_6_0.cso"
+)
+target_link_libraries(SmileGpuClassifyWarpTests PRIVATE SmileEngine d3d12 dxgi)
+add_dependencies(SmileGpuClassifyWarpTests Shaders)
+set_target_properties(SmileGpuClassifyWarpTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuClassifyWarp
+    COMMAND SmileGpuClassifyWarpTests
+)
+
+set_tests_properties(Smile.GpuClassifyWarp PROPERTIES
+    LABELS "scene;gpu-driven;abi;warp"
+    TIMEOUT 240
+)
+
 # Paridade da composicao de transform (Fase 4). Nao linka a engine: o header sob teste e puro, e o
 # ponto e justamente comparar a composicao do C++ com a do HLSL sem nada no meio.
 add_executable(SmileInstanceTransformWarpTests
