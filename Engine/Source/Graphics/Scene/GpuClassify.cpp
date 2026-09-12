@@ -36,8 +36,9 @@ namespace Smile {
     }
 
     u32 PrefixBatchCounts(std::span<const u32> _Counts, std::vector<u32>& _OutOffsets,
-                          u32& _OutOverflow) {
+                          std::vector<u32>& _OutDrawCounts, u32& _OutOverflow) {
         _OutOffsets.assign(_Counts.size(), 0u);
+        _OutDrawCounts.assign(_Counts.size(), 0u);
         _OutOverflow = 0u;
 
         u32 Acc = 0;
@@ -49,11 +50,17 @@ namespace Smile {
                 _OutOverflow = 1u;
                 for (size_t J = I; J < _Counts.size(); ++J)
                     _OutOffsets[J] = kGpuBatchOffsetPoison;
+                // `_OutDrawCounts` ja esta TODO zerado pelo assign, e e assim que fica: count buffer
+                // zerado faz o ExecuteIndirect executar zero comandos. Nao e uma otimizacao de
+                // escrita — e o contrato.
                 return Acc;
             }
             _OutOffsets[I] = Acc;
             Acc += _Counts[I];
         }
+        // Sem estouro: o count buffer e copia das contagens. A copia acontece depois do laco, e nao
+        // dentro dele, porque so aqui se sabe que o prefixo fechou inteiro.
+        for (size_t I = 0; I < _Counts.size(); ++I) _OutDrawCounts[I] = _Counts[I];
         return Acc;
     }
 }

@@ -296,13 +296,31 @@ namespace Smile {
         GpuPrefixCounterCount    = 2,
     };
 
+
+    // O COUNT BUFFER do `ExecuteIndirect`, publicado pelo prefixo junto dos offsets.
+    //
+    // `DrawCounts[b]` = `BatchCounts[b]` quando o prefixo fechou, e ZERO em todas as entradas quando
+    // `PrefixOverflow != 0`. Um count buffer zerado faz o `ExecuteIndirect` executar zero comandos —
+    // que e a unica forma de suprimir o draw sem readback, porque a decisao acontece na GPU, dentro
+    // do buffer que o command processor le.
+    //
+    // Buffer SEPARADO em vez de zerar `BatchCounts` no lugar: as contagens sao o diagnostico que se
+    // quer olhar justamente quando houve estouro, e destrui-las apagaria a evidencia. Custa
+    // `4 * PoolCount` dwords — dezenas de bytes.
+    //
+    // ⚠️ A versao anterior deste header dizia que `BatchCounts` seria o count buffer. Nao pode ser:
+    // ele e escrito pelo classify, que nao sabe se o prefixo vai fechar.
+
     // Referencia CPU do prefixo. Devolve o total; `_OutOffsets` fica com o prefixo exclusivo.
     //
     // `_OutOverflow` recebe 1 quando a soma daria a volta. NESSE CASO, o contrato e:
     //
-    //   - a saida inteira e INUTILIZAVEL. Quem consome tem de checar a flag e suprimir a emissao
-    //     por completo. Isso e verificavel na GPU, dentro do proprio scatter, sem readback nenhum:
-    //     o contador vive num buffer que o scatter le;
+    //   - a saida inteira e INUTILIZAVEL, e suprimi-la NAO e trabalho do scatter sozinho. Um
+    //     `return` no shader nao alcanca o `ExecuteIndirect`: ele e do command processor, le o COUNT
+    //     BUFFER direto e executaria a contagem de antes sobre argumentos que o scatter deixou
+    //     intactos — comandos do frame passado, ou memoria nunca inicializada. Por isso o prefixo
+    //     publica um count buffer SANITIZADO (ver abaixo), e e ele, e nao `BatchCounts`, que vai
+    //     para o `ExecuteIndirect`;
     //   - da entrada que falhou em diante, todas recebem `kGpuBatchOffsetPoison`. Deterministico e
     //     IGUAL nos dois lados, entao o teste compara elemento a elemento inclusive no caso de
     //     estouro. A entrada que falhou tambem entra: o `Acc` ali ainda e valido, mas o lote nao
@@ -314,7 +332,7 @@ namespace Smile {
     // antes do estouro". Nao ficavam: a CPU deixava os zeros do `assign` e a GPU deixava o conteudo
     // anterior do recurso — duas coisas diferentes, e nenhuma das duas a descrita.
     u32 PrefixBatchCounts(std::span<const u32> Counts, std::vector<u32>& OutOffsets,
-                          u32& OutOverflow);
+                          std::vector<u32>& OutDrawCounts, u32& OutOverflow);
     // Referencia CPU do dispatch. E o oraculo do teste WARP e, depois, o braco A/B.
     //
     // NAO consulta o `GpuClassifyPreflight`, e isso e deliberado: ela espelha o SHADER, que executa o
