@@ -295,19 +295,17 @@ namespace Smile {
             Row.IndexCount    = M->GetIndexCount();
             Row.TriangleCount = M->RTTriangleCount();
 
-            // O pool e o recurso do VERTEX buffer, que e o MESMO do index e do payload de RT (o
-            // InitFromPool aponta os tres para ele). Identidade por ponteiro de recurso: dois
-            // chunks distintos sao dois recursos distintos, sempre.
-            Row.GeometryPoolId = GpuGeometryPoolIdFor(GeometryPools_, M->VertexResource());
+            // O PAR de recursos, e nao so o vertex buffer. No `AddMeshesBatch` os dois sao o mesmo
+            // chunk; no `AddMesh` — cena default, primitivas do editor, preview de material — sao
+            // dois recursos por malha. Identidade por ponteiro: dois chunks distintos sao dois
+            // recursos distintos, sempre.
+            Row.GeometryPoolId = GpuGeometryPoolIdFor(
+                GeometryPools_, FGpuGeometryPool{ M->VertexResource(), M->IndexResource() });
 
-            if (GpuMeshOffsetsRepresentable(M->VertexFirstElement(), M->IndexFirstElement())) {
-                Row.VertexOffset = static_cast<i32>(M->VertexFirstElement());
-                Row.IndexOffset  = M->IndexFirstElement();
-            } else {
-                // Conservador: a linha perde o caminho INDIRETO, nao o raster. Zerar os dois
-                // offsets e deliberado — assim uma leitura que ignore a flag desenha a primeira
-                // malha do pool no lugar de indexar fora dele.
-                Row.Flags |= GpuMeshOffsetsUnrepresentable;
+            // Conservador: quem nao cabe perde o caminho INDIRETO, e nao o raster. A politica mora
+            // na funcao compartilhada porque o ramo de poison e inalcancavel a partir daqui — ele
+            // exigiria um pool de 68 GB —, e uma copia inline dele nunca seria exercitada.
+            if (!GpuMeshFillPoolAddress(Row, M->VertexFirstElement(), M->IndexFirstElement())) {
                 ++UnrepresentableOffsets_;
                 LogError("GpuMeshTable: offset de pool fora do contrato do argumento indireto "
                          "(vertice " + std::to_string(M->VertexFirstElement()) +

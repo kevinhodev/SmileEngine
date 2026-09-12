@@ -243,21 +243,105 @@ namespace {
             Check(Row.VertexOffset > 0, "INT32_MAX no campo continua positivo");
         }
 
-        // Ids DENSOS e ESTAVEIS. Os ponteiros abaixo nunca sao dereferenciados -- a funcao so os
-        // compara --, entao valores fabricados servem e nenhum recurso e criado.
-        std::vector<ID3D12Resource*> Pools;
-        auto* const PoolA = reinterpret_cast<ID3D12Resource*>(0x1000);
-        auto* const PoolB = reinterpret_cast<ID3D12Resource*>(0x2000);
-        Check(GpuGeometryPoolIdFor(Pools, PoolA) == 0u && Pools.size() == 1,
-              "o primeiro pool ganha o id 0");
-        Check(GpuGeometryPoolIdFor(Pools, PoolA) == 0u && Pools.size() == 1,
-              "o mesmo pool nao cria id novo");
-        Check(GpuGeometryPoolIdFor(Pools, PoolB) == 1u && Pools.size() == 2,
-              "o segundo pool ganha o id 1");
-        Check(GpuGeometryPoolIdFor(Pools, PoolA) == 0u && Pools.size() == 2,
+        // A POLITICA do caso irrepresentavel, no ramo que a tabela nao consegue alcancar.
+        {
+            FGpuMeshRecord Ok{};
+            Check(GpuMeshFillPoolAddress(Ok, 1234u, 5678u), "offset que cabe e aceito");
+            Check(Ok.VertexOffset == 1234 && Ok.IndexOffset == 5678u,
+                  "e os dois offsets chegam na linha");
+            Check((Ok.Flags & GpuMeshOffsetsUnrepresentable) == 0u, "sem flag no caso normal");
+
+            FGpuMeshRecord Ruim{};
+            Check(!GpuMeshFillPoolAddress(Ruim, 0x80000000u, 0u),
+                  "offset acima de INT32_MAX e recusado");
+            Check((Ruim.Flags & GpuMeshOffsetsUnrepresentable) != 0u, "e a linha leva a flag");
+            // ZERO seria o pior default: o pool e [todos os VBs][todos os IBs], entao indice zero
+            // aponta para a regiao de VERTICE e um comando emitido por engano leria bytes de vertice
+            // como indices. A primeira versao desta slice zerava os dois.
+            Check(Ruim.IndexOffset != 0u, "o offset de indice envenenado NAO e zero");
+            Check(Ruim.VertexOffset < 0, "o de vertice fica negativo, que nao e um offset valido");
+            Check(Ruim.VertexOffset == kGpuMeshPoisonVertexOffset &&
+                      Ruim.IndexOffset == kGpuMeshPoisonIndexOffset,
+                  "e os dois sao os valores-poison declarados");
+        }
+
+        // Ids DENSOS e ESTAVEIS, pelo PAR VB/IB. Os ponteiros abaixo nunca sao dereferenciados -- a
+        // funcao so os compara --, entao valores fabricados servem e nenhum recurso e criado.
+        std::vector<FGpuGeometryPool> Pools;
+        auto* const A = reinterpret_cast<ID3D12Resource*>(0x1000);
+        auto* const B = reinterpret_cast<ID3D12Resource*>(0x2000);
+        auto* const C = reinterpret_cast<ID3D12Resource*>(0x3000);
+        // Caso `AddMeshesBatch`: VB e IB sao o MESMO chunk.
+        Check(GpuGeometryPoolIdFor(Pools, { A, A }) == 0u && Pools.size() == 1,
+              "o primeiro par ganha o id 0");
+        Check(GpuGeometryPoolIdFor(Pools, { A, A }) == 0u && Pools.size() == 1,
+              "o mesmo par nao cria id novo");
+        Check(GpuGeometryPoolIdFor(Pools, { B, B }) == 1u && Pools.size() == 2,
+              "o segundo par ganha o id 1");
+        Check(GpuGeometryPoolIdFor(Pools, { A, A }) == 0u && Pools.size() == 2,
               "voltar ao primeiro devolve o id dele, e nao um terceiro");
-        Check(Pools[0] == PoolA && Pools[1] == PoolB,
+
+        // O caso que a identidade por VB sozinho errava, e que EXISTE: o `AddMesh` (cena default,
+        // primitivas do editor) cria dois recursos por malha, entao duas malhas podem compartilhar
+        // um vertex buffer sem compartilhar o index buffer. Juntar as duas faria o lote amarrar o IB
+        // de outra.
+        Check(GpuGeometryPoolIdFor(Pools, { A, B }) == 2u && Pools.size() == 3,
+              "mesmo VB com IB diferente e um par DIFERENTE");
+        Check(GpuGeometryPoolIdFor(Pools, { C, B }) == 3u && Pools.size() == 4,
+              "mesmo IB com VB diferente tambem");
+        Check(GpuGeometryPoolIdFor(Pools, { A, B }) == 2u && Pools.size() == 4,
+              "e o par misto continua estavel");
+        Check(Pools[0] == FGpuGeometryPool{ A, A } && Pools[2] == FGpuGeometryPool{ A, B },
               "a lista publicada indexa pelo id que a funcao devolveu");
+    }
+
+    // ---- o diff da linha de MALHA -------------------------------------------------------------
+    //
+    // A tabela de malha usa o mesmo DiffTableRows da de material, e quem decide o que e "igual" e o
+    // `operator==`. Um campo esquecido ali nao da erro nenhum: a linha simplesmente nunca sobe, e a
+    // GPU fica com o valor antigo. Os tres da Fase 5 chegaram a ficar de fora.
+    void TestarDiffMalhas() {
+        auto Linha = [](u32 Semente) {
+            FGpuMeshRecord R{};
+            R.LocalAABBMin      = { -1.0f, -2.0f, -3.0f };
+            R.LocalAABBMax      = {  1.0f,  2.0f,  3.0f };
+            R.VertexSrv         = 10u + Semente;
+            R.IndexSrv          = 20u + Semente;
+            R.TriangleSrv       = 30u + Semente;
+            R.VertexCount       = 40u + Semente;
+            R.IndexCount        = 50u + Semente;
+            R.TriangleCount     = 60u + Semente;
+            R.VirtualGeometryId = 70u + Semente;
+            R.VertexOffset      = static_cast<i32>(80u + Semente);
+            R.IndexOffset       = 90u + Semente;
+            R.GeometryPoolId    = 100u + Semente;
+            return R;
+        };
+
+        std::vector<u32> Changed;
+        // Cada campo MUTADO ISOLADAMENTE: mudar os tres juntos passaria com dois deles ausentes do
+        // operator==, e e exatamente assim que o defeito sobreviveu a primeira revisao.
+        struct FCaso { const char* Nome; void (*Mutar)(FGpuMeshRecord&); };
+        static constexpr FCaso kCasos[] = {
+            { "VertexOffset",      [](FGpuMeshRecord& R) { R.VertexOffset += 1; } },
+            { "IndexOffset",       [](FGpuMeshRecord& R) { R.IndexOffset += 1u; } },
+            { "GeometryPoolId",    [](FGpuMeshRecord& R) { R.GeometryPoolId += 1u; } },
+            { "Flags",             [](FGpuMeshRecord& R) { R.Flags ^= GpuMeshOffsetsUnrepresentable; } },
+            { "VirtualGeometryId", [](FGpuMeshRecord& R) { R.VirtualGeometryId += 1u; } },
+        };
+        for (const FCaso& Caso : kCasos) {
+            std::vector<FGpuMeshRecord> Fresh{ Linha(0), Linha(1), Linha(2) };
+            std::vector<FGpuMeshRecord> Shadow;
+            Check(DiffTableRows<FGpuMeshRecord>(Fresh, Shadow, Changed) == 3u,
+                  std::string("primeira publicacao sobe as tres linhas (") + Caso.Nome + ")");
+            Check(DiffTableRows<FGpuMeshRecord>(Fresh, Shadow, Changed) == 0u,
+                  std::string("sem mudanca, nenhuma linha (") + Caso.Nome + ")");
+            Caso.Mutar(Fresh[1]);
+            Check(DiffTableRows<FGpuMeshRecord>(Fresh, Shadow, Changed) == 1u,
+                  std::string("mudar so ") + Caso.Nome + " suja UMA linha");
+            Check(Changed.size() == 1 && Changed[0] == 1u,
+                  std::string("e e a linha 1 (") + Caso.Nome + ")");
+        }
     }
 
     // ---- footprint: o staging tambem e persistente -------------------------------------------
@@ -317,6 +401,7 @@ int main() try {
     TestarFootprint();
     TestarDiffInstancias();
     TestarEnderecoNoPool();
+    TestarDiffMalhas();
 
     // ---- dados: quatro instancias apontando para tres linhas de material ---------------------
     // A terceira e a quarta compartilham a linha 2 de proposito: e a situacao que a fase existe

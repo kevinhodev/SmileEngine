@@ -101,9 +101,15 @@ namespace Smile {
         i32 VertexOffset = 0; // -> BaseVertexLocation, em VERTICES a partir da base do pool
         u32 IndexOffset  = 0; // -> StartIndexLocation, em INDICES a partir da base do pool
 
-        // Qual pool. Um `ExecuteIndirect` amarra UM par VB/IB, entao comandos de pools diferentes
+        // Qual PAR VB/IB. Um `ExecuteIndirect` amarra um par, entao comandos de pares diferentes
         // nao podem entrar no mesmo lote: e por isso que o id vive na linha, e nao so numa tabela
         // da CPU. Denso e estavel dentro de um setup (ver FGpuMeshTable::GeometryPools).
+        //
+        // ⚠️ O PAR, e nao o vertex buffer. Os dois caminhos de criacao de malha sao diferentes:
+        // `AddMeshesBatch` fatia um pool unico (VB == IB == o chunk), e `AddMesh` — usado pela cena
+        // default e pelas primitivas do editor — cria DOIS recursos por malha. Identificar o pool
+        // pelo VB sozinho juntaria malhas que nao compartilham index buffer, e o lote amarraria o IB
+        // de outra.
         u32 GeometryPoolId = 0;
     };
     static_assert(sizeof(FGpuMeshRecord) == 68, "FGpuMeshRecord deve casar com o HLSL (68 B)");
@@ -129,6 +135,29 @@ namespace Smile {
         GpuMeshOffsetsUnrepresentable = 1u << 0,
     };
 
+    // Offsets POISON da linha irrepresentavel.
+    //
+    // A primeira versao deixava os dois em ZERO, com o argumento de que "uma leitura que ignore a
+    // flag desenha a primeira malha do pool". Isso estava errado: o pool e
+    // `[todos os VBs][todos os IBs]`, entao offset de INDICE zero aponta para a regiao de VERTICE, e
+    // o command processor leria bytes de vertice como indices. Nao e um desenho errado — e uma
+    // leitura de indices arbitrarios.
+    //
+    // Poison, entao: se um comando for emitido para esta linha, que ele seja absurdo em vez de
+    // plausivel. Quem de fato impede a emissao e a FLAG, e provar isso e obrigacao da slice que
+    // escrever o scatter.
+    inline constexpr i32 kGpuMeshPoisonVertexOffset = INT32_MIN;
+    inline constexpr u32 kGpuMeshPoisonIndexOffset  = 0xFFFFFFFFu;
+
+    // Um par VB/IB. E a identidade que um lote de `ExecuteIndirect` pode amarrar de uma vez.
+    struct FGpuGeometryPool {
+        ID3D12Resource* Vertex = nullptr;
+        ID3D12Resource* Index  = nullptr;
+    };
+    inline bool operator==(const FGpuGeometryPool& A, const FGpuGeometryPool& B) {
+        return A.Vertex == B.Vertex && A.Index == B.Index;
+    }
+
     // Cabe no argumento indireto?
     //
     // PURA de proposito: os limites sao alcancaveis com dois inteiros, e nao com um pool de 68 GB.
@@ -143,17 +172,38 @@ namespace Smile {
         return _VertexFirstElement <= static_cast<u32>(INT32_MAX);
     }
 
-    // Id DENSO do pool, atribuido na primeira aparicao.
+    // Id DENSO do par, atribuido na primeira aparicao.
     //
     // Pura e separada da tabela pelo mesmo motivo do predicado acima: exercitar a atribuicao pela
     // `SetupForScene` exigiria uma cena com geometria em dois chunks de 256 MB, que nenhum teste vai
-    // montar. Aqui bastam dois ponteiros.
+    // montar. Aqui bastam quatro ponteiros.
     //
     // Os ponteiros sao COMPARADOS e guardados, nunca dereferenciados — e por isso o teste pode
     // passar valores que nao apontam para recurso nenhum.
     //
-    // Busca linear porque o numero de pools e o numero de chunks da cena: unidades, nao milhares.
-    inline u32 GpuGeometryPoolIdFor(std::vector<ID3D12Resource*>& _Pools, ID3D12Resource* _Pool) {
+    // Busca linear porque o numero de pares e o numero de chunks da cena cozida mais as malhas
+    // criadas uma a uma (primitivas do editor, preview de material): unidades, nao milhares.
+    // Preenche os campos de endereco da linha, ou a envenena e marca.
+    //
+    // Pura pelo mesmo motivo das outras duas: dentro do laco que varre `FGpuMesh` o ramo do poison
+    // seria inalcancavel por teste — exigiria um pool de 68 GB. Aqui basta um inteiro.
+    //
+    // Devolve true quando a linha ficou utilizavel pelo caminho indireto.
+    inline bool GpuMeshFillPoolAddress(FGpuMeshRecord& _Row, u32 _VertexFirstElement,
+                                       u32 _IndexFirstElement) {
+        if (GpuMeshOffsetsRepresentable(_VertexFirstElement, _IndexFirstElement)) {
+            _Row.VertexOffset = static_cast<i32>(_VertexFirstElement);
+            _Row.IndexOffset  = _IndexFirstElement;
+            return true;
+        }
+        _Row.Flags |= GpuMeshOffsetsUnrepresentable;
+        _Row.VertexOffset = kGpuMeshPoisonVertexOffset;
+        _Row.IndexOffset  = kGpuMeshPoisonIndexOffset;
+        return false;
+    }
+
+    inline u32 GpuGeometryPoolIdFor(std::vector<FGpuGeometryPool>& _Pools,
+                                    const FGpuGeometryPool& _Pool) {
         for (u32 Id = 0; Id < _Pools.size(); ++Id)
             if (_Pools[Id] == _Pool) return Id;
         _Pools.push_back(_Pool);
@@ -168,7 +218,12 @@ namespace Smile {
                A.VertexSrv == B.VertexSrv && A.IndexSrv == B.IndexSrv &&
                A.TriangleSrv == B.TriangleSrv && A.VertexCount == B.VertexCount &&
                A.IndexCount == B.IndexCount && A.TriangleCount == B.TriangleCount &&
-               A.Flags == B.Flags && A.VirtualGeometryId == B.VirtualGeometryId;
+               A.Flags == B.Flags && A.VirtualGeometryId == B.VirtualGeometryId &&
+               // Os tres da Fase 5 tambem. Fora daqui, uma linha cuja UNICA mudanca fosse o offset
+               // no pool — o que um resize de cena produz — seria considerada igual e nunca subiria:
+               // a GPU ficaria com o endereco antigo apontando para dentro de outro chunk.
+               A.VertexOffset == B.VertexOffset && A.IndexOffset == B.IndexOffset &&
+               A.GeometryPoolId == B.GeometryPoolId;
     }
     inline bool operator!=(const FGpuMeshRecord& A, const FGpuMeshRecord& B) { return !(A == B); }
 
@@ -534,9 +589,10 @@ namespace Smile {
         // precisa amarrar o do pool antes de cada chamada. Publicar so o id deixaria um numero sem
         // referente.
         //
-        // Ponteiros CRUS, e vivos enquanto o setup vale: cada FGpuMesh segura um ComPtr do proprio
-        // pool, e as malhas do `UniqueMeshes_` vivem na cena. Um Release/SetupForScene refaz a lista.
-        std::span<ID3D12Resource* const> GeometryPools() const { return GeometryPools_; }
+        // Ponteiros CRUS, e vivos enquanto o setup vale: cada FGpuMesh segura os ComPtrs dos proprios
+        // recursos, e as malhas do `UniqueMeshes_` vivem na cena. Um Release/SetupForScene refaz a
+        // lista.
+        std::span<const FGpuGeometryPool> GeometryPools() const { return GeometryPools_; }
 
         u64 PersistentBytes()   const { return Storage_.PersistentBytes(); }
         u64 ResidentBytes()     const { return Storage_.ResidentBytes(); }
@@ -550,7 +606,7 @@ namespace Smile {
     private:
         FGpuTableStorage Storage_;
         std::vector<const FGpuMesh*>              UniqueMeshes_;
-        std::vector<ID3D12Resource*>              GeometryPools_;
+        std::vector<FGpuGeometryPool>             GeometryPools_;
         u32                                       UnrepresentableOffsets_ = 0;
         std::vector<const FGpuMesh*>              RowMeshes_;   // [0] = nullptr (linha ausente)
         std::unordered_map<const FGpuMesh*, u32>  RowByMesh_;
