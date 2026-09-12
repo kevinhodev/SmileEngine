@@ -263,6 +263,19 @@ namespace {
             Check(Ruim.VertexOffset == kGpuMeshPoisonVertexOffset &&
                       Ruim.IndexOffset == kGpuMeshPoisonIndexOffset,
                   "e os dois sao os valores-poison declarados");
+
+            // INVALIDO -> VALIDO na MESMA linha. Acontece de verdade num resize de cena, em que a
+            // malha muda de posicao no pool. Sem a limpeza, a funcao devolve "utilizavel" e a flag
+            // continua mandando para o fallback -- o retorno e a linha discordando entre si.
+            constexpr u32 kBitReservado = 1u << 3; // finge ser de outro dono (virtual geometry)
+            Ruim.Flags |= kBitReservado;
+            Check(GpuMeshFillPoolAddress(Ruim, 7u, 9u), "a mesma linha volta a ser utilizavel");
+            Check((Ruim.Flags & GpuMeshOffsetsUnrepresentable) == 0u,
+                  "e a flag anterior foi limpa");
+            Check((Ruim.Flags & kBitReservado) != 0u,
+                  "sem levar junto os bits que nao sao desta funcao");
+            Check(Ruim.VertexOffset == 7 && Ruim.IndexOffset == 9u,
+                  "e os offsets validos substituiram o poison");
         }
 
         // Ids DENSOS e ESTAVEIS, pelo PAR VB/IB. Os ponteiros abaixo nunca sao dereferenciados -- a

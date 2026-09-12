@@ -194,6 +194,14 @@ namespace Smile {
         if (GpuMeshOffsetsRepresentable(_VertexFirstElement, _IndexFirstElement)) {
             _Row.VertexOffset = static_cast<i32>(_VertexFirstElement);
             _Row.IndexOffset  = _IndexFirstElement;
+            // LIMPA a flag: `true` diz que a linha esta utilizavel pelo caminho indireto, e uma
+            // marca de uma chamada anterior a mandaria para o fallback contradizendo o retorno. A
+            // transicao invalido -> valido acontece de verdade num resize de cena, em que a malha
+            // muda de posicao no pool.
+            //
+            // So ESTE bit, e nao `Flags = 0`: os outros sao reservados para a trilha de virtual
+            // geometry, e esta funcao nao tem nada a dizer sobre eles.
+            _Row.Flags &= ~static_cast<u32>(GpuMeshOffsetsUnrepresentable);
             return true;
         }
         _Row.Flags |= GpuMeshOffsetsUnrepresentable;
@@ -219,9 +227,13 @@ namespace Smile {
                A.TriangleSrv == B.TriangleSrv && A.VertexCount == B.VertexCount &&
                A.IndexCount == B.IndexCount && A.TriangleCount == B.TriangleCount &&
                A.Flags == B.Flags && A.VirtualGeometryId == B.VirtualGeometryId &&
-               // Os tres da Fase 5 tambem. Fora daqui, uma linha cuja UNICA mudanca fosse o offset
-               // no pool — o que um resize de cena produz — seria considerada igual e nunca subiria:
-               // a GPU ficaria com o endereco antigo apontando para dentro de outro chunk.
+               // Os tres da Fase 5 tambem, porque igualdade que ignora campo e igualdade errada.
+               //
+               // Sendo exato sobre a CONSEQUENCIA, que eu havia exagerado: hoje nao ha como isto
+               // causar dano, porque o `SetupForScene` limpa o `Shadow_` e um setup ou resize
+               // republica a tabela inteira de qualquer jeito. O dano aparece no dia em que a tabela
+               // de malha ganhar atualizacao INCREMENTAL — como a de instancias ja tem —, e ai uma
+               // linha cuja unica mudanca fosse o offset no pool ficaria para tras em silencio.
                A.VertexOffset == B.VertexOffset && A.IndexOffset == B.IndexOffset &&
                A.GeometryPoolId == B.GeometryPoolId;
     }
