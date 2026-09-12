@@ -115,10 +115,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         return;
     }
 
-    // O indice do lote ja esta limitado pelo `PoolCount` validado acima, entao este teste so dispara
-    // com `BatchCapacity` dimensionada abaixo de kGpuPipelineClassCount * PoolCount. E CANARIO de
-    // alocacao, e nao politica: ele existe porque a capacidade viaja separada do PoolCount ate aqui,
-    // e os dois podem discordar sem que nada reclame.
+    // Defesa de ultima instancia, e NAO politica. O `GpuClassifyPreflight` exige
+    // `BatchCapacity >= kGpuPipelineClassCount * PoolCount` antes do dispatch, e com o `PoolCount`
+    // validado logo acima o indice ja esta limitado — sob preflight aprovado este ramo e
+    // inalcancavel. Ele fica porque a capacidade viaja separada do PoolCount ate aqui e os dois
+    // podem discordar; descobrir falta de espaco NESTE ponto ja seria geometria perdida no frame, e
+    // por isso quem impede e o preflight, nao este contador.
     const uint Batch = BatchIndex(Material.PipelineClass, Mesh.GeometryPoolId, PoolCount);
     if (Batch >= BatchCapacity) {
         InterlockedAdd(Counters[SMILE_CLASSIFY_OVERFLOW], 1u);

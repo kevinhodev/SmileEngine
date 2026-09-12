@@ -12,26 +12,60 @@
 // QUEM DESENHA O QUE, que e a decisao que este arquivo carrega
 // ==============================================================================================
 //
-// A regra 7 do plano proibe readback novo decidindo draw, entao a GPU NAO pode dizer a CPU, a tempo
-// deste frame, quem ela recusou. Logo a divisao "indireto x fallback" e decidida pela CPU, com o
-// MESMO predicado (`GpuIndirectEligible`), sobre dados que ela tambem possui: a classe do material
-// e a flag de offset da malha. A CPU desenha o complemento.
+// A regra 7 do plano proibe readback novo decidindo draw, entao a GPU NAO pode dizer a CPU quem ela
+// recusou — nem neste frame nem no seguinte. Logo a divisao "indireto x fallback" e decidida pela
+// CPU, com o MESMO predicado (`GpuIndirectEligible`), sobre dados que ela tambem possui: a classe do
+// material e a flag de offset da malha. A CPU desenha o complemento.
+//
+// E por isso as PRE-CONDICOES do dispatch sao validadas ANTES dele, pela CPU, com dados que sao
+// dela: ver `GpuClassifyPreflight`. Preflight reprovado tira o frame INTEIRO do caminho indireto,
+// antes de qualquer comando ser gravado. Nao ha decisao de roteamento depois do dispatch.
 //
 // Isso parte os desfechos em duas naturezas, e confundi-las e o erro que custa geometria:
 //
-//   POLITICA  — `NotEligible` e `Unrepresentable`. Sao recusas previstas, e a CPU desenha esses
+//   POLITICA  — `NotEligible` e `Unrepresentable`. Recusas previstas, e a CPU desenha esses
 //               renderaveis pelo caminho classico. Crescem normalmente (masked, two-sided e Blend
-//               existem em toda cena). O par (GPU recusa, CPU desenha) e o que torna "exatamente
-//               uma vez" verdadeiro: os dois lados avaliam o mesmo predicado sobre a mesma linha.
+//               existem em toda cena). Os dois lados avaliam o MESMO predicado sobre a MESMA linha,
+//               entao a recusa da GPU e o desenho da CPU sao o mesmo fato visto de dois lugares.
 //
 //   CANARIO   — `NoSlot`, `InvalidSlot`, `InvalidMaterialId`, `InvalidMeshId`, `InvalidPoolId` e
-//               `Overflow`. Significam que as tabelas discordam do que a CPU acha que existe.
-//               Ninguem desenha esses neste frame — e por isso eles TEM de ser zero. Diferente de
-//               zero significa que o caminho indireto nao esta utilizavel, e o A/B volta inteiro
-//               para a CPU no frame seguinte. Mesma politica do overflow do expand.
+//               `Overflow`. Significam invariante quebrado: as tabelas discordam do que a CPU acha
+//               que existe. Sao DIAGNOSTICO, nunca entrada de roteamento — quando eles aparecem, o
+//               estrago daquele frame ja aconteceu, e "voltar para a CPU no frame seguinte" seria
+//               justamente a decisao por readback que a regra 7 proibe.
 //
-// Nao ha terceira categoria, e e isso que o teste fixa: a soma dos desfechos e igual ao numero de
-// candidatos. Um desfecho que nao incrementasse nada, ou que incrementasse dois, apareceria ali.
+//               `Overflow` e o unico que nao deveria ser alcancavel: o preflight exige
+//               `BatchCapacity >= GpuBatchSlotCount(PoolCount)`, e com isso o indice do lote esta
+//               limitado por construcao. Ele continua no shader como defesa de ultima instancia, e
+//               nao como politica — descobrir falta de espaco depois do dispatch ja e geometria
+//               perdida.
+//
+// ==============================================================================================
+// O QUE A SOMA DOS DESFECHOS PROVA, E O QUE ELA NAO PROVA
+// ==============================================================================================
+//
+// A soma dos nove contadores e igual ao numero de candidatos. Isso prova UM RESULTADO DE
+// CLASSIFICACAO por candidato — nenhum caminho esquece de contar, nenhum conta duas vezes.
+//
+// NAO prova `draw indireto + draw CPU == 1`. Canario e "quem desenha" nao sao a mesma particao, e o
+// contraexemplo e curto:
+//
+//   - malha com `GeometryPoolId` invalido sob material MASKED: a GPU registra `InvalidPoolId` e nao
+//     emite comando; a CPU desenha assim mesmo, porque a classe nao e elegivel. Desenhado uma vez —
+//     por acaso, e nao porque as duas contas fecharam;
+//
+//   - a MESMA malha sob material opaco ELEGIVEL: a GPU registra `InvalidPoolId` e nao emite; a CPU
+//     tambem nao desenha, porque a classe e elegivel. Desenhado ZERO vezes.
+//
+// Generalizando: a CPU desenha `!GpuIndirectEligible(...)` e a GPU emite
+// `GpuIndirectEligible(...) E ids validos`. O conjunto exposto e portanto `elegivel E canario`, e
+// ninguem o desenha. Pior: nos canarios de id (`InvalidMaterialId`, `InvalidSlot`) a classe nem
+// chega a ser conhecida, entao nao da para saber se o candidato estava exposto — o que obriga a
+// tratar QUALQUER canario como possivel geometria perdida.
+//
+// A prova de "desenhado exatamente uma vez" so pode existir quando o fallback e o scatter
+// existirem, e exige que os dois bracos leiam a MESMA versao das linhas canonicas. Ela pertence
+// aquela slice; aqui ela seria encenacao.
 
 #include "Smile/Core/Types.h"
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
@@ -135,6 +169,26 @@ namespace Smile {
         return GpuClassifyIndirect;
     }
 
+
+    // Por que o dispatch NAO pode ser feito.
+    //
+    // Tudo aqui e conhecido pela CPU antes de qualquer comando ser gravado: capacidade de buffer,
+    // numero de pools e tamanho das tabelas sao dela. Nenhum destes motivos exige olhar um contador
+    // que a GPU escreveu — se exigisse, seria readback decidindo draw.
+    enum EGpuClassifyPreflight : u32 {
+        GpuClassifyPreflightOk = 0,
+        // Sem pool publicado nao existe lote possivel: TODO candidato viraria `InvalidPoolId`.
+        GpuClassifyPreflightNoPools = 1,
+        // `BatchCounts` menor que `GpuBatchSlotCount(PoolCount)`. E este motivo que torna o
+        // `Overflow` do shader inalcancavel: com a capacidade certa, o indice do lote ja esta
+        // limitado pelo `PoolCount` que o proprio shader valida.
+        GpuClassifyPreflightSmallBatchBuffer = 2,
+        // Tabela canonica vazia com candidatos na fila. Meta vazia faz todo candidato virar
+        // `InvalidSlot`; material ou malha vazios fazem todo candidato virar id invalido. Em
+        // qualquer dos tres o dispatch so produziria canario.
+        GpuClassifyPreflightEmptyTable = 3,
+    };
+
     // O que o dispatch recebe. Espelha o ClassifyCB do shader.
     struct FGpuClassifyInput {
         std::span<const u32>                   Slots; // saida do ExpandInstanceRanges
@@ -145,7 +199,29 @@ namespace Smile {
         u32 BatchCapacity = 0; // slots de BatchCounts; ver GpuBatchSlotCount
     };
 
+    // A porta do FRAME. Chamada pela CPU ANTES do dispatch; reprovada, o frame inteiro desenha pelo
+    // caminho classico e nenhum comando indireto e gravado.
+    //
+    // Pura e sobre a MESMA struct que o dispatch recebe, de proposito: uma pre-condicao verificada
+    // sobre outra copia dos numeros e uma pre-condicao sobre outra coisa.
+    inline u32 GpuClassifyPreflight(const FGpuClassifyInput& _In) {
+        // Sem candidato nao ha o que reprovar: um dispatch de zero threads e valido e nao produz
+        // desfecho nenhum. Reprovar aqui obrigaria o chamador a tratar "cena vazia" como falha.
+        if (_In.Slots.empty()) return GpuClassifyPreflightOk;
+        if (_In.Meta.empty() || _In.Materials.empty() || _In.Meshes.empty())
+            return GpuClassifyPreflightEmptyTable;
+        if (_In.PoolCount == 0u) return GpuClassifyPreflightNoPools;
+        if (_In.BatchCapacity < GpuBatchSlotCount(_In.PoolCount))
+            return GpuClassifyPreflightSmallBatchBuffer;
+        return GpuClassifyPreflightOk;
+    }
+
     // Referencia CPU do dispatch. E o oraculo do teste WARP e, depois, o braco A/B.
+    //
+    // NAO consulta o `GpuClassifyPreflight`, e isso e deliberado: ela espelha o SHADER, que executa o
+    // que recebe. Quem decide se o dispatch acontece e o chamador, antes. Se ela reprovasse sozinha,
+    // o teste perderia a unica forma de exercitar as defesas do shader sob entrada que o preflight
+    // proibe — e uma defesa que nenhum teste alcanca e um comentario.
     //
     // As duas saidas sao ZERADAS aqui, e nao acumuladas: o shader tambem parte de contadores zerados,
     // e comparar acumulados de origens diferentes esconderia um desfecho que nunca incrementa.

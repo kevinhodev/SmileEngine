@@ -2,9 +2,9 @@
 //
 // O que este teste existe para impedir, em ordem de gravidade:
 //
-//  1. um candidato ser contado DUAS vezes, ou nenhuma. A divisao "indireto x fallback" so e segura
-//     porque cada candidato tem exatamente um desfecho: quem a GPU recusa, a CPU desenha. Contar
-//     duas vezes desenha o objeto duas vezes; nao contar o faz sumir, que a regra 6 proibe;
+//  1. um candidato receber DOIS resultados de classificacao, ou nenhum. A contabilidade e o que
+//     permite auditar a fatia; ela NAO prova "desenhado exatamente uma vez" — ver a nota do
+//     GpuClassify.h sobre o que a soma prova e o que ela nao prova;
 //  2. a leitura de uma linha ANTES de validar o indice. Load fora do StructuredBuffer nao trava —
 //     o D3D12 devolve zero —, e zero e a linha do material default e a da malha ausente. O
 //     candidato passaria a desenhar algo PLAUSIVEL e errado;
@@ -195,13 +195,15 @@ namespace {
         Check(std::unique(Vistos.begin(), Vistos.end()) == Vistos.end(),
               "pares distintos dao indices distintos");
     }
-
-    // ---- parte CPU pura: exatamente um desfecho por candidato ---------------------------------
+    // ---- parte CPU pura: UM RESULTADO DE CLASSIFICACAO por candidato --------------------------
     //
-    // O invariante que autoriza a divisao indireto/fallback. A soma dos nove contadores tem de dar o
-    // numero de candidatos: um desfecho que nao incrementasse nada, ou um caminho que incrementasse
-    // dois, aparece aqui e em nenhum outro lugar.
-    void TestarExatamenteUmaVez() {
+    // A soma dos nove contadores tem de dar o numero de candidatos. Isso pega um caminho que esquece
+    // de contar e um que conta duas vezes — e so isso.
+    //
+    // Nao confundir com "desenhado exatamente uma vez": esse e outro invariante, sobre outra
+    // particao, e nao existe enquanto o fallback e o scatter nao existirem. Ver TestarParticoes logo
+    // abaixo, que registra por que as duas nao coincidem.
+    void TestarUmResultadoPorCandidato() {
         const auto Mats = Materiais(); const auto Meshs = Malhas();
         const auto Metas = Meta();     const auto S = Slots();
 
@@ -214,13 +216,121 @@ namespace {
 
         u32 Soma = 0;
         for (const u32 C : Contadores) Soma += C;
-        CheckEq(Soma, static_cast<u32>(S.size()), "todo candidato tem exatamente um desfecho");
+        CheckEq(Soma, static_cast<u32>(S.size()),
+                "todo candidato recebe exatamente um resultado de classificacao");
         CheckEq(Indiretos, Contadores[GpuClassifyIndirect], "o retorno e o contador de indiretos");
 
         u32 SomaLotes = 0;
         for (const u32 L : Lotes) SomaLotes += L;
         CheckEq(SomaLotes, Contadores[GpuClassifyIndirect],
                 "a soma dos lotes e o numero de comandos");
+    }
+
+    // ---- as duas particoes NAO coincidem -------------------------------------------------------
+    //
+    // Contraexemplo escrito como teste para nao viver so num comentario:
+    //
+    //     a CPU desenha:  !GpuIndirectEligible(classe, flags)
+    //     a GPU emite:     GpuIndirectEligible(classe, flags) E ids validos
+    //
+    // Logo o conjunto EXPOSTO — que ninguem desenha — e `elegivel E canario`. A mesma malha de pool
+    // invalido sob material masked e desenhada uma vez (por acaso, nao porque as contas fecharam);
+    // sob material opaco elegivel, nenhuma vez.
+    void TestarParticoes() {
+        const auto Mats = Materiais(); const auto Meshs = Malhas();
+
+        FGpuBatchKey K{};
+        FGpuSceneInstanceMeta Masked{};
+        Masked.Generation = 1u; Masked.MaterialId = 2u; Masked.MeshId = 3u;
+        FGpuSceneInstanceMeta Opaco{};
+        Opaco.Generation = 1u;  Opaco.MaterialId = 0u;  Opaco.MeshId = 3u;
+        const std::vector<FGpuSceneInstanceMeta> Par{ Masked, Opaco };
+
+        CheckEq(GpuClassifyCandidate(0u, Par, Mats, Meshs, kPoolCount, K),
+                GpuClassifyInvalidPoolId, "masked com pool invalido: canario");
+        CheckEq(GpuClassifyCandidate(1u, Par, Mats, Meshs, kPoolCount, K),
+                GpuClassifyInvalidPoolId, "opaco com pool invalido: o MESMO canario");
+
+        // Mesmo desfecho, destinos diferentes na CPU. E esse o ponto.
+        Check(!GpuIndirectEligible(Mats[2].PipelineClass, Meshs[3].Flags),
+              "o masked cai no complemento da CPU, e e desenhado uma vez");
+        Check(GpuIndirectEligible(Mats[0].PipelineClass, Meshs[3].Flags),
+              "o opaco NAO cai no complemento: ninguem o desenha");
+
+        // O conjunto exposto da cena do teste, calculado como a definicao manda. Nao e zero aqui
+        // porque a cena foi montada com defeitos de proposito; numa cena sa ele tem de ser zero, e e
+        // isso que os canarios diagnosticam.
+        const auto Metas = Meta(); const auto S = Slots();
+        u32 Expostos = 0, Incognitos = 0;
+        for (const u32 Slot : S) {
+            FGpuBatchKey Key{};
+            const u32 O = GpuClassifyCandidate(Slot, Metas, Mats, Meshs, kPoolCount, Key);
+            // Politica: alguem desenha, e nao ha exposicao.
+            if (O == GpuClassifyIndirect || O == GpuClassifyNotEligible ||
+                O == GpuClassifyUnrepresentable)
+                continue;
+            // Canario. A classe so e conhecida quando slot e os dois ids sao validos — sem ela nao
+            // da nem para dizer se o candidato estava exposto, que e o pior caso.
+            if (Slot >= Metas.size()) { ++Incognitos; continue; }
+            const FGpuSceneInstanceMeta& M = Metas[Slot];
+            if (M.Generation == 0u || M.MaterialId >= Mats.size() || M.MeshId >= Meshs.size()) {
+                ++Incognitos;
+                continue;
+            }
+            if (GpuIndirectEligible(Mats[M.MaterialId].PipelineClass, Meshs[M.MeshId].Flags))
+                ++Expostos;
+        }
+        CheckEq(Expostos, 1u, "um candidato exposto: classe elegivel sobre pool invalido");
+        CheckEq(Incognitos, 5u, "e cinco canarios em que a classe nem chega a ser conhecida");
+    }
+
+    // ---- o preflight: a porta do FRAME ---------------------------------------------------------
+    //
+    // Tudo que ele olha e conhecido pela CPU antes do dispatch. Nenhum motivo depende de contador que
+    // a GPU escreveu — se dependesse, seria readback decidindo draw, que a regra 7 proibe.
+    void TestarPreflight() {
+        const auto Mats = Materiais(); const auto Meshs = Malhas();
+        const auto Metas = Meta();     const auto S = Slots();
+
+        FGpuClassifyInput In{};
+        In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
+        In.PoolCount = kPoolCount; In.BatchCapacity = GpuBatchSlotCount(kPoolCount);
+        CheckEq(GpuClassifyPreflight(In), GpuClassifyPreflightOk, "a cena do teste passa");
+
+        // A CAPACIDADE EXATA passa, e uma abaixo dela nao. E este limite que torna o overflow
+        // inalcancavel: nao existe folga a descobrir depois do dispatch.
+        FGpuClassifyInput Curta = In;
+        Curta.BatchCapacity = GpuBatchSlotCount(kPoolCount) - 1u;
+        CheckEq(GpuClassifyPreflight(Curta), GpuClassifyPreflightSmallBatchBuffer,
+                "um slot a menos ja reprova");
+        Curta.BatchCapacity = 1u;
+        CheckEq(GpuClassifyPreflight(Curta), GpuClassifyPreflightSmallBatchBuffer,
+                "a capacidade que o teste usa para exercitar o overflow e, ela propria, reprovada");
+
+        FGpuClassifyInput SemPool = In;
+        SemPool.PoolCount = 0u;
+        CheckEq(GpuClassifyPreflight(SemPool), GpuClassifyPreflightNoPools, "sem pool, reprova");
+
+        for (int Qual = 0; Qual < 3; ++Qual) {
+            FGpuClassifyInput Vazia = In;
+            if (Qual == 0) Vazia.Meta = {};
+            if (Qual == 1) Vazia.Materials = {};
+            if (Qual == 2) Vazia.Meshes = {};
+            CheckEq(GpuClassifyPreflight(Vazia), GpuClassifyPreflightEmptyTable,
+                    "tabela vazia com candidatos na fila reprova (" + std::to_string(Qual) + ")");
+        }
+
+        // Cena sem candidato NAO e falha: um dispatch de zero threads e valido e nao produz desfecho.
+        FGpuClassifyInput SemCandidato = In;
+        SemCandidato.Slots = {};
+        SemCandidato.PoolCount = 0u;
+        CheckEq(GpuClassifyPreflight(SemCandidato), GpuClassifyPreflightOk,
+                "cena sem candidato passa, mesmo sem pool");
+
+        // E a consequencia que interessa: sob preflight aprovado, o overflow nao acontece.
+        std::vector<u32> Lotes, Cont;
+        ClassifyCandidates(In, Lotes, Cont);
+        CheckEq(Cont[GpuClassifyOverflow], 0u, "preflight aprovado: overflow inalcancavel");
     }
 }
 
@@ -513,7 +623,9 @@ int main() try {
 
     TestarDesfechos();
     TestarIndiceDeLote();
-    TestarExatamenteUmaVez();
+    TestarUmResultadoPorCandidato();
+    TestarParticoes();
+    TestarPreflight();
 
     const std::vector<u8> Bytecode = LerArquivo(SMILE_CLASSIFY_CANDIDATES_CSO);
     Check(!Bytecode.empty(), "a sonda compilada foi encontrada");
@@ -575,9 +687,12 @@ int main() try {
             CheckEq(Gpu.Lotes[GpuBatchIndex({ C, P }, kPoolCount)], 0u,
                     "classe " + std::to_string(C) + " nao emite comando nesta fase");
 
-    // Capacidade curta: o canario de alocacao. `BatchCapacity` viaja separada do `PoolCount` ate o
-    // shader, e la os dois podem discordar sem que nada reclame — com capacidade 1, o comando do
-    // pool 1 nao tem slot e tem de ser CONTADO, nao somado no slot errado.
+    // Capacidade curta: a DEFESA de ultima instancia do shader, sob uma entrada que o preflight
+    // reprova (TestarPreflight confere que reprova). Ela nao deveria acontecer em producao — quem a
+    // impede e o preflight, porque descobrir falta de espaco depois do dispatch ja e geometria
+    // perdida naquele frame. Exercitada aqui porque defesa que nenhum teste alcanca e comentario:
+    // com capacidade 1, o comando do pool 1 nao tem slot e tem de ser CONTADO, nunca somado no slot
+    // errado de outro lote.
     {
         FGpuClassifyInput Curta = In;
         Curta.BatchCapacity = 1u;
