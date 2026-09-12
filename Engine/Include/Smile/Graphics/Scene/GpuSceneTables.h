@@ -44,6 +44,7 @@
 #include "Smile/Math/Math.h"
 #include "Smile/Scene/CapturedIdentity.h"
 
+#include <cstdint>
 #include <d3d12.h>
 #include <span>
 #include <unordered_map>
@@ -78,13 +79,34 @@ namespace Smile {
         u32 IndexCount    = 0;
         u32 TriangleCount = 0; // payload de RT; 0 = malha sem payload
 
-        // RESERVADO. Zero em toda malha, e assim fica ate a trilha de virtual geometry existir
-        // (Fase 9+). Declarado agora porque o plano manda declara-lo, e NAO serializado no formato
-        // cozido pelo mesmo motivo: nao ha consumidor. Ver a nota de decisao no GPU-DRIVEN-PLAN.
+        // Ver EGpuMeshFlags. Era RESERVADO e zero em toda malha; a Fase 5 abriu o primeiro bit, e o
+        // resto continua reservado para a trilha de virtual geometry (Fase 9+). NAO e serializado no
+        // formato cozido: e derivado da malha em runtime.
         u32 Flags             = 0;
         u32 VirtualGeometryId = 0;
+
+        // === Endereco DENTRO do pool de geometria (Fase 5) ======================================
+        //
+        // Malhas nao tem buffer proprio: elas sao fatias de um pool de ate 256 MB
+        // ([VB][IB][RTTri]), e estes dois sao o que o `ExecuteIndirect` precisa para desenhar uma
+        // delas com o VB/IB do POOL amarrado uma vez. Os valores ja existiam no FGpuMesh
+        // (`VertexFirstElement`/`IndexFirstElement`, usados nos SRVs bindless); o que faltava era
+        // publica-los na linha para a GPU poder montar o argumento.
+        //
+        // Os TIPOS espelham o destino, e nao a origem: `BaseVertexLocation` e INT no contrato do
+        // D3D12 e `StartIndexLocation` e UINT. Publicar os dois como u32 funcionaria ate um offset
+        // passar de INT_MAX, e ai o comportamento seria silenciosamente outro. Quem garante que o
+        // valor cabe e `GpuMeshOffsetsRepresentable`, e quem NAO cabe leva a flag e sai do caminho
+        // indireto — nao do raster.
+        i32 VertexOffset = 0; // -> BaseVertexLocation, em VERTICES a partir da base do pool
+        u32 IndexOffset  = 0; // -> StartIndexLocation, em INDICES a partir da base do pool
+
+        // Qual pool. Um `ExecuteIndirect` amarra UM par VB/IB, entao comandos de pools diferentes
+        // nao podem entrar no mesmo lote: e por isso que o id vive na linha, e nao so numa tabela
+        // da CPU. Denso e estavel dentro de um setup (ver FGpuMeshTable::GeometryPools).
+        u32 GeometryPoolId = 0;
     };
-    static_assert(sizeof(FGpuMeshRecord) == 56, "FGpuMeshRecord deve casar com o HLSL (56 B)");
+    static_assert(sizeof(FGpuMeshRecord) == 68, "FGpuMeshRecord deve casar com o HLSL (68 B)");
     static_assert(offsetof(FGpuMeshRecord, LocalAABBMin)      ==  0);
     static_assert(offsetof(FGpuMeshRecord, LocalAABBMax)      == 12);
     static_assert(offsetof(FGpuMeshRecord, VertexSrv)         == 24);
@@ -95,6 +117,48 @@ namespace Smile {
     static_assert(offsetof(FGpuMeshRecord, TriangleCount)     == 44);
     static_assert(offsetof(FGpuMeshRecord, Flags)             == 48);
     static_assert(offsetof(FGpuMeshRecord, VirtualGeometryId) == 52);
+    static_assert(offsetof(FGpuMeshRecord, VertexOffset)      == 56);
+    static_assert(offsetof(FGpuMeshRecord, IndexOffset)       == 60);
+    static_assert(offsetof(FGpuMeshRecord, GeometryPoolId)    == 64);
+
+    enum EGpuMeshFlags : u32 {
+        // O offset da malha no pool nao cabe no contrato do argumento indireto. A linha continua
+        // valida para todo o resto (RT, bindless, contagens); o que ela perde e o caminho
+        // INDIRETO, e quem a desenha e o fallback CPU. Regra 6 do plano: desenhar pela CPU e
+        // aceitavel, geometria sumir nao e.
+        GpuMeshOffsetsUnrepresentable = 1u << 0,
+    };
+
+    // Cabe no argumento indireto?
+    //
+    // PURA de proposito: os limites sao alcancaveis com dois inteiros, e nao com um pool de 68 GB.
+    // Um teste que precisasse do pool nao existiria, e a checagem viveria so no comentario.
+    //
+    // Hoje o teto NAO e alcancavel: o orcamento de chunk e 256 MB, o que da 8M vertices e 64M
+    // indices por pool. A checagem existe porque esse orcamento e um numero escolhido, e o dia em
+    // que ele mudar ninguem vai lembrar deste campo.
+    inline bool GpuMeshOffsetsRepresentable(u32 _VertexFirstElement, u32 _IndexFirstElement) {
+        // O indice e UINT no contrato, entao qualquer u32 serve; o vertice e INT.
+        (void)_IndexFirstElement;
+        return _VertexFirstElement <= static_cast<u32>(INT32_MAX);
+    }
+
+    // Id DENSO do pool, atribuido na primeira aparicao.
+    //
+    // Pura e separada da tabela pelo mesmo motivo do predicado acima: exercitar a atribuicao pela
+    // `SetupForScene` exigiria uma cena com geometria em dois chunks de 256 MB, que nenhum teste vai
+    // montar. Aqui bastam dois ponteiros.
+    //
+    // Os ponteiros sao COMPARADOS e guardados, nunca dereferenciados — e por isso o teste pode
+    // passar valores que nao apontam para recurso nenhum.
+    //
+    // Busca linear porque o numero de pools e o numero de chunks da cena: unidades, nao milhares.
+    inline u32 GpuGeometryPoolIdFor(std::vector<ID3D12Resource*>& _Pools, ID3D12Resource* _Pool) {
+        for (u32 Id = 0; Id < _Pools.size(); ++Id)
+            if (_Pools[Id] == _Pool) return Id;
+        _Pools.push_back(_Pool);
+        return static_cast<u32>(_Pools.size() - 1);
+    }
 
     inline bool operator==(const FGpuMeshRecord& A, const FGpuMeshRecord& B) {
         auto Same3 = [](const Vec3& L, const Vec3& R) {
@@ -464,15 +528,30 @@ namespace Smile {
         // ResourceDescriptorHeap[0xFFFFFFFF] trava a GPU em vez de ler lixo.
         u32 GeometrySlotOf(const FGpuMesh* Mesh) const;
 
+        // Pools de geometria da cena, indexados pelo `GeometryPoolId` da linha (Fase 5).
+        //
+        // O id na linha e inutil sem isto: um `ExecuteIndirect` amarra UM par VB/IB, e e a CPU que
+        // precisa amarrar o do pool antes de cada chamada. Publicar so o id deixaria um numero sem
+        // referente.
+        //
+        // Ponteiros CRUS, e vivos enquanto o setup vale: cada FGpuMesh segura um ComPtr do proprio
+        // pool, e as malhas do `UniqueMeshes_` vivem na cena. Um Release/SetupForScene refaz a lista.
+        std::span<ID3D12Resource* const> GeometryPools() const { return GeometryPools_; }
+
         u64 PersistentBytes()   const { return Storage_.PersistentBytes(); }
         u64 ResidentBytes()     const { return Storage_.ResidentBytes(); }
         u64 StagingBytes()      const { return Storage_.StagingBytes(); }
         u32 LastDirtyRows()     const { return LastDirtyRows_; }
         u32 DescriptorCount()   const { return DescriptorCount_; }
+        // Malhas que ficaram fora do caminho indireto por offset inalcancavel. Contador, e nao
+        // booleano: o numero diz quantas, e zero e o estado esperado em toda cena de hoje.
+        u32 UnrepresentableOffsets() const { return UnrepresentableOffsets_; }
 
     private:
         FGpuTableStorage Storage_;
         std::vector<const FGpuMesh*>              UniqueMeshes_;
+        std::vector<ID3D12Resource*>              GeometryPools_;
+        u32                                       UnrepresentableOffsets_ = 0;
         std::vector<const FGpuMesh*>              RowMeshes_;   // [0] = nullptr (linha ausente)
         std::unordered_map<const FGpuMesh*, u32>  RowByMesh_;
         std::vector<FGpuMeshRecord>               Shadow_;

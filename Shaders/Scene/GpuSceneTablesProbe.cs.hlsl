@@ -27,7 +27,7 @@ StructuredBuffer<GpuInstanceBounds> InstanceBounds    : register(t4);
 StructuredBuffer<GpuInstanceTransform> InstanceCurrent  : register(t5);
 StructuredBuffer<GpuInstanceTransform> InstancePrevious : register(t6);
 
-// Vinte e seis uint4 por instancia: todos os campos das sete structs mais os derivados que provam
+// Vinte e oito uint4 por instancia: todos os campos das sete structs mais os derivados que provam
 // que as CONSTANTES tambem casam (deslocamentos de textura e bits de flag).
 RWStructuredBuffer<uint4> Results : register(u0);
 
@@ -46,7 +46,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     const GpuInstanceTransform ic = InstanceCurrent[i];
     const GpuInstanceTransform ip = InstancePrevious[i];
 
-    const uint b = i * 26u;
+    const uint b = i * 28u;
     Results[b + 0u] = asuint(m.BaseColor);
     Results[b + 1u] = asuint(m.EmissiveFactor);
     Results[b + 2u] = asuint(m.SubsurfaceColor);
@@ -95,7 +95,12 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                              MaterialTextureIndex(m, SMILE_MAT_TEX_NORMAL),
                              MaterialTextureIndex(m, SMILE_MAT_TEX_HEIGHT));
 
-    // Flags e VirtualGeometryId da MALHA sao reservados e valem 0; conferi-los no C++ exigiria
-    // dois uint4 so para dois zeros. O static_assert do offset ja fixa a posicao deles, e o dia
-    // em que ganharem valor este teste ganha a leitura junto.
+    // O bloco de ENDERECO NO POOL da linha de malha (Fase 5). Chegou a vez do `Flags`, que era
+    // reservado: ele agora carrega o bit de offset inalcancavel, e os tres campos seguintes sao o
+    // que o argumento indireto consome. `VertexOffset` viaja como asuint porque e INT — e ler um
+    // negativo como uint aqui e exatamente o que o teste tem de conseguir ver.
+    Results[b + 26u] = uint4(h.Flags, asuint(h.VertexOffset), h.IndexOffset, h.GeometryPoolId);
+    Results[b + 27u] = uint4(
+        (h.Flags & SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE) != 0u ? 1u : 0u,
+        h.VirtualGeometryId, 0u, 0u);
 }

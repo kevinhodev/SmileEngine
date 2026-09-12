@@ -24,12 +24,25 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
+#include "Smile/Graphics/Scene/GpuIndirectDraw.h"
 #include "Smile/Graphics/Scene/GpuSceneTables.h"
 
 namespace wrl = Microsoft::WRL;
 using namespace Smile;
+
+// Os dois campos de endereco da linha de malha existem para ALIMENTAR o argumento indireto, e por
+// isso os tipos tem de ser os mesmos. A checagem mora aqui, e nao num dos dois headers, para nao
+// acoplar a tabela canonica (Fase 2) ao comando indireto (Fase 5) so por causa de um assert -- e
+// porque e este teste que fica vermelho se alguem trocar um dos dois.
+static_assert(std::is_same_v<decltype(FGpuMeshRecord::VertexOffset),
+                             decltype(FGpuIndirectDrawArgs::BaseVertexLocation)>,
+              "VertexOffset alimenta BaseVertexLocation: INT nos dois");
+static_assert(std::is_same_v<decltype(FGpuMeshRecord::IndexOffset),
+                             decltype(FGpuIndirectDrawArgs::StartIndexLocation)>,
+              "IndexOffset alimenta StartIndexLocation: UINT nos dois");
 
 namespace {
     int Failures = 0;
@@ -210,6 +223,43 @@ namespace {
               "e sao exatamente as duas novas");
     }
 
+    // ---- endereco no pool (Fase 5): as duas funcoes puras ------------------------------------
+    //
+    // Puras justamente para serem testaveis: o limite de `VertexOffset` esta a 68 GB de geometria e
+    // a atribuicao de id precisaria de dois chunks de 256 MB. Nenhum teste montaria os dois, e a
+    // checagem viveria so no comentario.
+    void TestarEnderecoNoPool() {
+        // O contrato e INT: o teto e INT32_MAX, e nao UINT32_MAX.
+        Check(GpuMeshOffsetsRepresentable(0u, 0u), "offset zero cabe");
+        Check(GpuMeshOffsetsRepresentable(1u, 0xFFFFFFFFu),
+              "o offset de INDICE e UINT: qualquer u32 cabe");
+        Check(GpuMeshOffsetsRepresentable(0x7FFFFFFFu, 0u), "INT32_MAX cabe, na borda exata");
+        Check(!GpuMeshOffsetsRepresentable(0x80000000u, 0u), "INT32_MAX + 1 NAO cabe");
+        Check(!GpuMeshOffsetsRepresentable(0xFFFFFFFFu, 0u), "UINT32_MAX NAO cabe");
+        // E o valor da borda tem de sobreviver a viagem pelo campo i32 sem virar negativo.
+        {
+            FGpuMeshRecord Row{};
+            Row.VertexOffset = static_cast<i32>(0x7FFFFFFFu);
+            Check(Row.VertexOffset > 0, "INT32_MAX no campo continua positivo");
+        }
+
+        // Ids DENSOS e ESTAVEIS. Os ponteiros abaixo nunca sao dereferenciados -- a funcao so os
+        // compara --, entao valores fabricados servem e nenhum recurso e criado.
+        std::vector<ID3D12Resource*> Pools;
+        auto* const PoolA = reinterpret_cast<ID3D12Resource*>(0x1000);
+        auto* const PoolB = reinterpret_cast<ID3D12Resource*>(0x2000);
+        Check(GpuGeometryPoolIdFor(Pools, PoolA) == 0u && Pools.size() == 1,
+              "o primeiro pool ganha o id 0");
+        Check(GpuGeometryPoolIdFor(Pools, PoolA) == 0u && Pools.size() == 1,
+              "o mesmo pool nao cria id novo");
+        Check(GpuGeometryPoolIdFor(Pools, PoolB) == 1u && Pools.size() == 2,
+              "o segundo pool ganha o id 1");
+        Check(GpuGeometryPoolIdFor(Pools, PoolA) == 0u && Pools.size() == 2,
+              "voltar ao primeiro devolve o id dele, e nao um terceiro");
+        Check(Pools[0] == PoolA && Pools[1] == PoolB,
+              "a lista publicada indexa pelo id que a funcao devolveu");
+    }
+
     // ---- footprint: o staging tambem e persistente -------------------------------------------
     // O primeiro `residentBytes` publicado contava so o buffer DEFAULT e valia um TERCO do que a
     // tabela custa — os slices de upload sao criados junto com ela e ficam mapeados o tempo todo.
@@ -266,6 +316,7 @@ int main() try {
     TestarDiff();
     TestarFootprint();
     TestarDiffInstancias();
+    TestarEnderecoNoPool();
 
     // ---- dados: quatro instancias apontando para tres linhas de material ---------------------
     // A terceira e a quarta compartilham a linha 2 de proposito: e a situacao que a fase existe
@@ -306,7 +357,15 @@ int main() try {
         Malhas[I].VertexCount   = 1000u + I;
         Malhas[I].IndexCount    = 2000u + I;
         Malhas[I].TriangleCount = 3000u + I;
+        // Endereco no pool (Fase 5). Valores distintos entre si e dos campos vizinhos, pela mesma
+        // razao de sempre: com 0 e 1 espalhados, trocar dois campos ainda bateria em metade.
+        Malhas[I].VertexOffset    = static_cast<i32>(4000u + I);
+        Malhas[I].IndexOffset     = 5000u + I;
+        Malhas[I].GeometryPoolId  = 6000u + I;
+        Malhas[I].VirtualGeometryId = 7000u + I;
     }
+    // A linha 1 carrega a FLAG, a 2 nao: sem as duas, um espelho que ignorasse `Flags` passaria.
+    Malhas[1].Flags = GpuMeshOffsetsUnrepresentable;
 
     std::vector<FGpuInstanceGeo> Instancias(4);
     for (u32 I = 0; I < 4; ++I) {
@@ -403,7 +462,7 @@ int main() try {
     auto BufBounds = S.Upload(Bounds.data(), Bounds.size() * sizeof(FGpuSceneInstanceBounds));
     auto BufCurrent = S.Upload(Current.data(), Current.size() * sizeof(FGpuSceneInstanceTransform));
     auto BufPrevious = S.Upload(Previous.data(), Previous.size() * sizeof(FGpuSceneInstanceTransform));
-    constexpr u32 kResultRows = 26u;
+    constexpr u32 kResultRows = 28u;
     constexpr u32 kResultStride = kResultRows * 4u;
     const u64 SaidaBytes = static_cast<u64>(kInstancias) * kResultStride * sizeof(u32);
     auto BufSaida   = S.Buffer(D3D12_HEAP_TYPE_DEFAULT, SaidaBytes, true,
@@ -540,6 +599,26 @@ int main() try {
         Check(R[33] == H.VertexCount,   Onde + ": VertexCount no offset 36");
         Check(R[34] == H.IndexCount,    Onde + ": IndexCount no offset 40");
         Check(R[35] == H.TriangleCount, Onde + ": TriangleCount no offset 44");
+
+        // Endereco no POOL (Fase 5).
+        //
+        // A comparacao e por BITS, e o que ela prova e OFFSET e STRIDE. Ela NAO prova a signedness:
+        // `asuint` de um int e de um uint devolve os mesmos 32 bits, entao um espelho que declarasse
+        // `uint VertexOffset` passaria aqui. Quem amarra o tipo e o static_assert la em cima, contra
+        // `D3D12_DRAW_INDEXED_ARGUMENTS::BaseVertexLocation`; do lado HLSL e comentario e revisao.
+        // Vale dizer o que o teste nao cobre em vez de deixar parecer que cobre.
+        Check(R[104] == H.Flags, Onde + ": Flags da malha no offset 48");
+        {
+            u32 Bits = 0;
+            std::memcpy(&Bits, &H.VertexOffset, sizeof(u32));
+            Check(R[105] == Bits, Onde + ": VertexOffset no offset 56, bit a bit");
+        }
+        Check(R[106] == H.IndexOffset,    Onde + ": IndexOffset no offset 60");
+        Check(R[107] == H.GeometryPoolId, Onde + ": GeometryPoolId no offset 64");
+        Check((R[108] != 0u) ==
+                  ((H.Flags & GpuMeshOffsetsUnrepresentable) != 0u),
+              Onde + ": SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE casa com o C++");
+        Check(R[109] == H.VirtualGeometryId, Onde + ": VirtualGeometryId no offset 52");
 
         Check(R[36] == IM.MeshId && R[37] == IM.MaterialId && R[38] == IM.CellId &&
                   R[39] == IM.Flags,

@@ -6,7 +6,7 @@
 //
 // Espelha, byte a byte:
 //   GpuMaterialRecord <- Smile::FGpuMaterialRecord  (Graphics/Scene/GpuMaterialRecord.h, 112 B)
-//   GpuMeshRecord     <- Smile::FGpuMeshRecord      (Graphics/Scene/GpuSceneTables.h, 56 B)
+//   GpuMeshRecord     <- Smile::FGpuMeshRecord      (Graphics/Scene/GpuSceneTables.h, 68 B)
 //   GpuInstanceMeta   <- Smile::FGpuSceneInstanceMeta (20 B)
 //   GpuInstanceBounds <- Smile::FGpuSceneInstanceBounds (32 B)
 //   GpuInstanceTransform <- Smile::FGpuSceneInstanceTransform (64 B)
@@ -91,7 +91,7 @@ uint MaterialTextureIndex(GpuMaterialRecord _M, uint _Offset) {
     return (_M.TextureBase == 0xFFFFFFFFu) ? 0xFFFFFFFFu : (_M.TextureBase + _Offset);
 }
 
-// Uma linha por MALHA UNICA. Espelha Smile::FGpuMeshRecord (56 B).
+// Uma linha por MALHA UNICA. Espelha Smile::FGpuMeshRecord (68 B).
 struct GpuMeshRecord {
     float3 LocalAABBMin; // espaco do OBJETO, como o cozido v7+ grava
     float3 LocalAABBMax;
@@ -101,9 +101,18 @@ struct GpuMeshRecord {
     uint   VertexCount;
     uint   IndexCount;
     uint   TriangleCount;
-    uint   Flags;             // RESERVADO: 0 hoje
+    uint   Flags;             // ver SMILE_MESH_FLAG_*; o resto continua reservado
     uint   VirtualGeometryId; // RESERVADO: 0 hoje, ate a trilha de virtual geometry existir
+    // Endereco dentro do POOL de geometria (Fase 5). Alimentam `BaseVertexLocation` e
+    // `StartIndexLocation` do argumento indireto, e por isso o primeiro e INT como la.
+    int    VertexOffset;
+    uint   IndexOffset;
+    uint   GeometryPoolId; // um ExecuteIndirect amarra UM par VB/IB: lote nao cruza pool
 };
+
+// A malha nao pode ir pelo caminho INDIRETO (offset fora do contrato do argumento). Ela continua
+// valida para todo o resto; quem a desenha e o fallback CPU.
+#define SMILE_MESH_FLAG_OFFSETS_UNREPRESENTABLE 1u
 
 #define SMILE_INSTANCE_FLAG_VISIBLE        1u
 #define SMILE_INSTANCE_FLAG_RT_ONLY        2u

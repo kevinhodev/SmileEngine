@@ -7,8 +7,11 @@
 #include "Smile/Graphics/Resources/Mesh.h" // sizeof(Vertex): stride do SRV bindless de VB
 #include "Smile/Scene/Scene.h"
 
+#include "Smile/Core/Logger.h"
+
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 namespace Smile {
     static_assert(FGpuTableStorage::kFrameSlots == FCommandQueue::kFramesInFlight,
@@ -278,6 +281,8 @@ namespace Smile {
         // As linhas sao funcao pura da malha + dos descritores acabados de escrever, entao dao
         // para ser montadas aqui de uma vez; o RecordUpload do proximo frame as sobe.
         Fresh_.assign(RowMeshes_.size(), FGpuMeshRecord{});
+        GeometryPools_.clear();
+        UnrepresentableOffsets_ = 0;
         for (u32 I = 0; I < NumMeshes; ++I) {
             const FGpuMesh* M = UniqueMeshes_[I];
             FGpuMeshRecord& Row = Fresh_[I + 1];
@@ -289,6 +294,25 @@ namespace Smile {
             Row.VertexCount   = M->VertexCount();
             Row.IndexCount    = M->GetIndexCount();
             Row.TriangleCount = M->RTTriangleCount();
+
+            // O pool e o recurso do VERTEX buffer, que e o MESMO do index e do payload de RT (o
+            // InitFromPool aponta os tres para ele). Identidade por ponteiro de recurso: dois
+            // chunks distintos sao dois recursos distintos, sempre.
+            Row.GeometryPoolId = GpuGeometryPoolIdFor(GeometryPools_, M->VertexResource());
+
+            if (GpuMeshOffsetsRepresentable(M->VertexFirstElement(), M->IndexFirstElement())) {
+                Row.VertexOffset = static_cast<i32>(M->VertexFirstElement());
+                Row.IndexOffset  = M->IndexFirstElement();
+            } else {
+                // Conservador: a linha perde o caminho INDIRETO, nao o raster. Zerar os dois
+                // offsets e deliberado — assim uma leitura que ignore a flag desenha a primeira
+                // malha do pool no lugar de indexar fora dele.
+                Row.Flags |= GpuMeshOffsetsUnrepresentable;
+                ++UnrepresentableOffsets_;
+                LogError("GpuMeshTable: offset de pool fora do contrato do argumento indireto "
+                         "(vertice " + std::to_string(M->VertexFirstElement()) +
+                         "); a malha fica no fallback CPU");
+            }
         }
 
         Shadow_.clear();
@@ -304,6 +328,8 @@ namespace Smile {
         }
         Storage_.Release(_SRVHeap);
         UniqueMeshes_.clear();
+        GeometryPools_.clear();
+        UnrepresentableOffsets_ = 0;
         RowMeshes_.clear();
         RowByMesh_.clear();
         Shadow_.clear();
