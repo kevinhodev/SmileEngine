@@ -22,6 +22,11 @@
 #define SMILE_PREFIX_OVERFLOW 1u
 #define SMILE_PREFIX_COUNT    2u
 
+// Offset gravado em toda entrada que o prefixo nao conseguiu calcular. Espelha
+// kGpuBatchOffsetPoison. Nao e zero: zero e o offset legitimo do primeiro lote, e um consumidor que
+// ignorasse a flag escreveria os comandos de um lote por cima dos do lote 0.
+#define SMILE_BATCH_OFFSET_POISON 0xFFFFFFFFu
+
 cbuffer PrefixCB : register(b0) {
     uint4 PrefixParams; // x = slots de BatchCounts; yzw reservados
 };
@@ -38,16 +43,23 @@ void main() {
     uint Acc = 0u;
     uint Estourou = 0u;
     for (uint I = 0u; I < Slots; ++I) {
-        BatchOffsets[I] = Acc;
-        // Deteccao de volta ANTES de somar, escrita como subtracao no lado seguro. Um
-        // `BatchCounts` vindo do classify nao consegue estourar — cada candidato contribui no
-        // maximo 1, e candidatos sao contados em u32 —, mas este shader nao sabe quem escreveu o
-        // buffer que esta somando, e um prefixo que da a volta aponta comandos para dentro dos
-        // comandos de outro lote.
+        // A checagem vem ANTES da escrita: assim a entrada que falhou recebe o poison junto das
+        // seguintes, e nao um inicio valido para um lote que nao cabe inteiro.
+        //
+        // Escrita como subtracao no lado seguro. Um `BatchCounts` vindo do classify nao consegue
+        // estourar — cada candidato contribui no maximo 1, e candidatos sao contados em u32 —, mas
+        // este shader nao sabe quem escreveu o buffer que esta somando, e um prefixo que da a volta
+        // aponta comandos para dentro dos comandos de outro lote.
         if (Acc > 0xFFFFFFFFu - BatchCounts[I]) {
             Estourou = 1u;
+            // Poison em TODAS as entradas restantes, e nao so a interrupcao das escritas. Parar de
+            // escrever deixaria o conteudo ANTERIOR do recurso — no frame seguinte, os offsets do
+            // frame passado, que sao plausiveis e errados. O valor tem de ser o mesmo da referencia
+            // CPU para que o teste possa comparar elemento a elemento tambem neste caso.
+            for (uint J = I; J < Slots; ++J) BatchOffsets[J] = SMILE_BATCH_OFFSET_POISON;
             break;
         }
+        BatchOffsets[I] = Acc;
         Acc += BatchCounts[I];
     }
 

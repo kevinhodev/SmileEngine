@@ -99,6 +99,18 @@ namespace {
         }
     }
 
+
+    // Capacidade de lote da cena do teste, pela PORTA — nunca por
+    // `static_cast<u32>(GpuBatchSlotCount(...))`. O contrato diz que a conversao para u32 so pode
+    // acontecer dentro de `GpuClassifyBatchBufferSlots`, e um harness que a escreve por fora
+    // mascara exatamente o overflow que motivou a porta. Se a porta recusasse, o teste para aqui em
+    // vez de seguir com um numero inventado.
+    u32 CapacidadeDeLote(u32 _PoolCount) {
+        u32 Slots = 0;
+        const u32 Motivo = GpuClassifyBatchBufferSlots(_PoolCount, Slots);
+        Check(Motivo == GpuClassifyPreflightOk, "a porta de dimensionamento aprova a cena do teste");
+        return Slots;
+    }
     // ---- a cena do teste ----------------------------------------------------------------------
     //
     // Montada para que TODO desfecho seja alcancado por pelo menos um candidato, e para que dois
@@ -209,7 +221,9 @@ namespace {
             std::vector<u32> Offsets; u32 Estourou = 0u;
             PrefixBatchCounts(Contagens, Offsets, Estourou);
             CheckEq(Estourou, 1u, "a soma que daria a volta e marcada");
-            CheckEq(Offsets[1], 0xFFFFFFF0u, "o offset ate o estouro continua valido");
+            CheckEq(Offsets[0], 0u, "a entrada ANTERIOR ao estouro continua correta");
+            CheckEq(Offsets[1], kGpuBatchOffsetPoison, "a entrada que FALHOU recebe poison");
+            CheckEq(Offsets[2], kGpuBatchOffsetPoison, "e as seguintes tambem");
         }
     }
     // ---- parte CPU pura: o desfecho de cada candidato -----------------------------------------
@@ -250,7 +264,7 @@ namespace {
 
     // ---- parte CPU pura: o indice do lote -----------------------------------------------------
     void TestarIndiceDeLote() {
-        CheckEq(static_cast<u32>(GpuBatchSlotCount(kPoolCount)), kGpuPipelineClassCount * kPoolCount,
+        CheckEq(CapacidadeDeLote(kPoolCount), kGpuPipelineClassCount * kPoolCount,
                 "a tabela de lotes reserva as quatro classes");
         // CLASS-MAJOR: os lotes de uma classe sao contiguos, e classes diferentes nunca colidem.
         CheckEq(GpuBatchIndex({ GpuPipelineClassOpaqueOneSided, 0u }, kPoolCount), 0u, "lote {0,0}");
@@ -285,7 +299,7 @@ namespace {
         FGpuClassifyInput In{};
         In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
         In.PoolCount = kPoolCount;
-        In.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount));
+        In.BatchCapacity = CapacidadeDeLote(kPoolCount);
 
         std::vector<u32> Lotes, Contadores;
         const u32 Indiretos = ClassifyCandidates(In, Lotes, Contadores);
@@ -371,13 +385,13 @@ namespace {
         FGpuClassifyInput In{};
         In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
         In.PoolCount = kPoolCount;
-        In.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount));
+        In.BatchCapacity = CapacidadeDeLote(kPoolCount);
         CheckEq(GpuClassifyPreflight(In), GpuClassifyPreflightOk, "a cena do teste passa");
 
         // A CAPACIDADE EXATA passa, e uma abaixo dela nao. E este limite que torna o overflow
         // inalcancavel: nao existe folga a descobrir depois do dispatch.
         FGpuClassifyInput Curta = In;
-        Curta.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount)) - 1u;
+        Curta.BatchCapacity = CapacidadeDeLote(kPoolCount) - 1u;
         CheckEq(GpuClassifyPreflight(Curta), GpuClassifyPreflightSmallBatchBuffer,
                 "um slot a menos ja reprova");
         Curta.BatchCapacity = 1u;
@@ -604,6 +618,159 @@ namespace {
             Step = Device->GetDescriptorHandleIncrementSize(
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             Drenar("criacao");
+        }
+
+
+        struct FPrefixo {
+            std::vector<u32> Offsets;
+            std::vector<u32> Contadores;
+        };
+
+        // Execucao ISOLADA do prefixo, com `BatchCounts` semeado a mao.
+        //
+        // Existe porque o fluxo encadeado nunca consegue estourar: as contagens vem do classify, e a
+        // soma delas e limitada pelo numero de candidatos. Sem esta porta de entrada, quebrar a
+        // protecao de estouro no HLSL continuaria verde — a defesa viveria so no comentario.
+        //
+        // O buffer de offsets nasce com um padrao RECONHECIVEL, e nao com zeros: assim o teste
+        // distingue "o shader escreveu poison" de "o shader nao escreveu nada". Com zeros, uma
+        // implementacao que simplesmente parasse de escrever passaria pelo mesmo teste.
+        FPrefixo ExecutarPrefixo(std::span<const u32> _Counts) {
+            const u32 Slots = static_cast<u32>(_Counts.size());
+            const u64 OffBytes  = std::max<u64>(sizeof(u32), Slots * sizeof(u32));
+            const u64 ContBytes = GpuPrefixCounterCount * sizeof(u32);
+
+            auto BufCounts = Upload(_Counts.data(), OffBytes);
+            auto BufOffsets = Buffer(D3D12_HEAP_TYPE_DEFAULT, OffBytes, true,
+                                     D3D12_RESOURCE_STATE_COMMON);
+            auto BufCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, ContBytes, true,
+                                  D3D12_RESOURCE_STATE_COMMON);
+
+            const std::vector<u32> Semente(static_cast<size_t>(OffBytes / 4), 0xA5A5A5A5u);
+            const u32 ZerosCont[GpuPrefixCounterCount]{};
+            auto BufSemente = Upload(Semente.data(), OffBytes);
+            auto BufZeros   = Upload(ZerosCont, ContBytes);
+
+            auto LeituraOff  = Buffer(D3D12_HEAP_TYPE_READBACK, OffBytes, false,
+                                      D3D12_RESOURCE_STATE_COPY_DEST);
+            auto LeituraCont = Buffer(D3D12_HEAP_TYPE_READBACK, ContBytes, false,
+                                      D3D12_RESOURCE_STATE_COPY_DEST);
+
+            wrl::ComPtr<ID3D12DescriptorHeap> Heap;
+            D3D12_DESCRIPTOR_HEAP_DESC HD{};
+            HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            HD.NumDescriptors = 3;
+            HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
+            auto CpuAt = [&](UINT I) {
+                auto H = Heap->GetCPUDescriptorHandleForHeapStart();
+                H.ptr += static_cast<SIZE_T>(I) * Step;
+                return H;
+            };
+            {
+                D3D12_SHADER_RESOURCE_VIEW_DESC D{};
+                D.Format                     = DXGI_FORMAT_UNKNOWN;
+                D.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                D.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+                D.Buffer.NumElements         = std::max(1u, Slots);
+                D.Buffer.StructureByteStride = sizeof(u32);
+                Device->CreateShaderResourceView(BufCounts.Get(), &D, CpuAt(0));
+            }
+            auto UAV = [&](ID3D12Resource* R, u32 N, UINT Slot) {
+                D3D12_UNORDERED_ACCESS_VIEW_DESC D{};
+                D.Format                     = DXGI_FORMAT_UNKNOWN;
+                D.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+                D.Buffer.NumElements         = std::max(1u, N);
+                D.Buffer.StructureByteStride = sizeof(u32);
+                Device->CreateUnorderedAccessView(R, nullptr, &D, CpuAt(Slot));
+            };
+            UAV(BufOffsets.Get(), Slots, 1);
+            UAV(BufCont.Get(), GpuPrefixCounterCount, 2);
+
+            alignas(16) u8 CB[256]{};
+            const u32 P4[4]{ Slots, 0u, 0u, 0u };
+            std::memcpy(CB, P4, sizeof(P4));
+            auto BufCB = Upload(CB, sizeof(CB));
+
+            wrl::ComPtr<ID3D12CommandAllocator>    Allocator;
+            wrl::ComPtr<ID3D12GraphicsCommandList> List;
+            Hr(Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              IID_PPV_ARGS(&Allocator)), "CreateCommandAllocator");
+            Hr(Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Allocator.Get(),
+                                         PipelinePrefixo.Get(), IID_PPV_ARGS(&List)),
+               "CreateCommandList");
+            auto Transicao = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES A,
+                                 D3D12_RESOURCE_STATES B) {
+                D3D12_RESOURCE_BARRIER Bar{};
+                Bar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                Bar.Transition.pResource   = R;
+                Bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                Bar.Transition.StateBefore = A;
+                Bar.Transition.StateAfter  = B;
+                List->ResourceBarrier(1, &Bar);
+            };
+            List->CopyBufferRegion(BufOffsets.Get(), 0, BufSemente.Get(), 0, OffBytes);
+            List->CopyBufferRegion(BufCont.Get(), 0, BufZeros.Get(), 0, ContBytes);
+            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
+            List->SetDescriptorHeaps(1, Heaps);
+            List->SetComputeRootSignature(RootPrefixo.Get());
+            List->SetComputeRootConstantBufferView(0, BufCB->GetGPUVirtualAddress());
+            auto GpuAt = [&](UINT I) {
+                auto H = Heap->GetGPUDescriptorHandleForHeapStart();
+                H.ptr += static_cast<UINT64>(I) * Step;
+                return H;
+            };
+            List->SetComputeRootDescriptorTable(1, GpuAt(0));
+            List->SetComputeRootDescriptorTable(2, GpuAt(1));
+            List->Dispatch(1, 1, 1);
+
+            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_COPY_SOURCE);
+            List->CopyResource(LeituraOff.Get(), BufOffsets.Get());
+            List->CopyResource(LeituraCont.Get(), BufCont.Get());
+            Hr(List->Close(), "Close (prefixo)");
+
+            ID3D12CommandList* Listas[] = { List.Get() };
+            Queue->ExecuteCommandLists(1, Listas);
+            ++FenceValue;
+            Hr(Queue->Signal(Fence.Get(), FenceValue), "Signal (prefixo)");
+            if (Fence->GetCompletedValue() < FenceValue) {
+                struct FEvent {
+                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                    ~FEvent() { if (Value) CloseHandle(Value); }
+                } Evento;
+                if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
+                Hr(Fence->SetEventOnCompletion(FenceValue, Evento.Value), "SetEventOnCompletion");
+                if (WaitForSingleObject(Evento.Value, 30000) != WAIT_OBJECT_0)
+                    throw std::runtime_error("dispatch de prefixo nao terminou");
+            }
+            Drenar("prefixo isolado");
+
+            FPrefixo Saida;
+            Saida.Offsets.resize(Slots);
+            Saida.Contadores.resize(GpuPrefixCounterCount);
+            if (Slots > 0) {
+                const u32* P = nullptr;
+                Hr(LeituraOff->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
+                   "Map offsets isolados");
+                std::memcpy(Saida.Offsets.data(), P, Slots * sizeof(u32));
+                LeituraOff->Unmap(0, nullptr);
+            }
+            {
+                const u32* P = nullptr;
+                Hr(LeituraCont->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
+                   "Map contadores isolados");
+                std::memcpy(Saida.Contadores.data(), P, ContBytes);
+                LeituraCont->Unmap(0, nullptr);
+            }
+            return Saida;
         }
 
         FResultado Executar(const FGpuClassifyInput& _In) {
@@ -887,7 +1054,7 @@ int main() try {
     FGpuClassifyInput In{};
     In.Slots = Slot; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
     In.PoolCount = kPoolCount;
-        In.BatchCapacity = static_cast<u32>(GpuBatchSlotCount(kPoolCount));
+        In.BatchCapacity = CapacidadeDeLote(kPoolCount);
 
     std::vector<u32> LotesCpu, ContCpu;
     ClassifyCandidates(In, LotesCpu, ContCpu);
@@ -932,6 +1099,47 @@ int main() try {
             CheckEq(Gpu.Lotes[GpuBatchIndex({ C, P }, kPoolCount)], 0u,
                     "classe " + std::to_string(C) + " nao emite comando nesta fase");
 
+
+    // O prefixo com `BatchCounts` SEMEADO, fora do fluxo encadeado.
+    //
+    // Motivo: pelo fluxo normal as contagens vem do classify e a soma nunca pode estourar, entao a
+    // protecao de estouro do HLSL nunca e executada — quebra-la continuaria verde. Aqui ela e
+    // alimentada direto.
+    {
+        // Caso normal, mesmo vetor do teste CPU. O oraculo continua escrito a mao.
+        const std::vector<u32> Contagens{ 2u, 0u, 5u, 1u, 0u, 3u };
+        const u32 QueridoOff[6]{ 0u, 2u, 2u, 7u, 8u, 8u };
+        const FSonda::FPrefixo P = S.ExecutarPrefixo(Contagens);
+        for (u32 I = 0; I < 6u; ++I)
+            CheckEq(P.Offsets[I], QueridoOff[I], "prefixo isolado, offset " + std::to_string(I));
+        CheckEq(P.Contadores[GpuPrefixCounterTotal], 11u, "prefixo isolado: total");
+        CheckEq(P.Contadores[GpuPrefixCounterOverflow], 0u, "prefixo isolado: sem estouro");
+
+        // E a referencia CPU sobre as mesmas contagens.
+        std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
+        PrefixBatchCounts(Contagens, OffCpu, EstourouCpu);
+        for (u32 I = 0; I < 6u; ++I)
+            CheckEq(OffCpu[I], P.Offsets[I], "prefixo isolado, CPU x GPU em " + std::to_string(I));
+    }
+    {
+        // O ESTOURO, que o fluxo encadeado nao alcanca. A soma passa de u32 no indice 1.
+        const std::vector<u32> Contagens{ 0xFFFFFFF0u, 0x20u, 1u, 7u };
+        const FSonda::FPrefixo P = S.ExecutarPrefixo(Contagens);
+        CheckEq(P.Contadores[GpuPrefixCounterOverflow], 1u,
+                "o HLSL marca a soma que daria a volta");
+        CheckEq(P.Offsets[0], 0u, "a entrada anterior ao estouro continua correta");
+        for (u32 I = 1; I < 4u; ++I)
+            CheckEq(P.Offsets[I], kGpuBatchOffsetPoison,
+                    "da entrada que falhou em diante, poison (" + std::to_string(I) + ")");
+
+        // Elemento a elemento contra a referencia CPU, inclusive o poison: e o que prova que os dois
+        // lados implementam o MESMO contrato pos-estouro, e nao dois contratos parecidos.
+        std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
+        PrefixBatchCounts(Contagens, OffCpu, EstourouCpu);
+        CheckEq(EstourouCpu, P.Contadores[GpuPrefixCounterOverflow], "os dois marcam estouro");
+        for (u32 I = 0; I < 4u; ++I)
+            CheckEq(OffCpu[I], P.Offsets[I], "pos-estouro, CPU x GPU em " + std::to_string(I));
+    }
     // O prefixo, sobre o `BatchCounts` que o classify acabou de escrever — sem readback entre os
     // dois, como sera na producao. O oraculo continua escrito a mao.
     {

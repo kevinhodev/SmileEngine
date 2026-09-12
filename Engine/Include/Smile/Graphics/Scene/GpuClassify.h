@@ -275,6 +275,15 @@ namespace Smile {
     // `CountBufferOffset`, entao o lote b usa offset `b * 4`. Por isso o prefixo escreve num buffer
     // SEPARADO em vez de acumular no lugar — um prefixo in-place destruiria as contagens de que os
     // draws dependem.
+
+    // Offset POISON, gravado em toda entrada que o prefixo nao conseguiu calcular.
+    //
+    // Nao e zero: zero e o offset LEGITIMO do primeiro lote, e um consumidor que ignorasse a flag
+    // passaria a escrever os comandos de um lote por cima dos do lote 0. Com 0xFFFFFFFF ele erra
+    // alto — qualquer verificacao de limite contra a capacidade de `IndirectArgs` o rejeita.
+    //
+    // Mesma decisao, e pelo mesmo motivo, do `kGpuMeshPoisonIndexOffset`.
+    inline constexpr u32 kGpuBatchOffsetPoison = 0xFFFFFFFFu;
     enum EGpuPrefixCounter : u32 {
         // Total de comandos. Nao e `BatchOffsets[Slots]`: manter o total num contador, e nao numa
         // entrada extra do array, evita que o array de offsets precise de `Slots + 1` entradas —
@@ -289,9 +298,21 @@ namespace Smile {
 
     // Referencia CPU do prefixo. Devolve o total; `_OutOffsets` fica com o prefixo exclusivo.
     //
-    // `_OutOverflow` recebe 1 quando a soma daria a volta. Nesse caso as entradas seguintes ficam
-    // com o acumulado ANTES do estouro, e nao com lixo: o shader faz o mesmo, e o teste compara os
-    // dois elemento a elemento.
+    // `_OutOverflow` recebe 1 quando a soma daria a volta. NESSE CASO, o contrato e:
+    //
+    //   - a saida inteira e INUTILIZAVEL. Quem consome tem de checar a flag e suprimir a emissao
+    //     por completo. Isso e verificavel na GPU, dentro do proprio scatter, sem readback nenhum:
+    //     o contador vive num buffer que o scatter le;
+    //   - da entrada que falhou em diante, todas recebem `kGpuBatchOffsetPoison`. Deterministico e
+    //     IGUAL nos dois lados, entao o teste compara elemento a elemento inclusive no caso de
+    //     estouro. A entrada que falhou tambem entra: o `Acc` ali ainda e valido, mas o lote nao
+    //     cabe inteiro, e publicar um inicio para um lote que nao cabe e publicar um comeco sem fim;
+    //   - as entradas ANTERIORES continuam corretas, e ficam assim de proposito — e por elas que se
+    //     enxerga onde a conta quebrou.
+    //
+    // ⚠️ A versao anterior deste comentario dizia que as entradas seguintes ficavam "com o acumulado
+    // antes do estouro". Nao ficavam: a CPU deixava os zeros do `assign` e a GPU deixava o conteudo
+    // anterior do recurso — duas coisas diferentes, e nenhuma das duas a descrita.
     u32 PrefixBatchCounts(std::span<const u32> Counts, std::vector<u32>& OutOffsets,
                           u32& OutOverflow);
     // Referencia CPU do dispatch. E o oraculo do teste WARP e, depois, o braco A/B.

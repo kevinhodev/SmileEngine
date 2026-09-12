@@ -42,14 +42,16 @@ namespace Smile {
 
         u32 Acc = 0;
         for (size_t I = 0; I < _Counts.size(); ++I) {
-            _OutOffsets[I] = Acc;
-            // Deteccao de volta ANTES de somar. Custa uma comparacao num laco que roda unidades de
-            // vezes, e e a unica defesa contra um `BatchCounts` que nao veio do classify — o shader
-            // nao tem como saber quem escreveu o buffer que ele soma.
+            // A checagem vem ANTES da escrita, e nao depois: assim a entrada que falhou recebe o
+            // poison junto das seguintes. Publicar o inicio de um lote que nao cabe inteiro seria
+            // publicar um comeco sem fim.
             if (Acc > UINT32_MAX - _Counts[I]) {
                 _OutOverflow = 1u;
-                break;
+                for (size_t J = I; J < _Counts.size(); ++J)
+                    _OutOffsets[J] = kGpuBatchOffsetPoison;
+                return Acc;
             }
+            _OutOffsets[I] = Acc;
             Acc += _Counts[I];
         }
         return Acc;
