@@ -520,6 +520,30 @@ namespace {
                 GpuRegionPreflightVersion, "e com a versao do layout seguinte");
     }
 
+    // O `SizeInBytes` da view, na borda do u32. Pura: um recurso de 4 GB nao cabe no teste.
+    void TestarTamanhoDaView() {
+        const u32 kVertice = static_cast<u32>(sizeof(Vertex));
+        u32 Bytes = 0xDEADBEEFu;
+        CheckEq(GpuPoolViewBytes(0xFFFFFFFFull, kVertice, Bytes), GpuPoolViewsOk,
+                "view: um recurso de UINT32_MAX bytes cabe");
+        CheckEq(Bytes, 0xFFFFFFFFu, "com o tamanho exato");
+
+        // 2^32 + 64 truncado viraria 64: uma view pequena e PLAUSIVEL, que passaria pelo piso.
+        Bytes = 0xDEADBEEFu;
+        CheckEq(GpuPoolViewBytes(0x100000040ull, kVertice, Bytes), GpuPoolViewsTooLarge,
+                "view: um recurso alem de UINT32_MAX reprova, e nao trunca");
+        CheckEq(Bytes, 0xDEADBEEFu, "e a recusa nao escreve o tamanho");
+
+        CheckEq(GpuPoolViewBytes(kVertice - 1u, kVertice, Bytes), GpuPoolViewsTooSmall,
+                "view: menos de um vertice reprova");
+        CheckEq(Bytes, 0xDEADBEEFu, "e tambem nao escreve");
+        CheckEq(GpuPoolViewBytes(kVertice, kVertice, Bytes), GpuPoolViewsOk, "view: um vertice cabe");
+        CheckEq(Bytes, kVertice, "com o tamanho de um vertice");
+        const u32 kIndice = static_cast<u32>(sizeof(u32));
+        CheckEq(GpuPoolViewBytes(kIndice - 1u, kIndice, Bytes), GpuPoolViewsTooSmall,
+                "view: menos de um indice reprova");
+    }
+
     // ---- parte CPU pura: o desfecho de cada candidato -----------------------------------------
     //
     // O oraculo e uma TABELA escrita a mao, e nao a funcao rodada de novo: a referencia CPU e o
@@ -1795,11 +1819,13 @@ namespace {
     // que QUALQUER combinacao de comando e pool fique dentro dos recursos:
     //
     //   VB[k] = tag de ENCHIMENTO do pool, exceto na malha do pool: VB[VertexOffset + i] = tag(pool, i)
-    //   IB[k] = 0,                         exceto na malha do pool: IB[IndexOffset + i]  = i
+    //   IB[k] = indice de ENCHIMENTO,      exceto na malha do pool: IB[IndexOffset + i]  = i
     //
-    // Um lote desenhado com o par do OUTRO pool le indice 0 e o vertice `VertexOffset` de la, que e
-    // enchimento. Aparece como tag errada, e nao como leitura fora do recurso: o teste reprova pela
-    // identidade em vez de travar o WARP.
+    // O indice de enchimento aponta, a partir de QUALQUER base de vertice da cena, para um vertice de
+    // enchimento — nenhuma malha tem tantos vertices — e fica dentro do pool. Toda leitura fora do lugar
+    // vira tag errada, e nao leitura fora do recurso: um lote desenhado com o par do OUTRO pool, e tambem
+    // um IB lido um indice adiante. Com enchimento ZERO este segundo caso passava: a malha lia 1..29 e
+    // depois o zero, isto e, exatamente o mesmo CONJUNTO de vertices.
     //
     // O vertice e o de PRODUCAO, `Vertex`, porque a porta exige o stride da tabela de malhas. O tag
     // mora nos 4 primeiros bytes de cada um, onde a sonda le o TEXCOORD.
@@ -1807,6 +1833,9 @@ namespace {
     constexpr u32 kPoolIndices   = 300u;  // cobre 207 + 60
     constexpr u32 kTagsPorPool   = 64u;
     constexpr u32 kTagEnchimento = 63u;
+    // Maior que o IndexCount de toda malha do desenho (conferido no `Criar`), entao a base de qualquer
+    // malha mais ele e sempre vertice de enchimento.
+    constexpr u32 kIndiceEnchimento = 63u;
 
     u32 TagDe(u32 _Pool, u32 _I) { return _Pool * kTagsPorPool + _I; }
 
@@ -1889,30 +1918,51 @@ namespace {
                "CreateGraphicsPipelineState (desenho)");
 
             // Os pools: a malha 0 mora no pool 0 e a malha 1 no pool 1, como na tabela da cena.
-            Pools.assign(2, FGpuPoolViews{});
             for (u32 Pool = 0; Pool < 2u; ++Pool) {
                 const FGpuMeshRecord& M = _Malhas[Pool];
                 const u64 FimVertices = static_cast<u64>(static_cast<u32>(M.VertexOffset)) + M.IndexCount;
                 const u64 FimIndices  = static_cast<u64>(M.IndexOffset) + M.IndexCount;
+                const u64 LeituraDeEnchimento =
+                    static_cast<u64>(static_cast<u32>(M.VertexOffset)) + kIndiceEnchimento;
                 if (M.GeometryPoolId != Pool || FimVertices > kPoolVertices || FimIndices > kPoolIndices ||
-                    M.IndexCount > kTagEnchimento)
+                    M.IndexCount > kTagEnchimento || M.IndexCount > kIndiceEnchimento ||
+                    LeituraDeEnchimento >= kPoolVertices)
                     throw std::runtime_error("a malha da cena nao cabe no pool do desenho");
                 const auto PoeTag = [](Vertex& _V, u32 _Tag) { std::memcpy(&_V, &_Tag, sizeof(_Tag)); };
                 std::vector<Vertex> V(kPoolVertices, Vertex{});
                 for (Vertex& X : V) PoeTag(X, TagDe(Pool, kTagEnchimento));
-                std::vector<u32> I(kPoolIndices, 0u);
+                std::vector<u32> I(kPoolIndices, kIndiceEnchimento);
                 for (u32 K = 0; K < M.IndexCount; ++K) {
                     I[M.IndexOffset + K] = K;
                     PoeTag(V[static_cast<u32>(M.VertexOffset) + K], TagDe(Pool, K));
                 }
                 Vb[Pool] = S.Upload(V.data(), V.size() * sizeof(Vertex));
                 Ib[Pool] = S.Upload(I.data(), I.size() * sizeof(u32));
-                Pools[Pool].Vertex.BufferLocation = Vb[Pool]->GetGPUVirtualAddress();
-                Pools[Pool].Vertex.SizeInBytes    = kPoolVertices * static_cast<u32>(sizeof(Vertex));
-                Pools[Pool].Vertex.StrideInBytes  = static_cast<u32>(sizeof(Vertex));
-                Pools[Pool].Index.BufferLocation  = Ib[Pool]->GetGPUVirtualAddress();
-                Pools[Pool].Index.SizeInBytes     = kPoolIndices * static_cast<u32>(sizeof(u32));
-                Pools[Pool].Index.Format          = DXGI_FORMAT_R32_UINT;
+            }
+
+            // As views saem da construcao de PRODUCAO, a partir dos recursos. Os campos sao conferidos
+            // aqui, contra os recursos; o desenho valido prova a BASE de novo, pelo efeito: um elemento
+            // de deslocamento, no VB ou no IB, troca a identidade dos vertices lidos (ver o indice de
+            // enchimento).
+            const FGpuGeometryPool Recursos[2]{ { Vb[0].Get(), Ib[0].Get() },
+                                                { Vb[1].Get(), Ib[1].Get() } };
+            CheckEq(GpuPoolViewsFor(Recursos, Pools), GpuPoolViewsOk,
+                    "as views dos pools do desenho saem dos recursos");
+            if (Pools.size() != 2u) throw std::runtime_error("sem as views dos pools do desenho");
+            for (u32 Pool = 0; Pool < 2u; ++Pool) {
+                const std::string N = "view do pool " + std::to_string(Pool);
+                const FGpuPoolViews& Vw = Pools[Pool];
+                Check(Vw.Vertex.BufferLocation == Vb[Pool]->GetGPUVirtualAddress(),
+                      N + ": o VB comeca no inicio do recurso");
+                CheckEq(Vw.Vertex.SizeInBytes, kPoolVertices * static_cast<u32>(sizeof(Vertex)),
+                        N + ": o VB e o recurso inteiro");
+                CheckEq(Vw.Vertex.StrideInBytes, static_cast<u32>(sizeof(Vertex)), N + ": stride de Vertex");
+                Check(Vw.Index.BufferLocation == Ib[Pool]->GetGPUVirtualAddress(),
+                      N + ": o IB comeca no inicio do recurso");
+                CheckEq(Vw.Index.SizeInBytes, kPoolIndices * static_cast<u32>(sizeof(u32)),
+                        N + ": o IB e o recurso inteiro");
+                CheckEq(static_cast<u32>(Vw.Index.Format), static_cast<u32>(DXGI_FORMAT_R32_UINT),
+                        N + ": indice R32_UINT");
             }
 
             const u64 SeenBytes = static_cast<u64>(kSeenEntradas) * sizeof(u32);
@@ -2062,6 +2112,7 @@ int main() try {
     TestarVersoes();
     TestarLayout();
     TestarPreflightDeRegioes();
+    TestarTamanhoDaView();
     TestarUmResultadoPorCandidato();
     TestarParticoes();
     TestarPreflight();
@@ -2599,6 +2650,42 @@ int main() try {
             ContagemTextura.DrawCounts = Textura.Get();
             CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ContagemTextura),
                     GpuIndirectRecordCountNotBuffer, "count buffer numa textura reprova, mesmo larga");
+
+            // A construcao das views, sobre recursos de verdade. Cada caso estraga UM recurso de UM pool.
+            //
+            // O limite de 4 GB NAO e alcancavel aqui: o WARP recusa ate um recurso RESERVADO de 2^32 + 64
+            // B (E_OUTOFMEMORY). Ele fica no `TestarTamanhoDaView`, e os dois casos "menor que um
+            // elemento" abaixo provam que a construcao passa pela MESMA funcao nos dois recursos.
+            const wrl::ComPtr<ID3D12Resource> VbCurto = S.Upload(nullptr, sizeof(Vertex) - 1u);
+            const wrl::ComPtr<ID3D12Resource> IbCurto = S.Upload(nullptr, sizeof(u32) - 1u);
+            const FGpuGeometryPool Bom0{ D.Vb[0].Get(), D.Ib[0].Get() };
+            const FGpuGeometryPool Bom1{ D.Vb[1].Get(), D.Ib[1].Get() };
+            struct FPoolRuim {
+                const char*      Nome;
+                FGpuGeometryPool Pools[2];
+                u32              Motivo;
+            };
+            const FPoolRuim PoolsRuins[] = {
+                { "VB nulo no pool 1", { Bom0, { nullptr, D.Ib[1].Get() } }, GpuPoolViewsMissingResource },
+                { "IB nulo no pool 1", { Bom0, { D.Vb[1].Get(), nullptr } }, GpuPoolViewsMissingResource },
+                { "VB numa textura no pool 1", { Bom0, { Textura.Get(), D.Ib[1].Get() } },
+                  GpuPoolViewsNotBuffer },
+                { "IB numa textura no pool 1", { Bom0, { D.Vb[1].Get(), Textura.Get() } },
+                  GpuPoolViewsNotBuffer },
+                { "VB menor que um vertice no pool 1", { Bom0, { VbCurto.Get(), D.Ib[1].Get() } },
+                  GpuPoolViewsTooSmall },
+                { "IB menor que um indice no pool 1", { Bom0, { D.Vb[1].Get(), IbCurto.Get() } },
+                  GpuPoolViewsTooSmall },
+                { "VB nulo no pool 0", { { nullptr, D.Ib[0].Get() }, Bom1 }, GpuPoolViewsMissingResource },
+            };
+            for (const FPoolRuim& Pr : PoolsRuins) {
+                std::vector<FGpuPoolViews> Saida(3);
+                Saida[0].Index.Format = DXGI_FORMAT_R8_UINT; // marca: a recusa nao pode tocar
+                const std::string N = Pr.Nome;
+                CheckEq(GpuPoolViewsFor(Pr.Pools, Saida), Pr.Motivo, N + " reprova as views");
+                Check(Saida.size() == 3u && Saida[0].Index.Format == DXGI_FORMAT_R8_UINT,
+                      N + ": a recusa nao escreve as views");
+            }
 
             // As views. Cada caso estraga UMA coisa da view de um pool com regiao; o resto e valido, entao
             // so a checagem daquela coisa pode recusar. O pool 1 e o ULTIMO a ser gravado, e o pool 0 o

@@ -8,6 +8,34 @@ namespace Smile {
         bool GanhaChamada(const FGpuIndirectRegion& _R) { return _R.Capacity != 0u; }
     }
 
+    u32 GpuPoolViewsFor(std::span<const FGpuGeometryPool> _Pools,
+                        std::vector<FGpuPoolViews>& _OutViews) {
+        std::vector<FGpuPoolViews> Views(_Pools.size());
+        for (size_t P = 0; P < _Pools.size(); ++P) {
+            const FGpuGeometryPool& Pool = _Pools[P];
+            if (!Pool.Vertex) return GpuPoolViewsMissingResource;
+            if (!Pool.Index) return GpuPoolViewsMissingResource;
+            const D3D12_RESOURCE_DESC Vb = Pool.Vertex->GetDesc();
+            const D3D12_RESOURCE_DESC Ib = Pool.Index->GetDesc();
+            if (Vb.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return GpuPoolViewsNotBuffer;
+            if (Ib.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return GpuPoolViewsNotBuffer;
+            u32 VbBytes = 0, IbBytes = 0;
+            u32 Motivo = GpuPoolViewBytes(Vb.Width, static_cast<u32>(sizeof(Vertex)), VbBytes);
+            if (Motivo != GpuPoolViewsOk) return Motivo;
+            Motivo = GpuPoolViewBytes(Ib.Width, static_cast<u32>(sizeof(u32)), IbBytes);
+            if (Motivo != GpuPoolViewsOk) return Motivo;
+
+            Views[P].Vertex.BufferLocation = Pool.Vertex->GetGPUVirtualAddress();
+            Views[P].Vertex.SizeInBytes    = VbBytes;
+            Views[P].Vertex.StrideInBytes  = static_cast<u32>(sizeof(Vertex));
+            Views[P].Index.BufferLocation  = Pool.Index->GetGPUVirtualAddress();
+            Views[P].Index.SizeInBytes     = IbBytes;
+            Views[P].Index.Format          = DXGI_FORMAT_R32_UINT;
+        }
+        _OutViews = std::move(Views);
+        return GpuPoolViewsOk;
+    }
+
     u32 GpuIndirectRecordPreflight(const FGpuIndirectLayout& _Layout, u32 _PipelineClass,
                                    std::span<const FGpuPoolViews> _Pools,
                                    const FGpuIndirectDrawTargets& _Targets) {

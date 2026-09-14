@@ -20,6 +20,7 @@
 #include "Smile/Graphics/Scene/GpuClassify.h"
 
 #include <span>
+#include <vector>
 #include <d3d12.h>
 
 namespace Smile {
@@ -29,11 +30,46 @@ namespace Smile {
     // `Vertex` e o `IndexOffset` conta indices de 4 B, os dois desde o inicio do recurso. Stride
     // diferente de `sizeof(Vertex)`, ou indice em R16, a API aceita — e le outro trecho do pool:
     // geometria errada sem erro. A porta confere stride, formato, endereco nao nulo e que cabe um
-    // elemento; a BASE ela nao tem como ver (a view nao traz o recurso), e e de quem monta a view.
+    // elemento; a BASE ela nao tem como ver (a view nao traz o recurso). Quem a garante e
+    // `GpuPoolViewsFor`, a forma de producao de montar a view.
     struct FGpuPoolViews {
         D3D12_VERTEX_BUFFER_VIEW Vertex{};
         D3D12_INDEX_BUFFER_VIEW  Index{};
     };
+
+    // Por que um pool nao vira view.
+    enum EGpuPoolViews : u32 {
+        GpuPoolViewsOk = 0,
+        // VB ou IB nulo.
+        GpuPoolViewsMissingResource = 1,
+        // Recurso que nao e BUFFER: numa textura o `Width` e largura em texels.
+        GpuPoolViewsNotBuffer = 2,
+        // O recurso passa de UINT32_MAX bytes. `SizeInBytes` e UINT, e truncar nao falha: produz uma
+        // view PEQUENA e plausivel do mesmo recurso.
+        GpuPoolViewsTooLarge = 3,
+        // Nao cabe um elemento: um vertice no VB, um indice no IB.
+        GpuPoolViewsTooSmall = 4,
+    };
+
+    // O `SizeInBytes` da view de um recurso de `Width` bytes, com elementos de `ElementBytes`.
+    //
+    // PURA pelo mesmo motivo do `GpuMeshOffsetsRepresentable`: o limite de u32 e alcancavel com dois
+    // inteiros, e nao com um pool de 4 GB. `OutBytes` so e escrito sob `Ok`.
+    inline u32 GpuPoolViewBytes(u64 _Width, u32 _ElementBytes, u32& _OutBytes) {
+        if (_Width > UINT32_MAX) return GpuPoolViewsTooLarge;
+        if (_Width < _ElementBytes) return GpuPoolViewsTooSmall;
+        _OutBytes = static_cast<u32>(_Width);
+        return GpuPoolViewsOk;
+    }
+
+    // As views de TODOS os pools, a partir dos RECURSOS.
+    //
+    // A base e o inicio do recurso e o tamanho e o recurso inteiro — o referencial em que a tabela de
+    // malhas conta os offsets, inclusive no pool compartilhado do `AddMeshesBatch`, em que VB, IB e
+    // triangulos de RT moram no mesmo chunk. Stride `Vertex` e indice R32_UINT, as unidades da tabela.
+    //
+    // Tudo ou nada: o primeiro pool recusado devolve o motivo, e `OutViews` nao e escrita.
+    u32 GpuPoolViewsFor(std::span<const FGpuGeometryPool> Pools, std::vector<FGpuPoolViews>& OutViews);
 
     // Os recursos que as chamadas leem.
     struct FGpuIndirectDrawTargets {
