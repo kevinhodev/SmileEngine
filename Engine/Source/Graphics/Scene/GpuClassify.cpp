@@ -64,11 +64,19 @@ namespace Smile {
 
     u32 GpuLayoutRegions(std::span<const u64> _Capacities,
                          std::vector<FGpuIndirectRegion>& _OutRegions, u32& _OutTotal) {
-        // Primeiro a soma, inteira e em u64; so depois, e so se couber, qualquer escrita. A soma de
-        // u64 nao da a volta aqui: cada parcela e uma contagem de linhas de uma tabela em memoria.
+        // Primeiro a porta, inteira; so depois, e so se couber, qualquer escrita.
+        //
+        // A porta vem antes de CADA parcela, e nao depois da soma: somar tudo e so entao comparar deixa
+        // a propria soma em u64 dar a volta — `{UINT64_MAX, 1}` vira zero e passa como layout vazio. A
+        // versao anterior justificava a falta da checagem pela ORIGEM das capacidades (contagens de
+        // linhas de uma tabela em memoria), mas a origem nao faz parte da API, e o teste chama esta
+        // funcao direto.
         u64 Total = 0;
-        for (const u64 C : _Capacities) Total += C;
-        if (Total > UINT32_MAX) return GpuRegionLayoutTooManyCommands;
+        for (const u64 C : _Capacities) {
+            // `C > UINT32_MAX` primeiro: e ele que garante que a subtracao a direita nao da a volta.
+            if (C > UINT32_MAX || Total > UINT32_MAX - C) return GpuRegionLayoutTooManyCommands;
+            Total += C;
+        }
 
         // Daqui para baixo toda conversao e segura: cada offset e cada capacidade sao <= Total.
         _OutRegions.assign(_Capacities.size(), FGpuIndirectRegion{});

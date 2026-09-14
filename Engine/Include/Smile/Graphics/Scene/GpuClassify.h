@@ -362,10 +362,11 @@ namespace Smile {
 
     // Regioes DENSAS, na ordem dos lotes: `Offset[b]` = soma das capacidades antes de b.
     //
-    // A soma corre em u64 e so e convertida DEPOIS da porta. Em u32 ela daria a volta — e dar a volta
-    // aqui nao produz um numero absurdo, produz um `Offset` pequeno e plausivel, dentro da regiao de
-    // outro lote. Como cada capacidade e cada offset sao menores ou iguais ao total, total em u32
-    // garante que todos cabem.
+    // A porta vem ANTES de cada parcela, e nao depois da soma: cada capacidade tem de caber em u32, e o
+    // acumulado tem de caber junto com ela. Dar a volta aqui nao produz um numero absurdo, produz um
+    // `Offset` pequeno e plausivel, dentro da regiao de outro lote — e isso vale para u64 tambem:
+    // `{UINT64_MAX, 1}` somaria zero e passaria como layout vazio. Verificada antes de somar, a soma
+    // nunca sai de u32, e todo offset e toda capacidade cabem por construcao.
     //
     // `_OutRegions` e `_OutTotal` so sao escritos sob `Ok`: um layout recusado nao pode deixar regioes
     // plausiveis na mao do chamador.

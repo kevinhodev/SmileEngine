@@ -383,6 +383,21 @@ namespace {
                     "uma capacidade acima de u32 recusa");
         }
         {
+            // A soma que da a volta em U64. `{UINT64_MAX, 1}` somaria zero e passaria como layout
+            // vazio; `{1, UINT64_MAX}` tambem, com a regiao do segundo lote truncada. As duas ordens,
+            // porque cada uma prova um termo da porta: sem o limite por parcela, a segunda passa.
+            const u64 Casos[2][2]{ { UINT64_MAX, 1ull }, { 1ull, UINT64_MAX } };
+            for (u32 K = 0; K < 2u; ++K) {
+                const std::string N = K == 0u ? "{UINT64_MAX, 1}" : "{1, UINT64_MAX}";
+                std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
+                u32 Total = 0xDEADBEEFu;
+                CheckEq(GpuLayoutRegions(Casos[K], R, Total), GpuRegionLayoutTooManyCommands,
+                        N + ": a soma que da a volta em u64 recusa");
+                Check(R.size() == 1 && Igual(R[0], 7u, 7u), N + ": e a recusa nao escreve as regioes");
+                CheckEq(Total, 0xDEADBEEFu, N + ": nem o total");
+            }
+        }
+        {
             // Nenhum lote: nenhuma regiao, total zero.
             std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
             u32 Total = 9u;
