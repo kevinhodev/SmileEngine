@@ -519,6 +519,21 @@ namespace Smile {
         if (!Dirty_) TouchedSlots_.clear();
         NextSettleSlots_.clear();
 
+        // O previous de um ocupante e o current que a GPU TEM para ele: o da ultima publicacao
+        // ACEITA, e nao o da ultima escrita. Uma publicacao recusada deixa `TransformRows_` a frente
+        // da GPU, e derivar o previous dali apagaria um movimento que ela nunca recebeu — A→B
+        // recusado e depois C publicaria C/B com a GPU ainda em A.
+        //
+        // A generation tambem e a PUBLICADA. Sem publicacao deste ocupante — slot nunca publicado,
+        // reciclado, ou ocupante nascido numa publicacao recusada — nao ha passado na GPU, e o
+        // previous e o proprio current. Conferir a generation das linhas escritas daria a um objeto
+        // nascido na recusa o transform que o shadow guarda naquele slot, que nao e dele.
+        auto PublishedCurrent = [&](u32 Slot, u32 Generation, const Mat44& Current) -> Mat44 {
+            return Generation != 0u && Slot < MetaShadow_.size() &&
+                           MetaShadow_[Slot].Generation == Generation
+                       ? TransformShadow_[Slot].Value : Current;
+        };
+
         // Recompoe as quatro colunas de UM renderavel. Devolve o slot escrito, ou kInvalidSlot
         // quando o objeto nao tem residencia — o mesmo filtro que a varredura completa aplicava
         // no laco, agora num lugar so para os dois ramos nao poderem divergir.
@@ -528,19 +543,16 @@ namespace Smile {
                 return FGpuSceneHandle::kInvalidSlot;
 
             const u32 Slot = Handle.Slot;
-            // UMA escrita por slot por ciclo, e este guarda nao e defensivo: a caixa de correio
-            // repete indice de rotina. Mover um objeto ESTATICO bumpa transform e static casters,
-            // e os dois marcam o mesmo renderavel.
+            // UMA escrita por slot por ciclo: a caixa de correio repete indice de rotina. Mover um
+            // objeto ESTATICO bumpa transform e static casters, e os dois marcam o mesmo renderavel.
             //
-            // A segunda escrita seria destrutiva, nao redundante: `Previous` sai de
-            // TransformRows_[Slot], que a primeira acabou de igualar a `Current`. O objeto perderia
-            // o passado no exato frame em que se moveu — motion vector zero, sem erro nenhum. A
-            // deduplicacao de TouchedSlots_ acontece tarde demais para impedir isso.
+            // A segunda escrita refaria o mesmo trabalho e repetiria o slot na lista de assentamento.
+            // Ela ja nao seria destrutiva — o previous sai do shadow publicado, que o PrepareFrame
+            // nunca move —, mas o epoch continua sendo o que a limpeza e o assentamento abaixo
+            // consultam para saber quem ja foi escrito neste ciclo.
             if (SeenEpoch_[Slot] == Epoch) return Slot;
-            const FGpuSceneInstanceMeta OldMeta = MetaRows_[Slot];
             const Mat44 Current = R.Transform.Matrix();
-            const Mat44 Previous = OldMeta.Generation == Handle.Generation
-                                 ? TransformRows_[Slot].Value : Current;
+            const Mat44 Previous = PublishedCurrent(Slot, Handle.Generation, Current);
             const bool TransformChanged =
                 FGpuSceneInstanceTransform{ Current } != FGpuSceneInstanceTransform{ Previous };
 
@@ -602,15 +614,27 @@ namespace Smile {
                 if (Index < List.size()) WriteRow(List[Index]);
         }
 
-        // Assentamento do previous transform. Um slot reescrito acima ja recebeu o previous certo
-        // (o current do ciclo anterior); os que sobraram so precisam alcancar o atual, e para isso
-        // nao ha o que perguntar ao renderavel — nada nele mudou desde o ciclo passado.
+        // Assentamento do previous transform. Um slot reescrito acima ja recebeu o previous certo;
+        // os que sobraram so precisam alcancar o current PUBLICADO, e para isso nao ha o que
+        // perguntar ao renderavel — nada nele mudou desde o ciclo passado.
+        //
+        // Enquanto o movimento nao foi aceito, o shadow ainda tem o current antigo e o par continua
+        // em movimento: o slot fica na lista, e so assenta no frame seguinte ao da publicacao.
+        // Igualar o previous as linhas escritas publicaria na nova tentativa um par parado, e a GPU
+        // nunca veria o movimento.
         for (u32 Slot : SettleSlots_) {
             if (Slot >= SeenEpoch_.size() || SeenEpoch_[Slot] == Epoch) continue;
-            PrevTransformRows_[Slot] = TransformRows_[Slot];
-            // O fast path temporal depende desta limpeza. Sem ela, um objeto que parou continua
-            // pagando inversas por pixel para sempre, embora as duas matrizes ja sejam iguais.
-            MetaRows_[Slot].Flags &= ~GpuSceneInstanceTransformChanged;
+            const Mat44 Current = TransformRows_[Slot].Value;
+            const Mat44 Previous = PublishedCurrent(Slot, MetaRows_[Slot].Generation, Current);
+            PrevTransformRows_[Slot].Value = Previous;
+            if (FGpuSceneInstanceTransform{ Current } != FGpuSceneInstanceTransform{ Previous }) {
+                MetaRows_[Slot].Flags |= GpuSceneInstanceTransformChanged;
+                NextSettleSlots_.push_back(Slot);
+            } else {
+                // O fast path temporal depende desta limpeza. Sem ela, um objeto que parou continua
+                // pagando inversas por pixel para sempre, embora as duas matrizes ja sejam iguais.
+                MetaRows_[Slot].Flags &= ~GpuSceneInstanceTransformChanged;
+            }
             SeenEpoch_[Slot] = Epoch;
             TouchedSlots_.push_back(Slot);
         }
@@ -705,19 +729,23 @@ namespace Smile {
         for (u32 Slot : PrevTransformChanged_) DirtyMarks_[Slot] = 0;
     }
 
+    // As duas consultas leem os SHADOWS: a imagem publicada, a mesma que os leitores da GPU tem neste
+    // frame. Com um upload aceito as linhas escritas e o shadow sao iguais; so divergem depois de uma
+    // recusa, e ai o par das linhas escritas e um que a GPU nunca recebeu. Os quatro shadows avancam
+    // juntos no mesmo commit, entao o tamanho da meta vale para as matrizes.
     bool FGpuSceneInstanceTable::TransformsFor(FGpuSceneHandle _Handle, Mat44& _Current,
                                                Mat44& _Previous) const {
-        if (_Handle.Generation == 0 || _Handle.Slot >= MetaRows_.size()) return false;
-        if (MetaRows_[_Handle.Slot].Generation != _Handle.Generation) return false;
-        _Current  = TransformRows_[_Handle.Slot].Value;
-        _Previous = PrevTransformRows_[_Handle.Slot].Value;
+        if (_Handle.Generation == 0 || _Handle.Slot >= MetaShadow_.size()) return false;
+        if (MetaShadow_[_Handle.Slot].Generation != _Handle.Generation) return false;
+        _Current  = TransformShadow_[_Handle.Slot].Value;
+        _Previous = PrevTransformShadow_[_Handle.Slot].Value;
         return true;
     }
 
     bool FGpuSceneInstanceTable::MetaFor(FGpuSceneHandle _Handle,
                                          FGpuSceneInstanceMeta& _Meta) const {
-        if (_Handle.Generation == 0 || _Handle.Slot >= MetaRows_.size()) return false;
-        const FGpuSceneInstanceMeta& Row = MetaRows_[_Handle.Slot];
+        if (_Handle.Generation == 0 || _Handle.Slot >= MetaShadow_.size()) return false;
+        const FGpuSceneInstanceMeta& Row = MetaShadow_[_Handle.Slot];
         if (Row.Generation != _Handle.Generation) return false;
         _Meta = Row;
         return true;

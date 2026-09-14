@@ -180,11 +180,13 @@ int main() {
     // Mover um objeto ESTATICO bumpa transform E static casters, e os dois marcam o mesmo
     // renderavel: a caixa chega com o indice duas vezes. E o caso comum, nao uma borda.
     //
-    // A segunda escrita da mesma linha nao seria redundante, seria DESTRUTIVA: `Previous` sai de
-    // TransformRows_[Slot], que a primeira acabou de igualar a `Current`. O objeto perderia o
-    // passado no exato frame em que se moveu — motion vector zero, sem erro nenhum, so o objeto
-    // parando de borrar. Por isso o que se confere aqui sao as MATRIZES, e nao o contador: uma
-    // deduplicacao que rodasse tarde demais deixaria os contadores certos e as matrizes erradas.
+    // Quando o previous saia das linhas ESCRITAS, a segunda escrita da mesma linha era DESTRUTIVA: a
+    // primeira acabava de igualar current ao transform novo, e o objeto perdia o passado no exato
+    // frame em que se moveu — motion vector zero, sem erro nenhum. Hoje o previous sai do shadow
+    // publicado, que o PrepareFrame nunca move, e ha duas defesas: o epoch do WriteRow e a propria
+    // derivacao. Este caso so fica vermelho se as duas cairem juntas; a derivacao sozinha e provada
+    // pelo par temporal com copia recusada, em Smile.GpuIndirectLayout. Por isso o que se confere
+    // aqui continua sendo as MATRIZES, e nao o contador.
     {
         constexpr u32 kIdx = 77u;
         FRenderable& R = Rig.Scene.Renderables()[kIdx];

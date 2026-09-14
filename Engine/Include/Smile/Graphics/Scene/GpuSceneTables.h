@@ -799,7 +799,8 @@ namespace Smile {
     // Quatro buffers DEFAULT independentes. Separar meta/bounds/matrizes evita que o culling leia
     // 128 B de transform para testar uma caixa. O estado CPU abaixo e a fonte unica do historico:
     // raster e temporal derivam suas visoes especializadas daqui, em vez de manter dois mapas de
-    // previous model que podiam divergir.
+    // previous model que podiam divergir. O historico e o PUBLICADO: o previous de cada ocupante e
+    // o current da ultima publicacao aceita, e o raster CPU le o par pela mesma imagem.
     class FGpuSceneInstanceTable {
     public:
         static constexpr u32 kMetaBytes      = sizeof(FGpuSceneInstanceMeta);
@@ -836,11 +837,15 @@ namespace Smile {
         u32 TransformSrv()     const { return TransformStorage_.Srv(); }
         u32 PrevTransformSrv() const { return PrevTransformStorage_.Srv(); }
 
-        // CPU canonical: valida slot+generation antes de devolver o par. Consumido hoje pelo
-        // ObjectCB e pela visao temporal derivada; shaders passam a ler as colunas nas fases 3/4.
+        // O par PUBLICADO — o mesmo que os leitores da GPU tem neste frame —, validando
+        // slot+generation contra a meta publicada. Consumido pelo ObjectCB, que precisa desenhar a
+        // mesma imagem que o caminho bindless e os temporais. Depois de um upload aceito coincide com
+        // o que o PrepareFrame escreveu; depois de uma recusa, e o par antigo, e um ocupante que nunca
+        // foi publicado nao responde.
         bool TransformsFor(FGpuSceneHandle Handle, Mat44& Current, Mat44& Previous) const;
-        // A consulta CPU existe para diagnostico/teste do mesmo contrato de identidade. Os
-        // consumidores de frame leem o SRV; nenhum deles deve contornar a tabela por este atalho.
+        // A consulta CPU existe para diagnostico/teste do mesmo contrato de identidade, e le a mesma
+        // imagem publicada. Os consumidores de frame leem o SRV; nenhum deles deve contornar a tabela
+        // por este atalho.
         bool MetaFor(FGpuSceneHandle Handle, FGpuSceneInstanceMeta& Meta) const;
 
         u64 ResidentBytes() const;
@@ -867,8 +872,21 @@ namespace Smile {
         // ficou morto pode guardar na GPU a linha da cena anterior. Nenhum leitor da cadeia chega nele:
         // expand e classify so leem slots de candidatos, que sao vivos.
         std::span<const FGpuSceneInstanceMeta> PublishedMeta() const { return MetaShadow_; }
-        // O recurso da coluna de meta, para leitura de conferencia. Os leitores de frame usam o SRV.
+        // As outras tres colunas PUBLICADAS, com a mesma ressalva. Nenhum leitor de producao as
+        // consome por aqui — o layout so precisa da meta —, mas sem elas uma leitura de conferencia
+        // nao tem contra o que comparar bounds e o par temporal.
+        std::span<const FGpuSceneInstanceBounds> PublishedBounds() const { return BoundsShadow_; }
+        std::span<const FGpuSceneInstanceTransform> PublishedTransforms() const {
+            return TransformShadow_;
+        }
+        std::span<const FGpuSceneInstanceTransform> PublishedPrevTransforms() const {
+            return PrevTransformShadow_;
+        }
+        // Os recursos das quatro colunas, para leitura de conferencia. Os leitores de frame usam o SRV.
         ID3D12Resource* MetaResource() const { return MetaStorage_.Resource(); }
+        ID3D12Resource* BoundsResource() const { return BoundsStorage_.Resource(); }
+        ID3D12Resource* TransformResource() const { return TransformStorage_.Resource(); }
+        ID3D12Resource* PrevTransformResource() const { return PrevTransformStorage_.Resource(); }
 
         // Sobe quando alguma linha PUBLICADA muda o que o layout conta (`GpuInstanceMetaAltersLayout`),
         // e em Setup e Release. Transform, assentamento e visibilidade nao a movem. Monotonica pela
@@ -901,9 +919,11 @@ namespace Smile {
         // ponte entre produtor e diff: sem ela o diff teria de redescobrir por varredura o que o
         // produtor acabou de saber por construcao.
         std::vector<u32> TouchedSlots_;
-        // Slots cujo previous transform ainda nao alcancou o atual. Sem esta lista, o assentamento
-        // do frame seguinte precisaria revarrer a cena so para descobrir quem ficou para tras — o
-        // que devolveria, pelo caminho do assentamento, o custo que a caixa de correio tirou.
+        // Slots cujo previous transform ainda nao alcancou o current PUBLICADO — inclusive os de um
+        // movimento cuja copia foi recusada, que continuam aqui ate a publicacao ser aceita. Sem esta
+        // lista, o assentamento do frame seguinte precisaria revarrer a cena so para descobrir quem
+        // ficou para tras — o que devolveria, pelo caminho do assentamento, o custo que a caixa de
+        // correio tirou.
         std::vector<u32> SettleSlots_;
         std::vector<u32> NextSettleSlots_;
         std::vector<u32> SeenEpoch_;

@@ -11,17 +11,25 @@
 //     que a tabela publicou alguma linha: sem isso, "nao recontou" passaria por nada ter acontecido.
 //
 //  2. "Publicado" e o que a GPU tem. Cada frame e gravado, EXECUTADO e esperado pela fence, e as tres
-//     tabelas sao lidas de volta no fim da propria lista — onde um leitor do frame estaria — e
-//     comparadas byte a byte com as linhas publicadas no momento da gravacao. As copias recusadas
-//     (lista nula) nao podem avancar nem as linhas publicadas nem a versao, e a nova tentativa tem de
-//     publicar tudo. Dois frames gravados antes de qualquer um executar provam que cada upload le o
-//     staging do SEU frame slot.
+//     tabelas — as quatro colunas das instancias — sao lidas de volta no fim da propria lista, onde um
+//     leitor do frame estaria, e comparadas byte a byte com as linhas publicadas no momento da
+//     gravacao. As copias recusadas (lista nula) nao podem avancar nem as linhas publicadas nem a
+//     versao, e a nova tentativa tem de publicar tudo. Dois frames gravados antes de qualquer um
+//     executar provam que cada upload le o staging do SEU frame slot.
+//
+//  3. O par temporal publicado segue a GPU, e nao as linhas escritas. A leitura de volta so prova que
+//     a GPU tem o que as linhas publicadas dizem; o par CERTO e conferido contra matrizes calculadas
+//     aqui. O previous e o current que a GPU tinha: A→B recusado publica B/A na nova tentativa, A→B
+//     recusado e depois C publica C/A, e so o frame seguinte a publicacao assenta. Um objeto nascido
+//     numa recusa nao tem passado na GPU. `TransformsFor` (o ObjectCB) e `MetaFor` respondem pela
+//     mesma imagem.
 //
 // A camada de debug participa: ERROR e CORRUPTION reprovam.
 
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -107,7 +115,7 @@ namespace {
         u64                                    FenceValue = 0;
         wrl::ComPtr<ID3D12CommandAllocator>    Allocator[FGpuTableStorage::kFrameSlots];
         wrl::ComPtr<ID3D12GraphicsCommandList> List[FGpuTableStorage::kFrameSlots];
-        FLeitura                               Leituras[FGpuTableStorage::kFrameSlots][3];
+        FLeitura                               Leituras[FGpuTableStorage::kFrameSlots][6];
         u32                                    ProximoSlot = 0;
 
         FTextureSRVHeap Heap;
@@ -165,6 +173,11 @@ namespace {
                 FRenderable R;
                 R.Mesh     = _Malha;
                 R.Material = _Material;
+                // Caixa finita: a default, de ±1e9, absorve em float qualquer translacao pequena, e a
+                // caixa publicada nao andaria com o objeto.
+                R.LocalAABBMin = { -1.0f, -1.0f, -1.0f };
+                R.LocalAABBMax = { 1.0f, 1.0f, 1.0f };
+                R.RefreshWorldBounds();
                 return Scene.AddRenderable(R).Id;
             };
             for (u64& Id : IdOpaco) Id = Add(&MalhaA, &Opaco);
@@ -211,8 +224,9 @@ namespace {
             Motivo = Layout.Refresh(In);
         }
 
-        // Grava um frame no slot: produtor, os tres uploads, o layout, e a leitura das tres tabelas no
-        // FIM da lista, com a imagem esperada tirada das linhas publicadas neste instante.
+        // Grava um frame no slot: produtor, os tres uploads, o layout, e a leitura das tres tabelas —
+        // as quatro colunas das instancias — no FIM da lista, com a imagem esperada tirada das linhas
+        // publicadas neste instante.
         void Gravar(u32 _Slot, FRecusa _Recusa = {}) {
             Hr(Allocator[_Slot]->Reset(), "Reset do allocator");
             ID3D12GraphicsCommandList* L = List[_Slot].Get();
@@ -259,9 +273,15 @@ namespace {
             };
             Ler(Leituras[_Slot][0], "meta", Instances.MetaResource(),
                 ComoBytes(Instances.PublishedMeta()));
-            Ler(Leituras[_Slot][1], "material", Materials.Resource(),
+            Ler(Leituras[_Slot][1], "bounds", Instances.BoundsResource(),
+                ComoBytes(Instances.PublishedBounds()));
+            Ler(Leituras[_Slot][2], "transform", Instances.TransformResource(),
+                ComoBytes(Instances.PublishedTransforms()));
+            Ler(Leituras[_Slot][3], "prev transform", Instances.PrevTransformResource(),
+                ComoBytes(Instances.PublishedPrevTransforms()));
+            Ler(Leituras[_Slot][4], "material", Materials.Resource(),
                 ComoBytes(Materials.PublishedRows()));
-            Ler(Leituras[_Slot][2], "malha", Meshes.Resource(), ComoBytes(Meshes.PublishedRows()));
+            Ler(Leituras[_Slot][5], "malha", Meshes.Resource(), ComoBytes(Meshes.PublishedRows()));
 
             const HRESULT Fechou = L->Close();
             if (FAILED(Fechou)) Drenar("gravacao");
@@ -305,6 +325,54 @@ namespace {
 
         FRenderable& R(u64 _Id) { return *Scene.FindRenderable(_Id); }
         u32 Indice(u64 _Id) const { return static_cast<u32>(Scene.IndexOfRenderable(_Id)); }
+
+        // Move o objeto em X pelo caminho do editor e devolve o transform novo.
+        Mat44 Mover(u64 _Id, f32 _Dx) {
+            FRenderable& Obj = R(_Id);
+            Obj.Transform.Position.X += _Dx;
+            Obj.RefreshWorldBounds();
+            Scene.BumpTransformsVersion(Indice(_Id));
+            return Obj.Transform.Matrix();
+        }
+
+        // O par temporal PUBLICADO do objeto, contra matrizes calculadas pelo teste. A leitura de volta
+        // do frame ja provou que a GPU tem exatamente as colunas publicadas; as duas conferencias juntas
+        // amarram a GPU ao par esperado. O flag de movimento acompanha o par, e `TransformsFor` (o
+        // ObjectCB) e `MetaFor` respondem pela mesma imagem.
+        void ConferirPar(u64 _Id, const Mat44& _Current, const Mat44& _Previous,
+                         std::string_view _Caso) {
+            const std::string     Caso(_Caso);
+            const FGpuSceneHandle H        = R(_Id).GpuHandle;
+            const auto            Meta     = Instances.PublishedMeta();
+            const auto            Atual    = Instances.PublishedTransforms();
+            const auto            Anterior = Instances.PublishedPrevTransforms();
+            if (H.Slot >= Meta.size() || H.Slot >= Atual.size() || H.Slot >= Anterior.size()) {
+                Check(false, Caso + ": o slot esta publicado");
+                return;
+            }
+            const FGpuSceneInstanceTransform Cur{ _Current }, Prev{ _Previous };
+            CheckEq(Meta[H.Slot].Generation, H.Generation, Caso + ": a linha publicada e deste objeto");
+            Check(Atual[H.Slot] == Cur, Caso + ": current publicado");
+            Check(Anterior[H.Slot] == Prev, Caso + ": previous publicado");
+            Check(((Meta[H.Slot].Flags & GpuSceneInstanceTransformChanged) != 0u) == (Cur != Prev),
+                  Caso + ": o flag de movimento acompanha o par");
+
+            Mat44 C{}, P{};
+            Check(Instances.TransformsFor(H, C, P) && FGpuSceneInstanceTransform{ C } == Cur &&
+                      FGpuSceneInstanceTransform{ P } == Prev,
+                  Caso + ": TransformsFor devolve o par publicado");
+            FGpuSceneInstanceMeta M{};
+            Check(Instances.MetaFor(H, M) && M == Meta[H.Slot],
+                  Caso + ": MetaFor devolve a meta publicada");
+        }
+
+        // O centro X publicado da caixa do objeto, ou NaN quando o slot nao esta publicado.
+        f32 CentroPublicado(u64 _Id) const {
+            const FGpuSceneHandle H      = Scene.FindRenderable(_Id)->GpuHandle;
+            const auto            Bounds = Instances.PublishedBounds();
+            return H.Slot < Bounds.size() ? Bounds[H.Slot].Center.X
+                                          : std::numeric_limits<f32>::quiet_NaN();
+        }
 
         // Capacidade da classe opaca one-sided no pool.
         u32 Cap(u32 _Pool) const {
@@ -451,6 +519,47 @@ int main() try {
         CheckEq(G.Cap(1), 2u, "e a linha sai da contagem");
     }
 
+    // --- o par temporal, com a copia das instancias RECUSADA ------------------------------------
+    //
+    // O previous publicado e o current que a GPU tinha. Uma copia recusada deixa a GPU no par antigo:
+    // a nova tentativa publica o movimento inteiro a partir do que a GPU tem — e nao do que o produtor
+    // escreveu e nunca subiu —, e so o frame SEGUINTE a publicacao assenta.
+    {
+        const u64 Id = G.IdOpaco[0];
+        for (u32 I = 0; I < 2; ++I) G.Frame(); // assenta o objeto que o bloco anterior moveu
+        {
+            const Mat44 A = G.R(Id).Transform.Matrix();
+            G.ConferirPar(Id, A, A, "A→B: parte assentado em A");
+            const f32 CentroA = G.CentroPublicado(Id);
+
+            const Mat44 B       = G.Mover(Id, 2.0f);
+            const f32   CentroB = (G.R(Id).AABBMin.X + G.R(Id).AABBMax.X) * 0.5f;
+            Check(CentroB != CentroA, "A→B: a caixa anda com o objeto");
+            G.Frame({ .Instancias = true });
+            CheckEq(G.Instances.LastDirtyRows(), 0u, "A→B recusado: nenhuma linha publicada");
+            G.ConferirPar(Id, A, A, "A→B recusado: a GPU continua em A/A");
+            Check(G.CentroPublicado(Id) == CentroA, "A→B recusado: a caixa publicada continua a antiga");
+
+            G.Frame();
+            G.ConferirPar(Id, B, A, "A→B recusado, nova tentativa: Current=B, Previous=A");
+            Check(G.CentroPublicado(Id) == CentroB, "A→B, nova tentativa: a caixa publicada e a nova");
+            G.Frame();
+            G.ConferirPar(Id, B, B, "A→B recusado: so o frame seguinte assenta B/B");
+        }
+        {
+            const Mat44 A = G.R(Id).Transform.Matrix();
+            G.Mover(Id, 2.0f);
+            G.Frame({ .Instancias = true });
+            G.ConferirPar(Id, A, A, "A→B recusado e depois C: a recusa deixa A/A");
+            const Mat44 C = G.Mover(Id, 2.0f);
+            G.Frame();
+            G.ConferirPar(Id, C, A, "A→B recusado e depois C: Current=C, Previous=A");
+            G.Frame();
+            G.ConferirPar(Id, C, C, "A→B recusado e depois C: so o frame seguinte assenta C/C");
+        }
+        CheckEq64(G.Layout.RebuildAttempts(), 4ull, "o par temporal nao reconta");
+    }
+
     // --- associacao e ocupacao ------------------------------------------------------------------
     {
         G.R(G.IdTroca[1]).Mesh = &G.MalhaA;
@@ -468,13 +577,27 @@ int main() try {
         CheckEq(G.Cap(0), 4u, "e a capacidade nao muda");
     }
     {
+        // Acrescentado com a copia das instancias RECUSADA, e movido antes da nova tentativa. Ele nunca
+        // esteve na GPU, entao nao tem passado la: a nova tentativa publica previous = current — nem o
+        // transform com que nasceu, nem o que o shadow guarda naquele slot, que nao e dele.
         FRenderable Novo;
         Novo.Mesh     = &G.MalhaA;
         Novo.Material = &G.Opaco;
-        G.Scene.AddRenderable(Novo);
+        const u64             IdNovo = G.Scene.AddRenderable(Novo).Id;
+        const FGpuSceneHandle H      = G.R(IdNovo).GpuHandle;
+        G.Frame({ .Instancias = true });
+        CheckEq64(G.Layout.RebuildAttempts(), 6ull, "acrescentar recusado: nada reconta");
+        Mat44                 Cur{}, Prev{};
+        FGpuSceneInstanceMeta Meta{};
+        Check(!G.Instances.TransformsFor(H, Cur, Prev),
+              "acrescentar recusado: o novo nao tem par publicado");
+        Check(!G.Instances.MetaFor(H, Meta), "acrescentar recusado: nem meta publicada");
+
+        const Mat44 Movido = G.Mover(IdNovo, 5.0f);
         G.Frame();
         CheckEq64(G.Layout.RebuildAttempts(), 7ull, "ocupacao: acrescentar reconta");
         CheckEq(G.Cap(0), 5u, "e o novo entra no pool A");
+        G.ConferirPar(IdNovo, Movido, Movido, "nascido numa recusa e movido: sem passado na GPU");
     }
 
     // --- pool, com a copia da malha RECUSADA ----------------------------------------------------
