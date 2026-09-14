@@ -10,9 +10,9 @@ namespace Smile {
         _OutBatchCounts.assign(_In.BatchCapacity, 0u);
 
         for (const u32 Slot : _In.Slots) {
-            FGpuBatchKey Key{};
+            FGpuClassifyCommand Cmd{};
             const u32 Outcome = GpuClassifyCandidate(Slot, _In.Meta, _In.Materials, _In.Meshes,
-                                                     _In.PoolCount, Key);
+                                                     _In.PoolCount, Cmd);
             if (Outcome != GpuClassifyIndirect) {
                 ++_OutCounters[Outcome];
                 continue;
@@ -23,7 +23,7 @@ namespace Smile {
             // `GpuBatchSlotCount(PoolCount)` — erro de quem alocou, e nao dado de cena. Ele existe
             // porque a capacidade viaja separada do `PoolCount` ate o shader, e la os dois podem
             // discordar sem que nada reclame.
-            const u32 Batch = GpuBatchIndex(Key, _In.PoolCount);
+            const u32 Batch = Cmd.Batch;
             if (Batch >= _In.BatchCapacity) {
                 ++_OutCounters[GpuClassifyOverflow];
                 continue;
@@ -62,5 +62,35 @@ namespace Smile {
         // dentro dele, porque so aqui se sabe que o prefixo fechou inteiro.
         for (size_t I = 0; I < _Counts.size(); ++I) _OutDrawCounts[I] = _Counts[I];
         return Acc;
+    }
+
+    void ScatterIndirectArgs(const FGpuClassifyInput& _In, std::span<const u32> _BatchOffsets,
+                             u32 _PrefixOverflow, std::vector<FGpuIndirectDrawArgs>& _InOutArgs,
+                             std::vector<u32>& _OutCounters) {
+        _OutCounters.assign(GpuScatterCounterCount, 0u);
+        std::vector<u32> Cursores(_BatchOffsets.size(), 0u);
+        const u32 Capacidade = static_cast<u32>(_InOutArgs.size());
+
+        for (const u32 Slot : _In.Slots) {
+            // Mesma abstencao do shader, e pelo mesmo motivo: offset envenenado da a volta em u32.
+            if (_PrefixOverflow != 0u) {
+                ++_OutCounters[GpuScatterCounterSuppressed];
+                continue;
+            }
+            FGpuClassifyCommand Cmd{};
+            const u32 Outcome = GpuClassifyCandidate(Slot, _In.Meta, _In.Materials, _In.Meshes,
+                                                     _In.PoolCount, Cmd);
+            if (Outcome != GpuClassifyIndirect) continue;
+
+            // ---- a partir daqui, nenhuma recusa ----
+            const u32 Cursor   = Cursores[Cmd.Batch]++;
+            const u32 Position = _BatchOffsets[Cmd.Batch] + Cursor;
+            if (Position >= Capacidade) {
+                ++_OutCounters[GpuScatterCounterOverflow];
+                continue;
+            }
+            _InOutArgs[Position] = Cmd.Args;
+            ++_OutCounters[GpuScatterCounterEmitted];
+        }
     }
 }

@@ -47,7 +47,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // ramo e inalcancavel. Ele fica porque a capacidade viaja separada do PoolCount ate aqui e os
     // dois podem discordar; descobrir falta de espaco NESTE ponto ja seria geometria perdida no
     // frame, e por isso quem impede e o preflight, nao este contador.
-    const uint Batch = GpuBatchIndexFor(C.PipelineClass, C.GeometryPoolId, PoolCount);
+    // O MESMO indice que o scatter vai usar para achar a posicao: calculado uma vez, dentro do
+    // GpuClassifyOne, e nao aqui e la.
+    const uint Batch = C.Batch;
     if (Batch >= BatchCapacity) {
         InterlockedAdd(Counters[SMILE_CLASSIFY_OVERFLOW], 1u);
         return;

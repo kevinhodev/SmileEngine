@@ -324,6 +324,7 @@ target_compile_definitions(SmileGpuClassifyWarpTests PRIVATE
     NOMINMAX WIN32_LEAN_AND_MEAN
     SMILE_CLASSIFY_CANDIDATES_CSO="${SMILE_SHADER_OUTPUT_DIR}/ClassifyCandidates.cs_6_0.cso"
     SMILE_PREFIX_BATCH_COUNTS_CSO="${SMILE_SHADER_OUTPUT_DIR}/PrefixBatchCounts.cs_6_0.cso"
+    SMILE_SCATTER_INDIRECT_ARGS_CSO="${SMILE_SHADER_OUTPUT_DIR}/ScatterIndirectArgs.cs_6_0.cso"
 )
 target_link_libraries(SmileGpuClassifyWarpTests PRIVATE SmileEngine d3d12 dxgi)
 add_dependencies(SmileGpuClassifyWarpTests Shaders)

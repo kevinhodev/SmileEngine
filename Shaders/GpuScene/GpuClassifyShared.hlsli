@@ -17,6 +17,7 @@
 // e e proposital: os dois passes leem as mesmas tabelas, e deixar cada um escolher o seu
 // registrador seria abrir a porta para lerem tabelas diferentes.
 
+#include "../Scene/GpuIndirectDraw.hlsli"
 #include "../Scene/GpuSceneTables.hlsli"
 
 // Desfechos. Indices fixos, espelhando EGpuClassifyOutcome; o teste WARP le os nove de volta.
@@ -38,14 +39,16 @@ StructuredBuffer<GpuInstanceMeta>   InstanceMeta : register(t1);
 StructuredBuffer<GpuMaterialRecord> Materials    : register(t2);
 StructuredBuffer<GpuMeshRecord>     Meshes       : register(t3);
 
-// O resultado de UM candidato. Carrega, alem do desfecho, tudo que o scatter precisa para montar o
-// argumento — assim ele nao reabre nenhuma das tabelas por conta propria.
+// O resultado de UM candidato: o desfecho e, sob INDIRECT, o COMANDO INTEIRO pronto para escrita.
+//
+// Inteiro, e nao ids. A primeira versao carregava `MeshId` e `MaterialId`, e o scatter precisaria
+// ler `Meshes[MeshId]` para achar `IndexCount`, `IndexOffset` e `VertexOffset` — reabrindo
+// exatamente a tabela onde uma validacao a mais caberia sem ninguem notar. Com o argumento completo
+// aqui, o scatter nao tem o que ler: sob INDIRECT ele reserva a posicao e copia `Args`.
 struct GpuClassifyResult {
-    uint Outcome;
-    uint MaterialId;    // valido so sob SMILE_CLASSIFY_INDIRECT
-    uint MeshId;        // idem
-    uint PipelineClass; // idem
-    uint GeometryPoolId;// idem
+    uint                Outcome;
+    uint                Batch; // indice denso do lote; valido so sob INDIRECT
+    GpuIndirectDrawArgs Args;  // o comando; valido so sob INDIRECT
 };
 
 // Indice denso do lote. CLASS-MAJOR, espelhando GpuBatchIndex do C++.
@@ -59,11 +62,17 @@ uint GpuBatchIndexFor(uint _PipelineClass, uint _GeometryPoolId, uint _PoolCount
 GpuClassifyResult GpuClassifyOne(uint _Slot, uint _MetaCount, uint _MaterialCount,
                                  uint _MeshCount, uint _PoolCount) {
     GpuClassifyResult R;
-    R.Outcome        = SMILE_CLASSIFY_INDIRECT;
-    R.MaterialId     = 0u;
-    R.MeshId         = 0u;
-    R.PipelineClass  = 0u;
-    R.GeometryPoolId = 0u;
+    R.Outcome = SMILE_CLASSIFY_INDIRECT;
+    R.Batch   = 0u;
+    // Zerado por inteiro antes de qualquer saida antecipada. So e lido sob INDIRECT, mas um campo
+    // nao inicializado numa struct HLSL e indefinido, e indefinido nao aparece em teste nenhum.
+    R.Args.MaterialRow           = 0u;
+    R.Args.InstanceSlot          = 0u;
+    R.Args.IndexCountPerInstance = 0u;
+    R.Args.InstanceCount         = 0u;
+    R.Args.StartIndexLocation    = 0u;
+    R.Args.BaseVertexLocation    = 0;
+    R.Args.StartInstanceLocation = 0u;
 
     if (_Slot == SMILE_CLASSIFY_NO_SLOT_ID) { R.Outcome = SMILE_CLASSIFY_NO_SLOT;      return R; }
     if (_Slot >= _MetaCount)                { R.Outcome = SMILE_CLASSIFY_INVALID_SLOT; return R; }
@@ -106,10 +115,18 @@ GpuClassifyResult GpuClassifyOne(uint _Slot, uint _MetaCount, uint _MaterialCoun
         return R;
     }
 
-    R.MaterialId     = Meta.MaterialId;
-    R.MeshId         = Meta.MeshId;
-    R.PipelineClass  = Material.PipelineClass;
-    R.GeometryPoolId = Mesh.GeometryPoolId;
+    // O comando, campo a campo. Cada fonte e a UNICA possivel: a linha de material e o id que a meta
+    // aponta, o slot e o proprio candidato, e os tres numeros de geometria vem da linha de malha —
+    // cujos offsets ja foram garantidos representaveis e cuja contagem ja foi garantida inteira pela
+    // mascara que a porta acabou de consultar.
+    R.Batch = GpuBatchIndexFor(Material.PipelineClass, Mesh.GeometryPoolId, _PoolCount);
+    R.Args.MaterialRow           = Meta.MaterialId;
+    R.Args.InstanceSlot          = _Slot;
+    R.Args.IndexCountPerInstance = Mesh.IndexCount;
+    R.Args.InstanceCount         = 1u;
+    R.Args.StartIndexLocation    = Mesh.IndexOffset;
+    R.Args.BaseVertexLocation    = Mesh.VertexOffset;
+    R.Args.StartInstanceLocation = 0u;
     return R;
 }
 

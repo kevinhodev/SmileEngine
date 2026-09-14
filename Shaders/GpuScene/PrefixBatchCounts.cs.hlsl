@@ -20,15 +20,7 @@
 // aqui mesmo: ele le um uint32 em `CountBufferOffset`, entao o lote b usa `b * 4`. Ligar o draw no
 // `BatchCounts` faria o command processor executar comandos velhos sempre que o prefixo estourasse.
 
-// Indices dos contadores, espelhando EGpuPrefixCounter.
-#define SMILE_PREFIX_TOTAL    0u
-#define SMILE_PREFIX_OVERFLOW 1u
-#define SMILE_PREFIX_COUNT    2u
-
-// Offset gravado em toda entrada que o prefixo nao conseguiu calcular. Espelha
-// kGpuBatchOffsetPoison. Nao e zero: zero e o offset legitimo do primeiro lote, e um consumidor que
-// ignorasse a flag escreveria os comandos de um lote por cima dos do lote 0.
-#define SMILE_BATCH_OFFSET_POISON 0xFFFFFFFFu
+#include "GpuBatchCounters.hlsli"
 
 cbuffer PrefixCB : register(b0) {
     uint4 PrefixParams; // x = slots de BatchCounts; yzw reservados

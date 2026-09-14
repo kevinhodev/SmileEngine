@@ -193,6 +193,7 @@ smile_compile_shader(Scene/GpuSceneTablesProbe.cs.hlsl cs_6_0 main SHADER_OUTPUT
 # indexado -- os buffers chegam por descriptor table, como o dispatch de HZB.
 smile_compile_shader(GpuScene/ClassifyCandidates.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GpuScene/PrefixBatchCounts.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
+smile_compile_shader(GpuScene/ScatterIndirectArgs.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(GpuScene/ExpandInstanceRanges.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 
 # AO (GTAO) — oclusao de contato em screen-space (so depth), aplicada no termo indireto

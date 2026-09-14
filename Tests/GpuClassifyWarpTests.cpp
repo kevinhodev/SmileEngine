@@ -137,6 +137,14 @@ namespace {
         H[2].GeometryPoolId = 0u;
         H[2].Flags          = GpuMeshOffsetsUnrepresentable;
         H[3].GeometryPoolId = 7u; // fora da lista publicada: kPoolCount e 2
+        // Geometria DISTINTA por malha e entre campos, para o scatter. Com tudo em zero, trocar
+        // `IndexCountPerInstance` por `StartIndexLocation` no comando continuaria dando zero dos
+        // dois lados. As contagens sao multiplas de 3 porque a tabela real marcaria as outras.
+        for (u32 I = 0; I < 4u; ++I) {
+            H[I].IndexCount   = 30u * (I + 1u);
+            H[I].IndexOffset  = 100u * (I + 1u) + 7u;
+            H[I].VertexOffset = static_cast<i32>(1000u * (I + 1u) + 13u);
+        }
         return H;
     }
 
@@ -257,7 +265,7 @@ namespace {
             GpuClassifyInvalidSlot,       // 13: slot fora da tabela
         };
         for (u32 I = 0; I < 14u; ++I) {
-            FGpuBatchKey Key{};
+            FGpuClassifyCommand Key{};
             const u32 Got = GpuClassifyCandidate(S[I], Metas, Mats, Meshs, kPoolCount, Key);
             Check(Got == kEsperado[I],
                   std::string("candidato ") + std::to_string(I) + ": desfecho " +
@@ -332,7 +340,7 @@ namespace {
     void TestarParticoes() {
         const auto Mats = Materiais(); const auto Meshs = Malhas();
 
-        FGpuBatchKey K{};
+        FGpuClassifyCommand K{};
         FGpuSceneInstanceMeta Masked{};
         Masked.Generation = 1u; Masked.MaterialId = 2u; Masked.MeshId = 3u;
         FGpuSceneInstanceMeta Opaco{};
@@ -356,7 +364,7 @@ namespace {
         const auto Metas = Meta(); const auto S = Slots();
         u32 Expostos = 0, Incognitos = 0;
         for (const u32 Slot : S) {
-            FGpuBatchKey Key{};
+            FGpuClassifyCommand Key{};
             const u32 O = GpuClassifyCandidate(Slot, Metas, Mats, Meshs, kPoolCount, Key);
             // Politica: alguem desenha, e nao ha exposicao.
             if (O == GpuClassifyIndirect || O == GpuClassifyNotEligible ||
@@ -467,6 +475,134 @@ namespace {
         ClassifyCandidates(In, Lotes, Cont);
         CheckEq(Cont[GpuClassifyOverflow], 0u, "preflight aprovado: overflow inalcancavel");
     }
+
+    // ---- o COMANDO que a classificacao produz --------------------------------------------------
+    //
+    // Cada campo tem UMA fonte possivel, e o oraculo e a propria linha de origem — nao a funcao rodada
+    // de novo. A malha do teste tem geometria distinta entre si e entre campos, entao uma troca de
+    // dois campos no comando nao tem como bater por coincidencia.
+    void TestarComando() {
+        const auto Mats = Materiais(); const auto Meshs = Malhas();
+        const auto Metas = Meta();
+
+        // Slot 1: material 0, malha 1 (pool 1).
+        FGpuClassifyCommand C{};
+        CheckEq(GpuClassifyCandidate(1u, Metas, Mats, Meshs, kPoolCount, C), GpuClassifyIndirect,
+                "o slot 1 e indireto");
+        CheckEq(C.Batch, GpuBatchIndex({ GpuPipelineClassOpaqueOneSided, 1u }, kPoolCount),
+                "lote = classe 0, pool 1");
+        CheckEq(C.Args.MaterialRow, Metas[1].MaterialId, "MaterialRow vem do MaterialId da meta");
+        CheckEq(C.Args.InstanceSlot, 1u, "InstanceSlot e o proprio slot do candidato");
+        CheckEq(C.Args.IndexCountPerInstance, Meshs[1].IndexCount, "contagem vem da malha");
+        CheckEq(C.Args.InstanceCount, 1u, "uma instancia por comando");
+        CheckEq(C.Args.StartIndexLocation, Meshs[1].IndexOffset, "inicio do indice vem da malha");
+        Check(C.Args.BaseVertexLocation == Meshs[1].VertexOffset, "base do vertice vem da malha");
+        CheckEq(C.Args.StartInstanceLocation, 0u, "StartInstanceLocation fica em zero");
+
+        // Recusa nao escreve o comando: um candidato recusado nao pode deixar argumento plausivel.
+        FGpuClassifyCommand R{};
+        R.Batch = 0xABCDu;
+        R.Args.IndexCountPerInstance = 0xABCDu;
+        CheckEq(GpuClassifyCandidate(3u, Metas, Mats, Meshs, kPoolCount, R),
+                GpuClassifyNotEligible, "o slot 3 e recusado");
+        CheckEq(R.Batch, 0xABCDu, "e a recusa nao toca no lote");
+        CheckEq(R.Args.IndexCountPerInstance, 0xABCDu, "nem no comando");
+    }
+
+    // ---- ferramentas do scatter ----------------------------------------------------------------
+
+    // O comando POISON que semeia `IndirectArgs`. Todo campo em 0xA5A5A5A5: nenhum comando real da
+    // cena do teste tem esse valor em campo nenhum, entao uma posicao que o scatter deixou de escrever
+    // aparece como poison, e nunca como um comando plausivel.
+    FGpuIndirectDrawArgs ComandoPoison() {
+        FGpuIndirectDrawArgs P{};
+        P.MaterialRow = P.InstanceSlot = P.IndexCountPerInstance = P.InstanceCount = 0xA5A5A5A5u;
+        P.StartIndexLocation = P.StartInstanceLocation = 0xA5A5A5A5u;
+        P.BaseVertexLocation = static_cast<i32>(0xA5A5A5A5u);
+        return P;
+    }
+
+    bool MesmoComando(const FGpuIndirectDrawArgs& A, const FGpuIndirectDrawArgs& B) {
+        return std::memcmp(&A, &B, sizeof(FGpuIndirectDrawArgs)) == 0;
+    }
+
+    // Ordena um trecho de comandos pelos BYTES. Serve so para comparar multiconjuntos: a ordem dentro
+    // de um lote nao tem significado, e ordenar os dois lados pelo mesmo criterio a elimina.
+    std::vector<FGpuIndirectDrawArgs> Ordenados(const FGpuIndirectDrawArgs* _Inicio, u32 _N) {
+        std::vector<FGpuIndirectDrawArgs> V(_Inicio, _Inicio + _N);
+        std::sort(V.begin(), V.end(), [](const FGpuIndirectDrawArgs& A, const FGpuIndirectDrawArgs& B) {
+            return std::memcmp(&A, &B, sizeof(FGpuIndirectDrawArgs)) < 0;
+        });
+        return V;
+    }
+
+    // O comando esperado, escrito A MAO a partir da cena do teste — e nao pela funcao que produz o
+    // comando, que e o que esta sob teste.
+    FGpuIndirectDrawArgs Esperado(u32 _Slot, u32 _Malha) {
+        FGpuIndirectDrawArgs E{};
+        E.MaterialRow           = 0u;     // os tres candidatos indiretos usam o material 0
+        E.InstanceSlot          = _Slot;
+        E.IndexCountPerInstance = 30u * (_Malha + 1u);
+        E.InstanceCount         = 1u;
+        E.StartIndexLocation    = 100u * (_Malha + 1u) + 7u;
+        E.BaseVertexLocation    = static_cast<i32>(1000u * (_Malha + 1u) + 13u);
+        E.StartInstanceLocation = 0u;
+        return E;
+    }
+
+    // ---- parte CPU pura: dimensionamento, preflight e a referencia do scatter ----------------
+    void TestarScatterCpu() {
+        // Bytes em u64. Em u32, 153.391.690 comandos ja dariam a volta.
+        CheckEq64(GpuScatterArgsBytes(14u), 14ull * 28ull, "14 comandos, 28 B cada");
+        CheckEq64(GpuScatterArgsBytes(0u), 28ull, "zero comandos ainda aloca um: recurso vazio e ilegal");
+        CheckEq64(GpuScatterArgsBytes(0xFFFFFFFFu), 0xFFFFFFFFull * 28ull,
+                  "o maior u32 de comandos nao da a volta nos bytes");
+
+        CheckEq(GpuScatterPreflight(14u, 14u), GpuScatterPreflightOk, "capacidade exata passa");
+        CheckEq(GpuScatterPreflight(14u, 13u), GpuScatterPreflightSmallArgsBuffer,
+                "um comando a menos reprova");
+        CheckEq(GpuScatterPreflight(0u, 0u), GpuScatterPreflightOk, "cena vazia passa");
+
+        // A referencia, sobre a cena do teste, com os offsets que o prefixo produz.
+        const auto Mats = Materiais(); const auto Meshs = Malhas();
+        const auto Metas = Meta();     const auto S = Slots();
+        FGpuClassifyInput In{};
+        In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
+        In.PoolCount = kPoolCount;
+        In.BatchCapacity = CapacidadeDeLote(kPoolCount);
+
+        std::vector<u32> Lotes, ContClassify;
+        ClassifyCandidates(In, Lotes, ContClassify);
+        std::vector<u32> Offsets, Draw; u32 Estourou = 0u;
+        const u32 Total = PrefixBatchCounts(Lotes, Offsets, Draw, Estourou);
+
+        const u32 Capacidade = static_cast<u32>(S.size());
+        std::vector<FGpuIndirectDrawArgs> Args(Capacidade, ComandoPoison());
+        std::vector<u32> Cont;
+        ScatterIndirectArgs(In, Offsets, Estourou, Args, Cont);
+
+        // A contagem e a emissao olham o mesmo fato. Um scatter que recusasse alguem que o classify
+        // contou apareceria AQUI, antes de virar comando velho no ExecuteIndirect.
+        CheckEq(Cont[GpuScatterCounterEmitted], ContClassify[GpuClassifyIndirect],
+                "o scatter emite exatamente o que o classify contou");
+        CheckEq(Cont[GpuScatterCounterSuppressed], 0u, "sem estouro, nada suprimido");
+        CheckEq(Cont[GpuScatterCounterOverflow], 0u, "preflight aprovado: sem overflow");
+
+        // Lote 0 (pool 0): slots 0 e 2, os dois na malha 0. Lote 1 (pool 1): slot 1, malha 1.
+        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
+        const auto Got0 = Ordenados(&Args[Offsets[0]], Lotes[0]);
+        const auto Want0 = Ordenados(L0, 2u);
+        Check(Lotes[0] == 2u && Got0.size() == 2 && MesmoComando(Got0[0], Want0[0]) &&
+              MesmoComando(Got0[1], Want0[1]), "lote 0: o multiconjunto exato de comandos");
+        Check(Lotes[1] == 1u && MesmoComando(Args[Offsets[1]], Esperado(1u, 1u)),
+              "lote 1: o comando exato");
+
+        // RESIDUO: toda posicao a partir do total continua poison. Um scatter que escrevesse uma
+        // posicao a frente (cursor pos-incremento, por exemplo) sujaria a primeira delas.
+        for (u32 P = Total; P < Capacidade; ++P)
+            Check(MesmoComando(Args[P], ComandoPoison()),
+                  "posicao " + std::to_string(P) + " fora dos lotes continua poison");
+    }
 }
 
 namespace {
@@ -486,8 +622,10 @@ namespace {
         wrl::ComPtr<ID3D12CommandQueue>  Queue;
         wrl::ComPtr<ID3D12RootSignature> Root;
         wrl::ComPtr<ID3D12RootSignature> RootPrefixo;
+        wrl::ComPtr<ID3D12RootSignature> RootScatter;
         wrl::ComPtr<ID3D12PipelineState> Pipeline;
         wrl::ComPtr<ID3D12PipelineState> PipelinePrefixo;
+        wrl::ComPtr<ID3D12PipelineState> PipelineScatter;
         wrl::ComPtr<ID3D12Fence>         Fence;
         wrl::ComPtr<ID3D12InfoQueue>     Info;
         u64  FenceValue = 0;
@@ -546,7 +684,8 @@ namespace {
             Info->ClearStoredMessages();
         }
 
-        void Construir(const std::vector<u8>& _Bytecode, const std::vector<u8>& _Prefixo) {
+        void Construir(const std::vector<u8>& _Bytecode, const std::vector<u8>& _Prefixo,
+                       const std::vector<u8>& _Scatter) {
             wrl::ComPtr<ID3D12Debug> Debug;
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&Debug)))) Debug->EnableDebugLayer();
 
@@ -616,6 +755,35 @@ namespace {
             PSOP.CS             = { _Prefixo.data(), _Prefixo.size() };
             Hr(Device->CreateComputePipelineState(&PSOP, IID_PPV_ARGS(&PipelinePrefixo)),
                "CreateComputePipelineState (prefixo)");
+
+            // O scatter: seis SRVs (slots + tres tabelas + offsets + contadores do prefixo) e tres
+            // UAVs (argumentos, cursores, contadores).
+            D3D12_DESCRIPTOR_RANGE RangesS[2]{};
+            RangesS[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            RangesS[0].NumDescriptors = 6;
+            RangesS[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+            RangesS[1].NumDescriptors = 3;
+            D3D12_ROOT_PARAMETER ParamsS[3]{};
+            ParamsS[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            for (int I = 0; I < 2; ++I) {
+                ParamsS[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                ParamsS[I + 1].DescriptorTable.NumDescriptorRanges = 1;
+                ParamsS[I + 1].DescriptorTable.pDescriptorRanges   = &RangesS[I];
+            }
+            D3D12_ROOT_SIGNATURE_DESC SigDescS{};
+            SigDescS.NumParameters = 3;
+            SigDescS.pParameters   = ParamsS;
+            wrl::ComPtr<ID3DBlob> SerialS, ErroS;
+            Hr(D3D12SerializeRootSignature(&SigDescS, D3D_ROOT_SIGNATURE_VERSION_1, &SerialS,
+                                           &ErroS), "SerializeRootSignature (scatter)");
+            Hr(Device->CreateRootSignature(0, SerialS->GetBufferPointer(), SerialS->GetBufferSize(),
+                                           IID_PPV_ARGS(&RootScatter)),
+               "CreateRootSignature (scatter)");
+            D3D12_COMPUTE_PIPELINE_STATE_DESC PSOS{};
+            PSOS.pRootSignature = RootScatter.Get();
+            PSOS.CS             = { _Scatter.data(), _Scatter.size() };
+            Hr(Device->CreateComputePipelineState(&PSOS, IID_PPV_ARGS(&PipelineScatter)),
+               "CreateComputePipelineState (scatter)");
 
             D3D12_COMMAND_QUEUE_DESC QD{};
             Hr(Device->CreateCommandQueue(&QD, IID_PPV_ARGS(&Queue)), "CreateCommandQueue");
@@ -796,6 +964,184 @@ namespace {
                    "Map draw counts isolados");
                 std::memcpy(Saida.DrawCounts.data(), P, Slots * sizeof(u32));
                 LeituraDraw->Unmap(0, nullptr);
+            }
+            return Saida;
+        }
+
+        struct FScatter {
+            std::vector<FGpuIndirectDrawArgs> Args;
+            std::vector<u32>                  Contadores;
+        };
+
+        // O scatter ISOLADO, com offsets e flag do prefixo fornecidos pelo teste.
+        //
+        // Isolado porque so assim da para forcar `PrefixOverflow = 1` sobre contagens validas — o
+        // fluxo encadeado nunca estoura. `IndirectArgs` nasce com o comando POISON em toda posicao:
+        // uma posicao que o scatter deixou de escrever aparece como poison, e uma escrita fora do
+        // lote suja uma posicao que devia continuar poison.
+        FScatter ExecutarScatter(const FGpuClassifyInput& _In, std::span<const u32> _Offsets,
+                                 u32 _PrefixOverflow, u32 _ArgsCapacity) {
+            auto Pisa = [](u64 _Bytes, u64 _Stride) { return std::max<u64>(_Stride, _Bytes); };
+            auto BufSlots = Upload(_In.Slots.data(), Pisa(_In.Slots.size() * 4u, 4u));
+            auto BufMeta  = Upload(_In.Meta.data(),
+                                   Pisa(_In.Meta.size() * sizeof(FGpuSceneInstanceMeta),
+                                        sizeof(FGpuSceneInstanceMeta)));
+            auto BufMats  = Upload(_In.Materials.data(),
+                                   Pisa(_In.Materials.size() * sizeof(FGpuMaterialRecord),
+                                        sizeof(FGpuMaterialRecord)));
+            auto BufMesh  = Upload(_In.Meshes.data(),
+                                   Pisa(_In.Meshes.size() * sizeof(FGpuMeshRecord),
+                                        sizeof(FGpuMeshRecord)));
+            auto BufOff   = Upload(_Offsets.data(), Pisa(_Offsets.size() * 4u, 4u));
+            const u32 PrefCont[GpuPrefixCounterCount]{ 0u, _PrefixOverflow };
+            auto BufPref  = Upload(PrefCont, sizeof(PrefCont));
+
+            // Pela porta de dimensionamento, e nunca `_ArgsCapacity * 28` em u32.
+            const u64 ArgsBytes = GpuScatterArgsBytes(_ArgsCapacity);
+            const u64 ContBytes = GpuScatterCounterCount * sizeof(u32);
+            const u64 CurBytes  = Pisa(_Offsets.size() * 4u, 4u);
+            auto BufArgs = Buffer(D3D12_HEAP_TYPE_DEFAULT, ArgsBytes, true,
+                                  D3D12_RESOURCE_STATE_COMMON);
+            auto BufCur  = Buffer(D3D12_HEAP_TYPE_DEFAULT, CurBytes, true,
+                                  D3D12_RESOURCE_STATE_COMMON);
+            auto BufCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, ContBytes, true,
+                                  D3D12_RESOURCE_STATE_COMMON);
+
+            const u32 NCmd = static_cast<u32>(ArgsBytes / sizeof(FGpuIndirectDrawArgs));
+            const std::vector<FGpuIndirectDrawArgs> Semente(NCmd, ComandoPoison());
+            auto BufSemArgs = Upload(Semente.data(), ArgsBytes);
+            const std::vector<u32> ZerosCur(static_cast<size_t>(CurBytes / 4), 0u);
+            const u32 ZerosCont[GpuScatterCounterCount]{};
+            auto BufZerosCur  = Upload(ZerosCur.data(), CurBytes);
+            auto BufZerosCont = Upload(ZerosCont, ContBytes);
+
+            auto LeituraArgs = Buffer(D3D12_HEAP_TYPE_READBACK, ArgsBytes, false,
+                                      D3D12_RESOURCE_STATE_COPY_DEST);
+            auto LeituraCont = Buffer(D3D12_HEAP_TYPE_READBACK, ContBytes, false,
+                                      D3D12_RESOURCE_STATE_COPY_DEST);
+
+            wrl::ComPtr<ID3D12DescriptorHeap> Heap;
+            D3D12_DESCRIPTOR_HEAP_DESC HD{};
+            HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            HD.NumDescriptors = 9;
+            HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
+            auto CpuAt = [&](UINT I) {
+                auto H = Heap->GetCPUDescriptorHandleForHeapStart();
+                H.ptr += static_cast<SIZE_T>(I) * Step;
+                return H;
+            };
+            auto SRV = [&](ID3D12Resource* R, u64 N, u32 Stride, UINT Slot) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC D{};
+                D.Format                     = DXGI_FORMAT_UNKNOWN;
+                D.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                D.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+                D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(N));
+                D.Buffer.StructureByteStride = Stride;
+                Device->CreateShaderResourceView(R, &D, CpuAt(Slot));
+            };
+            auto UAV = [&](ID3D12Resource* R, u32 N, u32 Stride, UINT Slot) {
+                D3D12_UNORDERED_ACCESS_VIEW_DESC D{};
+                D.Format                     = DXGI_FORMAT_UNKNOWN;
+                D.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+                D.Buffer.NumElements         = std::max(1u, N);
+                D.Buffer.StructureByteStride = Stride;
+                Device->CreateUnorderedAccessView(R, nullptr, &D, CpuAt(Slot));
+            };
+            SRV(BufSlots.Get(), _In.Slots.size(), sizeof(u32), 0);
+            SRV(BufMeta.Get(), _In.Meta.size(), sizeof(FGpuSceneInstanceMeta), 1);
+            SRV(BufMats.Get(), _In.Materials.size(), sizeof(FGpuMaterialRecord), 2);
+            SRV(BufMesh.Get(), _In.Meshes.size(), sizeof(FGpuMeshRecord), 3);
+            SRV(BufOff.Get(), _Offsets.size(), sizeof(u32), 4);
+            SRV(BufPref.Get(), GpuPrefixCounterCount, sizeof(u32), 5);
+            UAV(BufArgs.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), 6);
+            UAV(BufCur.Get(), static_cast<u32>(CurBytes / 4), sizeof(u32), 7);
+            UAV(BufCont.Get(), GpuScatterCounterCount, sizeof(u32), 8);
+
+            alignas(16) u8 CB[256]{};
+            const u32 P8[8]{ static_cast<u32>(_In.Slots.size()), static_cast<u32>(_In.Meta.size()),
+                             static_cast<u32>(_In.Materials.size()),
+                             static_cast<u32>(_In.Meshes.size()), _In.PoolCount, NCmd, 0u, 0u };
+            std::memcpy(CB, P8, sizeof(P8));
+            auto BufCB = Upload(CB, sizeof(CB));
+
+            wrl::ComPtr<ID3D12CommandAllocator>    Allocator;
+            wrl::ComPtr<ID3D12GraphicsCommandList> List;
+            Hr(Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              IID_PPV_ARGS(&Allocator)), "CreateCommandAllocator");
+            Hr(Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Allocator.Get(),
+                                         PipelineScatter.Get(), IID_PPV_ARGS(&List)),
+               "CreateCommandList (scatter)");
+            auto Transicao = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES A,
+                                 D3D12_RESOURCE_STATES B) {
+                D3D12_RESOURCE_BARRIER Bar{};
+                Bar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                Bar.Transition.pResource   = R;
+                Bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                Bar.Transition.StateBefore = A;
+                Bar.Transition.StateAfter  = B;
+                List->ResourceBarrier(1, &Bar);
+            };
+            List->CopyBufferRegion(BufArgs.Get(), 0, BufSemArgs.Get(), 0, ArgsBytes);
+            List->CopyBufferRegion(BufCur.Get(), 0, BufZerosCur.Get(), 0, CurBytes);
+            List->CopyBufferRegion(BufCont.Get(), 0, BufZerosCont.Get(), 0, ContBytes);
+            for (ID3D12Resource* R : { BufArgs.Get(), BufCur.Get(), BufCont.Get() })
+                Transicao(R, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
+            List->SetDescriptorHeaps(1, Heaps);
+            List->SetComputeRootSignature(RootScatter.Get());
+            List->SetComputeRootConstantBufferView(0, BufCB->GetGPUVirtualAddress());
+            auto GpuAt = [&](UINT I) {
+                auto H = Heap->GetGPUDescriptorHandleForHeapStart();
+                H.ptr += static_cast<UINT64>(I) * Step;
+                return H;
+            };
+            List->SetComputeRootDescriptorTable(1, GpuAt(0));
+            List->SetComputeRootDescriptorTable(2, GpuAt(6));
+            const u32 Total = static_cast<u32>(_In.Slots.size());
+            if (Total > 0) List->Dispatch((Total + 63u) / 64u, 1, 1);
+
+            Transicao(BufArgs.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_STATE_COPY_SOURCE);
+            List->CopyResource(LeituraArgs.Get(), BufArgs.Get());
+            List->CopyResource(LeituraCont.Get(), BufCont.Get());
+            Hr(List->Close(), "Close (scatter)");
+
+            ID3D12CommandList* Listas[] = { List.Get() };
+            Queue->ExecuteCommandLists(1, Listas);
+            ++FenceValue;
+            Hr(Queue->Signal(Fence.Get(), FenceValue), "Signal (scatter)");
+            if (Fence->GetCompletedValue() < FenceValue) {
+                struct FEvent {
+                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                    ~FEvent() { if (Value) CloseHandle(Value); }
+                } Evento;
+                if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
+                Hr(Fence->SetEventOnCompletion(FenceValue, Evento.Value), "SetEventOnCompletion");
+                if (WaitForSingleObject(Evento.Value, 30000) != WAIT_OBJECT_0)
+                    throw std::runtime_error("dispatch de scatter nao terminou");
+            }
+            Drenar("scatter");
+
+            FScatter Saida;
+            Saida.Args.resize(NCmd);
+            Saida.Contadores.resize(GpuScatterCounterCount);
+            {
+                const u8* P = nullptr;
+                Hr(LeituraArgs->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u8**>(&P))),
+                   "Map args");
+                std::memcpy(Saida.Args.data(), P, static_cast<size_t>(ArgsBytes));
+                LeituraArgs->Unmap(0, nullptr);
+            }
+            {
+                const u32* P = nullptr;
+                Hr(LeituraCont->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
+                   "Map cont scatter");
+                std::memcpy(Saida.Contadores.data(), P, static_cast<size_t>(ContBytes));
+                LeituraCont->Unmap(0, nullptr);
             }
             return Saida;
         }
@@ -1078,6 +1424,8 @@ int main() try {
     TestarUmResultadoPorCandidato();
     TestarParticoes();
     TestarPreflight();
+    TestarComando();
+    TestarScatterCpu();
 
     const std::vector<u8> Bytecode = LerArquivo(SMILE_CLASSIFY_CANDIDATES_CSO);
     Check(!Bytecode.empty(), "a sonda compilada foi encontrada");
@@ -1091,9 +1439,15 @@ int main() try {
         std::cerr << "  (esperado em " << SMILE_PREFIX_BATCH_COUNTS_CSO << ")\n";
         return 1;
     }
+    const std::vector<u8> BytecodeScatter = LerArquivo(SMILE_SCATTER_INDIRECT_ARGS_CSO);
+    Check(!BytecodeScatter.empty(), "a sonda do scatter foi encontrada");
+    if (BytecodeScatter.empty()) {
+        std::cerr << "  (esperado em " << SMILE_SCATTER_INDIRECT_ARGS_CSO << ")\n";
+        return 1;
+    }
 
     FSonda S;
-    S.Construir(Bytecode, BytecodePrefixo);
+    S.Construir(Bytecode, BytecodePrefixo, BytecodeScatter);
 
     const auto Mats = Materiais(); const auto Meshs = Malhas();
     const auto Metas = Meta();     const auto Slot = Slots();
@@ -1146,6 +1500,79 @@ int main() try {
             CheckEq(Gpu.Lotes[GpuBatchIndex({ C, P }, kPoolCount)], 0u,
                     "classe " + std::to_string(C) + " nao emite comando nesta fase");
 
+
+    // ---- SCATTER em WARP --------------------------------------------------------------------
+    //
+    // `IndirectArgs` nasce com o comando POISON em toda posicao. Duas coisas ficam visiveis assim:
+    // BURACO (posicao reservada que o scatter nao escreveu: poison dentro de um lote) e RESIDUO
+    // (escrita fora do lote: comando onde devia continuar poison). A comparacao dentro do lote e por
+    // MULTICONJUNTO, porque a ordem la depende de qual thread chega primeiro ao cursor.
+    {
+        std::vector<u32> OffCpu, DrawCpu; u32 EstCpu = 0u;
+        const u32 TotalCmd = PrefixBatchCounts(LotesCpu, OffCpu, DrawCpu, EstCpu);
+        const u32 Capacidade = static_cast<u32>(Slot.size());
+        CheckEq(GpuScatterPreflight(Capacidade, Capacidade), GpuScatterPreflightOk,
+                "a capacidade do teste passa pelo preflight do scatter");
+
+        const FSonda::FScatter G = S.ExecutarScatter(In, OffCpu, 0u, Capacidade);
+
+        CheckEq(G.Contadores[GpuScatterCounterEmitted], Gpu.Contadores[GpuClassifyIndirect],
+                "scatter na GPU emite exatamente o que o classify contou");
+        CheckEq(G.Contadores[GpuScatterCounterSuppressed], 0u, "sem estouro, nada suprimido");
+        CheckEq(G.Contadores[GpuScatterCounterOverflow], 0u, "preflight aprovado: sem overflow");
+
+        // Oraculo escrito A MAO: lote 0 = slots 0 e 2 na malha 0; lote 1 = slot 1 na malha 1.
+        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
+        const auto Got0  = Ordenados(&G.Args[OffCpu[0]], LotesCpu[0]);
+        const auto Want0 = Ordenados(L0, 2u);
+        Check(LotesCpu[0] == 2u && Got0.size() == 2 && MesmoComando(Got0[0], Want0[0]) &&
+              MesmoComando(Got0[1], Want0[1]),
+              "GPU, lote 0: o multiconjunto exato (dois comandos, ordem livre)");
+        Check(LotesCpu[1] == 1u && MesmoComando(G.Args[OffCpu[1]], Esperado(1u, 1u)),
+              "GPU, lote 1: o comando exato");
+
+        // Nenhum buraco: toda posicao reservada deixou de ser poison.
+        for (u32 P = 0; P < TotalCmd; ++P)
+            Check(!MesmoComando(G.Args[P], ComandoPoison()),
+                  "posicao reservada " + std::to_string(P) + " foi escrita (sem buraco)");
+        // Nenhum residuo: toda posicao a partir do total continua poison.
+        for (u32 P = TotalCmd; P < Capacidade; ++P)
+            Check(MesmoComando(G.Args[P], ComandoPoison()),
+                  "posicao " + std::to_string(P) + " fora dos lotes continua poison (sem residuo)");
+
+        // GPU x CPU, lote a lote como multiconjunto, e o residuo byte a byte. A referencia CPU recebe
+        // a MESMA semente, entao o que ficou intocado tambem tem de coincidir.
+        std::vector<FGpuIndirectDrawArgs> ArgsCpu(Capacidade, ComandoPoison());
+        std::vector<u32> ContScatterCpu;
+        ScatterIndirectArgs(In, OffCpu, 0u, ArgsCpu, ContScatterCpu);
+        for (u32 B = 0; B < In.BatchCapacity; ++B) {
+            if (LotesCpu[B] == 0u) continue;
+            const auto A = Ordenados(&G.Args[OffCpu[B]], LotesCpu[B]);
+            const auto C = Ordenados(&ArgsCpu[OffCpu[B]], LotesCpu[B]);
+            bool Iguais = A.size() == C.size();
+            for (size_t K = 0; Iguais && K < A.size(); ++K) Iguais = MesmoComando(A[K], C[K]);
+            Check(Iguais, "lote " + std::to_string(B) + ": multiconjunto GPU == CPU");
+        }
+        for (u32 P = TotalCmd; P < Capacidade; ++P)
+            Check(MesmoComando(G.Args[P], ArgsCpu[P]),
+                  "residuo na posicao " + std::to_string(P) + ": GPU == CPU");
+
+        // ---- estouro do prefixo: o scatter se ABSTEM por inteiro ----
+        //
+        // Com os offsets ENVENENADOS, como o prefixo os publica sob estouro. Nao e redundancia com
+        // passar offsets bons: e o caso do perigo real. Sem a abstencao, o cursor 1 do lote 0 cai em
+        // 0xFFFFFFFF + 1 = 0 e escreve em cima da primeira posicao — que aqui tem de continuar poison.
+        const std::vector<u32> OffPoison(OffCpu.size(), kGpuBatchOffsetPoison);
+        const FSonda::FScatter E = S.ExecutarScatter(In, OffPoison, 1u, Capacidade);
+        CheckEq(E.Contadores[GpuScatterCounterSuppressed], static_cast<u32>(Slot.size()),
+                "sob estouro, todo candidato e suprimido");
+        CheckEq(E.Contadores[GpuScatterCounterEmitted], 0u, "e nenhum comando e emitido");
+        CheckEq(E.Contadores[GpuScatterCounterOverflow], 0u,
+                "nem contado como overflow: a abstencao vem antes de qualquer posicao");
+        for (u32 P = 0; P < Capacidade; ++P)
+            Check(MesmoComando(E.Args[P], ComandoPoison()),
+                  "sob estouro a posicao " + std::to_string(P) + " continua poison");
+    }
 
     // O prefixo com `BatchCounts` SEMEADO, fora do fluxo encadeado.
     //

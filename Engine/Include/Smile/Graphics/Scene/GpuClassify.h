@@ -68,6 +68,7 @@
 // aquela slice; aqui ela seria encenacao.
 
 #include "Smile/Core/Types.h"
+#include "Smile/Graphics/Scene/GpuIndirectDraw.h"
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
 #include "Smile/Graphics/Scene/GpuSceneTables.h"
 
@@ -110,6 +111,16 @@ namespace Smile {
         u32 GeometryPoolId = 0;
     };
 
+    // O que um candidato INDIRETO produz: o lote e o COMANDO INTEIRO.
+    //
+    // O comando inteiro, e nao ids, pela mesma razao do espelho HLSL: com so `MeshId` na mao, o
+    // scatter precisaria reler a linha de malha para achar contagem e offsets, e essa leitura e
+    // exatamente onde uma recusa a mais caberia depois de o classify ja ter contado o candidato.
+    struct FGpuClassifyCommand {
+        u32                  Batch = 0;
+        FGpuIndirectDrawArgs Args{};
+    };
+
     // Indice denso do lote em BatchCounts. CLASS-MAJOR: os lotes de uma classe ficam contiguos, que
     // e a ordem em que os `ExecuteIndirect` de uma classe vao ler os argumentos.
     //
@@ -149,13 +160,15 @@ namespace Smile {
     // A ordem e slot -> meta -> ids -> linhas -> pool -> elegibilidade, e cada passo valida antes de
     // usar o resultado do anterior.
     //
-    // `_OutKey` so e escrita no desfecho `Indirect`.
+    // `_Out` so e escrito no desfecho `Indirect`, e ai sai COMPLETO: o lote e o comando inteiro.
+    // Espelha o `GpuClassifyOne` do GpuClassifyShared.hlsli, que devolve o mesmo par — a razao de ser
+    // o comando inteiro, e nao ids, esta escrita la.
     inline u32 GpuClassifyCandidate(u32 _Slot,
                                     std::span<const FGpuSceneInstanceMeta> _Meta,
                                     std::span<const FGpuMaterialRecord> _Materials,
                                     std::span<const FGpuMeshRecord> _Meshes,
                                     u32 _PoolCount,
-                                    FGpuBatchKey& _OutKey) {
+                                    FGpuClassifyCommand& _Out) {
         if (_Slot == kGpuExpandNoSlot) return GpuClassifyNoSlot;
         if (_Slot >= _Meta.size())     return GpuClassifyInvalidSlot;
 
@@ -186,8 +199,14 @@ namespace Smile {
                        : GpuClassifyNotEligible;
         }
 
-        _OutKey.PipelineClass  = Material.PipelineClass;
-        _OutKey.GeometryPoolId = Mesh.GeometryPoolId;
+        _Out.Batch = GpuBatchIndex({ Material.PipelineClass, Mesh.GeometryPoolId }, _PoolCount);
+        _Out.Args.MaterialRow           = Meta.MaterialId;
+        _Out.Args.InstanceSlot          = _Slot;
+        _Out.Args.IndexCountPerInstance = Mesh.IndexCount;
+        _Out.Args.InstanceCount         = 1u;
+        _Out.Args.StartIndexLocation    = Mesh.IndexOffset;
+        _Out.Args.BaseVertexLocation    = Mesh.VertexOffset;
+        _Out.Args.StartInstanceLocation = 0u;
         return GpuClassifyIndirect;
     }
 
@@ -352,4 +371,62 @@ namespace Smile {
     // Devolve quantos candidatos viraram comando (== OutCounters[GpuClassifyIndirect]).
     u32 ClassifyCandidates(const FGpuClassifyInput& Input, std::vector<u32>& OutBatchCounts,
                            std::vector<u32>& OutCounters);
+
+    // === Scatter ================================================================================
+    //
+    // Segunda passada: cada candidato INDIRECT recebe `BatchOffsets[lote] + cursor` e o comando que o
+    // `GpuClassifyCandidate` ja montou. Depois de `Indirect`, NENHUMA recusa — a contagem ja reservou
+    // a posicao, e uma recusa deixaria ali o comando do frame passado.
+    enum EGpuScatterCounter : u32 {
+        GpuScatterCounterEmitted    = 0, // comandos escritos
+        // Candidatos em que o scatter se ABSTEVE porque o prefixo nao fechou. Nao e o que suprime o
+        // draw (isso e o `DrawCounts` zerado); e o que impede escrever com offset envenenado, que em
+        // u32 da a volta: 0xFFFFFFFF + 1 = 0, em cima do primeiro comando do primeiro lote.
+        GpuScatterCounterSuppressed = 1,
+        // Posicao fora de `IndirectArgs`. CANARIO de alocacao, inalcancavel sob preflight aprovado.
+        GpuScatterCounterOverflow   = 2,
+        GpuScatterCounterCount      = 3,
+    };
+
+    // Bytes de `IndirectArgs` para `_Commands` comandos.
+    //
+    // Em u64, e nao por zelo: `_Commands * 28` em u32 da a volta a partir de ~153 milhoes de
+    // comandos, e o recurso seria alocado pequeno para a contagem que o shader recebe.
+    //
+    // Sem modo de falha, e isso e consequencia do tipo: a unica multiplicacao fica em u64, e a
+    // contagem de comandos ENTRA como u32 — nada aqui converte um produto de volta para u32. O piso de
+    // um comando e porque recurso de zero bytes e ilegal, e uma cena sem candidato ainda amarra a view.
+    inline u64 GpuScatterArgsBytes(u32 _Commands) {
+        const u32 Piso = _Commands == 0u ? 1u : _Commands;
+        return static_cast<u64>(Piso) * sizeof(FGpuIndirectDrawArgs);
+    }
+
+    enum EGpuScatterPreflight : u32 {
+        GpuScatterPreflightOk = 0,
+        // Capacidade de `IndirectArgs` abaixo do numero de candidatos. E a regra que torna o canario
+        // de overflow do shader inalcancavel: cada candidato escreve no MAXIMO um comando.
+        //
+        // Por candidatos, e nao pelo total real de comandos, porque o total so existe na GPU depois
+        // do classify, e le-lo seria readback. Custa 28 B por candidato — 28 MB na sintetica de 1M.
+        GpuScatterPreflightSmallArgsBuffer = 1,
+    };
+
+    inline u32 GpuScatterPreflight(u32 _CandidateCount, u32 _ArgsCapacity) {
+        return _ArgsCapacity >= _CandidateCount ? GpuScatterPreflightOk
+                                                : GpuScatterPreflightSmallArgsBuffer;
+    }
+
+    // Referencia CPU do scatter.
+    //
+    // `InOutArgs` vem DIMENSIONADO e SEMEADO pelo chamador, e so as posicoes emitidas sao escritas —
+    // exatamente como na GPU. E isso que permite ao teste semear os dois lados com o mesmo poison e
+    // comparar tambem o que ficou intocado: um buraco dentro de um lote aparece como poison dentro
+    // do intervalo, e um residuo fora dele aparece como comando onde deveria haver poison.
+    //
+    // A ORDEM dentro de um lote aqui e a dos candidatos; na GPU e a de chegada ao cursor, que nao e
+    // deterministica. Nada no draw depende dela (o lote inteiro compartilha PSO e pool), e por isso o
+    // teste compara cada intervalo como MULTICONJUNTO.
+    void ScatterIndirectArgs(const FGpuClassifyInput& Input, std::span<const u32> BatchOffsets,
+                             u32 PrefixOverflow, std::vector<FGpuIndirectDrawArgs>& InOutArgs,
+                             std::vector<u32>& OutCounters);
 }
