@@ -1,7 +1,8 @@
 // Classificacao e contagem por lote (Fase 5 do GPU-DRIVEN-PLAN, passo 4 da secao 6.2).
 //
-// Le `ExpandedSlots` (saida do ExpandInstanceRanges) e escreve `BatchCounts` + `Counters`. Esta
-// fatia so CONTA: o prefixo, a compactacao e a escrita dos argumentos vem depois.
+// Le `ExpandedSlots` (saida do ExpandInstanceRanges) e escreve `BatchCounts` + `Counters`. So CONTA:
+// quem escreve os argumentos e o scatter, dentro das regioes que a CPU reservou, e quem publica o
+// count buffer e a finalizacao.
 //
 // A DECISAO nao mora aqui: ela e o `GpuClassifyOne` do GpuClassifyShared.hlsli, que o scatter usa
 // tambem. A razao esta escrita la — a contagem reserva a posicao do comando, e o scatter que

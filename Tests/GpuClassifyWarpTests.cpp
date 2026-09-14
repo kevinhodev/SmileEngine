@@ -1,18 +1,25 @@
-// Classificacao e contagem por lote, executadas em WARP (Fase 5 do GPU-DRIVEN-PLAN).
+// Classificacao, regioes, scatter e finalizacao, executados em WARP (Fase 5 do GPU-DRIVEN-PLAN).
 //
 // O que este teste existe para impedir, em ordem de gravidade:
 //
-//  1. um candidato receber DOIS resultados de classificacao, ou nenhum. A contabilidade e o que
+//  1. um comando cair na REGIAO de outro lote. Cada `ExecuteIndirect` amarra o par VB/IB do pool do
+//     seu lote, e um comando fora da regiao certa desenha outra geometria sem erro de API nenhum;
+//  2. um candidato receber DOIS resultados de classificacao, ou nenhum. A contabilidade e o que
 //     permite auditar a fatia; ela NAO prova "desenhado exatamente uma vez" — ver a nota do
 //     GpuClassify.h sobre o que a soma prova e o que ela nao prova;
-//  2. a leitura de uma linha ANTES de validar o indice. Load fora do StructuredBuffer nao trava —
+//  3. a leitura de uma linha ANTES de validar o indice. Load fora do StructuredBuffer nao trava —
 //     o D3D12 devolve zero —, e zero e a linha do material default e a da malha ausente. O
 //     candidato passaria a desenhar algo PLAUSIVEL e errado;
-//  3. a porta do indireto ser partida em dois testes. So o predicado completo pode decidir; a
+//  4. a porta do indireto ser partida em dois testes. So o predicado completo pode decidir; a
 //     decomposicao existe para ATRIBUIR o motivo, e um dia em que ela decidisse mandaria a malha
 //     irrepresentavel para o command processor com offset poison;
-//  4. os indices dos desfechos divergirem entre C++ e HLSL. Sao dois espelhos de macros e nada os
+//  5. os indices dos desfechos divergirem entre C++ e HLSL. Sao dois espelhos de macros e nada os
 //     liga em tempo de compilacao; aqui os nove sao lidos de volta.
+//
+// As regioes que a GPU recebe saem SEMPRE das funcoes de producao, calculadas das TABELAS da cena. O
+// fixture nao fornece offset nenhum: ele so os confere contra um oraculo escrito a mao. As unicas
+// tabelas de regiao montadas a mao sao as dos cenarios de falha, e cada uma diz por que a producao
+// nao a produziria.
 //
 // O shader e o de PRODUCAO, compilado pelo MESMO DXC dos shaders do jogo. WARP nao exige placa.
 //
@@ -24,11 +31,14 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <d3d12.h>
@@ -60,8 +70,8 @@ namespace {
     }
 
 
-    // Versao u64 do CheckEq. Existe porque `GpuBatchSlotCount` devolve u64 de proposito: comparar o
-    // produto depois de espremer em u32 seria testar exatamente o bug que ele evita.
+    // Versao u64 do CheckEq. Existe porque `GpuBatchSlotCount` e as capacidades de regiao sao u64 de
+    // proposito: comparar depois de espremer em u32 seria testar exatamente o bug que eles evitam.
     void CheckEq64(u64 _Got, u64 _Want, std::string_view _Message) {
         if (_Got != _Want) {
             ++Failures;
@@ -115,7 +125,7 @@ namespace {
     //
     // Montada para que TODO desfecho seja alcancado por pelo menos um candidato, e para que dois
     // candidatos caiam no MESMO lote — sem isso, um shader que sobrescrevesse em vez de somar
-    // passaria.
+    // passaria. Os DOIS pools recebem comando: e o que obriga cada lote a ter a sua regiao.
     constexpr u32 kPoolCount = 2u;
 
     std::vector<FGpuMaterialRecord> Materiais() {
@@ -148,18 +158,29 @@ namespace {
         return H;
     }
 
-    // Doze linhas, uma por situacao. A generation e 1 em todas menos na ultima, que fica VAZIA.
+    // Dezessete linhas.
+    //
+    // As doze primeiras sao CANDIDATAS, uma por situacao. A generation e 1 em todas menos na 11, que
+    // fica VAZIA.
+    //
+    // As cinco ultimas sao instancias VIVAS que NAO estao na lista de candidatos — uma escondida, uma
+    // RaytracingOnly, e as demais como o culling da Fase 6 as deixaria de fora. Elas existem para dar
+    // FOLGA as regioes: a capacidade vem das tabelas, e a contagem, da lista. Sem folga, capacidade e
+    // contagem coincidiriam, e um offset tirado do prefixo das contagens passaria por este teste.
     std::vector<FGpuSceneInstanceMeta> Meta() {
-        std::vector<FGpuSceneInstanceMeta> M(12);
+        std::vector<FGpuSceneInstanceMeta> M(17);
         for (auto& R : M) { R.Generation = 1u; R.Flags = GpuSceneInstanceVisible; }
-        const u32 Mat[12]  = { 0, 0, 0, 1, 2, 3, 0,  1, 0, 99, 0,  0 };
-        const u32 Mesh[12] = { 0, 1, 0, 0, 0, 0, 2,  2, 3,  0, 99, 0 };
-        for (u32 I = 0; I < 12u; ++I) { M[I].MaterialId = Mat[I]; M[I].MeshId = Mesh[I]; }
-        M[11].Generation = 0u; // linha sem ocupante
+        const u32 Mat[17]  = { 0, 0, 0, 1, 2, 3, 0,  1, 0, 99, 0,  0,   0, 0, 0, 0, 1 };
+        const u32 Mesh[17] = { 0, 1, 0, 0, 0, 0, 2,  2, 3,  0, 99, 0,   0, 1, 1, 0, 1 };
+        for (u32 I = 0; I < 17u; ++I) { M[I].MaterialId = Mat[I]; M[I].MeshId = Mesh[I]; }
+        M[11].Generation = 0u;                             // linha sem ocupante
+        M[12].Flags      = 0u;                             // ESCONDIDA: viva, e fora da lista
+        M[14].Flags     |= GpuSceneInstanceRaytracingOnly; // exclusao permanente do raster
         return M;
     }
 
-    // Os catorze candidatos: as doze linhas, mais um buraco do expand e um slot fora da tabela.
+    // Os catorze candidatos: as doze primeiras linhas, mais um buraco do expand e um slot fora da
+    // tabela.
     std::vector<u32> Slots() {
         std::vector<u32> S;
         for (u32 I = 0; I < 12u; ++I) S.push_back(I);
@@ -195,45 +216,235 @@ namespace {
         CheckEq(Slots, 4294967292u, "com o total exato, ja em u32");
     }
 
-    // ---- parte CPU pura: o prefixo ------------------------------------------------------------
+    // ---- parte CPU pura: a CAPACIDADE das regioes ---------------------------------------------
     //
-    // Exclusivo: `Offsets[b]` e onde o lote b comeca, e o total e a soma. O oraculo e escrito a mao,
-    // e nao a propria funcao rodada de novo.
-    void TestarPrefixo() {
+    // Sai das TABELAS, e o oraculo e escrito a mao linha a linha. Cada exclusao tem uma linha propria
+    // na cena, entao um criterio que contasse a mais ou a menos muda um numero aqui.
+    //
+    // A segunda metade fixa DE QUE a capacidade e funcao: associacao, classe e pool a mudam;
+    // visibilidade nao. E o contrato que permite recalcula-la so quando uma daquelas tres muda.
+    void TestarCapacidades() {
+        const auto Mats  = Materiais(); const auto Meshs = Malhas();
+        const auto Metas = Meta();      const auto S     = Slots();
+
+        std::vector<u64> Cap;
+        CheckEq(GpuCountRegionCapacities(Metas, Mats, Meshs, kPoolCount, Cap),
+                GpuClassifyPreflightOk, "a cena do teste passa pela porta de lotes");
+        CheckEq(static_cast<u32>(Cap.size()), CapacidadeDeLote(kPoolCount),
+                "uma capacidade por slot de lote");
+        //   lote 0 (classe 0, pool 0): linhas 0 e 2 (candidatas), 12 (ESCONDIDA) e 15 (fora da lista)
+        //   lote 1 (classe 0, pool 1): linhas 1 (candidata) e 13 (fora da lista)
+        //   fora de tudo: 3-5 e 16 (classes 1..3), 6 e 7 (malha barrada), 8-10 (canarios), 11 (vazia)
+        //   e 14 (RaytracingOnly)
+        const u64 Querido[8]{ 4ull, 2ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull };
+        for (u32 B = 0; B < 8u && B < Cap.size(); ++B)
+            CheckEq64(Cap[B], Querido[B], "capacidade do lote " + std::to_string(B));
+
+        // NAO e a contagem do frame. Os mesmos lotes contam {2, 1} sobre a lista de candidatos; a
+        // diferenca sao as instancias vivas que nao estao nela — exatamente o que o culling da Fase 6
+        // vai produzir sem mexer nas regioes.
+        FGpuClassifyInput In{};
+        In.Slots = S; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
+        In.PoolCount = kPoolCount;
+        In.BatchCapacity = CapacidadeDeLote(kPoolCount);
+        std::vector<u32> Lotes, Cont;
+        ClassifyCandidates(In, Lotes, Cont);
+        CheckEq(Lotes[0], 2u, "os candidatos contam 2 no lote 0, contra capacidade 4");
+        CheckEq(Lotes[1], 1u, "e 1 no lote 1, contra capacidade 2");
+
+        auto CapDe = [](const std::vector<FGpuSceneInstanceMeta>& _M,
+                        const std::vector<FGpuMaterialRecord>& _Mat,
+                        const std::vector<FGpuMeshRecord>& _Mesh, u32 _Lote) {
+            std::vector<u64> C;
+            GpuCountRegionCapacities(_M, _Mat, _Mesh, kPoolCount, C);
+            return _Lote < C.size() ? C[_Lote] : ~0ull;
+        };
         {
-            const u32 Contagens[6]{ 2u, 0u, 5u, 1u, 0u, 3u };
-            const u32 Esperado[6]{ 0u, 2u, 2u, 7u, 8u, 8u };
-            std::vector<u32> Offsets; u32 Estourou = 0u;
-            const u32 Total = PrefixBatchCounts(Contagens, Offsets, Estourou);
-            CheckEq(Total, 11u, "o total e a soma das contagens");
-            CheckEq(Estourou, 0u, "e nao estourou");
-            Check(Offsets.size() == 6, "uma entrada por lote");
-            for (u32 I = 0; I < 6u; ++I)
-                CheckEq(Offsets[I], Esperado[I], "offset do lote " + std::to_string(I));
-            // Lotes VAZIOS nao consomem espaco: o offset do lote 2 e o mesmo do 1. Se o prefixo
-            // fosse inclusivo, cada lote apontaria para dentro do seguinte.
-            CheckEq(Offsets[1], Offsets[2], "lote vazio nao avanca o offset");
+            // VISIBILIDADE nao muda: mostrar a escondida e esconder uma candidata mantem o lote 0 em 4.
+            auto M = Metas;
+            M[12].Flags = GpuSceneInstanceVisible;
+            CheckEq64(CapDe(M, Mats, Meshs, 0u), 4ull, "mostrar a instancia escondida nao muda nada");
+            M[0].Flags = 0u;
+            CheckEq64(CapDe(M, Mats, Meshs, 0u), 4ull, "esconder uma candidata tambem nao");
         }
         {
-            // Lista vazia: nada a prefixar, total zero, sem tocar em nada.
-            std::vector<u32> Offsets{ 7u, 7u }; u32 Estourou = 1u;
-            CheckEq(PrefixBatchCounts({}, Offsets, Estourou), 0u, "lista vazia soma zero");
-            CheckEq(Estourou, 0u, "e nao marca estouro");
-            Check(Offsets.empty(), "e a saida fica vazia, e nao com o conteudo anterior");
+            // A flag RaytracingOnly e o que tira a linha 14: sem ela, o lote 1 ganha uma.
+            auto M = Metas;
+            M[14].Flags = GpuSceneInstanceVisible;
+            CheckEq64(CapDe(M, Mats, Meshs, 1u), 3ull, "sem RaytracingOnly a linha 14 conta");
         }
         {
-            // A volta em u32. Inalcancavel a partir do classify — cada candidato contribui no
-            // maximo 1 —, mas o shader nao sabe quem escreveu o buffer que ele soma. Um prefixo que
-            // da a volta aponta comandos para dentro dos comandos de outro lote.
-            const u32 Contagens[3]{ 0xFFFFFFF0u, 0x20u, 1u };
-            std::vector<u32> Offsets; u32 Estourou = 0u;
-            PrefixBatchCounts(Contagens, Offsets, Estourou);
-            CheckEq(Estourou, 1u, "a soma que daria a volta e marcada");
-            CheckEq(Offsets[0], 0u, "a entrada ANTERIOR ao estouro continua correta");
-            CheckEq(Offsets[1], kGpuBatchOffsetPoison, "a entrada que FALHOU recebe poison");
-            CheckEq(Offsets[2], kGpuBatchOffsetPoison, "e as seguintes tambem");
+            // ASSOCIACAO muda: a linha 13 trocando para a malha 0 passa do lote 1 para o lote 0.
+            auto M = Metas;
+            M[13].MeshId = 0u;
+            CheckEq64(CapDe(M, Mats, Meshs, 0u), 5ull, "associacao: a linha 13 entra no lote 0");
+            CheckEq64(CapDe(M, Mats, Meshs, 1u), 1ull, "e sai do lote 1");
+        }
+        {
+            // POOL muda: a malha 1 indo para o pool 0 leva o lote 1 inteiro junto.
+            auto H = Meshs;
+            H[1].GeometryPoolId = 0u;
+            CheckEq64(CapDe(Metas, Mats, H, 0u), 6ull, "pool: a malha 1 no pool 0 junta os dois lotes");
+            CheckEq64(CapDe(Metas, Mats, H, 1u), 0ull, "e o lote 1 fica vazio");
+        }
+        {
+            // CLASSE muda: o material 0 virando masked tira as seis instancias do indireto.
+            auto Mt = Mats;
+            MaterialConstants C{};
+            C.AlphaTest = 1u;
+            Mt[0] = FGpuMaterialRecord::FromParts(C, false, false, 0u);
+            CheckEq64(CapDe(Metas, Mt, Meshs, 0u), 0ull, "classe: material masked sai do lote 0");
+            CheckEq64(CapDe(Metas, Mt, Meshs, 1u), 0ull, "e do lote 1");
+        }
+        {
+            // A porta de lotes recusa sem escrever.
+            std::vector<u64> Sentinela{ 77ull };
+            CheckEq(GpuCountRegionCapacities(Metas, Mats, Meshs, 0u, Sentinela),
+                    GpuClassifyPreflightNoPools, "sem pool nao ha capacidade");
+            Check(Sentinela.size() == 1 && Sentinela[0] == 77ull, "e a recusa nao escreve a saida");
+            CheckEq(GpuCountRegionCapacities(Metas, Mats, Meshs,
+                                             UINT32_MAX / kGpuPipelineClassCount + 1u, Sentinela),
+                    GpuClassifyPreflightTooManyPools, "pools demais tambem recusam");
+            Check(Sentinela.size() == 1 && Sentinela[0] == 77ull, "e tambem nao escrevem");
         }
     }
+
+    // ---- parte CPU pura: o LAYOUT e a porta de u32 --------------------------------------------
+    //
+    // Regioes densas na ordem dos lotes. A soma corre em u64 e so vira u32 depois da porta; os casos
+    // de fronteira abaixo sao os que um layout somado em u32 aprovaria com regioes plausiveis.
+    void TestarLayout() {
+        auto Igual = [](const FGpuIndirectRegion& _R, u32 _Offset, u32 _Capacity) {
+            return _R.Offset == _Offset && _R.Capacity == _Capacity;
+        };
+        {
+            // O layout da cena do teste, com as capacidades que TestarCapacidades fixou.
+            const u64 Cap[8]{ 4ull, 2ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull };
+            std::vector<FGpuIndirectRegion> R;
+            u32 Total = 0xDEADBEEFu;
+            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutOk, "o layout da cena passa");
+            CheckEq(Total, 6u, "seis comandos no total");
+            Check(R.size() == 8, "uma regiao por slot de lote");
+            if (R.size() == 8) {
+                Check(Igual(R[0], 0u, 4u), "regiao 0 = [0, 4)");
+                Check(Igual(R[1], 4u, 2u), "regiao 1 = [4, 6): comeca DEPOIS da folga do lote 0");
+                for (u32 B = 2; B < 8u; ++B)
+                    Check(Igual(R[B], 6u, 0u),
+                          "regiao vazia " + std::to_string(B) + " fica no fim, sem espaco");
+            }
+        }
+        {
+            // Lotes VAZIOS entre cheios nao consomem espaco: o offset do vazio e o do seguinte.
+            const u64 Cap[5]{ 2ull, 0ull, 5ull, 0ull, 3ull };
+            const u32 Offsets[5]{ 0u, 2u, 2u, 7u, 7u };
+            std::vector<FGpuIndirectRegion> R;
+            u32 Total = 0u;
+            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutOk,
+                    "lotes vazios intercalados passam");
+            CheckEq(Total, 10u, "o total e a soma");
+            for (u32 B = 0; B < 5u && B < R.size(); ++B)
+                CheckEq(R[B].Offset, Offsets[B], "offset denso do lote " + std::to_string(B));
+        }
+        {
+            // A fronteira: soma EXATAMENTE UINT32_MAX passa, e as regioes saem certas.
+            const u64 Cap[2]{ 0xFFFFFFFEull, 1ull };
+            std::vector<FGpuIndirectRegion> R;
+            u32 Total = 0u;
+            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutOk, "soma igual a UINT32_MAX passa");
+            CheckEq(Total, 0xFFFFFFFFu, "com o total exato");
+            Check(R.size() == 2 && Igual(R[1], 0xFFFFFFFEu, 1u),
+                  "e a ultima regiao comeca no ultimo comando");
+        }
+        {
+            // Um acima recusa, e a recusa nao escreve nada.
+            const u64 Cap[2]{ 0xFFFFFFFFull, 1ull };
+            std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
+            u32 Total = 0xDEADBEEFu;
+            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutTooManyCommands,
+                    "um acima de UINT32_MAX recusa");
+            Check(R.size() == 1 && Igual(R[0], 7u, 7u), "e a recusa nao escreve as regioes");
+            CheckEq(Total, 0xDEADBEEFu, "nem o total");
+        }
+        {
+            // A soma que em u32 daria a volta para ZERO. Um layout em u32 a aprovaria com total 0 e
+            // poria a regiao 1 no offset 0x80000000 — plausivel, e dentro de nada.
+            const u64 Cap[2]{ 0x80000000ull, 0x80000000ull };
+            std::vector<FGpuIndirectRegion> R;
+            u32 Total = 0u;
+            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutTooManyCommands,
+                    "a soma que daria a volta para zero recusa");
+        }
+        {
+            // Uma capacidade SOZINHA acima de u32: truncada, viraria zero e o lote sumiria do layout.
+            const u64 Cap[1]{ 0x100000000ull };
+            std::vector<FGpuIndirectRegion> R;
+            u32 Total = 0u;
+            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutTooManyCommands,
+                    "uma capacidade acima de u32 recusa");
+        }
+        {
+            // Nenhum lote: nenhuma regiao, total zero.
+            std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
+            u32 Total = 9u;
+            CheckEq(GpuLayoutRegions({}, R, Total), GpuRegionLayoutOk, "sem lote o layout e vazio");
+            Check(R.empty(), "e a saida fica vazia, e nao com o conteudo anterior");
+            CheckEq(Total, 0u, "com total zero");
+        }
+
+        // Os dois parametros que a gravacao tira da regiao, em u64.
+        CheckEq64(GpuRegionArgumentOffset(FGpuIndirectRegion{ 4u, 2u }), 112ull,
+                  "ArgumentBufferOffset = Offset * 28");
+        CheckEq64(GpuRegionArgumentOffset(FGpuIndirectRegion{ 0xFFFFFFFFu, 1u }),
+                  0xFFFFFFFFull * 28ull, "o maior offset nao da a volta");
+        CheckEq64(GpuRegionCountOffset(1u), 4ull, "CountBufferOffset = lote * 4");
+        CheckEq64(GpuRegionCountOffset(0xFFFFFFFFu), 0xFFFFFFFFull * 4ull,
+                  "o maior lote nao da a volta");
+    }
+
+    // ---- parte CPU pura: a porta das REGIOES ---------------------------------------------------
+    //
+    // Estrutura, e nao suficiencia: ela confere que as regioes cobrem todo lote, cabem no recurso e
+    // nao se sobrepoem. Se a contagem do FRAME cabe em cada regiao ela nao tem como saber — isso e
+    // garantido pela capacidade estavel e verificado pela GPU.
+    void TestarPreflightDeRegioes() {
+        const FGpuIndirectRegion Cena[8]{ { 0u, 4u }, { 4u, 2u }, { 6u, 0u }, { 6u, 0u },
+                                          { 6u, 0u }, { 6u, 0u }, { 6u, 0u }, { 6u, 0u } };
+        CheckEq(GpuRegionPreflight(Cena, 8u, 6u), GpuRegionPreflightOk,
+                "as regioes da cena passam com a capacidade exata");
+        CheckEq(GpuRegionPreflight(Cena, 8u, 5u), GpuRegionPreflightSmallArgsBuffer,
+                "um comando a menos reprova");
+        CheckEq(GpuRegionPreflight(std::span<const FGpuIndirectRegion>(Cena, 7u), 8u, 6u),
+                GpuRegionPreflightSmallRegionTable, "uma regiao a menos que os lotes reprova");
+
+        FGpuIndirectRegion Sobre[8];
+        std::copy(std::begin(Cena), std::end(Cena), Sobre);
+        Sobre[1].Offset = 3u; // [3, 5): a ultima posicao do lote 0 e tambem a primeira do lote 1
+        CheckEq(GpuRegionPreflight(Sobre, 8u, 6u), GpuRegionPreflightOverlap,
+                "regioes sobrepostas reprovam, mesmo cabendo no recurso");
+
+        FGpuIndirectRegion Invertida[8];
+        std::copy(std::begin(Cena), std::end(Cena), Invertida);
+        Invertida[0] = { 2u, 4u };
+        Invertida[1] = { 0u, 2u };
+        CheckEq(GpuRegionPreflight(Invertida, 8u, 6u), GpuRegionPreflightOverlap,
+                "regioes fora da ordem dos lotes reprovam");
+
+        // O fim que em u32 daria a volta: `0xFFFFFFFF + 2` seria 1, e 1 cabe em qualquer recurso.
+        const FGpuIndirectRegion Volta[1]{ { 0xFFFFFFFFu, 2u } };
+        CheckEq(GpuRegionPreflight(Volta, 1u, 0xFFFFFFFFu), GpuRegionPreflightSmallArgsBuffer,
+                "o fim de regiao que daria a volta reprova");
+
+        // E a garantia de producao: o layout, contra o total que ele mesmo devolve, sempre passa.
+        const u64 Cap[5]{ 2ull, 0ull, 5ull, 0ull, 3ull };
+        std::vector<FGpuIndirectRegion> R;
+        u32 Total = 0u;
+        GpuLayoutRegions(Cap, R, Total);
+        CheckEq(GpuRegionPreflight(R, 5u, Total), GpuRegionPreflightOk,
+                "o layout de producao passa com o proprio total");
+        CheckEq(GpuRegionPreflight(R, 5u, Total - 1u), GpuRegionPreflightSmallArgsBuffer,
+                "e reprova com um comando a menos");
+    }
+
     // ---- parte CPU pura: o desfecho de cada candidato -----------------------------------------
     //
     // O oraculo e uma TABELA escrita a mao, e nao a funcao rodada de novo: a referencia CPU e o
@@ -547,20 +758,38 @@ namespace {
         return E;
     }
 
-    // ---- parte CPU pura: dimensionamento, preflight e a referencia do scatter ----------------
+    // O conteudo de `IndirectArgs` sob as regioes da cena, {0,4} e {4,2}, depois de UMA execucao:
+    //
+    //   [0, 2)  lote 0: slots 0 e 2 na malha 0, em qualquer ordem   -> multiconjunto
+    //   [2, 4)  FOLGA do lote 0                                      -> poison
+    //   [4, 5)  lote 1: slot 1 na malha 1                            -> comando exato
+    //   [5, 6)  FOLGA do lote 1                                      -> poison
+    //
+    // A folga continuar poison e o que prova que cada comando foi para `Offset + cursor` da regiao do
+    // SEU lote: um scatter que ignorasse o offset poria o slot 1 na posicao 0, e um que usasse o
+    // prefixo das contagens o poria na posicao 2 — dentro da folga do lote 0.
+    void ConferirArgsDaCena(std::span<const FGpuIndirectDrawArgs> _Args, const std::string& _Quem) {
+        Check(_Args.size() >= 6, _Quem + ": IndirectArgs cobre as seis posicoes das regioes");
+        if (_Args.size() < 6) return;
+        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
+        const auto Got0  = Ordenados(_Args.data(), 2u);
+        const auto Want0 = Ordenados(L0, 2u);
+        Check(MesmoComando(Got0[0], Want0[0]) && MesmoComando(Got0[1], Want0[1]),
+              _Quem + ": regiao 0, o multiconjunto exato");
+        Check(MesmoComando(_Args[4], Esperado(1u, 1u)), _Quem + ": regiao 1, o comando exato");
+        for (const u32 P : { 2u, 3u, 5u })
+            Check(MesmoComando(_Args[P], ComandoPoison()),
+                  _Quem + ": folga na posicao " + std::to_string(P) + " continua poison");
+    }
+
+    // ---- parte CPU pura: a referencia do scatter, dentro das regioes -------------------------
     void TestarScatterCpu() {
         // Bytes em u64. Em u32, 153.391.690 comandos ja dariam a volta.
-        CheckEq64(GpuScatterArgsBytes(14u), 14ull * 28ull, "14 comandos, 28 B cada");
+        CheckEq64(GpuScatterArgsBytes(6u), 6ull * 28ull, "seis comandos, 28 B cada");
         CheckEq64(GpuScatterArgsBytes(0u), 28ull, "zero comandos ainda aloca um: recurso vazio e ilegal");
         CheckEq64(GpuScatterArgsBytes(0xFFFFFFFFu), 0xFFFFFFFFull * 28ull,
                   "o maior u32 de comandos nao da a volta nos bytes");
 
-        CheckEq(GpuScatterPreflight(14u, 14u), GpuScatterPreflightOk, "capacidade exata passa");
-        CheckEq(GpuScatterPreflight(14u, 13u), GpuScatterPreflightSmallArgsBuffer,
-                "um comando a menos reprova");
-        CheckEq(GpuScatterPreflight(0u, 0u), GpuScatterPreflightOk, "cena vazia passa");
-
-        // A referencia, sobre a cena do teste, com os offsets que o prefixo produz.
         const auto Mats = Materiais(); const auto Meshs = Malhas();
         const auto Metas = Meta();     const auto S = Slots();
         FGpuClassifyInput In{};
@@ -570,37 +799,43 @@ namespace {
 
         std::vector<u32> Lotes, ContClassify;
         ClassifyCandidates(In, Lotes, ContClassify);
-        std::vector<u32> Offsets; u32 Estourou = 0u;
-        const u32 Total = PrefixBatchCounts(Lotes, Offsets, Estourou);
 
-        const u32 Capacidade = static_cast<u32>(S.size());
-        std::vector<FGpuIndirectDrawArgs> Args(Capacidade, ComandoPoison());
+        // As regioes pela funcao de PRODUCAO, das tabelas.
+        std::vector<u64> Cap;
+        std::vector<FGpuIndirectRegion> Reg;
+        u32 Total = 0u;
+        GpuCountRegionCapacities(Metas, Mats, Meshs, kPoolCount, Cap);
+        GpuLayoutRegions(Cap, Reg, Total);
+
+        std::vector<FGpuIndirectDrawArgs> Args(Total, ComandoPoison());
         std::vector<u32> Cont;
         std::vector<u32> Cursores(Lotes.size(), 0u);
-        ScatterIndirectArgs(In, Offsets, Lotes, Estourou, Cursores, Args, Cont);
+        ScatterIndirectArgs(In, Reg, Lotes, Cursores, Args, Cont);
 
         // A contagem e a emissao olham o mesmo fato. Um scatter que recusasse alguem que o classify
         // contou apareceria AQUI, antes de virar comando velho no ExecuteIndirect.
         CheckEq(Cont[GpuScatterCounterEmitted], ContClassify[GpuClassifyIndirect],
                 "o scatter emite exatamente o que o classify contou");
-        CheckEq(Cont[GpuScatterCounterSuppressed], 0u, "sem estouro, nada suprimido");
         CheckEq(Cont[GpuScatterCounterFaultCursor], 0u, "cursores zerados: nenhuma falha de cursor");
-        CheckEq(Cont[GpuScatterCounterFaultCapacity], 0u, "preflight aprovado: nenhuma falha de capacidade");
+        CheckEq(Cont[GpuScatterCounterFaultRegion], 0u, "regioes das tabelas: nenhum lote passa da sua");
+        CheckEq(Cont[GpuScatterCounterFaultCapacity], 0u, "regioes no recurso: nenhuma falha de capacidade");
+        ConferirArgsDaCena(Args, "CPU");
 
-        // Lote 0 (pool 0): slots 0 e 2, os dois na malha 0. Lote 1 (pool 1): slot 1, malha 1.
-        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
-        const auto Got0 = Ordenados(&Args[Offsets[0]], Lotes[0]);
-        const auto Want0 = Ordenados(L0, 2u);
-        Check(Lotes[0] == 2u && Got0.size() == 2 && MesmoComando(Got0[0], Want0[0]) &&
-              MesmoComando(Got0[1], Want0[1]), "lote 0: o multiconjunto exato de comandos");
-        Check(Lotes[1] == 1u && MesmoComando(Args[Offsets[1]], Esperado(1u, 1u)),
-              "lote 1: o comando exato");
-
-        // RESIDUO: toda posicao a partir do total continua poison. Um scatter que escrevesse uma
-        // posicao a frente (cursor pos-incremento, por exemplo) sujaria a primeira delas.
-        for (u32 P = Total; P < Capacidade; ++P)
-            Check(MesmoComando(Args[P], ComandoPoison()),
-                  "posicao " + std::to_string(P) + " fora dos lotes continua poison");
+        // REGIAO CURTA: o lote 0 tem dois comandos e uma posicao. O excedente vira falha, e a posicao
+        // seguinte — que e do lote 1 — fica com o comando do lote 1.
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u });
+        Curta[0] = { 0u, 1u };
+        Curta[1] = { 1u, 2u };
+        std::vector<FGpuIndirectDrawArgs> ArgsC(3u, ComandoPoison());
+        std::vector<u32> CurC(Lotes.size(), 0u), ContC;
+        ScatterIndirectArgs(In, Curta, Lotes, CurC, ArgsC, ContC);
+        CheckEq(ContC[GpuScatterCounterFaultRegion], 1u, "CPU, regiao curta: o excedente vira falha");
+        CheckEq(ContC[GpuScatterCounterEmitted], 2u, "CPU, regiao curta: os outros dois sao escritos");
+        Check(MesmoComando(ArgsC[0], Esperado(0u, 0u)),
+              "CPU, regiao curta: a posicao do lote 0 fica com o primeiro candidato dele");
+        Check(MesmoComando(ArgsC[1], Esperado(1u, 1u)),
+              "CPU, regiao curta: a posicao 1, do lote 1, nao e invadida");
+        Check(MesmoComando(ArgsC[2], ComandoPoison()), "CPU, regiao curta: a folga do lote 1 fica poison");
     }
 }
 
@@ -608,10 +843,6 @@ namespace {
     struct FResultado {
         std::vector<u32> Lotes;
         std::vector<u32> Contadores;
-        // Saida do prefixo, produzida no MESMO command list, a partir do BatchCounts que o classify
-        // acabou de escrever. Encadear na GPU e o ponto: na producao nao ha readback entre os dois.
-        std::vector<u32> Offsets;
-        std::vector<u32> PrefixCont;
     };
 
     // A sonda. Mesma forma da do expand; o que muda sao as views e o CB.
@@ -619,11 +850,9 @@ namespace {
         wrl::ComPtr<ID3D12Device>        Device;
         wrl::ComPtr<ID3D12CommandQueue>  Queue;
         wrl::ComPtr<ID3D12RootSignature> Root;
-        wrl::ComPtr<ID3D12RootSignature> RootPrefixo;
         wrl::ComPtr<ID3D12RootSignature> RootScatter;
         wrl::ComPtr<ID3D12RootSignature> RootFinalize;
         wrl::ComPtr<ID3D12PipelineState> Pipeline;
-        wrl::ComPtr<ID3D12PipelineState> PipelinePrefixo;
         wrl::ComPtr<ID3D12PipelineState> PipelineScatter;
         wrl::ComPtr<ID3D12PipelineState> PipelineFinalize;
         wrl::ComPtr<ID3D12Fence>         Fence;
@@ -684,8 +913,64 @@ namespace {
             Info->ClearStoredMessages();
         }
 
-        void Construir(const std::vector<u8>& _Bytecode, const std::vector<u8>& _Prefixo,
-                       const std::vector<u8>& _Scatter, const std::vector<u8>& _Finalize) {
+        // Fecha, submete, espera a fence e drena a camada de debug.
+        void Submeter(ID3D12GraphicsCommandList* _L, const char* _Quando) {
+            Hr(_L->Close(), "Close");
+            ID3D12CommandList* Listas[] = { _L };
+            Queue->ExecuteCommandLists(1, Listas);
+            ++FenceValue;
+            Hr(Queue->Signal(Fence.Get(), FenceValue), "Signal");
+            if (Fence->GetCompletedValue() < FenceValue) {
+                struct FEvent {
+                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                    ~FEvent() { if (Value) CloseHandle(Value); }
+                } Evento;
+                if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
+                Hr(Fence->SetEventOnCompletion(FenceValue, Evento.Value), "SetEventOnCompletion");
+                if (WaitForSingleObject(Evento.Value, 30000) != WAIT_OBJECT_0)
+                    throw std::runtime_error(std::string("a execucao nao terminou: ") + _Quando);
+            }
+            Drenar(_Quando);
+        }
+
+        // Uma root signature por passo, com EXATAMENTE os descritores que ele le: CBV, uma tabela de
+        // SRVs e uma de UAVs. Reaproveitar uma maior deixaria SRVs do range ligados sem descritor
+        // inicializado — coisa que a camada de debug reclama e que nao tem nada a ver com o que esta
+        // sob teste.
+        void CriarPasso(UINT _Srvs, UINT _Uavs, const std::vector<u8>& _Cs,
+                        wrl::ComPtr<ID3D12RootSignature>& _Raiz,
+                        wrl::ComPtr<ID3D12PipelineState>& _Pso, const char* _Nome) {
+            D3D12_DESCRIPTOR_RANGE Ranges[2]{};
+            Ranges[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            Ranges[0].NumDescriptors = _Srvs;
+            Ranges[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+            Ranges[1].NumDescriptors = _Uavs;
+            D3D12_ROOT_PARAMETER Params[3]{};
+            Params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            for (int I = 0; I < 2; ++I) {
+                Params[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                Params[I + 1].DescriptorTable.NumDescriptorRanges = 1;
+                Params[I + 1].DescriptorTable.pDescriptorRanges   = &Ranges[I];
+            }
+            D3D12_ROOT_SIGNATURE_DESC Desc{};
+            Desc.NumParameters = 3;
+            Desc.pParameters   = Params;
+            wrl::ComPtr<ID3DBlob> Serial, Erro;
+            const std::string Onde = std::string(" (") + _Nome + ")";
+            Hr(D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Serial, &Erro),
+               ("SerializeRootSignature" + Onde).c_str());
+            Hr(Device->CreateRootSignature(0, Serial->GetBufferPointer(), Serial->GetBufferSize(),
+                                           IID_PPV_ARGS(&_Raiz)),
+               ("CreateRootSignature" + Onde).c_str());
+            D3D12_COMPUTE_PIPELINE_STATE_DESC PSO{};
+            PSO.pRootSignature = _Raiz.Get();
+            PSO.CS             = { _Cs.data(), _Cs.size() };
+            Hr(Device->CreateComputePipelineState(&PSO, IID_PPV_ARGS(&_Pso)),
+               ("CreateComputePipelineState" + Onde).c_str());
+        }
+
+        void Construir(const std::vector<u8>& _Classify, const std::vector<u8>& _Scatter,
+                       const std::vector<u8>& _Finalize) {
             wrl::ComPtr<ID3D12Debug> Debug;
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&Debug)))) Debug->EnableDebugLayer();
 
@@ -698,121 +983,13 @@ namespace {
             Device.As(&Info);
             Check(Info != nullptr, "a camada de debug esta ativa");
 
-            D3D12_DESCRIPTOR_RANGE Ranges[2]{};
-            Ranges[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-            Ranges[0].NumDescriptors = 4;
-            Ranges[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-            Ranges[1].NumDescriptors = 2;
-            D3D12_ROOT_PARAMETER Params[3]{};
-            Params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-            for (int I = 0; I < 2; ++I) {
-                Params[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-                Params[I + 1].DescriptorTable.NumDescriptorRanges = 1;
-                Params[I + 1].DescriptorTable.pDescriptorRanges   = &Ranges[I];
-            }
-            D3D12_ROOT_SIGNATURE_DESC SigDesc{};
-            SigDesc.NumParameters = 3;
-            SigDesc.pParameters   = Params;
-            wrl::ComPtr<ID3DBlob> Serial, Erro;
-            Hr(D3D12SerializeRootSignature(&SigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &Serial, &Erro),
-               "SerializeRootSignature");
-            Hr(Device->CreateRootSignature(0, Serial->GetBufferPointer(), Serial->GetBufferSize(),
-                                           IID_PPV_ARGS(&Root)), "CreateRootSignature");
-
-            D3D12_COMPUTE_PIPELINE_STATE_DESC PSO{};
-            PSO.pRootSignature = Root.Get();
-            PSO.CS             = { _Bytecode.data(), _Bytecode.size() };
-            Hr(Device->CreateComputePipelineState(&PSO, IID_PPV_ARGS(&Pipeline)),
-               "CreateComputePipelineState");
-
-            // O prefixo tem root signature PROPRIA: uma SRV e duas UAVs (offsets e contadores).
-            // Reaproveitar a do classify
-            // deixaria tres SRVs do range ligados sem descritor inicializado, que e coisa que a
-            // camada de debug reclama e que nao tem nada a ver com o que esta sob teste.
-            D3D12_DESCRIPTOR_RANGE RangesP[2]{};
-            RangesP[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-            RangesP[0].NumDescriptors = 1;
-            RangesP[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-            RangesP[1].NumDescriptors = 2; // BatchOffsets, Counters
-            D3D12_ROOT_PARAMETER ParamsP[3]{};
-            ParamsP[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-            for (int I = 0; I < 2; ++I) {
-                ParamsP[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-                ParamsP[I + 1].DescriptorTable.NumDescriptorRanges = 1;
-                ParamsP[I + 1].DescriptorTable.pDescriptorRanges   = &RangesP[I];
-            }
-            D3D12_ROOT_SIGNATURE_DESC SigDescP{};
-            SigDescP.NumParameters = 3;
-            SigDescP.pParameters   = ParamsP;
-            wrl::ComPtr<ID3DBlob> SerialP, ErroP;
-            Hr(D3D12SerializeRootSignature(&SigDescP, D3D_ROOT_SIGNATURE_VERSION_1, &SerialP,
-                                           &ErroP), "SerializeRootSignature (prefixo)");
-            Hr(Device->CreateRootSignature(0, SerialP->GetBufferPointer(), SerialP->GetBufferSize(),
-                                           IID_PPV_ARGS(&RootPrefixo)),
-               "CreateRootSignature (prefixo)");
-            D3D12_COMPUTE_PIPELINE_STATE_DESC PSOP{};
-            PSOP.pRootSignature = RootPrefixo.Get();
-            PSOP.CS             = { _Prefixo.data(), _Prefixo.size() };
-            Hr(Device->CreateComputePipelineState(&PSOP, IID_PPV_ARGS(&PipelinePrefixo)),
-               "CreateComputePipelineState (prefixo)");
-
-            // O scatter: seis SRVs (slots + tres tabelas + offsets + contadores do prefixo) e tres
-            // UAVs (argumentos, cursores, contadores).
-            D3D12_DESCRIPTOR_RANGE RangesS[2]{};
-            RangesS[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-            RangesS[0].NumDescriptors = 7;
-            RangesS[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-            RangesS[1].NumDescriptors = 3;
-            D3D12_ROOT_PARAMETER ParamsS[3]{};
-            ParamsS[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-            for (int I = 0; I < 2; ++I) {
-                ParamsS[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-                ParamsS[I + 1].DescriptorTable.NumDescriptorRanges = 1;
-                ParamsS[I + 1].DescriptorTable.pDescriptorRanges   = &RangesS[I];
-            }
-            D3D12_ROOT_SIGNATURE_DESC SigDescS{};
-            SigDescS.NumParameters = 3;
-            SigDescS.pParameters   = ParamsS;
-            wrl::ComPtr<ID3DBlob> SerialS, ErroS;
-            Hr(D3D12SerializeRootSignature(&SigDescS, D3D_ROOT_SIGNATURE_VERSION_1, &SerialS,
-                                           &ErroS), "SerializeRootSignature (scatter)");
-            Hr(Device->CreateRootSignature(0, SerialS->GetBufferPointer(), SerialS->GetBufferSize(),
-                                           IID_PPV_ARGS(&RootScatter)),
-               "CreateRootSignature (scatter)");
-            D3D12_COMPUTE_PIPELINE_STATE_DESC PSOS{};
-            PSOS.pRootSignature = RootScatter.Get();
-            PSOS.CS             = { _Scatter.data(), _Scatter.size() };
-            Hr(Device->CreateComputePipelineState(&PSOS, IID_PPV_ARGS(&PipelineScatter)),
-               "CreateComputePipelineState (scatter)");
-
-            // A finalizacao: cinco SRVs (contagens, contadores do prefixo, contadores do scatter,
-            // cursores, contadores do classify) e duas UAVs (count buffer, status).
-            D3D12_DESCRIPTOR_RANGE RangesF[2]{};
-            RangesF[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-            RangesF[0].NumDescriptors = 5;
-            RangesF[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-            RangesF[1].NumDescriptors = 2;
-            D3D12_ROOT_PARAMETER ParamsF[3]{};
-            ParamsF[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-            for (int I = 0; I < 2; ++I) {
-                ParamsF[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-                ParamsF[I + 1].DescriptorTable.NumDescriptorRanges = 1;
-                ParamsF[I + 1].DescriptorTable.pDescriptorRanges   = &RangesF[I];
-            }
-            D3D12_ROOT_SIGNATURE_DESC SigDescF{};
-            SigDescF.NumParameters = 3;
-            SigDescF.pParameters   = ParamsF;
-            wrl::ComPtr<ID3DBlob> SerialF, ErroF;
-            Hr(D3D12SerializeRootSignature(&SigDescF, D3D_ROOT_SIGNATURE_VERSION_1, &SerialF,
-                                           &ErroF), "SerializeRootSignature (finalizacao)");
-            Hr(Device->CreateRootSignature(0, SerialF->GetBufferPointer(), SerialF->GetBufferSize(),
-                                           IID_PPV_ARGS(&RootFinalize)),
-               "CreateRootSignature (finalizacao)");
-            D3D12_COMPUTE_PIPELINE_STATE_DESC PSOF{};
-            PSOF.pRootSignature = RootFinalize.Get();
-            PSOF.CS             = { _Finalize.data(), _Finalize.size() };
-            Hr(Device->CreateComputePipelineState(&PSOF, IID_PPV_ARGS(&PipelineFinalize)),
-               "CreateComputePipelineState (finalizacao)");
+            // classify: slots + tres tabelas; contagens + contadores.
+            CriarPasso(4, 2, _Classify, Root, Pipeline, "classify");
+            // scatter: slots + tres tabelas + regioes + contagens; argumentos, cursores, contadores.
+            CriarPasso(6, 3, _Scatter, RootScatter, PipelineScatter, "scatter");
+            // finalizacao: contagens, regioes, contadores do scatter, cursores, contadores do
+            // classify; count buffer + status.
+            CriarPasso(5, 2, _Finalize, RootFinalize, PipelineFinalize, "finalizacao");
 
             D3D12_COMMAND_QUEUE_DESC QD{};
             Hr(Device->CreateCommandQueue(&QD, IID_PPV_ARGS(&Queue)), "CreateCommandQueue");
@@ -822,173 +999,24 @@ namespace {
             Drenar("criacao");
         }
 
-
-        struct FPrefixo {
-            std::vector<u32> Offsets;
-            std::vector<u32> Contadores;
-        };
-
-        // Execucao ISOLADA do prefixo, com `BatchCounts` semeado a mao.
-        //
-        // Existe porque o fluxo encadeado nunca consegue estourar: as contagens vem do classify, e a
-        // soma delas e limitada pelo numero de candidatos. Sem esta porta de entrada, quebrar a
-        // protecao de estouro no HLSL continuaria verde — a defesa viveria so no comentario.
-        //
-        // O buffer de offsets nasce com um padrao RECONHECIVEL, e nao com zeros: assim o teste
-        // distingue "o shader escreveu poison" de "o shader nao escreveu nada". Com zeros, uma
-        // implementacao que simplesmente parasse de escrever passaria pelo mesmo teste.
-        FPrefixo ExecutarPrefixo(std::span<const u32> _Counts) {
-            const u32 Slots = static_cast<u32>(_Counts.size());
-            const u64 OffBytes  = std::max<u64>(sizeof(u32), Slots * sizeof(u32));
-            const u64 ContBytes = GpuPrefixCounterCount * sizeof(u32);
-
-            auto BufCounts = Upload(_Counts.data(), OffBytes);
-            auto BufOffsets = Buffer(D3D12_HEAP_TYPE_DEFAULT, OffBytes, true,
-                                     D3D12_RESOURCE_STATE_COMMON);
-            auto BufCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, ContBytes, true,
-                                  D3D12_RESOURCE_STATE_COMMON);
-
-            const std::vector<u32> Semente(static_cast<size_t>(OffBytes / 4), 0xA5A5A5A5u);
-            const u32 ZerosCont[GpuPrefixCounterCount]{};
-            auto BufSemente = Upload(Semente.data(), OffBytes);
-            auto BufZeros   = Upload(ZerosCont, ContBytes);
-
-            auto LeituraOff  = Buffer(D3D12_HEAP_TYPE_READBACK, OffBytes, false,
-                                      D3D12_RESOURCE_STATE_COPY_DEST);
-            auto LeituraCont = Buffer(D3D12_HEAP_TYPE_READBACK, ContBytes, false,
-                                      D3D12_RESOURCE_STATE_COPY_DEST);
-
-            wrl::ComPtr<ID3D12DescriptorHeap> Heap;
-            D3D12_DESCRIPTOR_HEAP_DESC HD{};
-            HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 3;
-            HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-            Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
-            auto CpuAt = [&](UINT I) {
-                auto H = Heap->GetCPUDescriptorHandleForHeapStart();
-                H.ptr += static_cast<SIZE_T>(I) * Step;
-                return H;
-            };
-            {
-                D3D12_SHADER_RESOURCE_VIEW_DESC D{};
-                D.Format                     = DXGI_FORMAT_UNKNOWN;
-                D.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                D.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
-                D.Buffer.NumElements         = std::max(1u, Slots);
-                D.Buffer.StructureByteStride = sizeof(u32);
-                Device->CreateShaderResourceView(BufCounts.Get(), &D, CpuAt(0));
-            }
-            auto UAV = [&](ID3D12Resource* R, u32 N, UINT Slot) {
-                D3D12_UNORDERED_ACCESS_VIEW_DESC D{};
-                D.Format                     = DXGI_FORMAT_UNKNOWN;
-                D.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-                D.Buffer.NumElements         = std::max(1u, N);
-                D.Buffer.StructureByteStride = sizeof(u32);
-                Device->CreateUnorderedAccessView(R, nullptr, &D, CpuAt(Slot));
-            };
-            UAV(BufOffsets.Get(), Slots, 1);
-            UAV(BufCont.Get(), GpuPrefixCounterCount, 2);
-
-            alignas(16) u8 CB[256]{};
-            const u32 P4[4]{ Slots, 0u, 0u, 0u };
-            std::memcpy(CB, P4, sizeof(P4));
-            auto BufCB = Upload(CB, sizeof(CB));
-
-            wrl::ComPtr<ID3D12CommandAllocator>    Allocator;
-            wrl::ComPtr<ID3D12GraphicsCommandList> List;
-            Hr(Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                              IID_PPV_ARGS(&Allocator)), "CreateCommandAllocator");
-            Hr(Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Allocator.Get(),
-                                         PipelinePrefixo.Get(), IID_PPV_ARGS(&List)),
-               "CreateCommandList");
-            auto Transicao = [&](ID3D12Resource* R, D3D12_RESOURCE_STATES A,
-                                 D3D12_RESOURCE_STATES B) {
-                D3D12_RESOURCE_BARRIER Bar{};
-                Bar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                Bar.Transition.pResource   = R;
-                Bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                Bar.Transition.StateBefore = A;
-                Bar.Transition.StateAfter  = B;
-                List->ResourceBarrier(1, &Bar);
-            };
-            List->CopyBufferRegion(BufOffsets.Get(), 0, BufSemente.Get(), 0, OffBytes);
-            List->CopyBufferRegion(BufCont.Get(), 0, BufZeros.Get(), 0, ContBytes);
-            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-            ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
-            List->SetDescriptorHeaps(1, Heaps);
-            List->SetComputeRootSignature(RootPrefixo.Get());
-            List->SetComputeRootConstantBufferView(0, BufCB->GetGPUVirtualAddress());
-            auto GpuAt = [&](UINT I) {
-                auto H = Heap->GetGPUDescriptorHandleForHeapStart();
-                H.ptr += static_cast<UINT64>(I) * Step;
-                return H;
-            };
-            List->SetComputeRootDescriptorTable(1, GpuAt(0));
-            List->SetComputeRootDescriptorTable(2, GpuAt(1));
-            List->Dispatch(1, 1, 1);
-
-            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
-            List->CopyResource(LeituraOff.Get(), BufOffsets.Get());
-            List->CopyResource(LeituraCont.Get(), BufCont.Get());
-            Hr(List->Close(), "Close (prefixo)");
-
-            ID3D12CommandList* Listas[] = { List.Get() };
-            Queue->ExecuteCommandLists(1, Listas);
-            ++FenceValue;
-            Hr(Queue->Signal(Fence.Get(), FenceValue), "Signal (prefixo)");
-            if (Fence->GetCompletedValue() < FenceValue) {
-                struct FEvent {
-                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-                    ~FEvent() { if (Value) CloseHandle(Value); }
-                } Evento;
-                if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
-                Hr(Fence->SetEventOnCompletion(FenceValue, Evento.Value), "SetEventOnCompletion");
-                if (WaitForSingleObject(Evento.Value, 30000) != WAIT_OBJECT_0)
-                    throw std::runtime_error("dispatch de prefixo nao terminou");
-            }
-            Drenar("prefixo isolado");
-
-            FPrefixo Saida;
-            Saida.Offsets.resize(Slots);
-            Saida.Contadores.resize(GpuPrefixCounterCount);
-            if (Slots > 0) {
-                const u32* P = nullptr;
-                Hr(LeituraOff->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
-                   "Map offsets isolados");
-                std::memcpy(Saida.Offsets.data(), P, Slots * sizeof(u32));
-                LeituraOff->Unmap(0, nullptr);
-            }
-            {
-                const u32* P = nullptr;
-                Hr(LeituraCont->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
-                   "Map contadores isolados");
-                std::memcpy(Saida.Contadores.data(), P, ContBytes);
-                LeituraCont->Unmap(0, nullptr);
-            }
-            return Saida;
-        }
-
         struct FScatter {
             std::vector<FGpuIndirectDrawArgs> Args;
             std::vector<u32>                  Contadores;
         };
 
-        // O scatter ISOLADO, com offsets e flag do prefixo fornecidos pelo teste.
+        // O scatter ISOLADO, com regioes e contagens fornecidas pelo chamador.
         //
-        // Isolado porque so assim da para forcar `PrefixOverflow = 1` sobre contagens validas — o
-        // fluxo encadeado nunca estoura. `IndirectArgs` nasce com o comando POISON em toda posicao:
-        // uma posicao que o scatter deixou de escrever aparece como poison, e uma escrita fora do
-        // lote suja uma posicao que devia continuar poison.
-        FScatter ExecutarScatter(const FGpuClassifyInput& _In, std::span<const u32> _Offsets,
+        // Isolado porque so assim da para entregar ao shader uma tabela que a CPU nao aprovaria — curta
+        // demais para o frame, fora do recurso — e ver a DEFESA do scatter agir sozinha, sem a
+        // finalizacao depois dela. `IndirectArgs` nasce com o comando POISON em toda posicao: uma
+        // posicao que o scatter deixou de escrever aparece como poison, e uma escrita fora da regiao
+        // suja uma posicao que devia continuar poison.
+        //
+        // `_ArgsCapacity` e ao mesmo tempo o tamanho do recurso e o numero que o shader recebe.
+        FScatter ExecutarScatter(const FGpuClassifyInput& _In,
+                                 std::span<const FGpuIndirectRegion> _Regioes,
                                  std::span<const u32> _Counts, std::span<const u32> _Cursores,
-                                 u32 _PrefixOverflow, u32 _ArgsCapacity) {
+                                 u32 _ArgsCapacity) {
             auto Pisa = [](u64 _Bytes, u64 _Stride) { return std::max<u64>(_Stride, _Bytes); };
             auto BufSlots = Upload(_In.Slots.data(), Pisa(_In.Slots.size() * 4u, 4u));
             auto BufMeta  = Upload(_In.Meta.data(),
@@ -1000,15 +1028,15 @@ namespace {
             auto BufMesh  = Upload(_In.Meshes.data(),
                                    Pisa(_In.Meshes.size() * sizeof(FGpuMeshRecord),
                                         sizeof(FGpuMeshRecord)));
-            auto BufOff   = Upload(_Offsets.data(), Pisa(_Offsets.size() * 4u, 4u));
-            const u32 PrefCont[GpuPrefixCounterCount]{ 0u, _PrefixOverflow };
-            auto BufPref  = Upload(PrefCont, sizeof(PrefCont));
+            auto BufReg   = Upload(_Regioes.data(),
+                                   Pisa(_Regioes.size() * sizeof(FGpuIndirectRegion),
+                                        sizeof(FGpuIndirectRegion)));
             auto BufCounts = Upload(_Counts.data(), Pisa(_Counts.size() * 4u, 4u));
 
             // Pela porta de dimensionamento, e nunca `_ArgsCapacity * 28` em u32.
             const u64 ArgsBytes = GpuScatterArgsBytes(_ArgsCapacity);
             const u64 ContBytes = GpuScatterCounterCount * sizeof(u32);
-            const u64 CurBytes  = Pisa(_Offsets.size() * 4u, 4u);
+            const u64 CurBytes  = Pisa(_Counts.size() * 4u, 4u);
             auto BufArgs = Buffer(D3D12_HEAP_TYPE_DEFAULT, ArgsBytes, true,
                                   D3D12_RESOURCE_STATE_COMMON);
             auto BufCur  = Buffer(D3D12_HEAP_TYPE_DEFAULT, CurBytes, true,
@@ -1023,9 +1051,8 @@ namespace {
             for (size_t K = 0; K < _Cursores.size() && K < CursoresSeed.size(); ++K)
                 CursoresSeed[K] = _Cursores[K];
             const u32 ZerosCont[GpuScatterCounterCount]{};
-            // Os cursores INICIAIS vem do teste, e nao de zeros: e assim que se reproduz o cursor sujo
-            // de uma execucao anterior sem reset, que a falha de cursor e a finalizacao existem para
-            // pegar.
+            // Os cursores INICIAIS vem do chamador, e nao de zeros: e assim que se reproduz o cursor
+            // sujo de uma execucao anterior sem reset, que a falha de cursor existe para pegar.
             auto BufSemCur = Upload(CursoresSeed.data(), CurBytes);
             auto BufZerosCont = Upload(ZerosCont, ContBytes);
 
@@ -1037,7 +1064,7 @@ namespace {
             wrl::ComPtr<ID3D12DescriptorHeap> Heap;
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 10;
+            HD.NumDescriptors = 9;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
             auto CpuAt = [&](UINT I) {
@@ -1066,17 +1093,17 @@ namespace {
             SRV(BufMeta.Get(), _In.Meta.size(), sizeof(FGpuSceneInstanceMeta), 1);
             SRV(BufMats.Get(), _In.Materials.size(), sizeof(FGpuMaterialRecord), 2);
             SRV(BufMesh.Get(), _In.Meshes.size(), sizeof(FGpuMeshRecord), 3);
-            SRV(BufOff.Get(), _Offsets.size(), sizeof(u32), 4);
-            SRV(BufPref.Get(), GpuPrefixCounterCount, sizeof(u32), 5);
-            SRV(BufCounts.Get(), _Counts.size(), sizeof(u32), 6);
-            UAV(BufArgs.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), 7);
-            UAV(BufCur.Get(), static_cast<u32>(CurBytes / 4), sizeof(u32), 8);
-            UAV(BufCont.Get(), GpuScatterCounterCount, sizeof(u32), 9);
+            SRV(BufReg.Get(), _Regioes.size(), sizeof(FGpuIndirectRegion), 4);
+            SRV(BufCounts.Get(), _Counts.size(), sizeof(u32), 5);
+            UAV(BufArgs.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), 6);
+            UAV(BufCur.Get(), static_cast<u32>(CurBytes / 4), sizeof(u32), 7);
+            UAV(BufCont.Get(), GpuScatterCounterCount, sizeof(u32), 8);
 
             alignas(16) u8 CB[256]{};
             const u32 P8[8]{ static_cast<u32>(_In.Slots.size()), static_cast<u32>(_In.Meta.size()),
                              static_cast<u32>(_In.Materials.size()),
-                             static_cast<u32>(_In.Meshes.size()), _In.PoolCount, NCmd, 0u, 0u };
+                             static_cast<u32>(_In.Meshes.size()), _In.PoolCount, _ArgsCapacity,
+                             0u, 0u };
             std::memcpy(CB, P8, sizeof(P8));
             auto BufCB = Upload(CB, sizeof(CB));
 
@@ -1113,7 +1140,7 @@ namespace {
                 return H;
             };
             List->SetComputeRootDescriptorTable(1, GpuAt(0));
-            List->SetComputeRootDescriptorTable(2, GpuAt(7));
+            List->SetComputeRootDescriptorTable(2, GpuAt(6));
             const u32 Total = static_cast<u32>(_In.Slots.size());
             if (Total > 0) List->Dispatch((Total + 63u) / 64u, 1, 1);
 
@@ -1123,23 +1150,7 @@ namespace {
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             List->CopyResource(LeituraArgs.Get(), BufArgs.Get());
             List->CopyResource(LeituraCont.Get(), BufCont.Get());
-            Hr(List->Close(), "Close (scatter)");
-
-            ID3D12CommandList* Listas[] = { List.Get() };
-            Queue->ExecuteCommandLists(1, Listas);
-            ++FenceValue;
-            Hr(Queue->Signal(Fence.Get(), FenceValue), "Signal (scatter)");
-            if (Fence->GetCompletedValue() < FenceValue) {
-                struct FEvent {
-                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-                    ~FEvent() { if (Value) CloseHandle(Value); }
-                } Evento;
-                if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
-                Hr(Fence->SetEventOnCompletion(FenceValue, Evento.Value), "SetEventOnCompletion");
-                if (WaitForSingleObject(Evento.Value, 30000) != WAIT_OBJECT_0)
-                    throw std::runtime_error("dispatch de scatter nao terminou");
-            }
-            Drenar("scatter");
+            Submeter(List.Get(), "scatter isolado");
 
             FScatter Saida;
             Saida.Args.resize(NCmd);
@@ -1161,6 +1172,7 @@ namespace {
             return Saida;
         }
 
+        // O classify ISOLADO: contagens e contadores de desfecho.
         FResultado Executar(const FGpuClassifyInput& _In) {
             // Piso de UM ELEMENTO, e nao de um byte: um SRV de um elemento sobre um recurso de 1 B
             // e ilegal e desfaz o device no dispatch seguinte, longe da causa.
@@ -1198,24 +1210,10 @@ namespace {
             auto LeituraCont  = Buffer(D3D12_HEAP_TYPE_READBACK, ContBytes, false,
                                        D3D12_RESOURCE_STATE_COPY_DEST);
 
-            // Buffers do PREFIXO. Criados aqui junto dos outros para que todas as copias de zeros
-            // aconteçam antes de qualquer dispatch.
-            const u64 PrefContBytes = GpuPrefixCounterCount * sizeof(u32);
-            auto BufOffsets  = Buffer(D3D12_HEAP_TYPE_DEFAULT, LoteBytes, true,
-                                      D3D12_RESOURCE_STATE_COMMON);
-            auto BufPrefCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, PrefContBytes, true,
-                                      D3D12_RESOURCE_STATE_COMMON);
-            const u32 ZerosPref[GpuPrefixCounterCount]{};
-            auto BufZerosPref = Upload(ZerosPref, PrefContBytes);
-            auto LeituraOffsets  = Buffer(D3D12_HEAP_TYPE_READBACK, LoteBytes, false,
-                                          D3D12_RESOURCE_STATE_COPY_DEST);
-            auto LeituraPrefCont = Buffer(D3D12_HEAP_TYPE_READBACK, PrefContBytes, false,
-                                          D3D12_RESOURCE_STATE_COPY_DEST);
-
             wrl::ComPtr<ID3D12DescriptorHeap> Heap;
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 9;
+            HD.NumDescriptors = 6;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
 
@@ -1247,10 +1245,6 @@ namespace {
             SRV(BufMesh.Get(), _In.Meshes.size(), sizeof(FGpuMeshRecord), 3);
             UAV(BufLotes.Get(), _In.BatchCapacity, 4);
             UAV(BufCont.Get(), GpuClassifyOutcomeCount, 5);
-            // Do prefixo: o MESMO BufLotes, agora como SRV, mais as duas saidas.
-            SRV(BufLotes.Get(), _In.BatchCapacity, sizeof(u32), 6);
-            UAV(BufOffsets.Get(), _In.BatchCapacity, 7);
-            UAV(BufPrefCont.Get(), GpuPrefixCounterCount, 8);
 
             alignas(16) u8 CB[256]{};
             const u32 P8[8]{ static_cast<u32>(_In.Slots.size()),
@@ -1280,15 +1274,9 @@ namespace {
             };
             List->CopyBufferRegion(BufLotes.Get(), 0, BufZerosLote.Get(), 0, LoteBytes);
             List->CopyBufferRegion(BufCont.Get(), 0, BufZerosCont.Get(), 0, ContBytes);
-            List->CopyBufferRegion(BufOffsets.Get(), 0, BufZerosLote.Get(), 0, LoteBytes);
-            List->CopyBufferRegion(BufPrefCont.Get(), 0, BufZerosPref.Get(), 0, PrefContBytes);
             Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Transicao(BufPrefCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
@@ -1305,69 +1293,13 @@ namespace {
             const u32 Total = static_cast<u32>(_In.Slots.size());
             if (Total > 0) List->Dispatch((Total + 63u) / 64u, 1, 1);
 
-            // ---- prefixo, NO MESMO command list -------------------------------------------------
-            //
-            // Encadeado na GPU porque e assim que o frame vai fazer: `BatchCounts` e escrito pelo
-            // classify e lido pelo prefixo sem nenhum readback no meio.
-            //
-            // A transicao UAV -> NON_PIXEL_SHADER_RESOURCE e o contrato da secao 6.4 do plano e e
-            // ela que serve de ponto de sincronizacao entre os dois dispatches.
-            //
-            // ⚠️ Este teste NAO prova que ela e necessaria, e eu verifiquei: removendo-a, tudo
-            // continua verde. Dois motivos, os dois do ambiente e nao do codigo — buffers em D3D12
-            // tem promocao e decaimento implicitos de estado, entao a camada de debug nao reprova a
-            // leitura por SRV de um buffer "em" UAV; e o WARP completa o primeiro dispatch antes do
-            // segundo, o que esconde a corrida. A ausencia da barreira e uma CORRIDA, e corrida nao
-            // se prova por teste deterministico. Ela fica porque o contrato exige, nao porque algo
-            // aqui a exija — e essa distincao esta escrita para nao ser confundida depois.
             Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-            alignas(16) u8 CBP[256]{};
-            const u32 P4[4]{ _In.BatchCapacity, 0u, 0u, 0u };
-            std::memcpy(CBP, P4, sizeof(P4));
-            auto BufCBP = Upload(CBP, sizeof(CBP));
-
-            List->SetPipelineState(PipelinePrefixo.Get());
-            List->SetComputeRootSignature(RootPrefixo.Get());
-            List->SetComputeRootConstantBufferView(0, BufCBP->GetGPUVirtualAddress());
-            List->SetComputeRootDescriptorTable(1, GpuAt(6));
-            List->SetComputeRootDescriptorTable(2, GpuAt(7));
-            List->Dispatch(1, 1, 1);
-
-            Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Transicao(BufPrefCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
-            List->CopyResource(LeituraOffsets.Get(), BufOffsets.Get());
-            List->CopyResource(LeituraPrefCont.Get(), BufPrefCont.Get());
-
-            // `BufLotes` ja saiu de UAV na transicao para o prefixo: parte de
-            // NON_PIXEL_SHADER_RESOURCE. Um `StateBefore` errado aqui e recusado pela camada de
-            // debug, que este teste trata como reprovacao.
-            Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             List->CopyResource(LeituraLotes.Get(), BufLotes.Get());
             List->CopyResource(LeituraCont.Get(), BufCont.Get());
-            Hr(List->Close(), "Close");
-
-            ID3D12CommandList* Listas[] = { List.Get() };
-            Queue->ExecuteCommandLists(1, Listas);
-            ++FenceValue;
-            Hr(Queue->Signal(Fence.Get(), FenceValue), "Signal");
-            if (Fence->GetCompletedValue() < FenceValue) {
-                struct FEvent {
-                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-                    ~FEvent() { if (Value) CloseHandle(Value); }
-                } Evento;
-                if (!Evento.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
-                Hr(Fence->SetEventOnCompletion(FenceValue, Evento.Value), "SetEventOnCompletion");
-                if (WaitForSingleObject(Evento.Value, 30000) != WAIT_OBJECT_0)
-                    throw std::runtime_error("dispatch de classificacao nao terminou");
-            }
-            Drenar("dispatch");
+            Submeter(List.Get(), "classify isolado");
 
             FResultado Saida;
             Saida.Lotes.resize(_In.BatchCapacity);
@@ -1386,24 +1318,6 @@ namespace {
                 std::memcpy(Saida.Contadores.data(), P, ContBytes);
                 LeituraCont->Unmap(0, nullptr);
             }
-            Saida.Offsets.resize(_In.BatchCapacity);
-            Saida.PrefixCont.resize(GpuPrefixCounterCount);
-            if (_In.BatchCapacity > 0) {
-                const u32* P = nullptr;
-                Hr(LeituraOffsets->Map(0, nullptr,
-                                       reinterpret_cast<void**>(const_cast<u32**>(&P))),
-                   "Map offsets");
-                std::memcpy(Saida.Offsets.data(), P, _In.BatchCapacity * sizeof(u32));
-                LeituraOffsets->Unmap(0, nullptr);
-            }
-            {
-                const u32* P = nullptr;
-                Hr(LeituraPrefCont->Map(0, nullptr,
-                                        reinterpret_cast<void**>(const_cast<u32**>(&P))),
-                   "Map cont prefixo");
-                std::memcpy(Saida.PrefixCont.data(), P, PrefContBytes);
-                LeituraPrefCont->Unmap(0, nullptr);
-            }
             return Saida;
         }
     };
@@ -1412,7 +1326,7 @@ namespace {
 namespace {
     // A CADEIA inteira, sobre recursos PERSISTENTES:
     //
-    //     reset -> classify -> prefixo -> scatter -> finalizacao
+    //     reset -> classify -> scatter -> finalizacao
     //
     // Os executores de cima criam buffers novos a cada chamada, e por isso nao enxergam o defeito que
     // esta estrutura existe para pegar: um acumulador que atravessa de uma execucao para a seguinte.
@@ -1426,23 +1340,31 @@ namespace {
         FSonda&                  S;
         const FGpuClassifyInput& In;
         u32                      Slots      = 0; // slots de lote
-        u32                      Capacidade = 0; // comandos em IndirectArgs
+        u32                      Capacidade = 0; // comandos do RECURSO IndirectArgs
+
+        // A tabela de regioes e a capacidade que o SHADER recebe. Membros, e nao constantes da criacao:
+        // sobem a cada execucao, como o frame faria, e os cenarios de falha os trocam para entregar a
+        // GPU uma tabela que a CPU nao aprovou.
+        std::vector<FGpuIndirectRegion> Regioes;
+        u32                             CapacidadeShader = 0;
 
         wrl::ComPtr<ID3D12Resource> BufSlots, BufMeta, BufMats, BufMesh, BufZeros;
-        wrl::ComPtr<ID3D12Resource> Counts, ClassCont, Offsets, PrefCont;
+        wrl::ComPtr<ID3D12Resource> Counts, ClassCont;
         wrl::ComPtr<ID3D12Resource> Args, Cursors, ScatCont, Draw, Status;
         wrl::ComPtr<ID3D12DescriptorHeap> Heap;
         std::vector<std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>> Estados;
 
         struct FSaida {
-            std::vector<u32>                  Counts, Cursors, ScatCont, PrefCont, Draw, ClassCont;
+            std::vector<u32>                  Counts, Cursors, ScatCont, Draw, ClassCont;
             std::vector<FGpuIndirectDrawArgs> Args;
             u32                               Status = 0;
             u32                               Reason = 0;
         };
 
-        FCadeia(FSonda& _S, const FGpuClassifyInput& _In, u32 _Capacidade)
-            : S(_S), In(_In), Slots(_In.BatchCapacity), Capacidade(_Capacidade) {}
+        FCadeia(FSonda& _S, const FGpuClassifyInput& _In,
+                std::span<const FGpuIndirectRegion> _Regioes, u32 _Capacidade)
+            : S(_S), In(_In), Slots(_In.BatchCapacity), Capacidade(_Capacidade),
+              Regioes(_Regioes.begin(), _Regioes.end()), CapacidadeShader(_Capacidade) {}
 
         D3D12_RESOURCE_STATES& EstadoDe(ID3D12Resource* _R) {
             for (auto& E : Estados) if (E.first == _R) return E.second;
@@ -1467,8 +1389,6 @@ namespace {
             };
             Counts    = Uav(LoteB);
             ClassCont = Uav(GpuClassifyOutcomeCount * 4u);
-            Offsets   = Uav(LoteB);
-            PrefCont  = Uav(GpuPrefixCounterCount * 4u);
             Args      = Uav(GpuScatterArgsBytes(Capacidade));
             Cursors   = Uav(LoteB);
             ScatCont  = Uav(GpuScatterCounterCount * 4u);
@@ -1511,7 +1431,7 @@ namespace {
             Atual = _Novo;
         }
 
-        // Grava, submete, espera a fence e drena a camada de debug. Uma command list por chamada.
+        // Grava e submete. Uma command list por chamada.
         template <typename TGravar>
         void Executar(TGravar&& _Gravar, const char* _Quando) {
             wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
@@ -1521,61 +1441,47 @@ namespace {
             Hr(S.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Alloc.Get(), nullptr,
                                            IID_PPV_ARGS(&L)), "CreateCommandList (cadeia)");
             _Gravar(L.Get());
-            Hr(L->Close(), "Close (cadeia)");
-            ID3D12CommandList* Listas[] = { L.Get() };
-            S.Queue->ExecuteCommandLists(1, Listas);
-            ++S.FenceValue;
-            Hr(S.Queue->Signal(S.Fence.Get(), S.FenceValue), "Signal (cadeia)");
-            if (S.Fence->GetCompletedValue() < S.FenceValue) {
-                struct FEvent {
-                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-                    ~FEvent() { if (Value) CloseHandle(Value); }
-                } Ev;
-                if (!Ev.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
-                Hr(S.Fence->SetEventOnCompletion(S.FenceValue, Ev.Value), "SetEventOnCompletion");
-                if (WaitForSingleObject(Ev.Value, 30000) != WAIT_OBJECT_0)
-                    throw std::runtime_error("cadeia nao terminou");
-            }
-            S.Drenar(_Quando);
+            S.Submeter(L.Get(), _Quando);
         }
 
         // Tabelas de descritores, uma por passo, na ordem das root signatures de cada um.
-        //   classify: SRV 0-3 (slots, meta, mats, mesh)          UAV 4-5 (counts, classcont)
-        //   prefixo:  SRV 6   (counts)                           UAV 7-8 (offsets, prefcont)
-        //   scatter:  SRV 9-15 (slots, meta, mats, mesh, offsets, prefcont, counts)
-        //                                                        UAV 16-18 (args, cursors, scatcont)
-        //   final:    SRV 19-23 (counts, prefcont, scatcont, cursors, classcont) UAV 24-25 (draw, status)
-        static constexpr UINT kClassSrv = 0, kClassUav = 4, kPrefSrv = 6, kPrefUav = 7;
-        static constexpr UINT kScatSrv = 9, kScatUav = 16, kFinSrv = 19, kFinUav = 24;
+        //   classify: SRV 0-3   (slots, meta, mats, mesh)                        UAV 4-5   (counts, classcont)
+        //   scatter:  SRV 6-11  (slots, meta, mats, mesh, regioes, counts)       UAV 12-14 (args, cursors, scatcont)
+        //   final:    SRV 15-19 (counts, regioes, scatcont, cursors, classcont)  UAV 20-21 (draw, status)
+        //
+        // As duas SRVs de REGIOES (10 e 16) sao escritas a cada execucao, junto do upload da tabela.
+        static constexpr UINT kClassSrv = 0, kClassUav = 4, kScatSrv = 6, kScatUav = 12;
+        static constexpr UINT kFinSrv = 15, kFinUav = 20, kDescritores = 22;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE CpuAt(UINT _I) const {
+            auto H = Heap->GetCPUDescriptorHandleForHeapStart();
+            H.ptr += static_cast<SIZE_T>(_I) * S.Step;
+            return H;
+        }
+        void Srv(ID3D12Resource* _R, u64 _N, u32 _Stride, UINT _I) {
+            D3D12_SHADER_RESOURCE_VIEW_DESC D{};
+            D.Format                     = DXGI_FORMAT_UNKNOWN;
+            D.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            D.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+            D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(_N));
+            D.Buffer.StructureByteStride = _Stride;
+            S.Device->CreateShaderResourceView(_R, &D, CpuAt(_I));
+        }
+        void Uav(ID3D12Resource* _R, u64 _N, u32 _Stride, UINT _I) {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC D{};
+            D.Format                     = DXGI_FORMAT_UNKNOWN;
+            D.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+            D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(_N));
+            D.Buffer.StructureByteStride = _Stride;
+            S.Device->CreateUnorderedAccessView(_R, nullptr, &D, CpuAt(_I));
+        }
 
         void CriarDescritores() {
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 26;
+            HD.NumDescriptors = kDescritores;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(S.Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
-            auto At = [&](UINT I) {
-                auto H = Heap->GetCPUDescriptorHandleForHeapStart();
-                H.ptr += static_cast<SIZE_T>(I) * S.Step;
-                return H;
-            };
-            auto Srv = [&](ID3D12Resource* R, u64 N, u32 Stride, UINT I) {
-                D3D12_SHADER_RESOURCE_VIEW_DESC D{};
-                D.Format                     = DXGI_FORMAT_UNKNOWN;
-                D.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                D.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
-                D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(N));
-                D.Buffer.StructureByteStride = Stride;
-                S.Device->CreateShaderResourceView(R, &D, At(I));
-            };
-            auto Uav = [&](ID3D12Resource* R, u64 N, u32 Stride, UINT I) {
-                D3D12_UNORDERED_ACCESS_VIEW_DESC D{};
-                D.Format                     = DXGI_FORMAT_UNKNOWN;
-                D.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-                D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(N));
-                D.Buffer.StructureByteStride = Stride;
-                S.Device->CreateUnorderedAccessView(R, nullptr, &D, At(I));
-            };
             const u32 NCmd = static_cast<u32>(GpuScatterArgsBytes(Capacidade) / 28u);
             const u32 MetaStride = sizeof(FGpuSceneInstanceMeta);
             const u32 MatStride  = sizeof(FGpuMaterialRecord);
@@ -1587,24 +1493,17 @@ namespace {
             Srv(BufMesh.Get(), In.Meshes.size(), MeshStride, kClassSrv + 3);
             Uav(Counts.Get(), Slots, 4u, kClassUav + 0);
             Uav(ClassCont.Get(), GpuClassifyOutcomeCount, 4u, kClassUav + 1);
-            // prefixo
-            Srv(Counts.Get(), Slots, 4u, kPrefSrv);
-            Uav(Offsets.Get(), Slots, 4u, kPrefUav + 0);
-            Uav(PrefCont.Get(), GpuPrefixCounterCount, 4u, kPrefUav + 1);
-            // scatter
+            // scatter (a SRV 4, das regioes, e escrita por execucao)
             Srv(BufSlots.Get(), In.Slots.size(), 4u, kScatSrv + 0);
             Srv(BufMeta.Get(), In.Meta.size(), MetaStride, kScatSrv + 1);
             Srv(BufMats.Get(), In.Materials.size(), MatStride, kScatSrv + 2);
             Srv(BufMesh.Get(), In.Meshes.size(), MeshStride, kScatSrv + 3);
-            Srv(Offsets.Get(), Slots, 4u, kScatSrv + 4);
-            Srv(PrefCont.Get(), GpuPrefixCounterCount, 4u, kScatSrv + 5);
-            Srv(Counts.Get(), Slots, 4u, kScatSrv + 6);
+            Srv(Counts.Get(), Slots, 4u, kScatSrv + 5);
             Uav(Args.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), kScatUav + 0);
             Uav(Cursors.Get(), Slots, 4u, kScatUav + 1);
             Uav(ScatCont.Get(), GpuScatterCounterCount, 4u, kScatUav + 2);
-            // finalizacao
+            // finalizacao (a SRV 1, das regioes, e escrita por execucao)
             Srv(Counts.Get(), Slots, 4u, kFinSrv + 0);
-            Srv(PrefCont.Get(), GpuPrefixCounterCount, 4u, kFinSrv + 1);
             Srv(ScatCont.Get(), GpuScatterCounterCount, 4u, kFinSrv + 2);
             Srv(Cursors.Get(), Slots, 4u, kFinSrv + 3);
             Srv(ClassCont.Get(), GpuClassifyOutcomeCount, 4u, kFinSrv + 4);
@@ -1631,11 +1530,18 @@ namespace {
             auto CbClass = Cb({ Total, static_cast<u32>(In.Meta.size()),
                                 static_cast<u32>(In.Materials.size()),
                                 static_cast<u32>(In.Meshes.size()), In.PoolCount, Slots });
-            auto CbPref  = Cb({ Slots });
             auto CbScat  = Cb({ Total, static_cast<u32>(In.Meta.size()),
                                 static_cast<u32>(In.Materials.size()),
-                                static_cast<u32>(In.Meshes.size()), In.PoolCount, NCmd });
+                                static_cast<u32>(In.Meshes.size()), In.PoolCount, CapacidadeShader });
             auto CbFin   = Cb({ Slots, Total });
+
+            // A tabela de regioes DESTA execucao, e as duas views que a enxergam. Sobe a cada vez, como
+            // o frame faria com a tabela do seu frame slot.
+            auto BufReg = S.Upload(Regioes.data(),
+                                   std::max<u64>(sizeof(FGpuIndirectRegion),
+                                                 Regioes.size() * sizeof(FGpuIndirectRegion)));
+            Srv(BufReg.Get(), Regioes.size(), sizeof(FGpuIndirectRegion), kScatSrv + 4);
+            Srv(BufReg.Get(), Regioes.size(), sizeof(FGpuIndirectRegion), kFinSrv + 1);
 
             const u64 LoteB = std::max<u64>(4u, Slots * 4u);
             auto Leitura = [&](u64 _B) {
@@ -1643,7 +1549,6 @@ namespace {
             };
             auto LCounts = Leitura(LoteB), LCursors = Leitura(LoteB), LDraw = Leitura(LoteB);
             auto LScat   = Leitura(GpuScatterCounterCount * 4u);
-            auto LPref   = Leitura(GpuPrefixCounterCount * 4u);
             auto LStatus = Leitura(8u);
             auto LClass  = Leitura(GpuClassifyOutcomeCount * 4u);
             auto LArgs   = Leitura(GpuScatterArgsBytes(Capacidade));
@@ -1680,17 +1585,19 @@ namespace {
                 L->SetComputeRootDescriptorTable(2, GpuAt(kClassUav));
                 if (Total > 0) L->Dispatch((Total + 63u) / 64u, 1, 1);
 
-                // 2. prefixo
-                Ir(L, Counts.Get(), SRV_); Ir(L, Offsets.Get(), UAV_); Ir(L, PrefCont.Get(), UAV_);
-                L->SetPipelineState(S.PipelinePrefixo.Get());
-                L->SetComputeRootSignature(S.RootPrefixo.Get());
-                L->SetComputeRootConstantBufferView(0, CbPref->GetGPUVirtualAddress());
-                L->SetComputeRootDescriptorTable(1, GpuAt(kPrefSrv));
-                L->SetComputeRootDescriptorTable(2, GpuAt(kPrefUav));
-                L->Dispatch(1, 1, 1);
-
-                // 3. scatter
-                Ir(L, Offsets.Get(), SRV_); Ir(L, PrefCont.Get(), SRV_);
+                // 2. scatter
+                //
+                // A transicao UAV -> NON_PIXEL_SHADER_RESOURCE de `Counts` e o contrato da secao 6.4 do
+                // plano, e e ela que serve de ponto de sincronizacao entre os dois dispatches.
+                //
+                // ⚠️ Este teste NAO prova que ela e necessaria, e isso ja foi verificado: removendo-a,
+                // tudo continua verde. Dois motivos, os dois do ambiente e nao do codigo — buffers em
+                // D3D12 tem promocao e decaimento implicitos de estado, entao a camada de debug nao
+                // reprova a leitura por SRV de um buffer "em" UAV; e o WARP completa o primeiro dispatch
+                // antes do segundo, o que esconde a corrida. A ausencia da barreira e uma CORRIDA, e
+                // corrida nao se prova por teste deterministico. Ela fica porque o contrato exige, nao
+                // porque algo aqui a exija.
+                Ir(L, Counts.Get(), SRV_);
                 Ir(L, Args.Get(), UAV_); Ir(L, Cursors.Get(), UAV_); Ir(L, ScatCont.Get(), UAV_);
                 L->SetPipelineState(S.PipelineScatter.Get());
                 L->SetComputeRootSignature(S.RootScatter.Get());
@@ -1699,7 +1606,7 @@ namespace {
                 L->SetComputeRootDescriptorTable(2, GpuAt(kScatUav));
                 if (Total > 0) L->Dispatch((Total + 63u) / 64u, 1, 1);
 
-                // 4. finalizacao
+                // 3. finalizacao
                 Ir(L, ScatCont.Get(), SRV_); Ir(L, Cursors.Get(), SRV_); Ir(L, ClassCont.Get(), SRV_);
                 Ir(L, Draw.Get(), UAV_); Ir(L, Status.Get(), UAV_);
                 L->SetPipelineState(S.PipelineFinalize.Get());
@@ -1709,17 +1616,15 @@ namespace {
                 L->SetComputeRootDescriptorTable(2, GpuAt(kFinUav));
                 L->Dispatch(1, 1, 1);
 
-                // 5. leitura
+                // 4. leitura
                 const auto CS = D3D12_RESOURCE_STATE_COPY_SOURCE;
                 for (ID3D12Resource* R : { Counts.Get(), Cursors.Get(), Draw.Get(), ScatCont.Get(),
-                                           ClassCont.Get(),
-                                           PrefCont.Get(), Status.Get(), Args.Get() })
+                                           ClassCont.Get(), Status.Get(), Args.Get() })
                     Ir(L, R, CS);
                 L->CopyResource(LCounts.Get(), Counts.Get());
                 L->CopyResource(LCursors.Get(), Cursors.Get());
                 L->CopyResource(LDraw.Get(), Draw.Get());
                 L->CopyResource(LScat.Get(), ScatCont.Get());
-                L->CopyResource(LPref.Get(), PrefCont.Get());
                 L->CopyResource(LStatus.Get(), Status.Get());
                 L->CopyResource(LClass.Get(), ClassCont.Get());
                 L->CopyResource(LArgs.Get(), Args.Get());
@@ -1738,7 +1643,6 @@ namespace {
             O.Cursors  = Ler(LCursors.Get(), Slots * 4u);
             O.Draw     = Ler(LDraw.Get(), Slots * 4u);
             O.ScatCont = Ler(LScat.Get(), GpuScatterCounterCount * 4u);
-            O.PrefCont = Ler(LPref.Get(), GpuPrefixCounterCount * 4u);
             const std::vector<u32> St = Ler(LStatus.Get(), 8u);
             O.Status    = St[0];
             O.Reason    = St[1];
@@ -1761,7 +1665,9 @@ int main() try {
     TestarDesfechos();
     TestarIndiceDeLote();
     TestarPortaDeDimensionamento();
-    TestarPrefixo();
+    TestarCapacidades();
+    TestarLayout();
+    TestarPreflightDeRegioes();
     TestarUmResultadoPorCandidato();
     TestarParticoes();
     TestarPreflight();
@@ -1772,12 +1678,6 @@ int main() try {
     Check(!Bytecode.empty(), "a sonda compilada foi encontrada");
     if (Bytecode.empty()) {
         std::cerr << "  (esperado em " << SMILE_CLASSIFY_CANDIDATES_CSO << ")\n";
-        return 1;
-    }
-    const std::vector<u8> BytecodePrefixo = LerArquivo(SMILE_PREFIX_BATCH_COUNTS_CSO);
-    Check(!BytecodePrefixo.empty(), "a sonda do prefixo foi encontrada");
-    if (BytecodePrefixo.empty()) {
-        std::cerr << "  (esperado em " << SMILE_PREFIX_BATCH_COUNTS_CSO << ")\n";
         return 1;
     }
     const std::vector<u8> BytecodeScatter = LerArquivo(SMILE_SCATTER_INDIRECT_ARGS_CSO);
@@ -1794,7 +1694,7 @@ int main() try {
     }
 
     FSonda S;
-    S.Construir(Bytecode, BytecodePrefixo, BytecodeScatter, BytecodeFinalize);
+    S.Construir(Bytecode, BytecodeScatter, BytecodeFinalize);
 
     const auto Mats = Materiais(); const auto Meshs = Malhas();
     const auto Metas = Meta();     const auto Slot = Slots();
@@ -1802,7 +1702,8 @@ int main() try {
     FGpuClassifyInput In{};
     In.Slots = Slot; In.Meta = Metas; In.Materials = Mats; In.Meshes = Meshs;
     In.PoolCount = kPoolCount;
-        In.BatchCapacity = CapacidadeDeLote(kPoolCount);
+    In.BatchCapacity = CapacidadeDeLote(kPoolCount);
+    const u32 Candidatos = static_cast<u32>(Slot.size());
 
     std::vector<u32> LotesCpu, ContCpu;
     ClassifyCandidates(In, LotesCpu, ContCpu);
@@ -1829,8 +1730,7 @@ int main() try {
         CheckEq(ContCpu[O], Querido[O], std::string("contador ") + NomeDesfecho(O) + " na CPU");
         SomaGpu += Gpu.Contadores[O];
     }
-    CheckEq(SomaGpu, static_cast<u32>(Slot.size()),
-            "na GPU tambem: um desfecho por candidato, nem mais nem menos");
+    CheckEq(SomaGpu, Candidatos, "na GPU tambem: um desfecho por candidato, nem mais nem menos");
 
     // Os lotes, elemento a elemento. O lote 0 tem DOIS comandos: sem ele, um shader que
     // sobrescrevesse em vez de somar passaria.
@@ -1848,97 +1748,159 @@ int main() try {
                     "classe " + std::to_string(C) + " nao emite comando nesta fase");
 
 
-    // ---- SCATTER em WARP --------------------------------------------------------------------
+    // ---- as REGIOES da cena, pelas funcoes de PRODUCAO ---------------------------------------
+    //
+    // Calculadas das TABELAS, e de nada que o dispatch acima produziu: nem das contagens da GPU, que
+    // seria readback, nem das da CPU, que seria reproduzir o frame. Todo o resto deste teste consome
+    // estas regioes — o scatter isolado e a cadeia —, e nenhum offset e fornecido pelo fixture.
+    std::vector<u64> CapReg;
+    std::vector<FGpuIndirectRegion> Regioes;
+    u32 TotalReg = 0u;
+    CheckEq(GpuCountRegionCapacities(Metas, Mats, Meshs, kPoolCount, CapReg), GpuClassifyPreflightOk,
+            "capacidades das regioes da cena");
+    CheckEq(GpuLayoutRegions(CapReg, Regioes, TotalReg), GpuRegionLayoutOk,
+            "layout das regioes da cena");
+    CheckEq(GpuRegionPreflight(Regioes, In.BatchCapacity, TotalReg), GpuRegionPreflightOk,
+            "e a porta das regioes aprova, com IndirectArgs do tamanho exato do total");
+    // A FOLGA, que e o que distingue offset de regiao de prefixo das contagens: com prefixo, o lote 1
+    // comecaria em 2.
+    Check(Regioes.size() > 1 && Regioes[1].Offset == 4u && LotesCpu[0] == 2u,
+          "o lote 1 comeca em 4, depois da folga do lote 0, e nao na contagem dele");
+
+    // ---- SCATTER em WARP, isolado ---------------------------------------------------------------
     //
     // `IndirectArgs` nasce com o comando POISON em toda posicao. Duas coisas ficam visiveis assim:
-    // BURACO (posicao reservada que o scatter nao escreveu: poison dentro de um lote) e RESIDUO
-    // (escrita fora do lote: comando onde devia continuar poison). A comparacao dentro do lote e por
-    // MULTICONJUNTO, porque a ordem la depende de qual thread chega primeiro ao cursor.
+    // BURACO (posicao reservada que o scatter nao escreveu: poison entre os comandos de um lote) e
+    // escrita FORA DA REGIAO (comando onde devia continuar poison). A comparacao dentro da regiao e
+    // por MULTICONJUNTO, porque a ordem la depende de qual thread chega primeiro ao cursor.
     {
-        std::vector<u32> OffCpu; u32 EstCpu = 0u;
-        const u32 TotalCmd = PrefixBatchCounts(LotesCpu, OffCpu, EstCpu);
-        const u32 Capacidade = static_cast<u32>(Slot.size());
-        CheckEq(GpuScatterPreflight(Capacidade, Capacidade), GpuScatterPreflightOk,
-                "a capacidade do teste passa pelo preflight do scatter");
-
-        const FSonda::FScatter G = S.ExecutarScatter(In, OffCpu, LotesCpu, {}, 0u, Capacidade);
+        const FSonda::FScatter G = S.ExecutarScatter(In, Regioes, LotesCpu, {}, TotalReg);
 
         CheckEq(G.Contadores[GpuScatterCounterEmitted], Gpu.Contadores[GpuClassifyIndirect],
                 "scatter na GPU emite exatamente o que o classify contou");
-        CheckEq(G.Contadores[GpuScatterCounterSuppressed], 0u, "sem estouro, nada suprimido");
         CheckEq(G.Contadores[GpuScatterCounterFaultCursor], 0u, "cursores zerados: sem falha de cursor");
-        CheckEq(G.Contadores[GpuScatterCounterFaultCapacity], 0u, "preflight aprovado: sem falha de capacidade");
+        CheckEq(G.Contadores[GpuScatterCounterFaultRegion], 0u, "regioes das tabelas: sem falha de regiao");
+        CheckEq(G.Contadores[GpuScatterCounterFaultCapacity], 0u, "regioes no recurso: sem falha de capacidade");
+        ConferirArgsDaCena(G.Args, "GPU");
 
-        // Oraculo escrito A MAO: lote 0 = slots 0 e 2 na malha 0; lote 1 = slot 1 na malha 1.
-        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
-        const auto Got0  = Ordenados(&G.Args[OffCpu[0]], LotesCpu[0]);
-        const auto Want0 = Ordenados(L0, 2u);
-        Check(LotesCpu[0] == 2u && Got0.size() == 2 && MesmoComando(Got0[0], Want0[0]) &&
-              MesmoComando(Got0[1], Want0[1]),
-              "GPU, lote 0: o multiconjunto exato (dois comandos, ordem livre)");
-        Check(LotesCpu[1] == 1u && MesmoComando(G.Args[OffCpu[1]], Esperado(1u, 1u)),
-              "GPU, lote 1: o comando exato");
-
-        // Nenhum buraco: toda posicao reservada deixou de ser poison.
-        for (u32 P = 0; P < TotalCmd; ++P)
-            Check(!MesmoComando(G.Args[P], ComandoPoison()),
-                  "posicao reservada " + std::to_string(P) + " foi escrita (sem buraco)");
-        // Nenhum residuo: toda posicao a partir do total continua poison.
-        for (u32 P = TotalCmd; P < Capacidade; ++P)
-            Check(MesmoComando(G.Args[P], ComandoPoison()),
-                  "posicao " + std::to_string(P) + " fora dos lotes continua poison (sem residuo)");
-
-        // GPU x CPU, lote a lote como multiconjunto, e o residuo byte a byte. A referencia CPU recebe
-        // a MESMA semente, entao o que ficou intocado tambem tem de coincidir.
-        std::vector<FGpuIndirectDrawArgs> ArgsCpu(Capacidade, ComandoPoison());
+        // GPU x CPU, regiao a regiao como multiconjunto, e a folga byte a byte. A referencia CPU
+        // recebe a MESMA semente, entao o que ficou intocado tambem tem de coincidir.
+        std::vector<FGpuIndirectDrawArgs> ArgsCpu(TotalReg, ComandoPoison());
         std::vector<u32> ContScatterCpu;
         std::vector<u32> CursoresCpu(LotesCpu.size(), 0u);
-        ScatterIndirectArgs(In, OffCpu, LotesCpu, 0u, CursoresCpu, ArgsCpu, ContScatterCpu);
+        ScatterIndirectArgs(In, Regioes, LotesCpu, CursoresCpu, ArgsCpu, ContScatterCpu);
+        for (u32 K = 0; K < GpuScatterCounterCount; ++K)
+            CheckEq(ContScatterCpu[K], G.Contadores[K],
+                    "contador " + std::to_string(K) + " do scatter: CPU == GPU");
         for (u32 B = 0; B < In.BatchCapacity; ++B) {
-            if (LotesCpu[B] == 0u) continue;
-            const auto A = Ordenados(&G.Args[OffCpu[B]], LotesCpu[B]);
-            const auto C = Ordenados(&ArgsCpu[OffCpu[B]], LotesCpu[B]);
-            bool Iguais = A.size() == C.size();
-            for (size_t K = 0; Iguais && K < A.size(); ++K) Iguais = MesmoComando(A[K], C[K]);
-            Check(Iguais, "lote " + std::to_string(B) + ": multiconjunto GPU == CPU");
+            const FGpuIndirectRegion& R = Regioes[B];
+            if (R.Capacity == 0u) continue;
+            const auto A  = Ordenados(&G.Args[R.Offset], LotesCpu[B]);
+            const auto Cc = Ordenados(&ArgsCpu[R.Offset], LotesCpu[B]);
+            bool Iguais = A.size() == Cc.size();
+            for (size_t K = 0; Iguais && K < A.size(); ++K) Iguais = MesmoComando(A[K], Cc[K]);
+            Check(Iguais, "regiao " + std::to_string(B) + ": multiconjunto GPU == CPU");
+            for (u32 P = R.Offset + LotesCpu[B]; P < R.Offset + R.Capacity; ++P)
+                Check(MesmoComando(G.Args[P], ArgsCpu[P]),
+                      "folga na posicao " + std::to_string(P) + ": GPU == CPU");
         }
-        for (u32 P = TotalCmd; P < Capacidade; ++P)
-            Check(MesmoComando(G.Args[P], ArgsCpu[P]),
-                  "residuo na posicao " + std::to_string(P) + ": GPU == CPU");
 
-        // ---- estouro do prefixo: o scatter se ABSTEM por inteiro ----
+        // ---- REGIAO CURTA: mais comandos no lote do que a regiao reserva ----
         //
-        // Com os offsets ENVENENADOS, como o prefixo os publica sob estouro. Nao e redundancia com
-        // passar offsets bons: e o caso do perigo real. Sem a abstencao, o cursor 1 do lote 0 cai em
-        // 0xFFFFFFFF + 1 = 0 e escreve em cima da primeira posicao — que aqui tem de continuar poison.
-        const std::vector<u32> OffPoison(OffCpu.size(), kGpuBatchOffsetPoison);
-        const FSonda::FScatter E = S.ExecutarScatter(In, OffPoison, LotesCpu, {}, 1u, Capacidade);
-        CheckEq(E.Contadores[GpuScatterCounterSuppressed], static_cast<u32>(Slot.size()),
-                "sob estouro, todo candidato e suprimido");
-        CheckEq(E.Contadores[GpuScatterCounterEmitted], 0u, "e nenhum comando e emitido");
-        CheckEq(E.Contadores[GpuScatterCounterFaultCursor] + E.Contadores[GpuScatterCounterFaultCapacity], 0u,
-                "nem registrado como falha: a abstencao vem antes de qualquer cursor");
-        for (u32 P = 0; P < Capacidade; ++P)
-            Check(MesmoComando(E.Args[P], ComandoPoison()),
-                  "sob estouro a posicao " + std::to_string(P) + " continua poison");
+        // Tabela montada A MAO: a funcao de producao nao a produziria para esta cena, porque as
+        // tabelas dao capacidade 4 ao lote 0. Ela passa pela porta das regioes — que confere
+        // estrutura, e nao conhece o frame —, e so a GPU descobre que dois comandos nao cabem numa
+        // posicao. O excedente NAO pode ir para a posicao 1, que e do lote 1.
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u });
+        Curta[0] = { 0u, 1u };
+        Curta[1] = { 1u, 2u };
+        CheckEq(GpuRegionPreflight(Curta, In.BatchCapacity, 3u), GpuRegionPreflightOk,
+                "a regiao curta e estruturalmente valida: a porta nao tem como reprova-la");
+        const FSonda::FScatter C = S.ExecutarScatter(In, Curta, LotesCpu, {}, 3u);
+        CheckEq(C.Contadores[GpuScatterCounterFaultRegion], 1u,
+                "regiao curta: o comando excedente vira falha");
+        CheckEq(C.Contadores[GpuScatterCounterEmitted], 2u, "regiao curta: os outros dois sao escritos");
+        CheckEq(C.Contadores[GpuScatterCounterFaultCursor] + C.Contadores[GpuScatterCounterFaultCapacity],
+                0u, "regiao curta: e nenhuma outra falha");
+        Check(MesmoComando(C.Args[0], Esperado(0u, 0u)) || MesmoComando(C.Args[0], Esperado(2u, 0u)),
+              "regiao curta: a unica posicao do lote 0 tem um dos dois comandos dele");
+        Check(MesmoComando(C.Args[1], Esperado(1u, 1u)),
+              "regiao curta: a posicao 1, do lote 1, NAO foi invadida pelo excedente do lote 0");
+        Check(MesmoComando(C.Args[2], ComandoPoison()), "regiao curta: a folga do lote 1 continua poison");
+        {
+            std::vector<FGpuIndirectDrawArgs> ArgsC(3u, ComandoPoison());
+            std::vector<u32> CurC(LotesCpu.size(), 0u), ContC;
+            ScatterIndirectArgs(In, Curta, LotesCpu, CurC, ArgsC, ContC);
+            for (u32 K = 0; K < GpuScatterCounterCount; ++K)
+                CheckEq(ContC[K], C.Contadores[K],
+                        "regiao curta, contador " + std::to_string(K) + ": CPU == GPU");
+        }
+
+        // ---- REGIAO FORA DO RECURSO ----
+        //
+        // As regioes de producao contra um `IndirectArgs` de CINCO comandos: a regiao 1 = [4, 6) nao
+        // cabe. A porta das regioes reprova (conferido aqui), e o shader tem de conter mesmo assim.
+        CheckEq(GpuRegionPreflight(Regioes, In.BatchCapacity, TotalReg - 1u),
+                GpuRegionPreflightSmallArgsBuffer, "a porta reprova as regioes da cena contra cinco comandos");
+        const FSonda::FScatter F = S.ExecutarScatter(In, Regioes, LotesCpu, {}, TotalReg - 1u);
+        CheckEq(F.Contadores[GpuScatterCounterFaultCapacity], 1u,
+                "regiao fora do recurso: o comando do lote 1 vira falha");
+        CheckEq(F.Contadores[GpuScatterCounterEmitted], 2u, "e os do lote 0, que cabe, sao escritos");
+        CheckEq(F.Contadores[GpuScatterCounterFaultCursor] + F.Contadores[GpuScatterCounterFaultRegion],
+                0u, "regiao fora do recurso: e nenhuma outra falha");
+        {
+            const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
+            const auto Got0 = Ordenados(F.Args.data(), 2u);
+            const auto Want0 = Ordenados(L0, 2u);
+            Check(MesmoComando(Got0[0], Want0[0]) && MesmoComando(Got0[1], Want0[1]),
+                  "regiao fora do recurso: o lote 0 intacto");
+            for (const u32 P : { 2u, 3u, 4u })
+                Check(MesmoComando(F.Args[P], ComandoPoison()),
+                      "regiao fora do recurso: a posicao " + std::to_string(P) + " continua poison");
+            std::vector<FGpuIndirectDrawArgs> ArgsF(TotalReg - 1u, ComandoPoison());
+            std::vector<u32> CurF(LotesCpu.size(), 0u), ContF;
+            ScatterIndirectArgs(In, Regioes, LotesCpu, CurF, ArgsF, ContF);
+            for (u32 K = 0; K < GpuScatterCounterCount; ++K)
+                CheckEq(ContF[K], F.Contadores[K],
+                        "regiao fora do recurso, contador " + std::to_string(K) + ": CPU == GPU");
+        }
+
+        // ---- a regiao cujo FIM daria a volta em u32 ----
+        //
+        // `{0xFFFFFFFF, 2}`: somando antes de comparar, o fim seria 1, e 1 cabe em qualquer buffer. O
+        // comando iria para a posicao 0xFFFFFFFF — fora do recurso — ou, com um cursor a mais, para a
+        // posicao 0, em cima do lote 0.
+        std::vector<FGpuIndirectRegion> Volta = Regioes;
+        Volta[1] = { 0xFFFFFFFFu, 2u };
+        const FSonda::FScatter V = S.ExecutarScatter(In, Volta, LotesCpu, {}, TotalReg);
+        CheckEq(V.Contadores[GpuScatterCounterFaultCapacity], 1u,
+                "o fim que daria a volta e falha de capacidade, e nao escrita");
+        CheckEq(V.Contadores[GpuScatterCounterEmitted], 2u, "e so o lote 0 e escrito");
+        for (const u32 P : { 4u, 5u })
+            Check(MesmoComando(V.Args[P], ComandoPoison()),
+                  "fim que daria a volta: a posicao " + std::to_string(P) + " continua poison");
+        {
+            std::vector<FGpuIndirectDrawArgs> ArgsV(TotalReg, ComandoPoison());
+            std::vector<u32> CurV(LotesCpu.size(), 0u), ContV;
+            ScatterIndirectArgs(In, Volta, LotesCpu, CurV, ArgsV, ContV);
+            for (u32 K = 0; K < GpuScatterCounterCount; ++K)
+                CheckEq(ContV[K], V.Contadores[K],
+                        "fim que daria a volta, contador " + std::to_string(K) + ": CPU == GPU");
+        }
     }
 
-    // ---- a CADEIA sobre recursos PERSISTENTES: reset -> classify -> prefixo -> scatter -> final ----
+    // ---- a CADEIA sobre recursos PERSISTENTES: reset -> classify -> scatter -> finalizacao ----
     //
     // Os executores acima criam buffers novos a cada chamada e por isso nao enxergam um acumulador que
     // atravessa de uma execucao para a seguinte. Aqui a cadeia roda DUAS vezes sobre os mesmos
     // recursos, como o frame faria, e depois uma terceira sem o reset.
     {
-        const u32 Capacidade = static_cast<u32>(Slot.size());
-        FCadeia C(S, In, Capacidade);
+        FCadeia C(S, In, Regioes, TotalReg);
         C.Criar();
 
         const FCadeia::FSaida R1 = C.Rodar(FCadeia::kResetTudo);
         const FCadeia::FSaida R2 = C.Rodar(FCadeia::kResetTudo);
 
-        const u32 QueridoLote[8]{ 2u, 1u, 0u, 0u, 0u, 0u, 0u, 0u };
-        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
-        const auto Want0 = Ordenados(L0, 2u);
         for (u32 Rodada = 1; Rodada <= 2u; ++Rodada) {
             const FCadeia::FSaida& R = Rodada == 1u ? R1 : R2;
             const std::string N = std::to_string(Rodada) + "a execucao";
@@ -1947,15 +1909,13 @@ int main() try {
             for (u32 B = 0; B < In.BatchCapacity; ++B) {
                 CheckEq(R.Draw[B], QueridoLote[B], N + ": DrawCounts do lote " + std::to_string(B));
                 CheckEq(R.Cursors[B], R.Counts[B], N + ": cursor == contagem no lote " + std::to_string(B));
+                // O count buffer nunca alcanca alem da regiao. E isso que torna
+                // `MaxCommandCount = Capacity` um teto que nunca corta comando real.
+                Check(R.Draw[B] <= Regioes[B].Capacity,
+                      N + ": DrawCounts dentro da regiao do lote " + std::to_string(B));
             }
             CheckEq(R.ScatCont[GpuScatterCounterEmitted], 3u, N + ": tres comandos emitidos");
-            const auto Got0 = Ordenados(&R.Args[0], 2u);
-            Check(MesmoComando(Got0[0], Want0[0]) && MesmoComando(Got0[1], Want0[1]),
-                  N + ": lote 0, multiconjunto exato");
-            Check(MesmoComando(R.Args[2], Esperado(1u, 1u)), N + ": lote 1, comando exato");
-            for (u32 P = 3; P < Capacidade; ++P)
-                Check(MesmoComando(R.Args[P], ComandoPoison()),
-                      N + ": posicao " + std::to_string(P) + " continua poison");
+            ConferirArgsDaCena(R.Args, N);
         }
 
         // As duas execucoes com reset produzem o MESMO resultado. E isto que prova que nada atravessou
@@ -1967,12 +1927,15 @@ int main() try {
         //
         // Sem reset os quatro acumuladores crescem EM SINCRONIA: as contagens dobram para {4, 2}, os
         // cursores continuam de {2, 1} e terminam em {4, 2}, os emitidos vao a 6. Toda igualdade ENTRE
-        // acumuladores continua valendo. So a ANCORA — candidatos desta execucao, vindos do cbuffer —
-        // enxerga que os contadores do classify somam 28, e nao 14.
+        // acumuladores continua valendo — e, com a FOLGA das regioes, a contagem dobrada ainda cabe
+        // nelas. So a ANCORA — candidatos desta execucao, vindos do cbuffer — enxerga que os
+        // contadores do classify somam 28, e nao 14.
         const FCadeia::FSaida R3 = C.Rodar(0u);
         CheckEq(R3.Counts[0], 4u, "sem reset BatchCounts acumula: 2 + 2");
         CheckEq(R3.Cursors[0], R3.Counts[0],
                 "e os cursores acumulam JUNTO — por isso cursor == contagem nao basta");
+        Check(R3.Counts[0] <= Regioes[0].Capacity && R3.Counts[1] <= Regioes[1].Capacity,
+              "e a contagem dobrada CABE nas regioes — por isso a capacidade tambem nao basta");
         CheckEq(R3.Status, 0u, "sem reset o frame e invalidado");
         CheckEq(R3.Reason, static_cast<u32>(GpuFinalizeClassifyAnchor),
                 "e o UNICO motivo e a ancora: sem ela, esquecer o reset inteiro passaria");
@@ -1981,8 +1944,8 @@ int main() try {
 
         // A referencia CPU da finalizacao, sobre os MESMOS numeros lidos da GPU, chega ao mesmo veredito.
         std::vector<u32> DrawCpu; u32 MotivoCpu = 0u;
-        const u32 StatusCpu = FinalizeDrawCounts(R3.Counts, R3.PrefCont, R3.ScatCont, R3.Cursors,
-                                                 R3.ClassCont, Capacidade, DrawCpu, MotivoCpu);
+        const u32 StatusCpu = FinalizeDrawCounts(R3.Counts, Regioes, R3.ScatCont, R3.Cursors,
+                                                 R3.ClassCont, Candidatos, DrawCpu, MotivoCpu);
         CheckEq(StatusCpu, R3.Status, "finalizacao CPU == GPU no status");
         CheckEq(MotivoCpu, R3.Reason, "finalizacao CPU == GPU no motivo");
 
@@ -1990,11 +1953,12 @@ int main() try {
         //
         // Antes de cada cenario, uma execucao limpa — que tambem prova que o reset completo recupera
         // de qualquer estado parcial. Os motivos esperados foram calculados a mao a partir do estado
-        // que a execucao limpa deixa (contagens {2,1}, cursores {2,1}, 3 emitidos, 14 candidatos):
+        // que a execucao limpa deixa (contagens {2,1}, cursores {2,1}, 3 emitidos, 14 candidatos,
+        // regioes {4,2}):
         //
         //   sem reset dos CURSORES   : comecam em {2,1}, todos os tres passam da contagem
         //                              -> falha de cursor + cursor != contagem
-        //   sem reset das CONTAGENS  : viram {4,2} contra 3 indiretos frescos
+        //   sem reset das CONTAGENS  : viram {4,2} contra 3 indiretos frescos; cabem nas regioes
         //                              -> soma dos lotes + cursor != contagem
         //   sem reset do SCATTER     : 6 emitidos contra 3 indiretos -> soma do scatter
         //   sem reset do CLASSIFY    : 28 contra 14 candidatos, 6 indiretos contra 3 nos lotes e no
@@ -2022,76 +1986,54 @@ int main() try {
             // espelho seria verificado so no cenario sem reset nenhum, e um elo divergente nos outros
             // passaria.
             std::vector<u32> DCpu; u32 MCpu = 0u;
-            FinalizeDrawCounts(R.Counts, R.PrefCont, R.ScatCont, R.Cursors, R.ClassCont, Capacidade,
+            FinalizeDrawCounts(R.Counts, Regioes, R.ScatCont, R.Cursors, R.ClassCont, Candidatos,
                                DCpu, MCpu);
             CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
         }
-    }
 
-    // O prefixo com `BatchCounts` SEMEADO, fora do fluxo encadeado.
-    //
-    // Motivo: pelo fluxo normal as contagens vem do classify e a soma nunca pode estourar, entao a
-    // protecao de estouro do HLSL nunca e executada — quebra-la continuaria verde. Aqui ela e
-    // alimentada direto.
-    {
-        // Caso normal, mesmo vetor do teste CPU. O oraculo continua escrito a mao.
-        const std::vector<u32> Contagens{ 2u, 0u, 5u, 1u, 0u, 3u };
-        const u32 QueridoOff[6]{ 0u, 2u, 2u, 7u, 8u, 8u };
-        const FSonda::FPrefixo P = S.ExecutarPrefixo(Contagens);
-        for (u32 I = 0; I < 6u; ++I)
-            CheckEq(P.Offsets[I], QueridoOff[I], "prefixo isolado, offset " + std::to_string(I));
-        CheckEq(P.Contadores[GpuPrefixCounterTotal], 11u, "prefixo isolado: total");
-        CheckEq(P.Contadores[GpuPrefixCounterOverflow], 0u, "prefixo isolado: sem estouro");
+        // ---- REGIOES que a CPU nao aprovaria, entregues a cadeia inteira ----
+        //
+        // O scatter isolado provou que a defesa CONTEM a escrita. A pergunta aqui e outra: a falha
+        // chega ao COUNT BUFFER? Um frame com regiao estourada tem de publicar zero em TODO lote — nao
+        // so no que estourou —, com o motivo exato:
+        //
+        //   regiao curta ({0,1} e {1,2}) : o lote 0 conta 2 numa regiao de 1
+        //                                  -> estouro de regiao (finalizacao) + falha de regiao (scatter)
+        //   regiao fora do recurso       : regioes de producao, shader recebendo cinco comandos
+        //                                  -> falha de capacidade (scatter)
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u });
+        Curta[0] = { 0u, 1u };
+        Curta[1] = { 1u, 2u };
+        struct FRegiaoRuim {
+            const char*                     Nome;
+            std::vector<FGpuIndirectRegion> Tabela;
+            u32                             CapacidadeShader;
+            u32                             Motivo;
+        };
+        const FRegiaoRuim Ruins[] = {
+            { "regiao curta", Curta, TotalReg, GpuFinalizeRegionOverflow | GpuFinalizeFaultRegion },
+            { "regiao fora do recurso", Regioes, TotalReg - 1u, GpuFinalizeFaultCapacity },
+        };
+        for (const FRegiaoRuim& Rr : Ruins) {
+            C.Regioes          = Regioes;
+            C.CapacidadeShader = TotalReg;
+            const FCadeia::FSaida Limpa = C.Rodar(FCadeia::kResetTudo);
+            CheckEq(Limpa.Status, 1u,
+                    std::string("regioes de producao fecham antes de '") + Rr.Nome + "'");
 
-        // E a referencia CPU sobre as mesmas contagens.
-        std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
-        PrefixBatchCounts(Contagens, OffCpu, EstourouCpu);
-        for (u32 I = 0; I < 6u; ++I)
-            CheckEq(OffCpu[I], P.Offsets[I], "prefixo isolado, CPU x GPU em " + std::to_string(I));
-    }
-    {
-        // O ESTOURO, que o fluxo encadeado nao alcanca. A soma passa de u32 no indice 1.
-        const std::vector<u32> Contagens{ 0xFFFFFFF0u, 0x20u, 1u, 7u };
-        const FSonda::FPrefixo P = S.ExecutarPrefixo(Contagens);
-        CheckEq(P.Contadores[GpuPrefixCounterOverflow], 1u,
-                "o HLSL marca a soma que daria a volta");
-        CheckEq(P.Offsets[0], 0u, "a entrada anterior ao estouro continua correta");
-        for (u32 I = 1; I < 4u; ++I)
-            CheckEq(P.Offsets[I], kGpuBatchOffsetPoison,
-                    "da entrada que falhou em diante, poison (" + std::to_string(I) + ")");
-
-        // Elemento a elemento contra a referencia CPU, inclusive o poison: e o que prova que os dois
-        // lados implementam o MESMO contrato pos-estouro, e nao dois contratos parecidos.
-        std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
-        PrefixBatchCounts(Contagens, OffCpu, EstourouCpu);
-        CheckEq(EstourouCpu, P.Contadores[GpuPrefixCounterOverflow], "os dois marcam estouro");
-        for (u32 I = 0; I < 4u; ++I)
-            CheckEq(OffCpu[I], P.Offsets[I], "pos-estouro, CPU x GPU em " + std::to_string(I));
-    }
-    // O prefixo, sobre o `BatchCounts` que o classify acabou de escrever — sem readback entre os
-    // dois, como sera na producao. O oraculo continua escrito a mao.
-    {
-        const u32 QueridoOffset[8]{ 0u, 2u, 3u, 3u, 3u, 3u, 3u, 3u };
-        for (u32 B = 0; B < In.BatchCapacity; ++B)
-            CheckEq(Gpu.Offsets[B], QueridoOffset[B],
-                    "offset do lote " + std::to_string(B) + " na GPU");
-        CheckEq(Gpu.PrefixCont[GpuPrefixCounterTotal], 3u, "o total do prefixo e o de comandos");
-        CheckEq(Gpu.PrefixCont[GpuPrefixCounterOverflow], 0u, "e o prefixo nao estourou");
-
-        // E a referencia CPU sobre as MESMAS contagens.
-        std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
-        const u32 TotalCpu = PrefixBatchCounts(LotesCpu, OffCpu, EstourouCpu);
-        CheckEq(TotalCpu, Gpu.PrefixCont[GpuPrefixCounterTotal], "GPU e CPU somam o mesmo total");
-        for (u32 B = 0; B < In.BatchCapacity; ++B)
-            CheckEq(OffCpu[B], Gpu.Offsets[B], "offset do lote " + std::to_string(B) + ": CPU x GPU");
-
-        // A propriedade que o scatter vai depender: o intervalo de cada lote nao invade o do
-        // seguinte. `Offset[b] + Count[b] <= Offset[b+1]`, com igualdade porque o prefixo e denso.
-        for (u32 B = 0; B + 1 < In.BatchCapacity; ++B)
-            CheckEq(Gpu.Offsets[B] + Gpu.Lotes[B], Gpu.Offsets[B + 1],
-                    "o lote " + std::to_string(B) + " termina onde o seguinte comeca");
-        CheckEq(Gpu.Offsets[In.BatchCapacity - 1u] + Gpu.Lotes[In.BatchCapacity - 1u],
-                Gpu.PrefixCont[GpuPrefixCounterTotal], "e o ultimo termina no total");
+            C.Regioes          = Rr.Tabela;
+            C.CapacidadeShader = Rr.CapacidadeShader;
+            const FCadeia::FSaida R = C.Rodar(FCadeia::kResetTudo);
+            const std::string N = Rr.Nome;
+            CheckEq(R.Status, 0u, N + ": frame invalidado");
+            CheckEq(R.Reason, Rr.Motivo, N + ": o motivo exato");
+            for (u32 B = 0; B < In.BatchCapacity; ++B)
+                CheckEq(R.Draw[B], 0u, N + ": count buffer zerado no lote " + std::to_string(B));
+            std::vector<u32> DCpu; u32 MCpu = 0u;
+            FinalizeDrawCounts(R.Counts, Rr.Tabela, R.ScatCont, R.Cursors, R.ClassCont, Candidatos,
+                               DCpu, MCpu);
+            CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
+        }
     }
 
     // Capacidade curta: a DEFESA de ultima instancia do shader, sob uma entrada que o preflight
@@ -2111,8 +2053,8 @@ int main() try {
         CheckEq(G.Contadores[GpuClassifyIndirect], 2u, "e os outros dois comandos continuam");
         CheckEq(G.Lotes[0], 2u, "o lote que cabe recebe os dois");
         u32 Soma = 0;
-        for (const u32 C : G.Contadores) Soma += C;
-        CheckEq(Soma, static_cast<u32>(Slot.size()), "overflow tambem e UM desfecho, nao zero");
+        for (const u32 Ct : G.Contadores) Soma += Ct;
+        CheckEq(Soma, Candidatos, "overflow tambem e UM desfecho, nao zero");
     }
 
     // Lista vazia: nenhum dispatch, nenhum contador. Sem este caso, um shader que lesse
@@ -2122,7 +2064,7 @@ int main() try {
         Vazia.Slots = {};
         const FResultado G = S.Executar(Vazia);
         u32 Soma = 0;
-        for (const u32 C : G.Contadores) Soma += C;
+        for (const u32 Ct : G.Contadores) Soma += Ct;
         CheckEq(Soma, 0u, "lista vazia nao produz desfecho nenhum");
     }
 

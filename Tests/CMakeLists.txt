@@ -313,8 +313,8 @@ set_tests_properties(Smile.GpuSceneExpandWarp PROPERTIES
     TIMEOUT 240
 )
 
-# Classificacao e contagem por lote (Fase 5). Roda o shader de PRODUCAO em WARP e compara com a
-# referencia CPU do mesmo header, contra um oraculo escrito a mao.
+# Classificacao, regioes, scatter e finalizacao (Fase 5). Roda os shaders de PRODUCAO em WARP e
+# compara com a referencia CPU do mesmo header, contra um oraculo escrito a mao.
 add_executable(SmileGpuClassifyWarpTests
     GpuClassifyWarpTests.cpp
 )
@@ -323,7 +323,6 @@ target_compile_features(SmileGpuClassifyWarpTests PRIVATE cxx_std_20)
 target_compile_definitions(SmileGpuClassifyWarpTests PRIVATE
     NOMINMAX WIN32_LEAN_AND_MEAN
     SMILE_CLASSIFY_CANDIDATES_CSO="${SMILE_SHADER_OUTPUT_DIR}/ClassifyCandidates.cs_6_0.cso"
-    SMILE_PREFIX_BATCH_COUNTS_CSO="${SMILE_SHADER_OUTPUT_DIR}/PrefixBatchCounts.cs_6_0.cso"
     SMILE_SCATTER_INDIRECT_ARGS_CSO="${SMILE_SHADER_OUTPUT_DIR}/ScatterIndirectArgs.cs_6_0.cso"
     SMILE_FINALIZE_DRAW_COUNTS_CSO="${SMILE_SHADER_OUTPUT_DIR}/FinalizeDrawCounts.cs_6_0.cso"
 )

@@ -35,6 +35,7 @@ CPU/editor                         GPU persistente
 handles estáveis            ────>  instance/meta/transform tables
 dirty pages                 ────>  mesh/material tables
 spatial nodes aprovados     ────>  candidate instance ranges
+regiões por lote (estáveis) ────>  {Offset, Capacity} de cada lote
                                           │
                                           ▼
                                 expandir ranges + culling
@@ -43,7 +44,7 @@ spatial nodes aprovados     ────>  candidate instance ranges
                       ▼                   ▼                   ▼
                     depth              GBuffer             shadows
                       │                   │                   │
-                      └──── count → prefix → scatter → indirect args
+                      └──── count → scatter nas regiões → indirect args
                                           │
                                           ▼
                                    ExecuteIndirect
@@ -460,7 +461,8 @@ Buffers transitórios mínimos:
 - `CandidateInstanceRanges`;
 - `CandidateInstanceIds`;
 - `PassedInstanceIds`/`PassedSubmeshIds`;
-- `BatchCounts`, `BatchOffsets`, `BatchCursors`;
+- `BatchCounts`, `BatchCursors`, `DrawCounts` e a tabela de regiões `{Offset, Capacity}` por lote,
+  dimensionada pela CPU (ver a decisão da Fase 5);
 - `InstanceInfos` compactado;
 - `IndirectArgs` e `IndirectCount`;
 - contadores de overflow e diagnóstico.
@@ -483,7 +485,7 @@ dinâmico demonstrar que IDs pré-calculados não bastam.
 1. expandir ranges;
 2. testar frustum e pass masks;
 3. selecionar candidatos do depth prepass;
-4. contar/prefixar/compactar por batch;
+4. contar e compactar por batch, dentro das regiões que a CPU dimensionou;
 5. desenhar depth por `ExecuteIndirect`;
 6. construir HZB do frame;
 7. aplicar oclusão atual e conservadora aos candidatos do GBuffer;
@@ -1545,11 +1547,30 @@ culling.
 Trocar submissão por renderable por `ExecuteIndirect`, inicialmente desenhando o mesmo conjunto
 frustum-visible ou até todos os candidatos para maximizar depuração.
 
+> **Decisão registrada em 2026-09-14 — regiões da CPU, sem prefixo na GPU.** O `ExecuteIndirect`
+> só deixa a GPU decidir a CONTAGEM: `ArgumentBufferOffset` e `MaxCommandCount` são parâmetros da
+> CPU, e cada lote `{PipelineClass, GeometryPoolId}` precisa de uma chamada própria, porque amarra o
+> par VB/IB do seu pool. Um offset calculado por prefixo na GPU só chegaria ao draw por readback,
+> que a regra 7 proíbe — e nenhuma cena de gate teria exposto isso, porque Bistro, Emerald e as
+> sintéticas cabem num pool só (MEASURE_ONE/SEVEN têm dois).
+>
+> A CPU reserva uma REGIÃO `{Offset, Capacity}` por lote a partir de um limite **estável**:
+> instâncias vivas por `{PipelineClass, GeometryPoolId}` que o indireto pode emitir, recalculado só
+> quando associação, classe ou pool mudam — nunca sobre a lista frustum-visible. A GPU decide quantos
+> comandos existem; o culling da Fase 6 só reduz o `DrawCounts` dentro dessas regiões. É o padrão da
+> água (região fixa por frame slot) e o da Unreal (`InstanceCullingContext`: offsets por draw
+> command atribuídos na CPU).
+>
+> Avaliadas e descartadas: buffer por lote (a capacidade de cada um exige a mesma contagem), VBV/IBV
+> no comando e geometria bindless no VS — as duas últimas removem o eixo de pool, mas não o de
+> classe, que volta na Fase 7. O contrato está em `Engine/Include/Smile/Graphics/Scene/GpuClassify.h`.
+
 ### Trabalho
 
 - definir command signature e layout de args/count;
 - pré-calcular batch IDs por pass/PSO/geometry class;
-- implementar count → prefix → scatter → args reutilizando o padrão da água;
+- implementar count → scatter → args reutilizando o padrão da água, com o offset de cada lote vindo
+  de regiões que a CPU dimensiona (ver a decisão acima);
 - compactar `InstanceInfo`/visible slots;
 - executar depth e GBuffer por grupos de geometry page/PSO;
 - adicionar modo A/B CPU versus GPU-driven no mesmo build;
@@ -1561,7 +1582,7 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 - novo `GpuDrivenRenderer`/`GpuDrawStream` em `Graphics/Renderer` ou `Graphics/Scene`
 - `Engine/Source/Graphics/Renderer/RendererPasses.cpp`
 - `Engine/Source/Graphics/Backend/D3D12/PipelineState.cpp`
-- novos shaders de classify/count/prefix/scatter/args
+- novos shaders de classify/count/scatter/args
 - `Shaders/Water/WaterGenerateDraws.cs.hlsl` como referência, não dependência
 
 ### Gate de saída
@@ -1813,7 +1834,7 @@ materiais controláveis. O resto é opcional e roda quando o eixo dele interessa
 ### 9.4 Sinais obrigatórios
 
 - tempo CPU de scene update, list/classify e submission;
-- tempo GPU de expand/cull/count/prefix/scatter/args por pass;
+- tempo GPU de expand/cull/count/scatter/args por pass;
 - candidates, visible, rejected por motivo;
 - batches potenciais, indirect commands e draws fallback;
 - bytes persistentes, transitórios, dirty/uploaded e high-water marks;

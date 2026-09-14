@@ -1,12 +1,13 @@
 #pragma once
 
-// Classificacao dos candidatos do main view (Fase 5 do GPU-DRIVEN-PLAN, passo 4 da secao 6.2).
+// Classificacao, regioes, scatter e finalizacao do main view (Fase 5 do GPU-DRIVEN-PLAN, passo 4
+// da secao 6.2).
 //
-// Entrada: a lista de slots que o `ExpandInstanceRanges` produziu. Saida: quantos comandos cada
-// LOTE vai ter, mais a contabilidade de todo candidato que nao virou comando.
+// Entrada: a lista de slots que o `ExpandInstanceRanges` produziu. Saida: os argumentos indiretos de
+// cada LOTE, escritos dentro da REGIAO que a CPU reservou para ele, o count buffer que diz quantos
+// deles o frame desenha, e a contabilidade de todo candidato que nao virou comando.
 //
-// Esta fatia so CONTA. O prefixo, a compactacao e a escrita dos argumentos vem depois; nada aqui
-// tem consumidor ainda.
+// Nada aqui tem consumidor de producao ainda: a gravacao do `ExecuteIndirect` e a proxima fatia.
 //
 // ==============================================================================================
 // QUEM DESENHA O QUE, que e a decisao que este arquivo carrega
@@ -72,6 +73,7 @@
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
 #include "Smile/Graphics/Scene/GpuSceneTables.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -246,7 +248,8 @@ namespace Smile {
     };
 
 
-    // A porta do DIMENSIONAMENTO: quantos slots alocar para `BatchCounts` e `BatchOffsets`.
+    // A porta do DIMENSIONAMENTO: quantos slots alocar para `BatchCounts`, `BatchCursors`,
+    // `DrawCounts` e a tabela de regioes.
     //
     // Existe para que a conversao para u32 nao seja escrita em lugar nenhum fora daqui. A sequencia
     // correta e u64 -> porta -> converte, e um `static_cast<u32>(GpuBatchSlotCount(...))` no chamador
@@ -284,80 +287,150 @@ namespace Smile {
     }
 
 
-    // === Prefixo dos lotes ======================================================================
+    // === Regioes: ONDE cada lote escreve =======================================================
     //
-    // `BatchOffsets[b]` = onde os comandos do lote b comecam em `IndirectArgs`. Prefixo EXCLUSIVO
-    // sobre `BatchCounts`, que e o que o classify acabou de produzir.
+    // O `ExecuteIndirect` so deixa a GPU decidir a CONTAGEM. O offset do argumento e o
+    // `MaxCommandCount` sao parametros da CPU, e cada lote precisa de uma chamada propria, porque
+    // amarra o par VB/IB do seu pool. Logo a CPU tem de saber onde cada lote comeca sem ler nada que a
+    // GPU escreveu — e isso descarta um prefixo calculado na GPU: o offset que ele produzisse so
+    // chegaria ao `ExecuteIndirect` por readback, que a regra 7 proibe.
     //
-    // Na GPU, e nao na CPU, porque `BatchCounts` e escrito pela GPU: soma-lo na CPU exigiria
-    // readback, e readback nao entra no caminho do frame (regra 7). Nao e a mesma situacao do
-    // `BuildRangeOutputBases` da Fase 4, que prefixa dados que a CPU produziu.
+    // A REGIAO do lote b e `[Offset, Offset + Capacity)` em `IndirectArgs`, e so o lote b escreve
+    // nela. A CPU decide o espaco maximo; a GPU decide quantos comandos realmente existem no frame, e o
+    // `DrawCounts[b]` publica isso. A gravacao le a MESMA regiao:
     //
-    // ⚠️ O prefixo NAO e in-place: `BatchOffsets` e um buffer separado de `BatchCounts`. Acumular
-    // por cima destruiria as contagens, que continuam servindo para duas coisas — alimentar o
-    // `DrawCounts` sanitizado logo abaixo, e ser o diagnostico de quantos comandos cada lote teria.
+    //     ExecuteIndirect(Signature, MaxCommandCount      = Capacity,
+    //                     IndirectArgs, ArgumentBufferOffset = Offset * 28,
+    //                     DrawCounts,   CountBufferOffset    = b * 4)
     //
-    // ⚠️ `BatchCounts` NAO e o count buffer do `ExecuteIndirect`. Quem vai para o command processor e
-    // o `DrawCounts` (ver abaixo): `BatchCounts` e escrito pelo classify, que nao sabe se o prefixo
-    // vai fechar, e uma contagem nao zero sob estouro faria o draw executar argumentos velhos.
+    // ⚠️ A capacidade vem de um limite ESTAVEL da cena, e nao do frame: instancias VIVAS por
+    // {PipelineClass, GeometryPoolId} que o indireto pode emitir. Ela so muda quando muda a associacao
+    // de uma instancia (material, malha), a classe de um material ou o pool de uma malha — nunca com
+    // camera, visibilidade ou culling. Calcular sobre a lista frustum-visible do frame custaria duas
+    // vezes:
+    //
+    //   - manteria O(candidatos) na CPU por frame, que e o custo que esta fase existe para tirar;
+    //   - a Fase 6 poe o culling na GPU, e ai a CPU nao tem lista visivel nenhuma para contar. Com o
+    //     limite estavel, o culling so REDUZ o `DrawCounts` dentro de regioes que nao mudam.
+    //
+    // Por isso a contagem recebe as TABELAS, e nao a lista de candidatos: nao ha como alimenta-la com
+    // o frame.
+    //
+    // "Viva" e linha com ocupante (generation != 0) que pode virar candidata ao raster. Linhas
+    // `RaytracingOnly` ficam de fora porque sao EXCLUSAO permanente — o proxy do terreno nunca entra na
+    // lista. `Visible` NAO exclui: esconder um objeto no editor nao pode mudar o layout, e a instancia
+    // escondida so reserva espaco que o count buffer nao alcanca.
+    //
+    // O limite pressupoe que cada slot apareca NO MAXIMO UMA VEZ na lista expandida, que e o contrato
+    // do produtor de candidatos. Se ele quebrar, ou a contagem passa da capacidade e a finalizacao
+    // invalida o frame, ou cabe e o objeto e desenhado duas vezes — desenhar demais, que a regra 6
+    // aceita. Em nenhum dos dois casos um comando cai na regiao de outro lote.
 
-    // Offset POISON, gravado em toda entrada que o prefixo nao conseguiu calcular.
-    //
-    // Nao e zero: zero e o offset LEGITIMO do primeiro lote, e um consumidor que ignorasse a flag
-    // passaria a escrever os comandos de um lote por cima dos do lote 0. Com 0xFFFFFFFF ele erra
-    // alto — qualquer verificacao de limite contra a capacidade de `IndirectArgs` o rejeita.
-    //
-    // Mesma decisao, e pelo mesmo motivo, do `kGpuMeshPoisonIndexOffset`.
-    inline constexpr u32 kGpuBatchOffsetPoison = 0xFFFFFFFFu;
-    enum EGpuPrefixCounter : u32 {
-        // Total de comandos. Nao e `BatchOffsets[Slots]`: manter o total num contador, e nao numa
-        // entrada extra do array, evita que o array de offsets precise de `Slots + 1` entradas —
-        // e `Slots` ja e o numero que a porta de dimensionamento devolveu.
-        GpuPrefixCounterTotal = 0,
-        // A soma passou de u32. NAO e alcancavel a partir de um `BatchCounts` produzido pelo
-        // classify — cada candidato contribui no maximo 1, e os candidatos sao contados em u32 —,
-        // mas o shader nao tem como saber quem escreveu o buffer que ele esta somando.
-        GpuPrefixCounterOverflow = 1,
-        GpuPrefixCounterCount    = 2,
+    // Uma regiao. Espelhada em HLSL como `GpuIndirectRegion` (GpuBatchCounters.hlsli).
+    struct FGpuIndirectRegion {
+        u32 Offset   = 0; // primeiro comando do lote em `IndirectArgs`
+        u32 Capacity = 0; // quantos comandos cabem; e o `MaxCommandCount` da chamada do lote
     };
+    static_assert(sizeof(FGpuIndirectRegion) == 8, "FGpuIndirectRegion deve casar com o HLSL (8 B)");
+    static_assert(offsetof(FGpuIndirectRegion, Offset)   == 0);
+    static_assert(offsetof(FGpuIndirectRegion, Capacity) == 4);
+
+    // Capacidade ESTAVEL de cada lote. Ver acima o que conta como viva.
+    //
+    // Usa o MESMO `GpuClassifyCandidate` do dispatch, e e isso que faz da capacidade um limite de
+    // verdade: uma instancia so conta aqui se a GPU, recebendo-a como candidata, a emitiria — e no
+    // mesmo lote. Um criterio paralelo ("material opaco e malha com pool valido") divergiria no
+    // primeiro termo novo da porta, e a GPU passaria a contar comandos que nenhuma regiao previu.
+    //
+    // Devolve o motivo da porta de lotes (`GpuClassifyBatchBufferSlots`): sem pool, ou pools demais,
+    // nao ha tabela de lotes e `_OutCapacities` nao e escrita. Sob `Ok` ela sai com um slot por lote e
+    // zerada antes de contar.
+    //
+    // Em u64, porque a pergunta seguinte e a SOMA delas, e cada parcela ja nasce no tipo em que vai ser
+    // somada.
+    u32 GpuCountRegionCapacities(std::span<const FGpuSceneInstanceMeta> Meta,
+                                 std::span<const FGpuMaterialRecord> Materials,
+                                 std::span<const FGpuMeshRecord> Meshes, u32 PoolCount,
+                                 std::vector<u64>& OutCapacities);
+
+    enum EGpuRegionLayout : u32 {
+        GpuRegionLayoutOk = 0,
+        // A soma das capacidades passa de UINT32_MAX: nao existe `Offset` u32 que enderece a ultima
+        // regiao, nem `IndirectArgs` que a contenha.
+        GpuRegionLayoutTooManyCommands = 1,
+    };
+
+    // Regioes DENSAS, na ordem dos lotes: `Offset[b]` = soma das capacidades antes de b.
+    //
+    // A soma corre em u64 e so e convertida DEPOIS da porta. Em u32 ela daria a volta — e dar a volta
+    // aqui nao produz um numero absurdo, produz um `Offset` pequeno e plausivel, dentro da regiao de
+    // outro lote. Como cada capacidade e cada offset sao menores ou iguais ao total, total em u32
+    // garante que todos cabem.
+    //
+    // `_OutRegions` e `_OutTotal` so sao escritos sob `Ok`: um layout recusado nao pode deixar regioes
+    // plausiveis na mao do chamador.
+    u32 GpuLayoutRegions(std::span<const u64> Capacities, std::vector<FGpuIndirectRegion>& OutRegions,
+                         u32& OutTotal);
+
+    // O `ArgumentBufferOffset` da chamada do lote. Em u64: `Offset * 28` em u32 da a volta a partir de
+    // ~153 milhoes de comandos, e o `ExecuteIndirect` leria os argumentos de outro lote.
+    inline u64 GpuRegionArgumentOffset(const FGpuIndirectRegion& _Region) {
+        return static_cast<u64>(_Region.Offset) * sizeof(FGpuIndirectDrawArgs);
+    }
+
+    // O `CountBufferOffset` da chamada do lote: a contagem do lote b mora em `DrawCounts[b]`.
+    inline u64 GpuRegionCountOffset(u32 _Batch) {
+        return static_cast<u64>(_Batch) * sizeof(u32);
+    }
+
+    // Por que a tabela de regioes NAO pode ir para o dispatch. Tudo aqui e da CPU.
+    enum EGpuRegionPreflight : u32 {
+        GpuRegionPreflightOk = 0,
+        // Menos regioes que slots de lote: o scatter e a finalizacao indexam `Regions[lote]` para todo
+        // lote que `BatchCounts` enderaca.
+        GpuRegionPreflightSmallRegionTable = 1,
+        // Alguma regiao termina alem de `IndirectArgs`. Em u64: `Offset + Capacity` em u32 daria a
+        // volta e aprovaria uma regiao que comeca no fim do buffer.
+        GpuRegionPreflightSmallArgsBuffer = 2,
+        // Duas regioes se sobrepoem, ou estao fora da ordem dos lotes. E a unica falha de regiao que a
+        // GPU NAO enxerga: os dois lotes escreveriam as mesmas posicoes com contagens validas, e o
+        // `ExecuteIndirect` de um desenharia comandos do outro com o par VB/IB errado.
+        GpuRegionPreflightOverlap = 3,
+    };
+
+    // A porta das regioes, sobre a MESMA tabela e a MESMA capacidade que o scatter recebe.
+    inline u32 GpuRegionPreflight(std::span<const FGpuIndirectRegion> _Regions, u32 _BatchSlots,
+                                  u32 _ArgsCapacity) {
+        if (_Regions.size() < _BatchSlots) return GpuRegionPreflightSmallRegionTable;
+        u64 FimAnterior = 0;
+        for (u32 B = 0; B < _BatchSlots; ++B) {
+            const FGpuIndirectRegion& R = _Regions[B];
+            if (R.Offset < FimAnterior) return GpuRegionPreflightOverlap;
+            const u64 Fim = static_cast<u64>(R.Offset) + R.Capacity;
+            if (Fim > _ArgsCapacity) return GpuRegionPreflightSmallArgsBuffer;
+            FimAnterior = Fim;
+        }
+        return GpuRegionPreflightOk;
+    }
 
 
     // O COUNT BUFFER do `ExecuteIndirect`, publicado pela FINALIZACAO (FinalizeDrawCounts.cs.hlsl).
     //
     // `DrawCounts[b]` = `BatchCounts[b]` quando o frame fechou inteiro, e ZERO em todas as entradas
-    // quando QUALQUER falha foi registrada — estouro do prefixo, cursor alem da contagem, posicao fora
-    // do recurso. Count buffer zerado faz o `ExecuteIndirect` executar zero comandos, e essa e a unica
-    // forma de suprimir o draw sem readback.
+    // quando QUALQUER falha foi registrada — contagem alem da regiao, cursor alem da contagem, regiao
+    // fora do recurso, ou um elo da verificacao de reset. Count buffer zerado faz o `ExecuteIndirect`
+    // executar zero comandos, e essa e a unica forma de suprimir o draw sem readback.
     //
-    // ⚠️ Publicado DEPOIS do scatter, e nao pelo prefixo como numa versao anterior. O count buffer tem
-    // de ser a ultima palavra, escrita pelo ultimo passo capaz de descobrir uma falha: publicado pelo
-    // prefixo, ele ja estaria no ar quando o scatter falhasse, e o command processor executaria a
-    // contagem sobre uma posicao que o scatter nao escreveu.
+    // ⚠️ Publicado DEPOIS do scatter. O count buffer tem de ser a ultima palavra, escrita pelo ultimo
+    // passo capaz de descobrir uma falha: publicado antes, ele ja estaria no ar quando o scatter
+    // falhasse, e o command processor executaria a contagem sobre uma posicao que ninguem escreveu.
+    //
+    // ⚠️ `BatchCounts` NAO e o count buffer. Ele e escrito pelo classify, que nao sabe se o scatter vai
+    // fechar, e uma contagem nao zero sob falha faria o draw executar argumentos velhos.
     //
     // Buffer SEPARADO de `BatchCounts`: as contagens sao o diagnostico que se quer olhar justamente
-    // quando o frame foi invalidado. Custa `4 * PoolCount` dwords.
+    // quando o frame foi invalidado. Custa um dword por slot de lote.
 
-    // Referencia CPU do prefixo. Devolve o total; `_OutOffsets` fica com o prefixo exclusivo.
-    //
-    // `_OutOverflow` recebe 1 quando a soma daria a volta. NESSE CASO, o contrato e:
-    //
-    //   - a saida inteira e INUTILIZAVEL, e suprimi-la NAO e trabalho do scatter sozinho. Um
-    //     `return` no shader nao alcanca o `ExecuteIndirect`: ele e do command processor, le o COUNT
-    //     BUFFER direto e executaria a contagem de antes sobre argumentos que o scatter deixou
-    //     intactos — comandos do frame passado, ou memoria nunca inicializada. Por isso quem publica
-    //     o count buffer e a finalizacao (ver acima), e ela o zera quando a flag esta ligada;
-    //   - da entrada que falhou em diante, todas recebem `kGpuBatchOffsetPoison`. Deterministico e
-    //     IGUAL nos dois lados, entao o teste compara elemento a elemento inclusive no caso de
-    //     estouro. A entrada que falhou tambem entra: o `Acc` ali ainda e valido, mas o lote nao
-    //     cabe inteiro, e publicar um inicio para um lote que nao cabe e publicar um comeco sem fim;
-    //   - as entradas ANTERIORES continuam corretas, e ficam assim de proposito — e por elas que se
-    //     enxerga onde a conta quebrou.
-    //
-    // ⚠️ A versao anterior deste comentario dizia que as entradas seguintes ficavam "com o acumulado
-    // antes do estouro". Nao ficavam: a CPU deixava os zeros do `assign` e a GPU deixava o conteudo
-    // anterior do recurso — duas coisas diferentes, e nenhuma das duas a descrita.
-    u32 PrefixBatchCounts(std::span<const u32> Counts, std::vector<u32>& OutOffsets,
-                          u32& OutOverflow);
     // Referencia CPU do dispatch. E o oraculo do teste WARP e, depois, o braco A/B.
     //
     // NAO consulta o `GpuClassifyPreflight`, e isso e deliberado: ela espelha o SHADER, que executa o
@@ -374,19 +447,19 @@ namespace Smile {
 
     // === A cadeia, e o RESET que a abre =========================================================
     //
-    //     reset -> classify -> prefixo -> scatter -> finalizacao -> ExecuteIndirect(DrawCounts)
+    //     reset -> classify -> scatter -> finalizacao -> ExecuteIndirect(DrawCounts), um por lote
     //
     // Quatro buffers ACUMULAM por `InterlockedAdd` e sao lidos por um passo seguinte: `BatchCounts` e
     // os contadores do classify, `BatchCursors` e os contadores do scatter. Os quatro sao zerados por
     // UM passo, o primeiro da cadeia, antes do classify — um dono, um invariante: "todo acumulador
-    // comeca a execucao em zero".
+    // comeca a execucao em zero". A tabela de regioes nao entra no reset: ela nao acumula, e e da CPU.
     //
     // ⚠️ Nao e arrumacao. Sem o reset, a segunda execucao comeca das contagens da primeira:
     //
     //   - `BatchCounts` INFLADO e o pior caso, porque nenhuma falha do scatter o enxerga — o cursor
     //     nunca passa de uma contagem grande demais — e o count buffer publicaria posicoes que
     //     ninguem escreveu;
-    //   - cursor SUJO desloca comandos para dentro do intervalo de outro lote;
+    //   - cursor SUJO desloca comandos para posicoes que a contagem nao cobre;
     //   - contador do scatter velho carregaria a falha de uma execucao para a seguinte.
     //
     // A finalizacao e a rede de seguranca, e ela so funciona com uma ANCORA. Comparar os acumuladores
@@ -396,99 +469,96 @@ namespace Smile {
     // finalizacao encadeia quatro igualdades, uma por acumulador (ver EGpuFinalizeReason). Com isso,
     // esquecer o reset nao desenha comando velho — desenha NADA. O reset continua obrigatorio porque um
     // frame que nao desenha nada tambem e defeito, so que visivel.
+    //
+    // A capacidade das regioes tambem nao acumula, e uma contagem dobrada alem dela invalida o frame.
+    // Mas ela NAO substitui a ancora: com folga na regiao — instancia escondida hoje, culling na Fase
+    // 6 —, a contagem dobrada cabe, e so a ancora a enxerga.
 
     // === Scatter ================================================================================
     //
-    // Segunda passada: cada candidato INDIRECT recebe `BatchOffsets[lote] + cursor` e o comando que o
-    // `GpuClassifyCandidate` ja montou.
+    // Segunda passada: cada candidato INDIRECT recebe `Regions[lote].Offset + cursor` e o comando que
+    // o `GpuClassifyCandidate` ja montou.
     //
     // ⚠️ Depois de `Indirect`, nenhum ramo deixa de escrever SEM AVISAR. A contagem ja reservou a
-    // posicao; um candidato contado e nao escrito deixaria ali o comando do frame passado. Os dois
+    // posicao; um candidato contado e nao escrito deixaria ali o comando do frame passado. Os tres
     // ramos que nao escrevem registram FALHA, e a finalizacao zera o `DrawCounts` do frame inteiro.
-    // A versao anterior tinha um "canario" que pulava a escrita e so contava — que e exatamente uma
-    // recusa depois de contado, com outro nome.
     enum EGpuScatterCounter : u32 {
-        GpuScatterCounterEmitted    = 0, // comandos escritos
-        // Candidatos em que o scatter se ABSTEVE porque o prefixo nao fechou. Nao e o que suprime o
-        // draw (isso e o `DrawCounts` zerado); e o que impede escrever com offset envenenado, que em
-        // u32 da a volta: 0xFFFFFFFF + 1 = 0, em cima do primeiro comando do primeiro lote.
-        GpuScatterCounterSuppressed = 1,
+        GpuScatterCounterEmitted       = 0, // comandos escritos
         // FALHA: cursor alem da contagem do lote. Pega cursor sujo — todo inicio nao zero num lote com
-        // candidatos leva ao menos o ultimo alem da contagem — e contagem divergente. Invalida o frame.
-        GpuScatterCounterFaultCursor   = 2,
-        // FALHA: posicao fora de `IndirectArgs`. Inalcancavel sob preflight com o cursor dentro da
-        // contagem; se alcancada, nao ha onde escrever, e invalida o frame pelo mesmo motivo.
+        // candidatos leva ao menos o ultimo alem da contagem — e contagem divergente.
+        GpuScatterCounterFaultCursor   = 1,
+        // FALHA: cursor alem da capacidade da REGIAO — o frame tem mais comandos no lote do que a CPU
+        // reservou. Nao escrever e o que impede o comando excedente de cair na primeira posicao da
+        // regiao SEGUINTE, que o `ExecuteIndirect` do outro lote desenharia com o pool errado.
+        GpuScatterCounterFaultRegion   = 2,
+        // FALHA: a regiao nao cabe em `IndirectArgs`. Inalcancavel sob `GpuRegionPreflight`; se
+        // alcancada, a tabela que a GPU recebeu nao e a que a CPU aprovou.
         GpuScatterCounterFaultCapacity = 3,
         GpuScatterCounterCount         = 4,
     };
 
-    // Bytes de `IndirectArgs` para `_Commands` comandos.
+    // Bytes de `IndirectArgs` para `_Commands` comandos — o total que `GpuLayoutRegions` devolveu.
     //
     // Em u64, e nao por zelo: `_Commands * 28` em u32 da a volta a partir de ~153 milhoes de
-    // comandos, e o recurso seria alocado pequeno para a contagem que o shader recebe.
+    // comandos, e o recurso seria alocado pequeno para as regioes que o shader recebe.
     //
     // Sem modo de falha, e isso e consequencia do tipo: a unica multiplicacao fica em u64, e a
     // contagem de comandos ENTRA como u32 — nada aqui converte um produto de volta para u32. O piso de
-    // um comando e porque recurso de zero bytes e ilegal, e uma cena sem candidato ainda amarra a view.
+    // um comando e porque recurso de zero bytes e ilegal, e uma cena sem regiao ainda amarra a view.
     inline u64 GpuScatterArgsBytes(u32 _Commands) {
         const u32 Piso = _Commands == 0u ? 1u : _Commands;
         return static_cast<u64>(Piso) * sizeof(FGpuIndirectDrawArgs);
     }
 
-    enum EGpuScatterPreflight : u32 {
-        GpuScatterPreflightOk = 0,
-        // Capacidade de `IndirectArgs` abaixo do numero de candidatos. E a regra que torna o canario
-        // de overflow do shader inalcancavel: cada candidato escreve no MAXIMO um comando.
-        //
-        // Por candidatos, e nao pelo total real de comandos, porque o total so existe na GPU depois
-        // do classify, e le-lo seria readback. Custa 28 B por candidato — 28 MB na sintetica de 1M.
-        GpuScatterPreflightSmallArgsBuffer = 1,
-    };
-
-    inline u32 GpuScatterPreflight(u32 _CandidateCount, u32 _ArgsCapacity) {
-        return _ArgsCapacity >= _CandidateCount ? GpuScatterPreflightOk
-                                                : GpuScatterPreflightSmallArgsBuffer;
-    }
-
     // Referencia CPU do scatter.
     //
     // `InOutArgs` vem DIMENSIONADO e SEMEADO pelo chamador, e so as posicoes emitidas sao escritas —
-    // exatamente como na GPU. E isso que permite ao teste semear os dois lados com o mesmo poison e
-    // comparar tambem o que ficou intocado: um buraco dentro de um lote aparece como poison dentro
-    // do intervalo, e um residuo fora dele aparece como comando onde deveria haver poison.
+    // exatamente como na GPU. Seu tamanho e a capacidade de `IndirectArgs` que o shader recebe. E isso
+    // que permite ao teste semear os dois lados com o mesmo poison e comparar tambem o que ficou
+    // intocado: um buraco dentro de uma regiao aparece como poison entre os comandos, e uma escrita
+    // fora dela aparece como comando onde deveria haver poison.
     //
     // A ORDEM dentro de um lote aqui e a dos candidatos; na GPU e a de chegada ao cursor, que nao e
     // deterministica. Nada no draw depende dela (o lote inteiro compartilha PSO e pool), e por isso o
-    // teste compara cada intervalo como MULTICONJUNTO.
+    // teste compara cada regiao como MULTICONJUNTO.
     //
-    // `InOutCursors` e o estado dos cursores ANTES do scatter — normalmente o que o prefixo zerou. Ele
-    // e parametro, e nao zerado aqui dentro, para que o teste consiga reproduzir o cursor sujo que a
+    // `InOutCursors` e o estado dos cursores ANTES do scatter — normalmente o que o reset zerou. Ele e
+    // parametro, e nao zerado aqui dentro, para que o teste consiga reproduzir o cursor sujo que a
     // falha de cursor existe para pegar.
-    void ScatterIndirectArgs(const FGpuClassifyInput& Input, std::span<const u32> BatchOffsets,
-                             std::span<const u32> BatchCounts, u32 PrefixOverflow,
-                             std::vector<u32>& InOutCursors,
+    void ScatterIndirectArgs(const FGpuClassifyInput& Input,
+                             std::span<const FGpuIndirectRegion> Regions,
+                             std::span<const u32> BatchCounts, std::vector<u32>& InOutCursors,
                              std::vector<FGpuIndirectDrawArgs>& InOutArgs,
                              std::vector<u32>& OutCounters);
 
     // Por que a finalizacao invalidou o frame. BITS, espelhando SMILE_FINALIZE_* do
     // GpuBatchCounters.hlsli. Telemetria: nenhum draw depende deles.
     enum EGpuFinalizeReason : u32 {
-        GpuFinalizePrefixOverflow = 1u << 0, // o prefixo nao fechou
+        // A REGRA DE PUBLICACAO das regioes: contagem de algum lote alem da capacidade invalida o frame
+        // inteiro, e nao so o lote.
+        //
+        // O estouro aparece tambem como `FaultRegion`, e os dois nao sao a mesma defesa. O do scatter
+        // protege a MEMORIA — impede o comando excedente de ser escrito na regiao seguinte. Este
+        // protege a PUBLICACAO — compara a contagem com a regiao que a CPU publicou, sem depender de qual
+        // thread recebeu qual cursor. O teste os separa pelo motivo exato.
+        GpuFinalizeRegionOverflow = 1u << 0,
         GpuFinalizeFaultCursor    = 1u << 1, // falha de cursor registrada pelo scatter
-        GpuFinalizeFaultCapacity  = 1u << 2, // falha de capacidade registrada pelo scatter
+        GpuFinalizeFaultRegion    = 1u << 2, // falha de regiao registrada pelo scatter
+        GpuFinalizeFaultCapacity  = 1u << 3, // regiao fora de `IndirectArgs`, registrada pelo scatter
         // Os quatro elos da verificacao de RESET. O primeiro e a ANCORA: o numero de candidatos vem
-        // do cbuffer e nao acumula. Sem ele, esquecer o reset inteiro passaria — os acumuladores
-        // crescem juntos, e toda igualdade entre eles continua valendo.
-        GpuFinalizeClassifyAnchor = 1u << 3, // soma dos contadores do classify != candidatos
-        GpuFinalizeBatchSum       = 1u << 4, // soma dos lotes != indiretos
-        GpuFinalizeCursorMismatch = 1u << 5, // cursor != contagem em algum lote
-        GpuFinalizeScatterSum     = 1u << 6, // emitidos + falhas do scatter != indiretos
+        // do cbuffer e nao acumula. Sem ele, esquecer o reset inteiro passaria sempre que a regiao
+        // tivesse folga — os acumuladores crescem juntos, e toda igualdade entre eles continua valendo.
+        GpuFinalizeClassifyAnchor = 1u << 4, // soma dos contadores do classify != candidatos
+        GpuFinalizeBatchSum       = 1u << 5, // soma dos lotes != indiretos
+        GpuFinalizeCursorMismatch = 1u << 6, // cursor != contagem em algum lote
+        GpuFinalizeScatterSum     = 1u << 7, // emitidos + falhas do scatter != indiretos
     };
 
     // Referencia CPU da FINALIZACAO. Publica o count buffer a partir das contagens e de TODA
     // verificacao descrita no FinalizeDrawCounts.cs.hlsl. Devolve 1 quando o frame fechou e 0 quando
     // foi invalidado — o mesmo `Status[0]` do shader —, e `OutReason` recebe o `Status[1]`.
-    u32 FinalizeDrawCounts(std::span<const u32> BatchCounts, std::span<const u32> PrefixCounters,
+    u32 FinalizeDrawCounts(std::span<const u32> BatchCounts,
+                           std::span<const FGpuIndirectRegion> Regions,
                            std::span<const u32> ScatterCounters, std::span<const u32> BatchCursors,
                            std::span<const u32> ClassifyCounters, u32 CandidateCount,
                            std::vector<u32>& OutDrawCounts, u32& OutReason);
