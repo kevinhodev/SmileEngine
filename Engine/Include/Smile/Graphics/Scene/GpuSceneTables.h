@@ -447,24 +447,36 @@ namespace Smile {
     //
     // Shadow menor que Fresh cresce; Shadow maior e truncado. Linha nova conta como mudada: a GPU
     // nunca a recebeu.
+    //
+    // ⚠️ O shadow e o que a GPU TEM. As tabelas NAO chamam isto: elas acham o que mudou com
+    // `FindChangedRows`, gravam a copia, e so entao avancam o shadow com `CommitChangedRows`. Avancar
+    // antes e publicar uma imagem que a GPU talvez nunca receba — a copia pode ser recusada.
+
+    // O que MUDARIA, sem tocar no shadow.
+    template <typename TRow>
+    u32 FindChangedRows(std::span<const TRow> Fresh, std::span<const TRow> Shadow,
+                        std::vector<u32>& OutChanged) {
+        OutChanged.clear();
+        for (u32 I = 0; I < static_cast<u32>(Fresh.size()); ++I)
+            if (I >= Shadow.size() || Shadow[I] != Fresh[I]) OutChanged.push_back(I);
+        return static_cast<u32>(OutChanged.size());
+    }
+
+    // Avanca o shadow: dimensiona pelo `Fresh` (cresce ou trunca) e copia as linhas mudadas.
+    template <typename TRow>
+    void CommitChangedRows(std::span<const TRow> Fresh, std::span<const u32> Changed,
+                           std::vector<TRow>& Shadow) {
+        if (Shadow.size() != Fresh.size()) Shadow.resize(Fresh.size());
+        for (u32 I : Changed)
+            if (I < Fresh.size()) Shadow[I] = Fresh[I];
+    }
+
     template <typename TRow>
     u32 DiffTableRows(std::span<const TRow> Fresh, std::vector<TRow>& Shadow,
                       std::vector<u32>& OutChanged) {
-        OutChanged.clear();
-        const u32 Count = static_cast<u32>(Fresh.size());
-        const u32 Known = static_cast<u32>(Shadow.size() < Count ? Shadow.size() : Count);
-        for (u32 I = 0; I < Known; ++I) {
-            if (Shadow[I] != Fresh[I]) {
-                Shadow[I] = Fresh[I];
-                OutChanged.push_back(I);
-            }
-        }
-        if (Shadow.size() != Count) Shadow.resize(Count);
-        for (u32 I = Known; I < Count; ++I) {
-            Shadow[I] = Fresh[I];
-            OutChanged.push_back(I);
-        }
-        return static_cast<u32>(OutChanged.size());
+        const u32 Mudadas = FindChangedRows<TRow>(Fresh, Shadow, OutChanged);
+        CommitChangedRows<TRow>(Fresh, OutChanged, Shadow);
+        return Mudadas;
     }
 
     // Mesma diferenca, restrita aos slots que o PRODUTOR tocou.
@@ -488,21 +500,31 @@ namespace Smile {
     // entrada continuaria dizendo "1" se alguem trocasse este laco por um que varre a tabela
     // inteira — mediria a intencao, nao o trabalho. O gate da fase se decide por este numero,
     // entao ele conta de dentro do laco.
+    //
+    // A mesma separacao das duas fases: `FindChangedRowsAt` nao toca no shadow, e as tabelas o avancam
+    // com `CommitChangedRows` depois da copia gravada.
+    template <typename TRow>
+    u32 FindChangedRowsAt(std::span<const TRow> Fresh, std::span<const u32> Touched,
+                          std::span<const TRow> Shadow, std::vector<u32>& OutChanged,
+                          u32& OutVisited) {
+        OutChanged.clear();
+        for (u32 Slot : Touched) {
+            if (Slot >= Fresh.size()) continue;
+            ++OutVisited;
+            // Alem do shadow e a linha default: e o que o shadow teria ao crescer.
+            const TRow Antes = Slot < Shadow.size() ? Shadow[Slot] : TRow{};
+            if (Antes != Fresh[Slot]) OutChanged.push_back(Slot);
+        }
+        return static_cast<u32>(OutChanged.size());
+    }
+
     template <typename TRow>
     u32 DiffTableRowsAt(std::span<const TRow> Fresh, std::span<const u32> Touched,
                         std::vector<TRow>& Shadow, std::vector<u32>& OutChanged,
                         u32& OutVisited) {
-        OutChanged.clear();
-        if (Shadow.size() != Fresh.size()) Shadow.resize(Fresh.size());
-        for (u32 Slot : Touched) {
-            if (Slot >= Fresh.size()) continue;
-            ++OutVisited;
-            if (Shadow[Slot] != Fresh[Slot]) {
-                Shadow[Slot] = Fresh[Slot];
-                OutChanged.push_back(Slot);
-            }
-        }
-        return static_cast<u32>(OutChanged.size());
+        const u32 Mudadas = FindChangedRowsAt<TRow>(Fresh, Touched, Shadow, OutChanged, OutVisited);
+        CommitChangedRows<TRow>(Fresh, OutChanged, Shadow);
+        return Mudadas;
     }
 
     inline u32 DiffMaterialRows(std::span<const FGpuMaterialRecord> Fresh,
@@ -561,11 +583,21 @@ namespace Smile {
                     const char* Label);
         void Release(FTextureSRVHeap& SRVHeap);
 
+        // A copia destas linhas pode ser gravada? Lista, recurso e staging existem, e toda linha cabe
+        // no buffer. Nada a copiar e aceito. Sem efeito nenhum: e a porta que as tabelas consultam
+        // ANTES de gravar e de avancar o shadow, e a mesma que o `RecordUpload` aplica.
+        bool AcceptsUpload(ID3D12GraphicsCommandList* CommandList, const void* Rows,
+                           std::span<const u32> Changed) const;
+
         // Copia as linhas indicadas. Rows aponta para um array contiguo de pelo menos
         // max(Changed)+1 linhas. Devolve quantas regioes de copia foram emitidas (linhas
-        // contiguas viram uma so).
+        // contiguas viram uma so); zero quando nao ha o que copiar ou quando a porta recusa, e a
+        // recusa vem antes de qualquer escrita.
         u32 RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot, const void* Rows,
                          std::span<const u32> Changed);
+
+        // O recurso DEFAULT. Para leitura de conferencia; os leitores de frame usam o SRV.
+        ID3D12Resource* Resource() const { return Buffer_.Get(); }
 
         bool IsBuilt()  const { return Buffer_ != nullptr; }
         u32  Srv()      const { return SrvSlot_; }
@@ -635,9 +667,13 @@ namespace Smile {
         u32 LastCopyRegions()    const { return LastCopyRegions_; }
         u64 TotalRowsUploaded()  const { return TotalRowsUploaded_; }
 
-        // As linhas PUBLICADAS: o shadow, que o RecordUpload iguala ao que copiou. Lidas depois do
-        // RecordUpload do frame, sao as mesmas que os leitores da GPU desse frame enxergam.
+        // As linhas PUBLICADAS: o shadow, que so avanca depois de a copia ser GRAVADA na command list
+        // do frame. Lidas depois do RecordUpload, sao as que a GPU tem quando essa lista executa — e
+        // portanto as que os leitores gravados depois dele, na mesma lista, enxergam. Uma copia
+        // recusada nao as avanca.
         std::span<const FGpuMaterialRecord> PublishedRows() const { return Shadow_; }
+        // O recurso da tabela, para leitura de conferencia. Os leitores de frame usam o SRV.
+        ID3D12Resource* Resource() const { return Storage_.Resource(); }
 
         // Sobe quando o que o layout de regioes conta mudou nas linhas publicadas: a classe de alguma
         // linha ou o numero de linhas. Uma edicao de cor nao a move.
@@ -730,6 +766,7 @@ namespace Smile {
 
         // As linhas PUBLICADAS, como no FGpuMaterialTable.
         std::span<const FGpuMeshRecord> PublishedRows() const { return Shadow_; }
+        ID3D12Resource* Resource() const { return Storage_.Resource(); }
 
         // Sobe a CADA republicacao que muda alguma linha, e no Setup. Mais grossa que a do material de
         // proposito: linha de malha so muda por SetupForScene, que limpa o shadow, entao pool e mascara
@@ -821,14 +858,17 @@ namespace Smile {
         u32 LastRowsScanned() const { return LastRowsScanned_; }
         static constexpr u32 kColumns = 4; // meta, bounds, transform, prev transform
 
-        // A coluna de meta PUBLICADA: o shadow, igualado ao que o RecordUpload copiou. E a que o layout
-        // de regioes e a divisao indireto/fallback leem, porque e a que o classify desse frame le.
+        // A coluna de meta PUBLICADA: o shadow, que so avanca depois de as quatro copias serem GRAVADAS
+        // (ver FGpuMaterialTable::PublishedRows). E a que o layout de regioes e a divisao
+        // indireto/fallback leem, porque e a que o classify desse frame le.
         //
         // ⚠️ Igual a GPU nos slots que a lista de candidatos alcanca. Numa troca para cena MENOR o
         // `FGpuTableStorage::Create` preserva o buffer e o shadow recomeca zerado, entao um slot que
         // ficou morto pode guardar na GPU a linha da cena anterior. Nenhum leitor da cadeia chega nele:
         // expand e classify so leem slots de candidatos, que sao vivos.
         std::span<const FGpuSceneInstanceMeta> PublishedMeta() const { return MetaShadow_; }
+        // O recurso da coluna de meta, para leitura de conferencia. Os leitores de frame usam o SRV.
+        ID3D12Resource* MetaResource() const { return MetaStorage_.Resource(); }
 
         // Sobe quando alguma linha PUBLICADA muda o que o layout conta (`GpuInstanceMetaAltersLayout`),
         // e em Setup e Release. Transform, assentamento e visibilidade nao a movem. Monotonica pela

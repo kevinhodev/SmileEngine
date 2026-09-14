@@ -70,16 +70,24 @@ namespace Smile {
         RowBytes_ = 0;
     }
 
+    bool FGpuTableStorage::AcceptsUpload(ID3D12GraphicsCommandList* _CommandList, const void* _Rows,
+                                         std::span<const u32> _Changed) const {
+        if (_Changed.empty()) return true;
+        if (!Buffer_ || !Staging_ || !_CommandList || _Rows == nullptr) return false;
+        for (u32 Row : _Changed)
+            if (Row >= Capacity_) return false;
+        return true;
+    }
+
     u32 FGpuTableStorage::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot,
                                        const void* _Rows, std::span<const u32> _Changed) {
-        if (!Buffer_ || !Staging_ || !_CommandList || _Rows == nullptr || _Changed.empty())
-            return 0;
+        // A porta INTEIRA antes de qualquer escrita, inclusive no staging.
+        if (_Changed.empty() || !AcceptsUpload(_CommandList, _Rows, _Changed)) return 0;
 
         const u32 Slot = _FrameSlot % kFrameSlots;
         u8* const Base = Staging_.Slice(Slot);
         const u8* const Src = static_cast<const u8*>(_Rows);
         for (u32 Row : _Changed) {
-            if (Row >= Capacity_) return 0; // linha fora do buffer: nao copia nada
             std::memcpy(Base + static_cast<size_t>(Row) * RowBytes_,
                         Src + static_cast<size_t>(Row) * RowBytes_, RowBytes_);
         }
@@ -182,24 +190,28 @@ namespace Smile {
         LastDirtyRows_   = 0;
         LastCopyRegions_ = 0;
         if (!Dirty_ || !Storage_.IsBuilt() || RowMaterials_.empty()) return;
-        Dirty_ = false;
 
         const u32 Rows = static_cast<u32>(RowMaterials_.size());
         Fresh_.resize(Rows);
         for (u32 I = 0; I < Rows; ++I)
             Fresh_[I] = FGpuMaterialRecord::FromMaterial(RowMaterials_[I]);
 
-        // ANTES do diff: ele iguala o shadow ao novo, e a classe antiga deixa de existir.
-        bool AlteraLayout = Shadow_.size() != Rows;
-        for (u32 I = 0; I < Rows && !AlteraLayout; ++I)
-            AlteraLayout = GpuMaterialAltersLayout(Shadow_[I], Fresh_[I]);
+        // A publicacao e TRANSACIONAL: o shadow e a versao so avancam depois de a copia ser gravada.
+        // Recusada, nada muda — o shadow continua dizendo o que a GPU tem, e `Dirty_` fica ligado para
+        // o proximo frame tentar de novo.
+        FindChangedRows<FGpuMaterialRecord>(Fresh_, Shadow_, Changed_);
+        if (!Storage_.AcceptsUpload(_CommandList, Fresh_.data(), Changed_)) return;
 
-        if (DiffTableRows<FGpuMaterialRecord>(Fresh_, Shadow_, Changed_) == 0) return;
-        // Ja aqui, e nao depois da copia: o shadow mudou, e e ele que o layout le.
-        if (AlteraLayout) ++LayoutInputsVersion_;
+        bool AlteraLayout = Shadow_.size() != Rows;
+        for (u32 I : Changed_) {
+            if (AlteraLayout) break;
+            AlteraLayout = GpuMaterialAltersLayout(Shadow_[I], Fresh_[I]);
+        }
 
         LastCopyRegions_ = Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_);
-        if (LastCopyRegions_ == 0) return;
+        CommitChangedRows<FGpuMaterialRecord>(Fresh_, Changed_, Shadow_);
+        if (AlteraLayout) ++LayoutInputsVersion_;
+        Dirty_ = false;
         LastDirtyRows_ = static_cast<u32>(Changed_.size());
         TotalRowsUploaded_ += LastDirtyRows_;
     }
@@ -362,13 +374,19 @@ namespace Smile {
     void FGpuMeshTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
         LastDirtyRows_ = 0;
         if (!Dirty_ || !Storage_.IsBuilt() || Fresh_.empty()) return;
-        Dirty_ = false;
         // Sem recalculo: ao contrario do material, nada de malha muda sem passar por um Setup —
         // geometria nao e editavel em runtime. As linhas ja estao prontas desde o SetupForScene.
-        if (DiffTableRows<FGpuMeshRecord>(Fresh_, Shadow_, Changed_) == 0) return;
+        //
+        // Transacional, como no material: recusada, shadow, versao e `Dirty_` ficam como estavam.
+        FindChangedRows<FGpuMeshRecord>(Fresh_, Shadow_, Changed_);
+        if (!Storage_.AcceptsUpload(_CommandList, Fresh_.data(), Changed_)) return;
+
+        const bool Publica = !Changed_.empty() || Shadow_.size() != Fresh_.size();
+        Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_);
+        CommitChangedRows<FGpuMeshRecord>(Fresh_, Changed_, Shadow_);
         // Qualquer linha publicada conta (ver LayoutInputsVersion).
-        ++LayoutInputsVersion_;
-        if (Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_) == 0) return;
+        if (Publica) ++LayoutInputsVersion_;
+        Dirty_ = false;
         LastDirtyRows_ = static_cast<u32>(Changed_.size());
     }
 
@@ -495,7 +513,10 @@ namespace Smile {
             PrepareEpoch_ = 1;
         }
         const u32 Epoch = PrepareEpoch_;
-        TouchedSlots_.clear();
+        // Uma publicacao RECUSADA deixa os tocados do ciclo anterior pendentes, com `Dirty_` ligado (ver
+        // RecordUpload). Limpa-los aqui perderia linhas que a GPU nunca recebeu; somados aos deste
+        // ciclo, o sort do fim tira a repeticao.
+        if (!Dirty_) TouchedSlots_.clear();
         NextSettleSlots_.clear();
 
         // Recompoe as quatro colunas de UM renderavel. Devolve o slot escrito, ou kInvalidSlot
@@ -616,33 +637,39 @@ namespace Smile {
         LastCopyRegions_ = 0;
         LastRowsScanned_ = 0;
         if (!Dirty_ || !IsBuilt()) return;
-        Dirty_ = false;
 
         // O conjunto tocado e o mesmo para as quatro colunas — quem escreve uma linha escreve as
         // quatro —, entao o custo do diff e |tocados| x 4, e nao a capacidade da tabela x 4.
         const std::span<const u32> Touched{ TouchedSlots_ };
+        FindChangedRowsAt<FGpuSceneInstanceMeta>(MetaRows_, Touched, MetaShadow_, MetaChanged_,
+                                                 LastRowsScanned_);
+        FindChangedRowsAt<FGpuSceneInstanceBounds>(BoundsRows_, Touched, BoundsShadow_,
+                                                   BoundsChanged_, LastRowsScanned_);
+        FindChangedRowsAt<FGpuSceneInstanceTransform>(TransformRows_, Touched, TransformShadow_,
+                                                      TransformChanged_, LastRowsScanned_);
+        FindChangedRowsAt<FGpuSceneInstanceTransform>(PrevTransformRows_, Touched,
+                                                      PrevTransformShadow_, PrevTransformChanged_,
+                                                      LastRowsScanned_);
 
-        // O layout, ANTES do diff: ele iguala o shadow ao novo, e a comparacao precisa do que a GPU
-        // tinha. Sobre os MESMOS tocados, entao nao ha varredura nova — e fora do `LastRowsScanned`,
-        // que mede o diff.
+        // A publicacao e TRANSACIONAL. As quatro copias sao aceitas antes de qualquer uma ser gravada
+        // — uma coluna recusada depois de outra gravada deixaria meta e transform de imagens
+        // diferentes —, e os shadows e a versao so avancam depois das quatro gravadas. Recusada, nada
+        // muda: `Dirty_` e os tocados ficam para o proximo frame tentar de novo.
+        if (!MetaStorage_.AcceptsUpload(_CommandList, MetaRows_.data(), MetaChanged_) ||
+            !BoundsStorage_.AcceptsUpload(_CommandList, BoundsRows_.data(), BoundsChanged_) ||
+            !TransformStorage_.AcceptsUpload(_CommandList, TransformRows_.data(), TransformChanged_) ||
+            !PrevTransformStorage_.AcceptsUpload(_CommandList, PrevTransformRows_.data(),
+                                                 PrevTransformChanged_))
+            return;
+
+        // O layout, com o shadow ainda ANTIGO: e o que a GPU tinha. So sobre as linhas de meta que
+        // mudaram, entao nao ha varredura nova — e fora do `LastRowsScanned`, que mede o diff.
         bool AlteraLayout = false;
-        for (u32 Slot : Touched) {
-            if (Slot >= MetaRows_.size()) continue;
+        for (u32 Slot : MetaChanged_) {
             const FGpuSceneInstanceMeta Antes =
                 Slot < MetaShadow_.size() ? MetaShadow_[Slot] : FGpuSceneInstanceMeta{};
             if (GpuInstanceMetaAltersLayout(Antes, MetaRows_[Slot])) { AlteraLayout = true; break; }
         }
-
-        DiffTableRowsAt<FGpuSceneInstanceMeta>(MetaRows_, Touched, MetaShadow_, MetaChanged_,
-                                               LastRowsScanned_);
-        if (AlteraLayout) ++LayoutInputsVersion_;
-        DiffTableRowsAt<FGpuSceneInstanceBounds>(BoundsRows_, Touched, BoundsShadow_,
-                                                 BoundsChanged_, LastRowsScanned_);
-        DiffTableRowsAt<FGpuSceneInstanceTransform>(TransformRows_, Touched, TransformShadow_,
-                                                    TransformChanged_, LastRowsScanned_);
-        DiffTableRowsAt<FGpuSceneInstanceTransform>(PrevTransformRows_, Touched,
-                                                    PrevTransformShadow_, PrevTransformChanged_,
-                                                    LastRowsScanned_);
 
         auto Upload = [&](FGpuTableStorage& Storage, const auto& Rows,
                           const std::vector<u32>& Changed, u32 RowBytes) {
@@ -662,6 +689,16 @@ namespace Smile {
         Upload(BoundsStorage_, BoundsRows_, BoundsChanged_, kBoundsBytes);
         Upload(TransformStorage_, TransformRows_, TransformChanged_, kTransformBytes);
         Upload(PrevTransformStorage_, PrevTransformRows_, PrevTransformChanged_, kTransformBytes);
+
+        CommitChangedRows<FGpuSceneInstanceMeta>(MetaRows_, MetaChanged_, MetaShadow_);
+        CommitChangedRows<FGpuSceneInstanceBounds>(BoundsRows_, BoundsChanged_, BoundsShadow_);
+        CommitChangedRows<FGpuSceneInstanceTransform>(TransformRows_, TransformChanged_,
+                                                      TransformShadow_);
+        CommitChangedRows<FGpuSceneInstanceTransform>(PrevTransformRows_, PrevTransformChanged_,
+                                                      PrevTransformShadow_);
+        if (AlteraLayout) ++LayoutInputsVersion_;
+        Dirty_ = false;
+
         for (u32 Slot : MetaChanged_)          DirtyMarks_[Slot] = 0;
         for (u32 Slot : BoundsChanged_)        DirtyMarks_[Slot] = 0;
         for (u32 Slot : TransformChanged_)     DirtyMarks_[Slot] = 0;
