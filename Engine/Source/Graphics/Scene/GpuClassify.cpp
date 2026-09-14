@@ -1,5 +1,7 @@
 #include "Smile/Graphics/Scene/GpuClassify.h"
 
+#include <utility>
+
 namespace Smile {
     u32 ClassifyCandidates(const FGpuClassifyInput& _In, std::vector<u32>& _OutBatchCounts,
                            std::vector<u32>& _OutCounters) {
@@ -62,10 +64,11 @@ namespace Smile {
         return GpuClassifyPreflightOk;
     }
 
-    u32 GpuLayoutRegions(std::span<const u64> _Capacities,
-                         std::vector<FGpuIndirectRegion>& _OutRegions, u32& _OutTotal) {
-        // Primeiro a porta, inteira; so depois, e so se couber, qualquer escrita.
-        //
+    u32 GpuBuildIndirectLayout(std::span<const u64> _Capacities, u32 _Version,
+                               FGpuIndirectLayout& _OutLayout) {
+        // Primeiro as portas, inteiras; so depois, e so se couber, qualquer escrita.
+        if (_Version == 0u) return GpuRegionLayoutInvalidVersion;
+
         // A porta vem antes de CADA parcela, e nao depois da soma: somar tudo e so entao comparar deixa
         // a propria soma em u64 dar a volta — `{UINT64_MAX, 1}` vira zero e passa como layout vazio. A
         // versao anterior justificava a falta da checagem pela ORIGEM das capacidades (contagens de
@@ -78,20 +81,25 @@ namespace Smile {
             Total += C;
         }
 
-        // Daqui para baixo toda conversao e segura: cada offset e cada capacidade sao <= Total.
-        _OutRegions.assign(_Capacities.size(), FGpuIndirectRegion{});
+        // Daqui para baixo toda conversao e segura: cada offset e cada capacidade sao <= Total. As
+        // regioes sao montadas num vetor proprio e so entao entregues, para o layout de saida nunca
+        // ficar pela metade.
+        std::vector<FGpuIndirectRegion> Regioes(_Capacities.size());
         u64 Acc = 0;
         for (size_t B = 0; B < _Capacities.size(); ++B) {
-            _OutRegions[B].Offset   = static_cast<u32>(Acc);
-            _OutRegions[B].Capacity = static_cast<u32>(_Capacities[B]);
+            Regioes[B].Offset   = static_cast<u32>(Acc);
+            Regioes[B].Capacity = static_cast<u32>(_Capacities[B]);
+            Regioes[B].Version  = _Version;
             Acc += _Capacities[B];
         }
-        _OutTotal = static_cast<u32>(Total);
+        _OutLayout.Regions_ = std::move(Regioes);
+        _OutLayout.Total_   = static_cast<u32>(Total);
+        _OutLayout.Version_ = _Version;
         return GpuRegionLayoutOk;
     }
 
     void ScatterIndirectArgs(const FGpuClassifyInput& _In,
-                             std::span<const FGpuIndirectRegion> _Regions,
+                             std::span<const FGpuIndirectRegion> _Regions, u32 _ExpectedVersion,
                              std::span<const u32> _BatchCounts, std::vector<u32>& _InOutCursors,
                              std::vector<FGpuIndirectDrawArgs>& _InOutArgs,
                              std::vector<u32>& _OutCounters) {
@@ -114,6 +122,10 @@ namespace Smile {
                 continue;
             }
             const FGpuIndirectRegion& R = _Regions[Cmd.Batch];
+            if (_ExpectedVersion == 0u || R.Version != _ExpectedVersion) {
+                ++_OutCounters[GpuScatterCounterFaultLayoutVersion];
+                continue;
+            }
             if (Cursor >= R.Capacity) {
                 ++_OutCounters[GpuScatterCounterFaultRegion];
                 continue;
@@ -134,6 +146,8 @@ namespace Smile {
                            std::vector<u32>& _OutDrawCounts, u32& _OutReason) {
         u32 Motivo = 0;
         if (_ScatterCounters[GpuScatterCounterFaultCursor] != 0u)   Motivo |= GpuFinalizeFaultCursor;
+        if (_ScatterCounters[GpuScatterCounterFaultLayoutVersion] != 0u)
+            Motivo |= GpuFinalizeFaultLayoutVersion;
         if (_ScatterCounters[GpuScatterCounterFaultRegion] != 0u)   Motivo |= GpuFinalizeFaultRegion;
         if (_ScatterCounters[GpuScatterCounterFaultCapacity] != 0u) Motivo |= GpuFinalizeFaultCapacity;
 
@@ -153,6 +167,7 @@ namespace Smile {
 
         const u32 Tratados = _ScatterCounters[GpuScatterCounterEmitted] +
                              _ScatterCounters[GpuScatterCounterFaultCursor] +
+                             _ScatterCounters[GpuScatterCounterFaultLayoutVersion] +
                              _ScatterCounters[GpuScatterCounterFaultRegion] +
                              _ScatterCounters[GpuScatterCounterFaultCapacity];
         if (Tratados != Indiretos) Motivo |= GpuFinalizeScatterSum;

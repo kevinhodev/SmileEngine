@@ -24,7 +24,10 @@
 
 cbuffer ScatterCB : register(b0) {
     uint4 ScatterParams;  // x=candidatos, y=linhas de meta, z=linhas de material, w=linhas de malha
-    uint4 ScatterParams2; // x=pools, y=capacidade de IndirectArgs (em COMANDOS); zw reservados
+    // x=pools, y=capacidade de IndirectArgs (em COMANDOS), z=versao do layout que GRAVA os
+    // `ExecuteIndirect` — escrita do zero pela gravacao a cada execucao, e nunca lida da tabela; w
+    // reservado.
+    uint4 ScatterParams2;
 };
 
 StructuredBuffer<uint> ExpandedSlots : register(t0);
@@ -51,7 +54,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     // ---- a partir daqui, a posicao ja foi reservada pela contagem ----
     //
-    // ⚠️ Nao existe ramo que deixe de escrever SEM AVISAR. Os tres ramos de falha abaixo nao escrevem,
+    // ⚠️ Nao existe ramo que deixe de escrever SEM AVISAR. Os quatro ramos de falha abaixo nao escrevem,
     // e por isso registram FALHA — e a finalizacao, que roda depois deste passo, zera o `DrawCounts`
     // do frame inteiro quando qualquer falha foi registrada. O resultado de uma falha e zero
     // primitivas, e nunca um comando velho.
@@ -69,6 +72,20 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
 
     const GpuIndirectRegion Region = Regions[C.Batch];
+
+    // Regiao de OUTRO layout: a tabela que chegou aqui nao e a do layout que vai gravar os
+    // `ExecuteIndirect`. Tabela atrasada, frame slot trocado e upload esquecido chegam todos a este
+    // ramo — o ultimo porque a versao de memoria zerada e zero, e zero nunca e esperado.
+    //
+    // ANTES de qualquer uso da regiao: numa tabela de outro layout, offset e capacidade nao significam
+    // nada, e escrever com eles poria o comando exatamente onde a gravacao nao le. O
+    // `VersaoEsperada == 0` cobre a gravacao sem layout valido, que sem ele coincidiria com uma tabela
+    // zerada.
+    const uint VersaoEsperada = ScatterParams2.z;
+    if (VersaoEsperada == 0u || Region.Version != VersaoEsperada) {
+        InterlockedAdd(Counters[SMILE_SCATTER_FAULT_LAYOUT_VERSION], 1u);
+        return;
+    }
 
     // Cursor alem da capacidade da REGIAO: o frame tem mais comandos neste lote do que a CPU reservou.
     // Escrever mesmo assim poria o comando na primeira posicao da regiao SEGUINTE — que o

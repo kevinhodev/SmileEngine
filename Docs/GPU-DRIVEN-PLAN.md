@@ -1564,6 +1564,14 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > Avaliadas e descartadas: buffer por lote (a capacidade de cada um exige a mesma contagem), VBV/IBV
 > no comando e geometria bindless no VS — as duas últimas removem o eixo de pool, mas não o de
 > classe, que volta na Fase 7. O contrato está em `Engine/Include/Smile/Graphics/Scene/GpuClassify.h`.
+>
+> **E a tabela é VERSIONADA na GPU**, e não só protegida pela construção do chamador: se a tabela que
+> a GPU lê e os offsets da gravação vierem de layouts diferentes, os comandos ficam onde o
+> `ExecuteIndirect` não lê — geometria errada sem erro de API. O `FGpuIndirectLayout` é imutável e
+> carimba a versão em cada região; o `ScatterCB` recebe a versão do layout que grava; divergência
+> (tabela atrasada, frame slot trocado, upload esquecido) é falha registrada sem tocar em argumento, e
+> a finalização zera o frame. Versão zero é inválida, e o contador é monotônico, persistente e esgota
+> em vez de dar a volta.
 
 ### Trabalho
 

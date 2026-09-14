@@ -37,6 +37,8 @@ void main() {
     uint Motivo = 0u;
 
     if (ScatterCounters[SMILE_SCATTER_FAULT_CURSOR] != 0u)   Motivo |= SMILE_FINALIZE_FAULT_CURSOR;
+    if (ScatterCounters[SMILE_SCATTER_FAULT_LAYOUT_VERSION] != 0u)
+        Motivo |= SMILE_FINALIZE_FAULT_LAYOUT_VERSION;
     if (ScatterCounters[SMILE_SCATTER_FAULT_REGION] != 0u)   Motivo |= SMILE_FINALIZE_FAULT_REGION;
     if (ScatterCounters[SMILE_SCATTER_FAULT_CAPACITY] != 0u) Motivo |= SMILE_FINALIZE_FAULT_CAPACITY;
 
@@ -71,6 +73,7 @@ void main() {
     // 4. Todo indireto que o scatter viu terminou em exatamente um desfecho dele.
     const uint Tratados = ScatterCounters[SMILE_SCATTER_EMITTED] +
                           ScatterCounters[SMILE_SCATTER_FAULT_CURSOR] +
+                          ScatterCounters[SMILE_SCATTER_FAULT_LAYOUT_VERSION] +
                           ScatterCounters[SMILE_SCATTER_FAULT_REGION] +
                           ScatterCounters[SMILE_SCATTER_FAULT_CAPACITY];
     if (Tratados != Indiretos) Motivo |= SMILE_FINALIZE_SCATTER_SUM;

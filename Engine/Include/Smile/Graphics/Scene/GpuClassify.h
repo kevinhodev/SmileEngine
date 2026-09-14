@@ -326,14 +326,57 @@ namespace Smile {
     // invalida o frame, ou cabe e o objeto e desenhado duas vezes — desenhar demais, que a regra 6
     // aceita. Em nenhum dos dois casos um comando cai na regiao de outro lote.
 
+    // === A VERSAO do layout ===================================================================
+    //
+    // A regiao cria um risco SILENCIOSO: se a tabela que a GPU le e os offsets que a gravacao usa vierem
+    // de layouts diferentes, cada comando e escrito numa posicao que o `ExecuteIndirect` do seu lote nao
+    // le — ou que o de OUTRO lote le, com o par VB/IB do pool errado. Nenhuma API reclama. Tabela
+    // atrasada, frame slot trocado e upload esquecido produzem exatamente isso.
+    //
+    // A defesa e a ideia da ancora: um numero que a gravacao escreve do zero no `ScatterCB`, contra um
+    // numero que viaja DENTRO da tabela. Cada regiao publicada carrega a versao do layout que a
+    // produziu; o scatter recebe a versao do layout que vai gravar os `ExecuteIndirect`, e, se as duas
+    // divergem, registra falha sem tocar em argumento nenhum. A finalizacao zera o frame inteiro.
+    //
+    // Por REGIAO, e nao num cabecalho da tabela: cada comando confere a regiao que ele mesmo vai usar,
+    // e uma tabela parcialmente atualizada tambem e pega.
+    //
+    // Versao ZERO e invalida: e o que um buffer zerado, ou nunca escrito, contem. Um upload esquecido
+    // sobre memoria zerada nao coincide com versao nenhuma.
+
     // Uma regiao. Espelhada em HLSL como `GpuIndirectRegion` (GpuBatchCounters.hlsli).
     struct FGpuIndirectRegion {
         u32 Offset   = 0; // primeiro comando do lote em `IndirectArgs`
         u32 Capacity = 0; // quantos comandos cabem; e o `MaxCommandCount` da chamada do lote
+        u32 Version  = 0; // versao do layout que produziu esta regiao; 0 = invalida
     };
-    static_assert(sizeof(FGpuIndirectRegion) == 8, "FGpuIndirectRegion deve casar com o HLSL (8 B)");
+    static_assert(sizeof(FGpuIndirectRegion) == 12, "FGpuIndirectRegion deve casar com o HLSL (12 B)");
     static_assert(offsetof(FGpuIndirectRegion, Offset)   == 0);
     static_assert(offsetof(FGpuIndirectRegion, Capacity) == 4);
+    static_assert(offsetof(FGpuIndirectRegion, Version)  == 8);
+
+    // A FONTE das versoes: monotonica e PERSISTENTE — vive mais que a cena, e mais que o layout.
+    //
+    // Um contador por cena voltaria a 1 na troca de cena, e a tabela da cena anterior, ainda num frame
+    // slot, coincidiria com o primeiro layout da seguinte.
+    //
+    // Esgota em UINT32_MAX e fica esgotada: dali em diante devolve 0, e layout com versao 0 e recusado.
+    // Dar a volta para 1 reabriria exatamente a coincidencia que a versao existe para impedir. Sao
+    // quatro bilhoes de mudancas de associacao, classe ou pool.
+    class FGpuIndirectLayoutVersions {
+    public:
+        // `_Last` e a ultima versao ja entregue; a proxima e `_Last + 1`. O parametro existe para o
+        // teste alcancar a exaustao sem quatro bilhoes de chamadas.
+        explicit FGpuIndirectLayoutVersions(u32 _Last = 0u) : Last_(_Last) {}
+
+        u32 Next() {
+            if (Last_ == UINT32_MAX) return 0u;
+            return ++Last_;
+        }
+
+    private:
+        u32 Last_ = 0;
+    };
 
     // Capacidade ESTAVEL de cada lote. Ver acima o que conta como viva.
     //
@@ -358,9 +401,15 @@ namespace Smile {
         // A soma das capacidades passa de UINT32_MAX: nao existe `Offset` u32 que enderece a ultima
         // regiao, nem `IndirectArgs` que a contenha.
         GpuRegionLayoutTooManyCommands = 1,
+        // Versao 0: o contador esgotou, ou ninguem atribuiu versao. Uma tabela assim coincidiria com
+        // memoria zerada.
+        GpuRegionLayoutInvalidVersion = 2,
     };
 
-    // Regioes DENSAS, na ordem dos lotes: `Offset[b]` = soma das capacidades antes de b.
+    class FGpuIndirectLayout;
+
+    // Regioes DENSAS, na ordem dos lotes: `Offset[b]` = soma das capacidades antes de b. Toda regiao
+    // sai carimbada com `Version`.
     //
     // A porta vem ANTES de cada parcela, e nao depois da soma: cada capacidade tem de caber em u32, e o
     // acumulado tem de caber junto com ela. Dar a volta aqui nao produz um numero absurdo, produz um
@@ -368,10 +417,30 @@ namespace Smile {
     // `{UINT64_MAX, 1}` somaria zero e passaria como layout vazio. Verificada antes de somar, a soma
     // nunca sai de u32, e todo offset e toda capacidade cabem por construcao.
     //
-    // `_OutRegions` e `_OutTotal` so sao escritos sob `Ok`: um layout recusado nao pode deixar regioes
-    // plausiveis na mao do chamador.
-    u32 GpuLayoutRegions(std::span<const u64> Capacities, std::vector<FGpuIndirectRegion>& OutRegions,
-                         u32& OutTotal);
+    // `OutLayout` so e escrito sob `Ok`: um layout recusado nao pode deixar regioes plausiveis — nem
+    // uma versao — na mao do chamador.
+    u32 GpuBuildIndirectLayout(std::span<const u64> Capacities, u32 Version,
+                               FGpuIndirectLayout& OutLayout);
+
+    // O layout PUBLICADO: regioes, total e versao, construidos juntos e so leitura depois.
+    //
+    // Imutavel porque e o objeto que amarra os dois lados. A tabela que sobe para a GPU e os
+    // `ExecuteIndirect` da gravacao saem DELE — as regioes de um lado, a versao esperada e os offsets do
+    // outro. Um layout editavel depois de publicado deixaria a GPU com uma copia e a gravacao com outra,
+    // que e o defeito que a versao existe para pegar. So `GpuBuildIndirectLayout` o preenche.
+    class FGpuIndirectLayout {
+    public:
+        u32 Version() const { return Version_; }
+        u32 TotalCommands() const { return Total_; }
+        std::span<const FGpuIndirectRegion> Regions() const { return Regions_; }
+
+    private:
+        friend u32 GpuBuildIndirectLayout(std::span<const u64>, u32, FGpuIndirectLayout&);
+
+        u32                             Version_ = 0;
+        u32                             Total_   = 0;
+        std::vector<FGpuIndirectRegion> Regions_;
+    };
 
     // O `ArgumentBufferOffset` da chamada do lote. Em u64: `Offset * 28` em u32 da a volta a partir de
     // ~153 milhoes de comandos, e o `ExecuteIndirect` leria os argumentos de outro lote.
@@ -397,15 +466,23 @@ namespace Smile {
         // GPU NAO enxerga: os dois lotes escreveriam as mesmas posicoes com contagens validas, e o
         // `ExecuteIndirect` de um desenharia comandos do outro com o par VB/IB errado.
         GpuRegionPreflightOverlap = 3,
+        // A versao esperada e 0, ou alguma regiao traz outra versao. E a mesma falha que o scatter
+        // registra na GPU; aqui ela e pega antes de qualquer comando ser gravado.
+        GpuRegionPreflightVersion = 4,
     };
 
-    // A porta das regioes, sobre a MESMA tabela e a MESMA capacidade que o scatter recebe.
-    inline u32 GpuRegionPreflight(std::span<const FGpuIndirectRegion> _Regions, u32 _BatchSlots,
-                                  u32 _ArgsCapacity) {
+    // A porta das regioes, sobre a MESMA tabela, a MESMA versao esperada e a MESMA capacidade que o
+    // scatter recebe.
+    inline u32 GpuRegionPreflight(std::span<const FGpuIndirectRegion> _Regions, u32 _ExpectedVersion,
+                                  u32 _BatchSlots, u32 _ArgsCapacity) {
         if (_Regions.size() < _BatchSlots) return GpuRegionPreflightSmallRegionTable;
+        if (_ExpectedVersion == 0u) return GpuRegionPreflightVersion;
         u64 FimAnterior = 0;
         for (u32 B = 0; B < _BatchSlots; ++B) {
             const FGpuIndirectRegion& R = _Regions[B];
+            // A versao antes de tudo: numa regiao de outro layout, offset e capacidade nao significam
+            // nada, e reprova-la por sobreposicao esconderia a causa.
+            if (R.Version != _ExpectedVersion) return GpuRegionPreflightVersion;
             if (R.Offset < FimAnterior) return GpuRegionPreflightOverlap;
             const u64 Fim = static_cast<u64>(R.Offset) + R.Capacity;
             if (Fim > _ArgsCapacity) return GpuRegionPreflightSmallArgsBuffer;
@@ -418,8 +495,9 @@ namespace Smile {
     // O COUNT BUFFER do `ExecuteIndirect`, publicado pela FINALIZACAO (FinalizeDrawCounts.cs.hlsl).
     //
     // `DrawCounts[b]` = `BatchCounts[b]` quando o frame fechou inteiro, e ZERO em todas as entradas
-    // quando QUALQUER falha foi registrada — contagem alem da regiao, cursor alem da contagem, regiao
-    // fora do recurso, ou um elo da verificacao de reset. Count buffer zerado faz o `ExecuteIndirect`
+    // quando QUALQUER falha foi registrada — contagem alem da regiao, cursor alem da contagem, regiao de
+    // outro layout, regiao fora do recurso, ou um elo da verificacao de reset. Count buffer zerado faz
+    // o `ExecuteIndirect`
     // executar zero comandos, e essa e a unica forma de suprimir o draw sem readback.
     //
     // ⚠️ Publicado DEPOIS do scatter. O count buffer tem de ser a ultima palavra, escrita pelo ultimo
@@ -481,24 +559,28 @@ namespace Smile {
     // o `GpuClassifyCandidate` ja montou.
     //
     // ⚠️ Depois de `Indirect`, nenhum ramo deixa de escrever SEM AVISAR. A contagem ja reservou a
-    // posicao; um candidato contado e nao escrito deixaria ali o comando do frame passado. Os tres
+    // posicao; um candidato contado e nao escrito deixaria ali o comando do frame passado. Os quatro
     // ramos que nao escrevem registram FALHA, e a finalizacao zera o `DrawCounts` do frame inteiro.
     enum EGpuScatterCounter : u32 {
         GpuScatterCounterEmitted       = 0, // comandos escritos
         // FALHA: cursor alem da contagem do lote. Pega cursor sujo — todo inicio nao zero num lote com
         // candidatos leva ao menos o ultimo alem da contagem — e contagem divergente.
         GpuScatterCounterFaultCursor   = 1,
+        // FALHA: a regiao do lote veio de OUTRO layout — versao diferente da esperada, ou zero. Nada da
+        // regiao e usado: nem offset, nem capacidade, nem a posicao em `IndirectArgs`. E a falha que
+        // tabela atrasada, frame slot trocado e upload esquecido produzem.
+        GpuScatterCounterFaultLayoutVersion = 2,
         // FALHA: cursor alem da capacidade da REGIAO — o frame tem mais comandos no lote do que a CPU
         // reservou. Nao escrever e o que impede o comando excedente de cair na primeira posicao da
         // regiao SEGUINTE, que o `ExecuteIndirect` do outro lote desenharia com o pool errado.
-        GpuScatterCounterFaultRegion   = 2,
+        GpuScatterCounterFaultRegion   = 3,
         // FALHA: a regiao nao cabe em `IndirectArgs`. Inalcancavel sob `GpuRegionPreflight`; se
         // alcancada, a tabela que a GPU recebeu nao e a que a CPU aprovou.
-        GpuScatterCounterFaultCapacity = 3,
-        GpuScatterCounterCount         = 4,
+        GpuScatterCounterFaultCapacity = 4,
+        GpuScatterCounterCount         = 5,
     };
 
-    // Bytes de `IndirectArgs` para `_Commands` comandos — o total que `GpuLayoutRegions` devolveu.
+    // Bytes de `IndirectArgs` para `_Commands` comandos — o `TotalCommands()` do layout.
     //
     // Em u64, e nao por zelo: `_Commands * 28` em u32 da a volta a partir de ~153 milhoes de
     // comandos, e o recurso seria alocado pequeno para as regioes que o shader recebe.
@@ -526,8 +608,11 @@ namespace Smile {
     // `InOutCursors` e o estado dos cursores ANTES do scatter — normalmente o que o reset zerou. Ele e
     // parametro, e nao zerado aqui dentro, para que o teste consiga reproduzir o cursor sujo que a
     // falha de cursor existe para pegar.
+    //
+    // `Regions` e a tabela que a GPU LE; `ExpectedVersion` e a versao do layout que GRAVA. Sao dois
+    // parametros de proposito: e a divergencia entre eles que a falha de versao existe para pegar.
     void ScatterIndirectArgs(const FGpuClassifyInput& Input,
-                             std::span<const FGpuIndirectRegion> Regions,
+                             std::span<const FGpuIndirectRegion> Regions, u32 ExpectedVersion,
                              std::span<const u32> BatchCounts, std::vector<u32>& InOutCursors,
                              std::vector<FGpuIndirectDrawArgs>& InOutArgs,
                              std::vector<u32>& OutCounters);
@@ -542,17 +627,18 @@ namespace Smile {
         // protege a MEMORIA — impede o comando excedente de ser escrito na regiao seguinte. Este
         // protege a PUBLICACAO — compara a contagem com a regiao que a CPU publicou, sem depender de qual
         // thread recebeu qual cursor. O teste os separa pelo motivo exato.
-        GpuFinalizeRegionOverflow = 1u << 0,
-        GpuFinalizeFaultCursor    = 1u << 1, // falha de cursor registrada pelo scatter
-        GpuFinalizeFaultRegion    = 1u << 2, // falha de regiao registrada pelo scatter
-        GpuFinalizeFaultCapacity  = 1u << 3, // regiao fora de `IndirectArgs`, registrada pelo scatter
+        GpuFinalizeRegionOverflow      = 1u << 0,
+        GpuFinalizeFaultCursor         = 1u << 1, // falha de cursor registrada pelo scatter
+        GpuFinalizeFaultLayoutVersion  = 1u << 2, // regiao de outro layout, registrada pelo scatter
+        GpuFinalizeFaultRegion         = 1u << 3, // falha de regiao registrada pelo scatter
+        GpuFinalizeFaultCapacity       = 1u << 4, // regiao fora de `IndirectArgs`, registrada pelo scatter
         // Os quatro elos da verificacao de RESET. O primeiro e a ANCORA: o numero de candidatos vem
         // do cbuffer e nao acumula. Sem ele, esquecer o reset inteiro passaria sempre que a regiao
         // tivesse folga — os acumuladores crescem juntos, e toda igualdade entre eles continua valendo.
-        GpuFinalizeClassifyAnchor = 1u << 4, // soma dos contadores do classify != candidatos
-        GpuFinalizeBatchSum       = 1u << 5, // soma dos lotes != indiretos
-        GpuFinalizeCursorMismatch = 1u << 6, // cursor != contagem em algum lote
-        GpuFinalizeScatterSum     = 1u << 7, // emitidos + falhas do scatter != indiretos
+        GpuFinalizeClassifyAnchor      = 1u << 5, // soma dos contadores do classify != candidatos
+        GpuFinalizeBatchSum            = 1u << 6, // soma dos lotes != indiretos
+        GpuFinalizeCursorMismatch      = 1u << 7, // cursor != contagem em algum lote
+        GpuFinalizeScatterSum          = 1u << 8, // emitidos + falhas do scatter != indiretos
     };
 
     // Referencia CPU da FINALIZACAO. Publica o count buffer a partir das contagens e de TODA

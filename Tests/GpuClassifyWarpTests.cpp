@@ -309,21 +309,61 @@ namespace {
         }
     }
 
+    // ---- parte CPU pura: a VERSAO do layout ----------------------------------------------------
+    //
+    // Monotonica, nunca zero, e esgotada em vez de dar a volta. E o layout recusa versao zero sem
+    // escrever nada.
+    void TestarVersoes() {
+        FGpuIndirectLayoutVersions V;
+        CheckEq(V.Next(), 1u, "a primeira versao e 1: zero e invalida");
+        CheckEq(V.Next(), 2u, "e cresce de um em um");
+
+        FGpuIndirectLayoutVersions Fim(UINT32_MAX - 1u);
+        CheckEq(Fim.Next(), UINT32_MAX, "a ultima versao valida e UINT32_MAX");
+        CheckEq(Fim.Next(), 0u, "depois dela o contador ESGOTA: devolve 0, e nao da a volta para 1");
+        CheckEq(Fim.Next(), 0u, "e continua esgotado");
+
+        const u64 Cap[3]{ 2ull, 0ull, 1ull };
+        FGpuIndirectLayout L;
+        CheckEq(GpuBuildIndirectLayout(Cap, 7u, L), GpuRegionLayoutOk, "o layout com versao 7 passa");
+        CheckEq(L.Version(), 7u, "e carrega a versao");
+        Check(L.Regions().size() == 3, "uma regiao por lote");
+        for (const FGpuIndirectRegion& R : L.Regions())
+            CheckEq(R.Version, 7u, "TODA regiao sai carimbada com a versao do layout");
+
+        CheckEq(GpuBuildIndirectLayout(Cap, 0u, L), GpuRegionLayoutInvalidVersion,
+                "versao zero recusa: coincidiria com memoria zerada");
+        CheckEq(L.Version(), 7u, "e a recusa nao toca no layout anterior");
+        Check(L.Regions().size() == 3 && L.Regions()[2].Offset == 2u && L.Regions()[2].Version == 7u,
+              "nem nas regioes dele");
+        CheckEq(GpuBuildIndirectLayout(Cap, Fim.Next(), L), GpuRegionLayoutInvalidVersion,
+                "um contador esgotado nao produz layout");
+    }
+
     // ---- parte CPU pura: o LAYOUT e a porta de u32 --------------------------------------------
     //
-    // Regioes densas na ordem dos lotes. A soma corre em u64 e so vira u32 depois da porta; os casos
-    // de fronteira abaixo sao os que um layout somado em u32 aprovaria com regioes plausiveis.
+    // Regioes densas na ordem dos lotes. A porta vem antes de cada parcela; os casos de fronteira abaixo
+    // sao os que um layout somado sem ela aprovaria com regioes plausiveis.
     void TestarLayout() {
         auto Igual = [](const FGpuIndirectRegion& _R, u32 _Offset, u32 _Capacity) {
             return _R.Offset == _Offset && _R.Capacity == _Capacity;
         };
+        // Um layout VALIDO construido antes de cada recusa: e ele que tem de sobreviver intacto.
+        auto Anterior = [](FGpuIndirectLayout& _L) {
+            const u64 Um[1]{ 7ull };
+            GpuBuildIndirectLayout(Um, 9u, _L);
+        };
+        auto Intacto = [&](const FGpuIndirectLayout& _L) {
+            return _L.Version() == 9u && _L.TotalCommands() == 7u && _L.Regions().size() == 1 &&
+                   Igual(_L.Regions()[0], 0u, 7u) && _L.Regions()[0].Version == 9u;
+        };
         {
             // O layout da cena do teste, com as capacidades que TestarCapacidades fixou.
             const u64 Cap[8]{ 4ull, 2ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull };
-            std::vector<FGpuIndirectRegion> R;
-            u32 Total = 0xDEADBEEFu;
-            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutOk, "o layout da cena passa");
-            CheckEq(Total, 6u, "seis comandos no total");
+            FGpuIndirectLayout L;
+            CheckEq(GpuBuildIndirectLayout(Cap, 1u, L), GpuRegionLayoutOk, "o layout da cena passa");
+            CheckEq(L.TotalCommands(), 6u, "seis comandos no total");
+            const auto R = L.Regions();
             Check(R.size() == 8, "uma regiao por slot de lote");
             if (R.size() == 8) {
                 Check(Igual(R[0], 0u, 4u), "regiao 0 = [0, 4)");
@@ -337,49 +377,45 @@ namespace {
             // Lotes VAZIOS entre cheios nao consomem espaco: o offset do vazio e o do seguinte.
             const u64 Cap[5]{ 2ull, 0ull, 5ull, 0ull, 3ull };
             const u32 Offsets[5]{ 0u, 2u, 2u, 7u, 7u };
-            std::vector<FGpuIndirectRegion> R;
-            u32 Total = 0u;
-            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutOk,
+            FGpuIndirectLayout L;
+            CheckEq(GpuBuildIndirectLayout(Cap, 1u, L), GpuRegionLayoutOk,
                     "lotes vazios intercalados passam");
-            CheckEq(Total, 10u, "o total e a soma");
-            for (u32 B = 0; B < 5u && B < R.size(); ++B)
-                CheckEq(R[B].Offset, Offsets[B], "offset denso do lote " + std::to_string(B));
+            CheckEq(L.TotalCommands(), 10u, "o total e a soma");
+            for (u32 B = 0; B < 5u && B < L.Regions().size(); ++B)
+                CheckEq(L.Regions()[B].Offset, Offsets[B], "offset denso do lote " + std::to_string(B));
         }
         {
             // A fronteira: soma EXATAMENTE UINT32_MAX passa, e as regioes saem certas.
             const u64 Cap[2]{ 0xFFFFFFFEull, 1ull };
-            std::vector<FGpuIndirectRegion> R;
-            u32 Total = 0u;
-            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutOk, "soma igual a UINT32_MAX passa");
-            CheckEq(Total, 0xFFFFFFFFu, "com o total exato");
-            Check(R.size() == 2 && Igual(R[1], 0xFFFFFFFEu, 1u),
+            FGpuIndirectLayout L;
+            CheckEq(GpuBuildIndirectLayout(Cap, 1u, L), GpuRegionLayoutOk,
+                    "soma igual a UINT32_MAX passa");
+            CheckEq(L.TotalCommands(), 0xFFFFFFFFu, "com o total exato");
+            Check(L.Regions().size() == 2 && Igual(L.Regions()[1], 0xFFFFFFFEu, 1u),
                   "e a ultima regiao comeca no ultimo comando");
         }
         {
             // Um acima recusa, e a recusa nao escreve nada.
             const u64 Cap[2]{ 0xFFFFFFFFull, 1ull };
-            std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
-            u32 Total = 0xDEADBEEFu;
-            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutTooManyCommands,
+            FGpuIndirectLayout L;
+            Anterior(L);
+            CheckEq(GpuBuildIndirectLayout(Cap, 1u, L), GpuRegionLayoutTooManyCommands,
                     "um acima de UINT32_MAX recusa");
-            Check(R.size() == 1 && Igual(R[0], 7u, 7u), "e a recusa nao escreve as regioes");
-            CheckEq(Total, 0xDEADBEEFu, "nem o total");
+            Check(Intacto(L), "e a recusa nao escreve o layout");
         }
         {
             // A soma que em u32 daria a volta para ZERO. Um layout em u32 a aprovaria com total 0 e
             // poria a regiao 1 no offset 0x80000000 — plausivel, e dentro de nada.
             const u64 Cap[2]{ 0x80000000ull, 0x80000000ull };
-            std::vector<FGpuIndirectRegion> R;
-            u32 Total = 0u;
-            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutTooManyCommands,
+            FGpuIndirectLayout L;
+            CheckEq(GpuBuildIndirectLayout(Cap, 1u, L), GpuRegionLayoutTooManyCommands,
                     "a soma que daria a volta para zero recusa");
         }
         {
             // Uma capacidade SOZINHA acima de u32: truncada, viraria zero e o lote sumiria do layout.
             const u64 Cap[1]{ 0x100000000ull };
-            std::vector<FGpuIndirectRegion> R;
-            u32 Total = 0u;
-            CheckEq(GpuLayoutRegions(Cap, R, Total), GpuRegionLayoutTooManyCommands,
+            FGpuIndirectLayout L;
+            CheckEq(GpuBuildIndirectLayout(Cap, 1u, L), GpuRegionLayoutTooManyCommands,
                     "uma capacidade acima de u32 recusa");
         }
         {
@@ -389,27 +425,27 @@ namespace {
             const u64 Casos[2][2]{ { UINT64_MAX, 1ull }, { 1ull, UINT64_MAX } };
             for (u32 K = 0; K < 2u; ++K) {
                 const std::string N = K == 0u ? "{UINT64_MAX, 1}" : "{1, UINT64_MAX}";
-                std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
-                u32 Total = 0xDEADBEEFu;
-                CheckEq(GpuLayoutRegions(Casos[K], R, Total), GpuRegionLayoutTooManyCommands,
+                FGpuIndirectLayout L;
+                Anterior(L);
+                CheckEq(GpuBuildIndirectLayout(Casos[K], 1u, L), GpuRegionLayoutTooManyCommands,
                         N + ": a soma que da a volta em u64 recusa");
-                Check(R.size() == 1 && Igual(R[0], 7u, 7u), N + ": e a recusa nao escreve as regioes");
-                CheckEq(Total, 0xDEADBEEFu, N + ": nem o total");
+                Check(Intacto(L), N + ": e a recusa nao escreve o layout");
             }
         }
         {
-            // Nenhum lote: nenhuma regiao, total zero.
-            std::vector<FGpuIndirectRegion> R{ FGpuIndirectRegion{ 7u, 7u } };
-            u32 Total = 9u;
-            CheckEq(GpuLayoutRegions({}, R, Total), GpuRegionLayoutOk, "sem lote o layout e vazio");
-            Check(R.empty(), "e a saida fica vazia, e nao com o conteudo anterior");
-            CheckEq(Total, 0u, "com total zero");
+            // Nenhum lote: nenhuma regiao, total zero — e o layout anterior e SUBSTITUIDO, nao somado.
+            FGpuIndirectLayout L;
+            Anterior(L);
+            CheckEq(GpuBuildIndirectLayout({}, 2u, L), GpuRegionLayoutOk, "sem lote o layout e vazio");
+            Check(L.Regions().empty(), "e as regioes ficam vazias, e nao com as do layout anterior");
+            CheckEq(L.TotalCommands(), 0u, "com total zero");
+            CheckEq(L.Version(), 2u, "e a versao nova");
         }
 
         // Os dois parametros que a gravacao tira da regiao, em u64.
-        CheckEq64(GpuRegionArgumentOffset(FGpuIndirectRegion{ 4u, 2u }), 112ull,
+        CheckEq64(GpuRegionArgumentOffset(FGpuIndirectRegion{ 4u, 2u, 1u }), 112ull,
                   "ArgumentBufferOffset = Offset * 28");
-        CheckEq64(GpuRegionArgumentOffset(FGpuIndirectRegion{ 0xFFFFFFFFu, 1u }),
+        CheckEq64(GpuRegionArgumentOffset(FGpuIndirectRegion{ 0xFFFFFFFFu, 1u, 1u }),
                   0xFFFFFFFFull * 28ull, "o maior offset nao da a volta");
         CheckEq64(GpuRegionCountOffset(1u), 4ull, "CountBufferOffset = lote * 4");
         CheckEq64(GpuRegionCountOffset(0xFFFFFFFFu), 0xFFFFFFFFull * 4ull,
@@ -418,46 +454,68 @@ namespace {
 
     // ---- parte CPU pura: a porta das REGIOES ---------------------------------------------------
     //
-    // Estrutura, e nao suficiencia: ela confere que as regioes cobrem todo lote, cabem no recurso e
-    // nao se sobrepoem. Se a contagem do FRAME cabe em cada regiao ela nao tem como saber — isso e
-    // garantido pela capacidade estavel e verificado pela GPU.
+    // Estrutura e versao, e nao suficiencia: ela confere que as regioes cobrem todo lote, vieram do
+    // layout esperado, cabem no recurso e nao se sobrepoem. Se a contagem do FRAME cabe em cada regiao
+    // ela nao tem como saber — isso e garantido pela capacidade estavel e verificado pela GPU.
     void TestarPreflightDeRegioes() {
-        const FGpuIndirectRegion Cena[8]{ { 0u, 4u }, { 4u, 2u }, { 6u, 0u }, { 6u, 0u },
-                                          { 6u, 0u }, { 6u, 0u }, { 6u, 0u }, { 6u, 0u } };
-        CheckEq(GpuRegionPreflight(Cena, 8u, 6u), GpuRegionPreflightOk,
-                "as regioes da cena passam com a capacidade exata");
-        CheckEq(GpuRegionPreflight(Cena, 8u, 5u), GpuRegionPreflightSmallArgsBuffer,
+        const FGpuIndirectRegion Cena[8]{ { 0u, 4u, 1u }, { 4u, 2u, 1u }, { 6u, 0u, 1u },
+                                          { 6u, 0u, 1u }, { 6u, 0u, 1u }, { 6u, 0u, 1u },
+                                          { 6u, 0u, 1u }, { 6u, 0u, 1u } };
+        CheckEq(GpuRegionPreflight(Cena, 1u, 8u, 6u), GpuRegionPreflightOk,
+                "as regioes da cena passam com a versao e a capacidade exatas");
+        CheckEq(GpuRegionPreflight(Cena, 1u, 8u, 5u), GpuRegionPreflightSmallArgsBuffer,
                 "um comando a menos reprova");
-        CheckEq(GpuRegionPreflight(std::span<const FGpuIndirectRegion>(Cena, 7u), 8u, 6u),
+        CheckEq(GpuRegionPreflight(std::span<const FGpuIndirectRegion>(Cena, 7u), 1u, 8u, 6u),
                 GpuRegionPreflightSmallRegionTable, "uma regiao a menos que os lotes reprova");
+
+        // A VERSAO. Esperar outra versao, esperar zero, e uma unica regiao de outro layout.
+        CheckEq(GpuRegionPreflight(Cena, 2u, 8u, 6u), GpuRegionPreflightVersion,
+                "a tabela de um layout contra a versao de outro reprova");
+        CheckEq(GpuRegionPreflight(Cena, 0u, 8u, 6u), GpuRegionPreflightVersion,
+                "versao esperada zero reprova");
+        // Memoria zerada contra versao esperada zero: regiao por regiao as versoes COINCIDEM, e os
+        // offsets e capacidades zerados sao estruturalmente validos. So a regra de que zero nunca e
+        // esperado a reprova.
+        const FGpuIndirectRegion Zerada[8]{};
+        CheckEq(GpuRegionPreflight(Zerada, 0u, 8u, 6u), GpuRegionPreflightVersion,
+                "tabela zerada contra versao esperada zero reprova: e memoria, e nao layout");
+        FGpuIndirectRegion Mista[8];
+        std::copy(std::begin(Cena), std::end(Cena), Mista);
+        Mista[5].Version = 2u; // uma so, e numa regiao VAZIA: tabela parcialmente atualizada
+        CheckEq(GpuRegionPreflight(Mista, 1u, 8u, 6u), GpuRegionPreflightVersion,
+                "uma unica regiao de outro layout reprova a tabela inteira");
 
         FGpuIndirectRegion Sobre[8];
         std::copy(std::begin(Cena), std::end(Cena), Sobre);
         Sobre[1].Offset = 3u; // [3, 5): a ultima posicao do lote 0 e tambem a primeira do lote 1
-        CheckEq(GpuRegionPreflight(Sobre, 8u, 6u), GpuRegionPreflightOverlap,
+        CheckEq(GpuRegionPreflight(Sobre, 1u, 8u, 6u), GpuRegionPreflightOverlap,
                 "regioes sobrepostas reprovam, mesmo cabendo no recurso");
+        Sobre[1].Version = 2u;
+        CheckEq(GpuRegionPreflight(Sobre, 1u, 8u, 6u), GpuRegionPreflightVersion,
+                "e a versao vem ANTES da sobreposicao: numa regiao de outro layout, o offset nao significa nada");
 
         FGpuIndirectRegion Invertida[8];
         std::copy(std::begin(Cena), std::end(Cena), Invertida);
-        Invertida[0] = { 2u, 4u };
-        Invertida[1] = { 0u, 2u };
-        CheckEq(GpuRegionPreflight(Invertida, 8u, 6u), GpuRegionPreflightOverlap,
+        Invertida[0] = { 2u, 4u, 1u };
+        Invertida[1] = { 0u, 2u, 1u };
+        CheckEq(GpuRegionPreflight(Invertida, 1u, 8u, 6u), GpuRegionPreflightOverlap,
                 "regioes fora da ordem dos lotes reprovam");
 
         // O fim que em u32 daria a volta: `0xFFFFFFFF + 2` seria 1, e 1 cabe em qualquer recurso.
-        const FGpuIndirectRegion Volta[1]{ { 0xFFFFFFFFu, 2u } };
-        CheckEq(GpuRegionPreflight(Volta, 1u, 0xFFFFFFFFu), GpuRegionPreflightSmallArgsBuffer,
+        const FGpuIndirectRegion Volta[1]{ { 0xFFFFFFFFu, 2u, 1u } };
+        CheckEq(GpuRegionPreflight(Volta, 1u, 1u, 0xFFFFFFFFu), GpuRegionPreflightSmallArgsBuffer,
                 "o fim de regiao que daria a volta reprova");
 
-        // E a garantia de producao: o layout, contra o total que ele mesmo devolve, sempre passa.
+        // E a garantia de producao: o layout, contra a propria versao e o proprio total, sempre passa.
         const u64 Cap[5]{ 2ull, 0ull, 5ull, 0ull, 3ull };
-        std::vector<FGpuIndirectRegion> R;
-        u32 Total = 0u;
-        GpuLayoutRegions(Cap, R, Total);
-        CheckEq(GpuRegionPreflight(R, 5u, Total), GpuRegionPreflightOk,
-                "o layout de producao passa com o proprio total");
-        CheckEq(GpuRegionPreflight(R, 5u, Total - 1u), GpuRegionPreflightSmallArgsBuffer,
-                "e reprova com um comando a menos");
+        FGpuIndirectLayout L;
+        GpuBuildIndirectLayout(Cap, 5u, L);
+        CheckEq(GpuRegionPreflight(L.Regions(), L.Version(), 5u, L.TotalCommands()),
+                GpuRegionPreflightOk, "o layout de producao passa com a propria versao e o proprio total");
+        CheckEq(GpuRegionPreflight(L.Regions(), L.Version(), 5u, L.TotalCommands() - 1u),
+                GpuRegionPreflightSmallArgsBuffer, "e reprova com um comando a menos");
+        CheckEq(GpuRegionPreflight(L.Regions(), L.Version() + 1u, 5u, L.TotalCommands()),
+                GpuRegionPreflightVersion, "e com a versao do layout seguinte");
     }
 
     // ---- parte CPU pura: o desfecho de cada candidato -----------------------------------------
@@ -817,33 +875,48 @@ namespace {
 
         // As regioes pela funcao de PRODUCAO, das tabelas.
         std::vector<u64> Cap;
-        std::vector<FGpuIndirectRegion> Reg;
-        u32 Total = 0u;
         GpuCountRegionCapacities(Metas, Mats, Meshs, kPoolCount, Cap);
-        GpuLayoutRegions(Cap, Reg, Total);
+        FGpuIndirectLayout L;
+        GpuBuildIndirectLayout(Cap, 1u, L);
+        const u32 Total = L.TotalCommands();
 
         std::vector<FGpuIndirectDrawArgs> Args(Total, ComandoPoison());
         std::vector<u32> Cont;
         std::vector<u32> Cursores(Lotes.size(), 0u);
-        ScatterIndirectArgs(In, Reg, Lotes, Cursores, Args, Cont);
+        ScatterIndirectArgs(In, L.Regions(), L.Version(), Lotes, Cursores, Args, Cont);
 
         // A contagem e a emissao olham o mesmo fato. Um scatter que recusasse alguem que o classify
         // contou apareceria AQUI, antes de virar comando velho no ExecuteIndirect.
         CheckEq(Cont[GpuScatterCounterEmitted], ContClassify[GpuClassifyIndirect],
                 "o scatter emite exatamente o que o classify contou");
         CheckEq(Cont[GpuScatterCounterFaultCursor], 0u, "cursores zerados: nenhuma falha de cursor");
+        CheckEq(Cont[GpuScatterCounterFaultLayoutVersion], 0u, "tabela e gravacao do mesmo layout");
         CheckEq(Cont[GpuScatterCounterFaultRegion], 0u, "regioes das tabelas: nenhum lote passa da sua");
         CheckEq(Cont[GpuScatterCounterFaultCapacity], 0u, "regioes no recurso: nenhuma falha de capacidade");
         ConferirArgsDaCena(Args, "CPU");
 
+        // LAYOUT TROCADO: a tabela e deste layout, a gravacao espera a versao do seguinte. Nenhum
+        // comando pode ser escrito — em lugar nenhum.
+        {
+            std::vector<FGpuIndirectDrawArgs> ArgsT(Total, ComandoPoison());
+            std::vector<u32> CurT(Lotes.size(), 0u), ContT;
+            ScatterIndirectArgs(In, L.Regions(), L.Version() + 1u, Lotes, CurT, ArgsT, ContT);
+            CheckEq(ContT[GpuScatterCounterFaultLayoutVersion], 3u,
+                    "CPU, layout trocado: os tres comandos viram falha de versao");
+            CheckEq(ContT[GpuScatterCounterEmitted], 0u, "CPU, layout trocado: nenhum e escrito");
+            for (u32 P = 0; P < Total; ++P)
+                Check(MesmoComando(ArgsT[P], ComandoPoison()),
+                      "CPU, layout trocado: a posicao " + std::to_string(P) + " continua poison");
+        }
+
         // REGIAO CURTA: o lote 0 tem dois comandos e uma posicao. O excedente vira falha, e a posicao
         // seguinte — que e do lote 1 — fica com o comando do lote 1.
-        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u });
-        Curta[0] = { 0u, 1u };
-        Curta[1] = { 1u, 2u };
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u, L.Version() });
+        Curta[0] = { 0u, 1u, L.Version() };
+        Curta[1] = { 1u, 2u, L.Version() };
         std::vector<FGpuIndirectDrawArgs> ArgsC(3u, ComandoPoison());
         std::vector<u32> CurC(Lotes.size(), 0u), ContC;
-        ScatterIndirectArgs(In, Curta, Lotes, CurC, ArgsC, ContC);
+        ScatterIndirectArgs(In, Curta, L.Version(), Lotes, CurC, ArgsC, ContC);
         CheckEq(ContC[GpuScatterCounterFaultRegion], 1u, "CPU, regiao curta: o excedente vira falha");
         CheckEq(ContC[GpuScatterCounterEmitted], 2u, "CPU, regiao curta: os outros dois sao escritos");
         Check(MesmoComando(ArgsC[0], Esperado(0u, 0u)),
@@ -1028,10 +1101,13 @@ namespace {
         // suja uma posicao que devia continuar poison.
         //
         // `_ArgsCapacity` e ao mesmo tempo o tamanho do recurso e o numero que o shader recebe.
+        //
+        // `_Regioes` e a tabela que SOBE; `_VersaoEsperada` e a do layout que GRAVARIA os
+        // `ExecuteIndirect`. Dois parametros de proposito, para o teste poder desencontra-los.
         FScatter ExecutarScatter(const FGpuClassifyInput& _In,
                                  std::span<const FGpuIndirectRegion> _Regioes,
                                  std::span<const u32> _Counts, std::span<const u32> _Cursores,
-                                 u32 _ArgsCapacity) {
+                                 u32 _ArgsCapacity, u32 _VersaoEsperada) {
             auto Pisa = [](u64 _Bytes, u64 _Stride) { return std::max<u64>(_Stride, _Bytes); };
             auto BufSlots = Upload(_In.Slots.data(), Pisa(_In.Slots.size() * 4u, 4u));
             auto BufMeta  = Upload(_In.Meta.data(),
@@ -1118,7 +1194,7 @@ namespace {
             const u32 P8[8]{ static_cast<u32>(_In.Slots.size()), static_cast<u32>(_In.Meta.size()),
                              static_cast<u32>(_In.Materials.size()),
                              static_cast<u32>(_In.Meshes.size()), _In.PoolCount, _ArgsCapacity,
-                             0u, 0u };
+                             _VersaoEsperada, 0u };
             std::memcpy(CB, P8, sizeof(P8));
             auto BufCB = Upload(CB, sizeof(CB));
 
@@ -1357,10 +1433,12 @@ namespace {
         u32                      Slots      = 0; // slots de lote
         u32                      Capacidade = 0; // comandos do RECURSO IndirectArgs
 
-        // A tabela de regioes e a capacidade que o SHADER recebe. Membros, e nao constantes da criacao:
-        // sobem a cada execucao, como o frame faria, e os cenarios de falha os trocam para entregar a
-        // GPU uma tabela que a CPU nao aprovou.
-        std::vector<FGpuIndirectRegion> Regioes;
+        // A tabela que SOBE para a GPU, a versao que a GRAVACAO espera e a capacidade que o shader
+        // recebe. Membros, e nao constantes da criacao: sobem a cada execucao, como o frame faria. Na
+        // execucao normal os tres saem do MESMO layout (`Publicar`); os cenarios de falha trocam um
+        // deles para entregar a GPU o que a CPU nao aprovou.
+        std::vector<FGpuIndirectRegion> TabelaNaGpu;
+        u32                             VersaoGravacao   = 0;
         u32                             CapacidadeShader = 0;
 
         wrl::ComPtr<ID3D12Resource> BufSlots, BufMeta, BufMats, BufMesh, BufZeros;
@@ -1376,10 +1454,18 @@ namespace {
             u32                               Reason = 0;
         };
 
-        FCadeia(FSonda& _S, const FGpuClassifyInput& _In,
-                std::span<const FGpuIndirectRegion> _Regioes, u32 _Capacidade)
-            : S(_S), In(_In), Slots(_In.BatchCapacity), Capacidade(_Capacidade),
-              Regioes(_Regioes.begin(), _Regioes.end()), CapacidadeShader(_Capacidade) {}
+        FCadeia(FSonda& _S, const FGpuClassifyInput& _In, const FGpuIndirectLayout& _Layout,
+                u32 _Capacidade)
+            : S(_S), In(_In), Slots(_In.BatchCapacity), Capacidade(_Capacidade) {
+            Publicar(_Layout);
+        }
+
+        // O caminho normal: tabela e versao do MESMO layout, e o shader com a capacidade do recurso.
+        void Publicar(const FGpuIndirectLayout& _Layout) {
+            TabelaNaGpu.assign(_Layout.Regions().begin(), _Layout.Regions().end());
+            VersaoGravacao   = _Layout.Version();
+            CapacidadeShader = Capacidade;
+        }
 
         D3D12_RESOURCE_STATES& EstadoDe(ID3D12Resource* _R) {
             for (auto& E : Estados) if (E.first == _R) return E.second;
@@ -1547,16 +1633,17 @@ namespace {
                                 static_cast<u32>(In.Meshes.size()), In.PoolCount, Slots });
             auto CbScat  = Cb({ Total, static_cast<u32>(In.Meta.size()),
                                 static_cast<u32>(In.Materials.size()),
-                                static_cast<u32>(In.Meshes.size()), In.PoolCount, CapacidadeShader });
+                                static_cast<u32>(In.Meshes.size()), In.PoolCount, CapacidadeShader,
+                                VersaoGravacao });
             auto CbFin   = Cb({ Slots, Total });
 
             // A tabela de regioes DESTA execucao, e as duas views que a enxergam. Sobe a cada vez, como
             // o frame faria com a tabela do seu frame slot.
-            auto BufReg = S.Upload(Regioes.data(),
+            auto BufReg = S.Upload(TabelaNaGpu.data(),
                                    std::max<u64>(sizeof(FGpuIndirectRegion),
-                                                 Regioes.size() * sizeof(FGpuIndirectRegion)));
-            Srv(BufReg.Get(), Regioes.size(), sizeof(FGpuIndirectRegion), kScatSrv + 4);
-            Srv(BufReg.Get(), Regioes.size(), sizeof(FGpuIndirectRegion), kFinSrv + 1);
+                                                 TabelaNaGpu.size() * sizeof(FGpuIndirectRegion)));
+            Srv(BufReg.Get(), TabelaNaGpu.size(), sizeof(FGpuIndirectRegion), kScatSrv + 4);
+            Srv(BufReg.Get(), TabelaNaGpu.size(), sizeof(FGpuIndirectRegion), kFinSrv + 1);
 
             const u64 LoteB = std::max<u64>(4u, Slots * 4u);
             auto Leitura = [&](u64 _B) {
@@ -1681,6 +1768,7 @@ int main() try {
     TestarIndiceDeLote();
     TestarPortaDeDimensionamento();
     TestarCapacidades();
+    TestarVersoes();
     TestarLayout();
     TestarPreflightDeRegioes();
     TestarUmResultadoPorCandidato();
@@ -1767,16 +1855,35 @@ int main() try {
     //
     // Calculadas das TABELAS, e de nada que o dispatch acima produziu: nem das contagens da GPU, que
     // seria readback, nem das da CPU, que seria reproduzir o frame. Todo o resto deste teste consome
-    // estas regioes — o scatter isolado e a cadeia —, e nenhum offset e fornecido pelo fixture.
+    // este layout — o scatter isolado e a cadeia —, e nenhum offset e fornecido pelo fixture.
+    //
+    // As versoes saem de um contador, como em producao. O layout A existe so para os cenarios de
+    // desencontro: um layout de ANTES, com outras capacidades e outros offsets, que uma tabela atrasada
+    // ainda carregaria.
+    FGpuIndirectLayoutVersions Versoes;
+    const u64 CapA[8]{ 3ull, 3ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull };
+    FGpuIndirectLayout LayoutA;
+    CheckEq(GpuBuildIndirectLayout(CapA, Versoes.Next(), LayoutA), GpuRegionLayoutOk,
+            "o layout A, o de antes");
+
     std::vector<u64> CapReg;
-    std::vector<FGpuIndirectRegion> Regioes;
-    u32 TotalReg = 0u;
     CheckEq(GpuCountRegionCapacities(Metas, Mats, Meshs, kPoolCount, CapReg), GpuClassifyPreflightOk,
             "capacidades das regioes da cena");
-    CheckEq(GpuLayoutRegions(CapReg, Regioes, TotalReg), GpuRegionLayoutOk,
+    FGpuIndirectLayout Layout;
+    CheckEq(GpuBuildIndirectLayout(CapReg, Versoes.Next(), Layout), GpuRegionLayoutOk,
             "layout das regioes da cena");
-    CheckEq(GpuRegionPreflight(Regioes, In.BatchCapacity, TotalReg), GpuRegionPreflightOk,
+    const std::span<const FGpuIndirectRegion> Regioes = Layout.Regions();
+    const u32 TotalReg = Layout.TotalCommands();
+    const u32 Versao   = Layout.Version();
+    CheckEq(GpuRegionPreflight(Regioes, Versao, In.BatchCapacity, TotalReg), GpuRegionPreflightOk,
             "e a porta das regioes aprova, com IndirectArgs do tamanho exato do total");
+    CheckEq(GpuRegionPreflight(LayoutA.Regions(), Versao, In.BatchCapacity, TotalReg),
+            GpuRegionPreflightVersion, "e reprova a tabela do layout A contra a versao atual");
+    // O desencontro que importa tem de ser de OFFSET, e nao so de numero: com offsets iguais, uma
+    // tabela atrasada desenharia certo por acaso, e o teste nao provaria nada.
+    Check(LayoutA.Version() != Versao && LayoutA.TotalCommands() == TotalReg &&
+              LayoutA.Regions()[1].Offset != Regioes[1].Offset,
+          "o layout A tem outra versao e outros offsets, no mesmo tamanho de IndirectArgs");
     // A FOLGA, que e o que distingue offset de regiao de prefixo das contagens: com prefixo, o lote 1
     // comecaria em 2.
     Check(Regioes.size() > 1 && Regioes[1].Offset == 4u && LotesCpu[0] == 2u,
@@ -1789,11 +1896,13 @@ int main() try {
     // escrita FORA DA REGIAO (comando onde devia continuar poison). A comparacao dentro da regiao e
     // por MULTICONJUNTO, porque a ordem la depende de qual thread chega primeiro ao cursor.
     {
-        const FSonda::FScatter G = S.ExecutarScatter(In, Regioes, LotesCpu, {}, TotalReg);
+        const FSonda::FScatter G = S.ExecutarScatter(In, Regioes, LotesCpu, {}, TotalReg, Versao);
 
         CheckEq(G.Contadores[GpuScatterCounterEmitted], Gpu.Contadores[GpuClassifyIndirect],
                 "scatter na GPU emite exatamente o que o classify contou");
         CheckEq(G.Contadores[GpuScatterCounterFaultCursor], 0u, "cursores zerados: sem falha de cursor");
+        CheckEq(G.Contadores[GpuScatterCounterFaultLayoutVersion], 0u,
+                "tabela e gravacao do mesmo layout: sem falha de versao");
         CheckEq(G.Contadores[GpuScatterCounterFaultRegion], 0u, "regioes das tabelas: sem falha de regiao");
         CheckEq(G.Contadores[GpuScatterCounterFaultCapacity], 0u, "regioes no recurso: sem falha de capacidade");
         ConferirArgsDaCena(G.Args, "GPU");
@@ -1803,7 +1912,7 @@ int main() try {
         std::vector<FGpuIndirectDrawArgs> ArgsCpu(TotalReg, ComandoPoison());
         std::vector<u32> ContScatterCpu;
         std::vector<u32> CursoresCpu(LotesCpu.size(), 0u);
-        ScatterIndirectArgs(In, Regioes, LotesCpu, CursoresCpu, ArgsCpu, ContScatterCpu);
+        ScatterIndirectArgs(In, Regioes, Versao, LotesCpu, CursoresCpu, ArgsCpu, ContScatterCpu);
         for (u32 K = 0; K < GpuScatterCounterCount; ++K)
             CheckEq(ContScatterCpu[K], G.Contadores[K],
                     "contador " + std::to_string(K) + " do scatter: CPU == GPU");
@@ -1824,18 +1933,19 @@ int main() try {
         //
         // Tabela montada A MAO: a funcao de producao nao a produziria para esta cena, porque as
         // tabelas dao capacidade 4 ao lote 0. Ela passa pela porta das regioes — que confere
-        // estrutura, e nao conhece o frame —, e so a GPU descobre que dois comandos nao cabem numa
-        // posicao. O excedente NAO pode ir para a posicao 1, que e do lote 1.
-        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u });
-        Curta[0] = { 0u, 1u };
-        Curta[1] = { 1u, 2u };
-        CheckEq(GpuRegionPreflight(Curta, In.BatchCapacity, 3u), GpuRegionPreflightOk,
+        // estrutura e versao, e nao conhece o frame —, e so a GPU descobre que dois comandos nao cabem
+        // numa posicao. O excedente NAO pode ir para a posicao 1, que e do lote 1.
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u, Versao });
+        Curta[0] = { 0u, 1u, Versao };
+        Curta[1] = { 1u, 2u, Versao };
+        CheckEq(GpuRegionPreflight(Curta, Versao, In.BatchCapacity, 3u), GpuRegionPreflightOk,
                 "a regiao curta e estruturalmente valida: a porta nao tem como reprova-la");
-        const FSonda::FScatter C = S.ExecutarScatter(In, Curta, LotesCpu, {}, 3u);
+        const FSonda::FScatter C = S.ExecutarScatter(In, Curta, LotesCpu, {}, 3u, Versao);
         CheckEq(C.Contadores[GpuScatterCounterFaultRegion], 1u,
                 "regiao curta: o comando excedente vira falha");
         CheckEq(C.Contadores[GpuScatterCounterEmitted], 2u, "regiao curta: os outros dois sao escritos");
-        CheckEq(C.Contadores[GpuScatterCounterFaultCursor] + C.Contadores[GpuScatterCounterFaultCapacity],
+        CheckEq(C.Contadores[GpuScatterCounterFaultCursor] + C.Contadores[GpuScatterCounterFaultCapacity] +
+                    C.Contadores[GpuScatterCounterFaultLayoutVersion],
                 0u, "regiao curta: e nenhuma outra falha");
         Check(MesmoComando(C.Args[0], Esperado(0u, 0u)) || MesmoComando(C.Args[0], Esperado(2u, 0u)),
               "regiao curta: a unica posicao do lote 0 tem um dos dois comandos dele");
@@ -1845,7 +1955,7 @@ int main() try {
         {
             std::vector<FGpuIndirectDrawArgs> ArgsC(3u, ComandoPoison());
             std::vector<u32> CurC(LotesCpu.size(), 0u), ContC;
-            ScatterIndirectArgs(In, Curta, LotesCpu, CurC, ArgsC, ContC);
+            ScatterIndirectArgs(In, Curta, Versao, LotesCpu, CurC, ArgsC, ContC);
             for (u32 K = 0; K < GpuScatterCounterCount; ++K)
                 CheckEq(ContC[K], C.Contadores[K],
                         "regiao curta, contador " + std::to_string(K) + ": CPU == GPU");
@@ -1855,13 +1965,14 @@ int main() try {
         //
         // As regioes de producao contra um `IndirectArgs` de CINCO comandos: a regiao 1 = [4, 6) nao
         // cabe. A porta das regioes reprova (conferido aqui), e o shader tem de conter mesmo assim.
-        CheckEq(GpuRegionPreflight(Regioes, In.BatchCapacity, TotalReg - 1u),
+        CheckEq(GpuRegionPreflight(Regioes, Versao, In.BatchCapacity, TotalReg - 1u),
                 GpuRegionPreflightSmallArgsBuffer, "a porta reprova as regioes da cena contra cinco comandos");
-        const FSonda::FScatter F = S.ExecutarScatter(In, Regioes, LotesCpu, {}, TotalReg - 1u);
+        const FSonda::FScatter F = S.ExecutarScatter(In, Regioes, LotesCpu, {}, TotalReg - 1u, Versao);
         CheckEq(F.Contadores[GpuScatterCounterFaultCapacity], 1u,
                 "regiao fora do recurso: o comando do lote 1 vira falha");
         CheckEq(F.Contadores[GpuScatterCounterEmitted], 2u, "e os do lote 0, que cabe, sao escritos");
-        CheckEq(F.Contadores[GpuScatterCounterFaultCursor] + F.Contadores[GpuScatterCounterFaultRegion],
+        CheckEq(F.Contadores[GpuScatterCounterFaultCursor] + F.Contadores[GpuScatterCounterFaultRegion] +
+                    F.Contadores[GpuScatterCounterFaultLayoutVersion],
                 0u, "regiao fora do recurso: e nenhuma outra falha");
         {
             const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
@@ -1874,7 +1985,7 @@ int main() try {
                       "regiao fora do recurso: a posicao " + std::to_string(P) + " continua poison");
             std::vector<FGpuIndirectDrawArgs> ArgsF(TotalReg - 1u, ComandoPoison());
             std::vector<u32> CurF(LotesCpu.size(), 0u), ContF;
-            ScatterIndirectArgs(In, Regioes, LotesCpu, CurF, ArgsF, ContF);
+            ScatterIndirectArgs(In, Regioes, Versao, LotesCpu, CurF, ArgsF, ContF);
             for (u32 K = 0; K < GpuScatterCounterCount; ++K)
                 CheckEq(ContF[K], F.Contadores[K],
                         "regiao fora do recurso, contador " + std::to_string(K) + ": CPU == GPU");
@@ -1885,9 +1996,9 @@ int main() try {
         // `{0xFFFFFFFF, 2}`: somando antes de comparar, o fim seria 1, e 1 cabe em qualquer buffer. O
         // comando iria para a posicao 0xFFFFFFFF — fora do recurso — ou, com um cursor a mais, para a
         // posicao 0, em cima do lote 0.
-        std::vector<FGpuIndirectRegion> Volta = Regioes;
-        Volta[1] = { 0xFFFFFFFFu, 2u };
-        const FSonda::FScatter V = S.ExecutarScatter(In, Volta, LotesCpu, {}, TotalReg);
+        std::vector<FGpuIndirectRegion> Volta(Regioes.begin(), Regioes.end());
+        Volta[1] = { 0xFFFFFFFFu, 2u, Versao };
+        const FSonda::FScatter V = S.ExecutarScatter(In, Volta, LotesCpu, {}, TotalReg, Versao);
         CheckEq(V.Contadores[GpuScatterCounterFaultCapacity], 1u,
                 "o fim que daria a volta e falha de capacidade, e nao escrita");
         CheckEq(V.Contadores[GpuScatterCounterEmitted], 2u, "e so o lote 0 e escrito");
@@ -1897,10 +2008,56 @@ int main() try {
         {
             std::vector<FGpuIndirectDrawArgs> ArgsV(TotalReg, ComandoPoison());
             std::vector<u32> CurV(LotesCpu.size(), 0u), ContV;
-            ScatterIndirectArgs(In, Volta, LotesCpu, CurV, ArgsV, ContV);
+            ScatterIndirectArgs(In, Volta, Versao, LotesCpu, CurV, ArgsV, ContV);
             for (u32 K = 0; K < GpuScatterCounterCount; ++K)
                 CheckEq(ContV[K], V.Contadores[K],
                         "fim que daria a volta, contador " + std::to_string(K) + ": CPU == GPU");
+        }
+
+        // ---- LAYOUT TROCADO: a tabela que a GPU le nao e a do layout que grava ----
+        //
+        // O desencontro que a versao existe para pegar. Sem ela, os comandos iriam para os offsets da
+        // tabela — o do lote 1 para a posicao 3, no layout A — e a gravacao, com o layout atual, leria a
+        // posicao 4. Com ela, NENHUM argumento e escrito: toda posicao continua poison.
+        {
+            struct FTroca {
+                const char*                     Nome;
+                std::vector<FGpuIndirectRegion> Tabela;
+                u32                             Esperada;
+            };
+            const std::vector<FGpuIndirectRegion> Zerada(In.BatchCapacity, FGpuIndirectRegion{});
+            const FTroca Trocas[] = {
+                // Tabela atrasada, ou de outro frame slot.
+                { "tabela do layout A, gravacao com o atual",
+                  std::vector<FGpuIndirectRegion>(LayoutA.Regions().begin(), LayoutA.Regions().end()),
+                  Versao },
+                // Upload esquecido: a tabela nunca foi escrita, e versao zero nunca e esperada.
+                { "tabela zerada (upload esquecido)", Zerada, Versao },
+                // Gravacao sem layout valido contra memoria zerada: sem a regra de que a versao esperada
+                // nunca e zero, as duas coincidiriam.
+                { "tabela zerada e versao esperada zero", Zerada, 0u },
+            };
+            for (const FTroca& T : Trocas) {
+                const std::string N = T.Nome;
+                const FSonda::FScatter X =
+                    S.ExecutarScatter(In, T.Tabela, LotesCpu, {}, TotalReg, T.Esperada);
+                CheckEq(X.Contadores[GpuScatterCounterFaultLayoutVersion], 3u,
+                        N + ": os tres comandos viram falha de versao");
+                CheckEq(X.Contadores[GpuScatterCounterEmitted], 0u, N + ": nenhum argumento e escrito");
+                CheckEq(X.Contadores[GpuScatterCounterFaultCursor] +
+                            X.Contadores[GpuScatterCounterFaultRegion] +
+                            X.Contadores[GpuScatterCounterFaultCapacity],
+                        0u, N + ": e nenhuma outra falha — a versao vem antes de qualquer uso da regiao");
+                for (u32 P = 0; P < TotalReg; ++P)
+                    Check(MesmoComando(X.Args[P], ComandoPoison()),
+                          N + ": a posicao " + std::to_string(P) + " continua poison");
+                std::vector<FGpuIndirectDrawArgs> ArgsX(TotalReg, ComandoPoison());
+                std::vector<u32> CurX(LotesCpu.size(), 0u), ContX;
+                ScatterIndirectArgs(In, T.Tabela, T.Esperada, LotesCpu, CurX, ArgsX, ContX);
+                for (u32 K = 0; K < GpuScatterCounterCount; ++K)
+                    CheckEq(ContX[K], X.Contadores[K],
+                            N + ", contador " + std::to_string(K) + ": CPU == GPU");
+            }
         }
     }
 
@@ -1910,7 +2067,7 @@ int main() try {
     // atravessa de uma execucao para a seguinte. Aqui a cadeia roda DUAS vezes sobre os mesmos
     // recursos, como o frame faria, e depois uma terceira sem o reset.
     {
-        FCadeia C(S, In, Regioes, TotalReg);
+        FCadeia C(S, In, Layout, TotalReg);
         C.Criar();
 
         const FCadeia::FSaida R1 = C.Rodar(FCadeia::kResetTudo);
@@ -2006,37 +2163,49 @@ int main() try {
             CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
         }
 
-        // ---- REGIOES que a CPU nao aprovaria, entregues a cadeia inteira ----
+        // ---- TABELAS que a CPU nao aprovaria, entregues a cadeia inteira ----
         //
-        // O scatter isolado provou que a defesa CONTEM a escrita. A pergunta aqui e outra: a falha
-        // chega ao COUNT BUFFER? Um frame com regiao estourada tem de publicar zero em TODO lote — nao
-        // so no que estourou —, com o motivo exato:
+        // O scatter isolado provou que as defesas CONTEM a escrita. A pergunta aqui e outra: a falha
+        // chega ao COUNT BUFFER? Um frame com qualquer uma delas tem de publicar zero em TODO lote — nao
+        // so no afetado —, com o motivo exato:
         //
-        //   regiao curta ({0,1} e {1,2}) : o lote 0 conta 2 numa regiao de 1
-        //                                  -> estouro de regiao (finalizacao) + falha de regiao (scatter)
-        //   regiao fora do recurso       : regioes de producao, shader recebendo cinco comandos
-        //                                  -> falha de capacidade (scatter)
-        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u });
-        Curta[0] = { 0u, 1u };
-        Curta[1] = { 1u, 2u };
-        struct FRegiaoRuim {
+        //   regiao curta ({0,1} e {1,2})  : o lote 0 conta 2 numa regiao de 1
+        //                                   -> estouro de regiao (finalizacao) + falha de regiao (scatter)
+        //   regiao fora do recurso        : regioes de producao, shader recebendo cinco comandos
+        //                                   -> falha de capacidade (scatter)
+        //   layout A na GPU, grava o atual: as contagens CABEM nas regioes de A ({3,3}), entao o unico
+        //                                   motivo e a versao. E o cenario silencioso: sem ela, o frame
+        //                                   fecharia com os comandos nos offsets de A
+        //                                   -> falha de versao (scatter)
+        //   upload esquecido (zerada)     : capacidade zero em toda regiao, versao zero
+        //                                   -> estouro de regiao + falha de versao
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u, Versao });
+        Curta[0] = { 0u, 1u, Versao };
+        Curta[1] = { 1u, 2u, Versao };
+        struct FTabelaRuim {
             const char*                     Nome;
             std::vector<FGpuIndirectRegion> Tabela;
             u32                             CapacidadeShader;
             u32                             Motivo;
         };
-        const FRegiaoRuim Ruins[] = {
+        const FTabelaRuim Ruins[] = {
             { "regiao curta", Curta, TotalReg, GpuFinalizeRegionOverflow | GpuFinalizeFaultRegion },
-            { "regiao fora do recurso", Regioes, TotalReg - 1u, GpuFinalizeFaultCapacity },
+            { "regiao fora do recurso", std::vector<FGpuIndirectRegion>(Regioes.begin(), Regioes.end()),
+              TotalReg - 1u, GpuFinalizeFaultCapacity },
+            { "layout A na GPU, gravacao com o atual",
+              std::vector<FGpuIndirectRegion>(LayoutA.Regions().begin(), LayoutA.Regions().end()),
+              TotalReg, GpuFinalizeFaultLayoutVersion },
+            { "upload esquecido", std::vector<FGpuIndirectRegion>(In.BatchCapacity, FGpuIndirectRegion{}),
+              TotalReg, GpuFinalizeRegionOverflow | GpuFinalizeFaultLayoutVersion },
         };
-        for (const FRegiaoRuim& Rr : Ruins) {
-            C.Regioes          = Regioes;
-            C.CapacidadeShader = TotalReg;
+        for (const FTabelaRuim& Rr : Ruins) {
+            C.Publicar(Layout);
             const FCadeia::FSaida Limpa = C.Rodar(FCadeia::kResetTudo);
             CheckEq(Limpa.Status, 1u,
-                    std::string("regioes de producao fecham antes de '") + Rr.Nome + "'");
+                    std::string("o layout publicado fecha antes de '") + Rr.Nome + "'");
 
-            C.Regioes          = Rr.Tabela;
+            // A GRAVACAO continua sendo a do layout atual: so a tabela que sobe e a capacidade mudam.
+            C.TabelaNaGpu      = Rr.Tabela;
             C.CapacidadeShader = Rr.CapacidadeShader;
             const FCadeia::FSaida R = C.Rodar(FCadeia::kResetTudo);
             const std::string N = Rr.Nome;
