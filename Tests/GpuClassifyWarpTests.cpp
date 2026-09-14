@@ -47,6 +47,7 @@
 
 #include "Smile/Graphics/Scene/GpuClassify.h"
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
+#include "Smile/Graphics/Scene/GpuIndirectLayoutState.h"
 #include "Smile/Graphics/Scene/GpuIndirectRecord.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 
@@ -542,6 +543,178 @@ namespace {
         const u32 kIndice = static_cast<u32>(sizeof(u32));
         CheckEq(GpuPoolViewBytes(kIndice - 1u, kIndice, Bytes), GpuPoolViewsTooSmall,
                 "view: menos de um indice reprova");
+    }
+
+    // ---- parte CPU pura: a CHAVE do layout ----------------------------------------------------
+    //
+    // As tabelas so avisam o layout quando a chave muda, entao o que se prova aqui e que ela e
+    // COMPLETA — toda mudanca que muda a capacidade acende a chave — e que nao e larga onde o contrato
+    // proibe: CellId, visibilidade, mobilidade, o bit de transform e a generation que continua viva.
+    //
+    // Por BIT, e nao por nome de campo: cada bit de cada linha e invertido sozinho, e a capacidade e
+    // recontada pela funcao de producao. Um termo que a porta do classify passe a ler sem a chave
+    // acompanhar aparece aqui sem que ninguem precise lembrar de acrescentar a mutacao. O tamanho das
+    // linhas fica preso porque a lista de campos PROIBIDOS, essa sim, e escrita a mao.
+    static_assert(sizeof(FGpuSceneInstanceMeta) == 20, "campo novo na meta: rever os proibidos");
+    static_assert(sizeof(FGpuMaterialRecord) == 116, "campo novo no material: rever os proibidos");
+
+    void TestarChavesDoLayout() {
+        const auto Mats  = Materiais(); const auto Meshs = Malhas();
+        const auto Metas = Meta();
+        auto Capacidades = [&](std::span<const FGpuSceneInstanceMeta> _M,
+                               std::span<const FGpuMaterialRecord> _Mt) {
+            std::vector<u64> C;
+            GpuCountRegionCapacities(_M, _Mt, Meshs, kPoolCount, C);
+            return C;
+        };
+        const std::vector<u64> Base = Capacidades(Metas, Mats);
+
+        // --- meta ---
+        {
+            const size_t kMesh = offsetof(FGpuSceneInstanceMeta, MeshId);
+            const size_t kMat  = offsetof(FGpuSceneInstanceMeta, MaterialId);
+            const size_t kCell = offsetof(FGpuSceneInstanceMeta, CellId);
+            const size_t kFlag = offsetof(FGpuSceneInstanceMeta, Flags);
+            const size_t kGen  = offsetof(FGpuSceneInstanceMeta, Generation);
+            auto Dentro = [](size_t _Byte, size_t _Campo) { return _Byte >= _Campo && _Byte < _Campo + 4u; };
+            u32 MudouSemChave = 0, ChaveProibida = 0;
+            u32 MudouMesh = 0, MudouMat = 0, MudouFlag = 0, MudouGen = 0, MudouCell = 0;
+            for (size_t R = 0; R < Metas.size(); ++R) {
+                for (size_t Byte = 0; Byte < sizeof(FGpuSceneInstanceMeta); ++Byte) {
+                    for (u32 Bit = 0; Bit < 8u; ++Bit) {
+                        std::vector<FGpuSceneInstanceMeta> M = Metas;
+                        reinterpret_cast<u8*>(&M[R])[Byte] ^= static_cast<u8>(1u << Bit);
+                        const bool Chave = GpuInstanceMetaAltersLayout(Metas[R], M[R]);
+                        const bool Mudou = Capacidades(M, Mats) != Base;
+                        if (Mudou && !Chave) ++MudouSemChave;
+                        if (Mudou) {
+                            MudouMesh += Dentro(Byte, kMesh) ? 1u : 0u;
+                            MudouMat  += Dentro(Byte, kMat) ? 1u : 0u;
+                            MudouFlag += Dentro(Byte, kFlag) ? 1u : 0u;
+                            MudouGen  += Dentro(Byte, kGen) ? 1u : 0u;
+                            MudouCell += Dentro(Byte, kCell) ? 1u : 0u;
+                        }
+                        const u32  BitDaFlag     = static_cast<u32>((Byte - kFlag) * 8u) + Bit;
+                        const bool FlagProibida  = Dentro(Byte, kFlag) &&
+                                                   (1u << BitDaFlag) != GpuSceneInstanceRaytracingOnly;
+                        const bool GenerationViva = Dentro(Byte, kGen) && Metas[R].Generation != 0u &&
+                                                    M[R].Generation != 0u;
+                        if (Chave && (Dentro(Byte, kCell) || FlagProibida || GenerationViva))
+                            ++ChaveProibida;
+                    }
+                }
+            }
+            CheckEq(MudouSemChave, 0u, "chave da meta: toda mudanca de um bit que muda a capacidade a acende");
+            CheckEq(ChaveProibida, 0u,
+                    "chave da meta: CellId, visibilidade, mobilidade, transform e generation viva nao a acendem");
+            // Sem estes, o primeiro CheckEq seria vazio: a cena tem de ter linhas cuja capacidade cada
+            // campo da chave move de fato.
+            Check(MudouMesh > 0u && MudouMat > 0u && MudouFlag > 0u && MudouGen > 0u,
+                  "chave da meta: malha, material, RaytracingOnly e ocupacao movem a capacidade na cena");
+            CheckEq(MudouCell, 0u, "chave da meta: CellId nunca move a capacidade");
+        }
+
+        // --- material ---
+        {
+            const size_t kClasse = offsetof(FGpuMaterialRecord, PipelineClass);
+            u32 MudouSemChave = 0, ChaveProibida = 0, MudouClasse = 0;
+            for (size_t R = 0; R < Mats.size(); ++R) {
+                for (size_t Byte = 0; Byte < sizeof(FGpuMaterialRecord); ++Byte) {
+                    for (u32 Bit = 0; Bit < 8u; ++Bit) {
+                        std::vector<FGpuMaterialRecord> Mt = Mats;
+                        reinterpret_cast<u8*>(&Mt[R])[Byte] ^= static_cast<u8>(1u << Bit);
+                        const bool Chave = GpuMaterialAltersLayout(Mats[R], Mt[R]);
+                        const bool Mudou = Capacidades(Metas, Mt) != Base;
+                        const bool NaClasse = Byte >= kClasse && Byte < kClasse + 4u;
+                        if (Mudou && !Chave) ++MudouSemChave;
+                        if (Chave && !NaClasse) ++ChaveProibida;
+                        if (Mudou && NaClasse) ++MudouClasse;
+                    }
+                }
+            }
+            CheckEq(MudouSemChave, 0u,
+                    "chave do material: toda mudanca de um bit que muda a capacidade a acende");
+            CheckEq(ChaveProibida, 0u, "chave do material: nada fora da classe a acende");
+            Check(MudouClasse > 0u, "chave do material: a classe move a capacidade na cena");
+        }
+    }
+
+    // ---- parte CPU pura: QUANDO o layout e refeito ---------------------------------------------
+    //
+    // O gatilho sao as versoes das tabelas, e nao as linhas: o estado nao revarre a meta por frame. Por
+    // isso o teste tambem fixa o outro lado do contrato — linhas diferentes com as mesmas versoes nao
+    // reconstroem nada.
+    void TestarEstadoDoLayout() {
+        const auto Mats = Materiais(); const auto Meshs = Malhas();
+        auto Metas = Meta();
+        FGpuLayoutInputs In{ Metas, Mats, Meshs, kPoolCount, 1ull, 1ull, 1ull };
+        FGpuIndirectLayoutState S;
+
+        CheckEq(S.Refresh(In), GpuLayoutRefreshOk, "estado: a primeira consulta monta o layout");
+        CheckEq64(S.RebuildAttempts(), 1ull, "estado: com uma contagem");
+        CheckEq(S.Layout().Version(), 1u, "estado: na versao 1");
+        const u32 Caps[8]    { 4u, 2u, 0u, 0u, 0u, 0u, 0u, 0u };
+        const u32 Offsets[8] { 0u, 4u, 6u, 6u, 6u, 6u, 6u, 6u };
+        CheckEq(static_cast<u32>(S.Layout().Regions().size()), 8u, "estado: uma regiao por lote");
+        for (u32 B = 0; B < 8u && B < S.Layout().Regions().size(); ++B) {
+            CheckEq(S.Layout().Regions()[B].Capacity, Caps[B], "estado: capacidade do lote " + std::to_string(B));
+            CheckEq(S.Layout().Regions()[B].Offset, Offsets[B], "estado: offset do lote " + std::to_string(B));
+        }
+
+        CheckEq(S.Refresh(In), GpuLayoutRefreshOk, "estado: as mesmas entradas");
+        CheckEq64(S.RebuildAttempts(), 1ull, "estado: as mesmas versoes nao recontam");
+        CheckEq(S.Layout().Version(), 1u, "estado: e o layout continua o mesmo");
+
+        // As linhas SOZINHAS nao sao gatilho: quem garante a versao nova e a tabela.
+        Metas[0].Flags |= GpuSceneInstanceRaytracingOnly;
+        S.Refresh(In);
+        CheckEq64(S.RebuildAttempts(), 1ull, "estado: linha nova sem versao nova nao reconta");
+        CheckEq(S.Layout().Regions()[0].Capacity, 4u, "estado: e a capacidade continua a antiga");
+        In.MetaVersion = 2ull;
+        CheckEq(S.Refresh(In), GpuLayoutRefreshOk, "estado: a versao da meta");
+        CheckEq64(S.RebuildAttempts(), 2ull, "estado: a versao da meta sozinha reconta");
+        CheckEq(S.Layout().Version(), 2u, "estado: numa versao nova");
+        CheckEq(S.Layout().Regions()[0].Capacity, 3u, "estado: e le as linhas que recebeu");
+
+        In.MaterialVersion = 2ull;
+        S.Refresh(In);
+        CheckEq64(S.RebuildAttempts(), 3ull, "estado: a versao do material sozinha reconta");
+        In.MeshVersion = 2ull;
+        S.Refresh(In);
+        CheckEq64(S.RebuildAttempts(), 4ull, "estado: a versao da malha sozinha reconta");
+        In.PoolCount = 3u;
+        S.Refresh(In);
+        CheckEq64(S.RebuildAttempts(), 5ull, "estado: o numero de pools sozinho reconta");
+        CheckEq(static_cast<u32>(S.Layout().Regions().size()), 12u, "estado: com uma regiao por lote dos tres pools");
+        CheckEq(S.Layout().Version(), 5u, "estado: e cada reconstrucao consome uma versao");
+
+        // Recusa: o layout deixa de valer, e a mesma recusa nao e tentada de novo.
+        In.PoolCount = 0u;
+        CheckEq(S.Refresh(In), GpuLayoutRefreshNoPools, "estado: sem pool recusa");
+        CheckEq(S.Layout().Version(), 0u, "estado: e o layout anterior deixa de valer");
+        Check(S.Layout().Regions().empty(), "estado: sem regiao nenhuma");
+        CheckEq64(S.RebuildAttempts(), 6ull, "estado: a recusa conta como tentativa");
+        CheckEq(S.Refresh(In), GpuLayoutRefreshNoPools, "estado: a mesma recusa");
+        CheckEq64(S.RebuildAttempts(), 6ull, "estado: nao e tentada de novo");
+
+        In.PoolCount = kPoolCount;
+        CheckEq(S.Refresh(In), GpuLayoutRefreshOk, "estado: de volta a dois pools");
+        Check(S.Layout().Version() > 5u, "estado: numa versao NOVA, nunca uma ja entregue");
+
+        In.PoolCount = UINT32_MAX / kGpuPipelineClassCount + 1u;
+        CheckEq(S.Refresh(In), GpuLayoutRefreshTooManyPools, "estado: pools demais recusa");
+        CheckEq(S.Layout().Version(), 0u, "estado: e tambem invalida o layout");
+
+        // A fonte de versoes esgota e fica esgotada.
+        FGpuIndirectLayoutState E(UINT32_MAX - 1u);
+        In.PoolCount = kPoolCount;
+        CheckEq(E.Refresh(In), GpuLayoutRefreshOk, "estado: a ultima versao valida monta");
+        CheckEq(E.Layout().Version(), UINT32_MAX, "estado: e e UINT32_MAX");
+        In.MetaVersion = 3ull;
+        CheckEq(E.Refresh(In), GpuLayoutRefreshVersionsExhausted, "estado: depois dela esgota");
+        CheckEq(E.Layout().Version(), 0u, "estado: sem layout");
+        In.MetaVersion = 4ull;
+        CheckEq(E.Refresh(In), GpuLayoutRefreshVersionsExhausted, "estado: e continua esgotado");
     }
 
     // ---- parte CPU pura: o desfecho de cada candidato -----------------------------------------
@@ -2113,6 +2286,8 @@ int main() try {
     TestarLayout();
     TestarPreflightDeRegioes();
     TestarTamanhoDaView();
+    TestarChavesDoLayout();
+    TestarEstadoDoLayout();
     TestarUmResultadoPorCandidato();
     TestarParticoes();
     TestarPreflight();

@@ -342,6 +342,35 @@ namespace Smile {
         return !(A == B);
     }
 
+    // === O que de uma linha entra no LAYOUT de regioes (Fase 5) ================================
+    //
+    // A capacidade de cada lote conta as instancias vivas que o indireto emitiria (ver
+    // `GpuCountRegionCapacities`, GpuClassify.h), e ela depende de poucos campos — SO deles. E isto
+    // que deixa o layout ser refeito apenas quando a capacidade pode ter mudado: transform,
+    // assentamento do previous e visibilidade reescrevem a linha de meta e NAO mudam a capacidade (a
+    // instancia escondida continua reservando espaco, de proposito).
+    //
+    // ⚠️ Espelho dos campos que a porta do classify le. Um termo novo la exige um termo novo aqui, e o
+    // teste que enumera os campos das linhas contra a capacidade e o que pega o esquecimento.
+
+    // Da INSTANCIA: ocupacao (generation zero ou nao; o valor em si nao conta), associacao (malha e
+    // material) e `RaytracingOnly`, que tira a linha da contagem. `CellId` e os outros bits ficam de
+    // fora.
+    inline bool GpuInstanceMetaAltersLayout(const FGpuSceneInstanceMeta& _Old,
+                                            const FGpuSceneInstanceMeta& _New) {
+        return (_Old.Generation != 0u) != (_New.Generation != 0u) ||
+               _Old.MeshId != _New.MeshId || _Old.MaterialId != _New.MaterialId ||
+               ((_Old.Flags ^ _New.Flags) & GpuSceneInstanceRaytracingOnly) != 0u;
+    }
+
+    // Do MATERIAL: so a classe de pipeline. Cor, textura e o resto sao edicao frequente e nao mudam
+    // quem o indireto emite. Os bits de `Flags` que DERIVAM a classe chegam pela propria classe: a
+    // linha e montada por `FromParts`, que carimba as duas coisas juntas.
+    inline bool GpuMaterialAltersLayout(const FGpuMaterialRecord& _Old,
+                                        const FGpuMaterialRecord& _New) {
+        return _Old.PipelineClass != _New.PipelineClass;
+    }
+
     struct FGpuSceneInstanceBounds {
         Vec4 Center{}; // xyz world-space; w reservado
         Vec4 Extent{}; // xyz meia-extensao; w reservado
@@ -606,6 +635,17 @@ namespace Smile {
         u32 LastCopyRegions()    const { return LastCopyRegions_; }
         u64 TotalRowsUploaded()  const { return TotalRowsUploaded_; }
 
+        // As linhas PUBLICADAS: o shadow, que o RecordUpload iguala ao que copiou. Lidas depois do
+        // RecordUpload do frame, sao as mesmas que os leitores da GPU desse frame enxergam.
+        std::span<const FGpuMaterialRecord> PublishedRows() const { return Shadow_; }
+
+        // Sobe quando o que o layout de regioes conta mudou nas linhas publicadas: a classe de alguma
+        // linha ou o numero de linhas. Uma edicao de cor nao a move.
+        //
+        // Monotonica pela vida da TABELA, atravessando Setup e Release: um contador que voltasse a
+        // zero coincidiria com uma versao que o layout ja viu.
+        u64 LayoutInputsVersion() const { return LayoutInputsVersion_; }
+
     private:
         FGpuTableStorage Storage_;
         // Ponteiro por linha. Guardado, e nao consultado no editor a cada upload, porque a ordem
@@ -623,6 +663,7 @@ namespace Smile {
         u32  LastDirtyRows_     = 0;
         u32  LastCopyRegions_   = 0;
         u64  TotalRowsUploaded_ = 0;
+        u64  LayoutInputsVersion_ = 0;
     };
 
     // === Tabela de meshes =======================================================================
@@ -687,6 +728,16 @@ namespace Smile {
         // cozido. Zero e o estado esperado nas cenas de hoje.
         u32 UnusableIndexCounts() const { return UnusableIndexCounts_; }
 
+        // As linhas PUBLICADAS, como no FGpuMaterialTable.
+        std::span<const FGpuMeshRecord> PublishedRows() const { return Shadow_; }
+
+        // Sobe a CADA republicacao que muda alguma linha, e no Setup. Mais grossa que a do material de
+        // proposito: linha de malha so muda por SetupForScene, que limpa o shadow, entao pool e mascara
+        // de malha inutilizavel nunca mudam sozinhos. Uma comparacao por campo aqui seria defesa sem
+        // caminho que a alcance. O Release nao a move: ele esvazia os pools, e o layout ja compara o
+        // numero de pools. Monotonica pela vida da tabela.
+        u64 LayoutInputsVersion() const { return LayoutInputsVersion_; }
+
     private:
         FGpuTableStorage Storage_;
         std::vector<const FGpuMesh*>              UniqueMeshes_;
@@ -703,6 +754,7 @@ namespace Smile {
         u32 DescriptorCount_ = 0;
         bool Dirty_          = false;
         u32  LastDirtyRows_  = 0;
+        u64  LayoutInputsVersion_ = 0;
     };
 
     // === Tabela de instancias ==================================================================
@@ -769,6 +821,20 @@ namespace Smile {
         u32 LastRowsScanned() const { return LastRowsScanned_; }
         static constexpr u32 kColumns = 4; // meta, bounds, transform, prev transform
 
+        // A coluna de meta PUBLICADA: o shadow, igualado ao que o RecordUpload copiou. E a que o layout
+        // de regioes e a divisao indireto/fallback leem, porque e a que o classify desse frame le.
+        //
+        // ⚠️ Igual a GPU nos slots que a lista de candidatos alcanca. Numa troca para cena MENOR o
+        // `FGpuTableStorage::Create` preserva o buffer e o shadow recomeca zerado, entao um slot que
+        // ficou morto pode guardar na GPU a linha da cena anterior. Nenhum leitor da cadeia chega nele:
+        // expand e classify so leem slots de candidatos, que sao vivos.
+        std::span<const FGpuSceneInstanceMeta> PublishedMeta() const { return MetaShadow_; }
+
+        // Sobe quando alguma linha PUBLICADA muda o que o layout conta (`GpuInstanceMetaAltersLayout`),
+        // e em Setup e Release. Transform, assentamento e visibilidade nao a movem. Monotonica pela
+        // vida da tabela.
+        u64 LayoutInputsVersion() const { return LayoutInputsVersion_; }
+
     private:
         FGpuTableStorage MetaStorage_;
         FGpuTableStorage BoundsStorage_;
@@ -806,6 +872,7 @@ namespace Smile {
         u64 PreparedStructureVersion_ = ~0ull;
         u64 PreparedTransformVersion_ = ~0ull;
         u64 PreparedStaticCastersVersion_ = ~0ull;
+        u64 LayoutInputsVersion_       = 0;
         u32 PrepareEpoch_              = 0;
         u32 LiveRows_                  = 0;
         bool NeedsSettle_              = false;

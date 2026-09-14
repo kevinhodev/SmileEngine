@@ -156,6 +156,8 @@ namespace Smile {
         // tabela anterior continha — senao a comparacao do primeiro RecordUpload concluiria que
         // nada mudou e a GPU leria lixo. Limpar o shadow e o que torna TODAS as linhas sujas.
         Shadow_.clear();
+        // As linhas publicadas acabaram de mudar (para nenhuma): o layout que as contou nao vale mais.
+        ++LayoutInputsVersion_;
         Dirty_             = true;
         LastDirtyRows_     = 0;
         LastCopyRegions_   = 0;
@@ -167,6 +169,7 @@ namespace Smile {
         RowMaterials_.clear();
         RowByMaterial_.clear();
         Shadow_.clear();
+        ++LayoutInputsVersion_;
         Fresh_.clear();
         Changed_.clear();
         Dirty_             = false;
@@ -186,7 +189,14 @@ namespace Smile {
         for (u32 I = 0; I < Rows; ++I)
             Fresh_[I] = FGpuMaterialRecord::FromMaterial(RowMaterials_[I]);
 
+        // ANTES do diff: ele iguala o shadow ao novo, e a classe antiga deixa de existir.
+        bool AlteraLayout = Shadow_.size() != Rows;
+        for (u32 I = 0; I < Rows && !AlteraLayout; ++I)
+            AlteraLayout = GpuMaterialAltersLayout(Shadow_[I], Fresh_[I]);
+
         if (DiffTableRows<FGpuMaterialRecord>(Fresh_, Shadow_, Changed_) == 0) return;
+        // Ja aqui, e nao depois da copia: o shadow mudou, e e ele que o layout le.
+        if (AlteraLayout) ++LayoutInputsVersion_;
 
         LastCopyRegions_ = Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_);
         if (LastCopyRegions_ == 0) return;
@@ -322,6 +332,7 @@ namespace Smile {
         }
 
         Shadow_.clear();
+        ++LayoutInputsVersion_;
         Dirty_         = true;
         LastDirtyRows_ = 0;
     }
@@ -339,6 +350,8 @@ namespace Smile {
         UnusableIndexCounts_    = 0;
         RowMeshes_.clear();
         RowByMesh_.clear();
+        // Sem bump: `GeometryPools_` vazio acima ja muda o numero de pools que o layout compara, e uma
+        // tabela sem pool nao tem linha publicada que conte.
         Shadow_.clear();
         Fresh_.clear();
         Changed_.clear();
@@ -353,6 +366,8 @@ namespace Smile {
         // Sem recalculo: ao contrario do material, nada de malha muda sem passar por um Setup —
         // geometria nao e editavel em runtime. As linhas ja estao prontas desde o SetupForScene.
         if (DiffTableRows<FGpuMeshRecord>(Fresh_, Shadow_, Changed_) == 0) return;
+        // Qualquer linha publicada conta (ver LayoutInputsVersion).
+        ++LayoutInputsVersion_;
         if (Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_) == 0) return;
         LastDirtyRows_ = static_cast<u32>(Changed_.size());
     }
@@ -383,6 +398,7 @@ namespace Smile {
         TransformRows_.assign(RowCapacity, {});
         PrevTransformRows_.assign(RowCapacity, {});
         MetaShadow_.clear();
+        ++LayoutInputsVersion_;
         BoundsShadow_.clear();
         TransformShadow_.clear();
         PrevTransformShadow_.clear();
@@ -417,6 +433,7 @@ namespace Smile {
         TransformRows_.clear();
         PrevTransformRows_.clear();
         MetaShadow_.clear();
+        ++LayoutInputsVersion_;
         BoundsShadow_.clear();
         TransformShadow_.clear();
         PrevTransformShadow_.clear();
@@ -604,8 +621,21 @@ namespace Smile {
         // O conjunto tocado e o mesmo para as quatro colunas — quem escreve uma linha escreve as
         // quatro —, entao o custo do diff e |tocados| x 4, e nao a capacidade da tabela x 4.
         const std::span<const u32> Touched{ TouchedSlots_ };
+
+        // O layout, ANTES do diff: ele iguala o shadow ao novo, e a comparacao precisa do que a GPU
+        // tinha. Sobre os MESMOS tocados, entao nao ha varredura nova — e fora do `LastRowsScanned`,
+        // que mede o diff.
+        bool AlteraLayout = false;
+        for (u32 Slot : Touched) {
+            if (Slot >= MetaRows_.size()) continue;
+            const FGpuSceneInstanceMeta Antes =
+                Slot < MetaShadow_.size() ? MetaShadow_[Slot] : FGpuSceneInstanceMeta{};
+            if (GpuInstanceMetaAltersLayout(Antes, MetaRows_[Slot])) { AlteraLayout = true; break; }
+        }
+
         DiffTableRowsAt<FGpuSceneInstanceMeta>(MetaRows_, Touched, MetaShadow_, MetaChanged_,
                                                LastRowsScanned_);
+        if (AlteraLayout) ++LayoutInputsVersion_;
         DiffTableRowsAt<FGpuSceneInstanceBounds>(BoundsRows_, Touched, BoundsShadow_,
                                                  BoundsChanged_, LastRowsScanned_);
         DiffTableRowsAt<FGpuSceneInstanceTransform>(TransformRows_, Touched, TransformShadow_,

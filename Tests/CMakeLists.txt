@@ -258,6 +258,32 @@ set_tests_properties(Smile.GpuSceneIncremental PROPERTIES
     TIMEOUT 180
 )
 
+# Quando o layout de regioes e refeito (Fase 5): as tabelas de producao, uma cena de verdade e os
+# caminhos que o editor usa, contra o contrato de gatilhos do layout.
+add_executable(SmileGpuIndirectLayoutTests
+    GpuIndirectLayoutTests.cpp
+)
+
+target_compile_features(SmileGpuIndirectLayoutTests PRIVATE cxx_std_20)
+target_compile_definitions(SmileGpuIndirectLayoutTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(SmileGpuIndirectLayoutTests PRIVATE SmileEngine d3d12 dxgi)
+set_target_properties(SmileGpuIndirectLayoutTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuIndirectLayout
+    COMMAND SmileGpuIndirectLayoutTests
+)
+
+set_tests_properties(Smile.GpuIndirectLayout PROPERTIES
+    LABELS "scene;gpu-driven;warp"
+    TIMEOUT 180
+)
+
 # Lista de candidatos e ranges (Fase 4). A logica e CPU pura; o device WARP existe so porque um
 # FGpuMesh valido precisa apontar para um pool D3D12 de verdade.
 add_executable(SmileGpuSceneCandidateTests
