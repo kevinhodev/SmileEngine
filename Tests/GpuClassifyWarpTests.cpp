@@ -48,6 +48,7 @@
 #include "Smile/Graphics/Scene/GpuClassify.h"
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
 #include "Smile/Graphics/Scene/GpuIndirectRecord.h"
+#include "Smile/Graphics/Resources/Mesh.h"
 
 namespace wrl = Microsoft::WRL;
 using namespace Smile;
@@ -1799,6 +1800,9 @@ namespace {
     // Um lote desenhado com o par do OUTRO pool le indice 0 e o vertice `VertexOffset` de la, que e
     // enchimento. Aparece como tag errada, e nao como leitura fora do recurso: o teste reprova pela
     // identidade em vez de travar o WARP.
+    //
+    // O vertice e o de PRODUCAO, `Vertex`, porque a porta exige o stride da tabela de malhas. O tag
+    // mora nos 4 primeiros bytes de cada um, onde a sonda le o TEXCOORD.
     constexpr u32 kPoolVertices  = 2100u; // cobre 2013 + 60, o fim da malha 1
     constexpr u32 kPoolIndices   = 300u;  // cobre 207 + 60
     constexpr u32 kTagsPorPool   = 64u;
@@ -1893,17 +1897,19 @@ namespace {
                 if (M.GeometryPoolId != Pool || FimVertices > kPoolVertices || FimIndices > kPoolIndices ||
                     M.IndexCount > kTagEnchimento)
                     throw std::runtime_error("a malha da cena nao cabe no pool do desenho");
-                std::vector<u32> V(kPoolVertices, TagDe(Pool, kTagEnchimento));
+                const auto PoeTag = [](Vertex& _V, u32 _Tag) { std::memcpy(&_V, &_Tag, sizeof(_Tag)); };
+                std::vector<Vertex> V(kPoolVertices, Vertex{});
+                for (Vertex& X : V) PoeTag(X, TagDe(Pool, kTagEnchimento));
                 std::vector<u32> I(kPoolIndices, 0u);
                 for (u32 K = 0; K < M.IndexCount; ++K) {
-                    I[M.IndexOffset + K]                    = K;
-                    V[static_cast<u32>(M.VertexOffset) + K] = TagDe(Pool, K);
+                    I[M.IndexOffset + K] = K;
+                    PoeTag(V[static_cast<u32>(M.VertexOffset) + K], TagDe(Pool, K));
                 }
-                Vb[Pool] = S.Upload(V.data(), V.size() * sizeof(u32));
+                Vb[Pool] = S.Upload(V.data(), V.size() * sizeof(Vertex));
                 Ib[Pool] = S.Upload(I.data(), I.size() * sizeof(u32));
                 Pools[Pool].Vertex.BufferLocation = Vb[Pool]->GetGPUVirtualAddress();
-                Pools[Pool].Vertex.SizeInBytes    = kPoolVertices * static_cast<u32>(sizeof(u32));
-                Pools[Pool].Vertex.StrideInBytes  = static_cast<u32>(sizeof(u32));
+                Pools[Pool].Vertex.SizeInBytes    = kPoolVertices * static_cast<u32>(sizeof(Vertex));
+                Pools[Pool].Vertex.StrideInBytes  = static_cast<u32>(sizeof(Vertex));
                 Pools[Pool].Index.BufferLocation  = Ib[Pool]->GetGPUVirtualAddress();
                 Pools[Pool].Index.SizeInBytes     = kPoolIndices * static_cast<u32>(sizeof(u32));
                 Pools[Pool].Index.Format          = DXGI_FORMAT_R32_UINT;
@@ -1940,12 +1946,13 @@ namespace {
         }
 
         // Um passe de desenho sobre os argumentos da cadeia `_C`, gravado por `GpuRecordIndirectDraws`
-        // com o layout `_Gravacao`. `_CountBuffer` e o `Draw` da cadeia — o count buffer da finalizacao.
+        // com o layout `_Gravacao` e as views `_Pools`. `_CountBuffer` e o `Draw` da cadeia — o count
+        // buffer da finalizacao.
         //
         // Nenhuma leitura entre a cadeia e este passe decide nada: o que o command processor executa
         // sai do count buffer que a GPU publicou. As leituras daqui sao so o oraculo do teste.
         FResultado Desenhar(FCadeia& _C, const FGpuIndirectLayout& _Gravacao,
-                            ID3D12Resource* _CountBuffer) {
+                            ID3D12Resource* _CountBuffer, std::span<const FGpuPoolViews> _Pools) {
             FResultado O;
             auto IrSeen = [&](ID3D12GraphicsCommandList* _L, D3D12_RESOURCE_STATES _Novo) {
                 if (EstadoSeen == _Novo) return;
@@ -1982,7 +1989,7 @@ namespace {
 
                 L->BeginQuery(Queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
                 const FGpuIndirectDrawTargets Alvos{ Signature.Get(), _C.Args.Get(), _CountBuffer };
-                O.Motivo = GpuRecordIndirectDraws(L, _Gravacao, GpuPipelineClassOpaqueOneSided, Pools,
+                O.Motivo = GpuRecordIndirectDraws(L, _Gravacao, GpuPipelineClassOpaqueOneSided, _Pools,
                                                   Alvos, O.Chamadas);
                 L->EndQuery(Queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
                 L->ResolveQueryData(Queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0, 1,
@@ -2593,6 +2600,46 @@ int main() try {
             CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ContagemTextura),
                     GpuIndirectRecordCountNotBuffer, "count buffer numa textura reprova, mesmo larga");
 
+            // As views. Cada caso estraga UMA coisa da view de um pool com regiao; o resto e valido, entao
+            // so a checagem daquela coisa pode recusar. O pool 1 e o ULTIMO a ser gravado, e o pool 0 o
+            // primeiro: uma porta que olhasse so uma ponta passaria por um dos dois.
+            struct FViewRuim {
+                const char* Nome;
+                u32         Pool;
+                void        (*Estraga)(FGpuPoolViews&);
+                u32         Motivo;
+            };
+            const FViewRuim ViewsRuins[] = {
+                { "VB sem endereco", 1u, [](FGpuPoolViews& P) { P.Vertex.BufferLocation = 0; },
+                  GpuIndirectRecordBadVertexView },
+                { "VB com o stride de outro formato", 1u,
+                  [](FGpuPoolViews& P) { P.Vertex.StrideInBytes = static_cast<u32>(sizeof(u32)); },
+                  GpuIndirectRecordBadVertexView },
+                { "VB menor que um vertice", 1u,
+                  [](FGpuPoolViews& P) { P.Vertex.SizeInBytes = static_cast<u32>(sizeof(Vertex)) - 1u; },
+                  GpuIndirectRecordBadVertexView },
+                { "IB sem endereco", 1u, [](FGpuPoolViews& P) { P.Index.BufferLocation = 0; },
+                  GpuIndirectRecordBadIndexView },
+                { "IB sem formato", 1u, [](FGpuPoolViews& P) { P.Index.Format = DXGI_FORMAT_UNKNOWN; },
+                  GpuIndirectRecordBadIndexView },
+                // A API aceita R16; a tabela conta indices de 4 B.
+                { "IB em R16", 1u, [](FGpuPoolViews& P) { P.Index.Format = DXGI_FORMAT_R16_UINT; },
+                  GpuIndirectRecordBadIndexView },
+                { "IB menor que um indice", 1u,
+                  [](FGpuPoolViews& P) { P.Index.SizeInBytes = static_cast<u32>(sizeof(u32)) - 1u; },
+                  GpuIndirectRecordBadIndexView },
+                { "view zerada", 1u, [](FGpuPoolViews& P) { P = FGpuPoolViews{}; },
+                  GpuIndirectRecordBadVertexView },
+                { "view zerada", 0u, [](FGpuPoolViews& P) { P = FGpuPoolViews{}; },
+                  GpuIndirectRecordBadVertexView },
+            };
+            for (const FViewRuim& Vr : ViewsRuins) {
+                std::vector<FGpuPoolViews> Pools = D.Pools;
+                Vr.Estraga(Pools[Vr.Pool]);
+                CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, Pools, Alvos),
+                        Vr.Motivo, std::string(Vr.Nome) + " no pool " + std::to_string(Vr.Pool) + " reprova");
+            }
+
             // A gravacao refaz a porta, e recusada nao grava nada; e a regiao VAZIA nao ganha chamada.
             // Gravado numa command list que nunca e submetida: o que se confere e a gravacao.
             wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
@@ -2612,12 +2659,16 @@ int main() try {
                     GpuIndirectRecordMissingTarget, "a gravacao refaz a porta");
             CheckEq(Chamadas, 0u, "e recusada nao grava chamada nenhuma");
 
+            // O pool 1 sem regiao, e com a view ZERADA: pool sem chamada nao tem a view conferida, porque
+            // ela nao chega a lista — e a lista e fechada abaixo sob a camada de debug.
             const u64 SoPool0[8]{ 4ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull };
             FGpuIndirectLayout Vazio1;
             GpuBuildIndirectLayout(SoPool0, Versoes.Next(), Vazio1);
-            CheckEq(GpuRecordIndirectDraws(L.Get(), Vazio1, GpuPipelineClassOpaqueOneSided, D.Pools,
+            std::vector<FGpuPoolViews> Pool1Zerado = D.Pools;
+            Pool1Zerado[1] = FGpuPoolViews{};
+            CheckEq(GpuRecordIndirectDraws(L.Get(), Vazio1, GpuPipelineClassOpaqueOneSided, Pool1Zerado,
                                            Alvos, Chamadas),
-                    GpuIndirectRecordOk, "um layout com o pool 1 sem regiao grava");
+                    GpuIndirectRecordOk, "um layout com o pool 1 sem regiao grava, com a view do pool 1 zerada");
             CheckEq(Chamadas, 1u, "uma chamada so: a regiao vazia do pool 1 nao ganha ExecuteIndirect");
             Hr(L->Close(), "Close (gravacao)");
             S.Drenar("gravacao sem submissao");
@@ -2626,12 +2677,28 @@ int main() try {
         // ---- o frame VALIDO ----
         const FCadeia::FSaida Valido = C.Rodar(FCadeia::kResetTudo);
         CheckEq(Valido.Status, 1u, "desenho: o frame valido fecha");
-        const FDesenho::FResultado V = D.Desenhar(C, Layout, C.Draw.Get());
+        const FDesenho::FResultado V = D.Desenhar(C, Layout, C.Draw.Get(), D.Pools);
         CheckEq(V.Motivo, GpuIndirectRecordOk, "desenho: a gravacao aceita o layout da cena");
         CheckEq(V.Chamadas, 2u, "desenho: uma chamada por pool com regiao");
         CheckEq64(V.Stats.IAPrimitives, 40ull,
                   "desenho: 40 primitivas — 10 + 10 da malha 0 (slots 0 e 2) e 20 da malha 1 (slot 1)");
         ConferirVistos(V.Seen, "desenho valido");
+
+        // ---- views conferidas ANTES da primeira chamada ----
+        //
+        // Sobre o count buffer do frame valido logo acima, que publica dois comandos no lote do pool 0: uma
+        // gravacao que conferisse a view dentro do laco ja teria gravado o pool 0 quando o pool 1
+        // reprovasse. O contador de chamadas e da propria funcao, e poderia ser zerado na saida; quem
+        // prova que nada foi gravado e o desenho.
+        {
+            std::vector<FGpuPoolViews> Pool1Ruim = D.Pools;
+            Pool1Ruim[1].Index.Format = DXGI_FORMAT_UNKNOWN;
+            const FDesenho::FResultado X = D.Desenhar(C, Layout, C.Draw.Get(), Pool1Ruim);
+            const std::string N = "gravacao com a view do pool 1 invalida";
+            CheckEq(X.Motivo, GpuIndirectRecordBadIndexView, N + ": o motivo exato");
+            CheckEq(X.Chamadas, 0u, N + ": nenhuma chamada contada");
+            ConferirNada(X, N);
+        }
 
         // ---- falhas sobre comandos VELHOS e validos ----
         //
@@ -2664,7 +2731,8 @@ int main() try {
             CheckEq(R.Reason, F.Motivo, N + ": o motivo exato");
             Check(R.Counts[0] != 0u && R.Counts[1] != 0u,
                   N + ": BatchCounts continua nao zero — quem suprime o draw e so o count buffer");
-            const FDesenho::FResultado X = D.Desenhar(C, Layout, C.Draw.Get() /* count buffer da finalizacao */);
+            const FDesenho::FResultado X =
+                D.Desenhar(C, Layout, C.Draw.Get() /* count buffer da finalizacao */, D.Pools);
             CheckEq(X.Motivo, GpuIndirectRecordOk, N + ": a gravacao grava normalmente");
             CheckEq(X.Chamadas, 2u, N + ": as duas chamadas — quem zera e o count buffer, e nao a CPU");
             ConferirNada(X, N);
@@ -2684,7 +2752,7 @@ int main() try {
             const std::string N = "desenho com o layout A na GPU e gravacao com o atual";
             CheckEq(R.Status, 0u, N + ": frame invalidado");
             CheckEq(R.Reason, static_cast<u32>(GpuFinalizeFaultLayoutVersion), N + ": o motivo exato");
-            const FDesenho::FResultado X = D.Desenhar(C2, Layout, C2.Draw.Get());
+            const FDesenho::FResultado X = D.Desenhar(C2, Layout, C2.Draw.Get(), D.Pools);
             CheckEq(X.Motivo, GpuIndirectRecordOk, N + ": a gravacao grava normalmente");
             ConferirNada(X, N);
         }

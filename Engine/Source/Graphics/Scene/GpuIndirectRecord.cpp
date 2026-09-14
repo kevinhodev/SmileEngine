@@ -1,6 +1,13 @@
 #include "Smile/Graphics/Scene/GpuIndirectRecord.h"
+#include "Smile/Graphics/Resources/Mesh.h"
 
 namespace Smile {
+    namespace {
+        // Um pool ganha chamada quando a regiao do seu lote tem capacidade. UMA regra para a porta e
+        // para a gravacao: a porta confere as views exatamente dos pools que a gravacao vai amarrar.
+        bool GanhaChamada(const FGpuIndirectRegion& _R) { return _R.Capacity != 0u; }
+    }
+
     u32 GpuIndirectRecordPreflight(const FGpuIndirectLayout& _Layout, u32 _PipelineClass,
                                    std::span<const FGpuPoolViews> _Pools,
                                    const FGpuIndirectDrawTargets& _Targets) {
@@ -30,6 +37,22 @@ namespace Smile {
         if (Counts.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return GpuIndirectRecordCountNotBuffer;
         if (Counts.Width < static_cast<u64>(Slots) * sizeof(u32))
             return GpuIndirectRecordSmallCountBuffer;
+
+        // As views de TODO pool que vai ganhar chamada, antes da primeira: conferidas dentro do laco
+        // da gravacao, o pool 0 ja estaria gravado quando o pool 1 reprovasse.
+        const u32 PoolCount = static_cast<u32>(_Pools.size());
+        const std::span<const FGpuIndirectRegion> Regioes = _Layout.Regions();
+        for (u32 Pool = 0; Pool < PoolCount; ++Pool) {
+            if (!GanhaChamada(Regioes[GpuBatchIndex({ _PipelineClass, Pool }, PoolCount)])) continue;
+            const D3D12_VERTEX_BUFFER_VIEW& V = _Pools[Pool].Vertex;
+            if (V.BufferLocation == 0) return GpuIndirectRecordBadVertexView;
+            if (V.StrideInBytes != sizeof(Vertex)) return GpuIndirectRecordBadVertexView;
+            if (V.SizeInBytes < sizeof(Vertex)) return GpuIndirectRecordBadVertexView;
+            const D3D12_INDEX_BUFFER_VIEW& I = _Pools[Pool].Index;
+            if (I.BufferLocation == 0) return GpuIndirectRecordBadIndexView;
+            if (I.Format != DXGI_FORMAT_R32_UINT) return GpuIndirectRecordBadIndexView;
+            if (I.SizeInBytes < sizeof(u32)) return GpuIndirectRecordBadIndexView;
+        }
         return GpuIndirectRecordOk;
     }
 
@@ -46,7 +69,7 @@ namespace Smile {
             // Sob a porta aprovada o indice cabe: e menor que o total de slots, que ja passou por u32.
             const u32 Lote = GpuBatchIndex({ _PipelineClass, Pool }, PoolCount);
             const FGpuIndirectRegion& R = Regioes[Lote];
-            if (R.Capacity == 0u) continue;
+            if (!GanhaChamada(R)) continue;
 
             _List->IASetVertexBuffers(0, 1, &_Pools[Pool].Vertex);
             _List->IASetIndexBuffer(&_Pools[Pool].Index);

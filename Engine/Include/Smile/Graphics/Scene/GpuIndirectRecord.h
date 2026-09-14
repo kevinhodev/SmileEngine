@@ -24,6 +24,12 @@
 
 namespace Smile {
     // O par VB/IB de um pool, em forma de view. Indexado pelo `GeometryPoolId`.
+    //
+    // ⚠️ Nas UNIDADES da tabela de malhas, e a partir da BASE do pool: o `VertexOffset` da linha conta
+    // `Vertex` e o `IndexOffset` conta indices de 4 B, os dois desde o inicio do recurso. Stride
+    // diferente de `sizeof(Vertex)`, ou indice em R16, a API aceita — e le outro trecho do pool:
+    // geometria errada sem erro. A porta confere stride, formato, endereco nao nulo e que cabe um
+    // elemento; a BASE ela nao tem como ver (a view nao traz o recurso), e e de quem monta a view.
     struct FGpuPoolViews {
         D3D12_VERTEX_BUFFER_VIEW Vertex{};
         D3D12_INDEX_BUFFER_VIEW  Index{};
@@ -62,6 +68,12 @@ namespace Smile {
         // `Width` e largura em texels, e uma larga o bastante passa pela conta de bytes.
         GpuIndirectRecordArgsNotBuffer  = 8,
         GpuIndirectRecordCountNotBuffer = 9,
+        // A view de um pool que vai ganhar chamada nao serve: endereco nulo, stride que nao e o de
+        // `Vertex`, ou menos de um vertice. Pool sem chamada nao tem a view conferida — ela nao chega
+        // a lista.
+        GpuIndirectRecordBadVertexView = 10,
+        // O mesmo para o indice: endereco nulo, formato que nao e R32_UINT, ou menos de um indice.
+        GpuIndirectRecordBadIndexView  = 11,
     };
 
     // A porta da gravacao. Consultada ANTES de gravar o compute do frame: recusada, o frame vai inteiro
@@ -81,8 +93,9 @@ namespace Smile {
     // Regiao de capacidade ZERO nao grava chamada: nenhum comando cabe nela, e um que tentasse vira falha
     // que zera o frame inteiro. Pular ali nao esconde geometria.
     //
-    // Refaz a porta; recusada, nao grava NADA e devolve o motivo. `OutCalls` recebe quantas chamadas
-    // foram gravadas.
+    // Refaz a porta; recusada, nao grava NADA e devolve o motivo. As views de todos os pools com
+    // chamada sao conferidas ali, antes da primeira: nao existe gravacao parcial. `OutCalls` recebe
+    // quantas chamadas foram gravadas.
     u32 GpuRecordIndirectDraws(ID3D12GraphicsCommandList* List, const FGpuIndirectLayout& Layout,
                                u32 PipelineClass, std::span<const FGpuPoolViews> Pools,
                                const FGpuIndirectDrawTargets& Targets, u32& OutCalls);
