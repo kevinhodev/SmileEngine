@@ -58,6 +58,10 @@ namespace Smile {
         GpuIndirectRecordSmallArgsBuffer = 6,
         // O count buffer nao tem uma entrada por lote.
         GpuIndirectRecordSmallCountBuffer = 7,
+        // `IndirectArgs` ou o count buffer nao sao BUFFER. O tamanho sozinho nao pega: numa textura o
+        // `Width` e largura em texels, e uma larga o bastante passa pela conta de bytes.
+        GpuIndirectRecordArgsNotBuffer  = 8,
+        GpuIndirectRecordCountNotBuffer = 9,
     };
 
     // A porta da gravacao. Consultada ANTES de gravar o compute do frame: recusada, o frame vai inteiro

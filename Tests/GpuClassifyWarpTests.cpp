@@ -2563,6 +2563,36 @@ int main() try {
             CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ContagemCurta),
                     GpuIndirectRecordSmallCountBuffer, "count buffer sem uma entrada por lote reprova");
 
+            // Uma TEXTURA larga o bastante para as duas contas de bytes. So a dimensao a recusa.
+            wrl::ComPtr<ID3D12Resource> Textura;
+            {
+                D3D12_HEAP_PROPERTIES HP{};
+                HP.Type = D3D12_HEAP_TYPE_DEFAULT;
+                D3D12_RESOURCE_DESC RD{};
+                RD.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+                RD.Width            = 256;
+                RD.Height           = 1;
+                RD.DepthOrArraySize = 1;
+                RD.MipLevels        = 1;
+                RD.Format           = DXGI_FORMAT_R8_UNORM;
+                RD.SampleDesc.Count = 1;
+                Hr(S.Device->CreateCommittedResource(&HP, D3D12_HEAP_FLAG_NONE, &RD,
+                                                     D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                     IID_PPV_ARGS(&Textura)),
+                   "CreateCommittedResource (textura)");
+            }
+            Check(Textura->GetDesc().Width >= GpuScatterArgsBytes(Layout.TotalCommands()) &&
+                      Textura->GetDesc().Width >= static_cast<u64>(In.BatchCapacity) * sizeof(u32),
+                  "a textura passa pelas duas contas de bytes");
+            FGpuIndirectDrawTargets ArgsTextura = Alvos;
+            ArgsTextura.Args = Textura.Get();
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ArgsTextura),
+                    GpuIndirectRecordArgsNotBuffer, "IndirectArgs numa textura reprova, mesmo larga");
+            FGpuIndirectDrawTargets ContagemTextura = Alvos;
+            ContagemTextura.DrawCounts = Textura.Get();
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ContagemTextura),
+                    GpuIndirectRecordCountNotBuffer, "count buffer numa textura reprova, mesmo larga");
+
             // A gravacao refaz a porta, e recusada nao grava nada; e a regiao VAZIA nao ganha chamada.
             // Gravado numa command list que nunca e submetida: o que se confere e a gravacao.
             wrl::ComPtr<ID3D12CommandAllocator>    Alloc;

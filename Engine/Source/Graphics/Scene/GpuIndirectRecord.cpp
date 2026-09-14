@@ -20,9 +20,15 @@ namespace Smile {
 
         // Os tamanhos em u64. O layout e denso e imutavel, entao toda regiao termina no maximo em
         // `TotalCommands()`: cobrir o total cobre toda chamada.
-        if (_Targets.Args->GetDesc().Width < GpuScatterArgsBytes(_Layout.TotalCommands()))
+        //
+        // A dimensao ANTES de cada tamanho: o `Width` so e bytes num buffer.
+        const D3D12_RESOURCE_DESC Args = _Targets.Args->GetDesc();
+        if (Args.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return GpuIndirectRecordArgsNotBuffer;
+        if (Args.Width < GpuScatterArgsBytes(_Layout.TotalCommands()))
             return GpuIndirectRecordSmallArgsBuffer;
-        if (_Targets.DrawCounts->GetDesc().Width < static_cast<u64>(Slots) * sizeof(u32))
+        const D3D12_RESOURCE_DESC Counts = _Targets.DrawCounts->GetDesc();
+        if (Counts.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return GpuIndirectRecordCountNotBuffer;
+        if (Counts.Width < static_cast<u64>(Slots) * sizeof(u32))
             return GpuIndirectRecordSmallCountBuffer;
         return GpuIndirectRecordOk;
     }
