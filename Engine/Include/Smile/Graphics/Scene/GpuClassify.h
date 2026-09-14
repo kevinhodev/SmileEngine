@@ -322,19 +322,20 @@ namespace Smile {
     };
 
 
-    // O COUNT BUFFER do `ExecuteIndirect`, publicado pelo prefixo junto dos offsets.
+    // O COUNT BUFFER do `ExecuteIndirect`, publicado pela FINALIZACAO (FinalizeDrawCounts.cs.hlsl).
     //
-    // `DrawCounts[b]` = `BatchCounts[b]` quando o prefixo fechou, e ZERO em todas as entradas quando
-    // `PrefixOverflow != 0`. Um count buffer zerado faz o `ExecuteIndirect` executar zero comandos —
-    // que e a unica forma de suprimir o draw sem readback, porque a decisao acontece na GPU, dentro
-    // do buffer que o command processor le.
+    // `DrawCounts[b]` = `BatchCounts[b]` quando o frame fechou inteiro, e ZERO em todas as entradas
+    // quando QUALQUER falha foi registrada — estouro do prefixo, cursor alem da contagem, posicao fora
+    // do recurso. Count buffer zerado faz o `ExecuteIndirect` executar zero comandos, e essa e a unica
+    // forma de suprimir o draw sem readback.
     //
-    // Buffer SEPARADO em vez de zerar `BatchCounts` no lugar: as contagens sao o diagnostico que se
-    // quer olhar justamente quando houve estouro, e destrui-las apagaria a evidencia. Custa
-    // `4 * PoolCount` dwords — dezenas de bytes.
+    // ⚠️ Publicado DEPOIS do scatter, e nao pelo prefixo como numa versao anterior. O count buffer tem
+    // de ser a ultima palavra, escrita pelo ultimo passo capaz de descobrir uma falha: publicado pelo
+    // prefixo, ele ja estaria no ar quando o scatter falhasse, e o command processor executaria a
+    // contagem sobre uma posicao que o scatter nao escreveu.
     //
-    // ⚠️ A versao anterior deste header dizia que `BatchCounts` seria o count buffer. Nao pode ser:
-    // ele e escrito pelo classify, que nao sabe se o prefixo vai fechar.
+    // Buffer SEPARADO de `BatchCounts`: as contagens sao o diagnostico que se quer olhar justamente
+    // quando o frame foi invalidado. Custa `4 * PoolCount` dwords.
 
     // Referencia CPU do prefixo. Devolve o total; `_OutOffsets` fica com o prefixo exclusivo.
     //
@@ -343,9 +344,8 @@ namespace Smile {
     //   - a saida inteira e INUTILIZAVEL, e suprimi-la NAO e trabalho do scatter sozinho. Um
     //     `return` no shader nao alcanca o `ExecuteIndirect`: ele e do command processor, le o COUNT
     //     BUFFER direto e executaria a contagem de antes sobre argumentos que o scatter deixou
-    //     intactos — comandos do frame passado, ou memoria nunca inicializada. Por isso o prefixo
-    //     publica um count buffer SANITIZADO (ver abaixo), e e ele, e nao `BatchCounts`, que vai
-    //     para o `ExecuteIndirect`;
+    //     intactos — comandos do frame passado, ou memoria nunca inicializada. Por isso quem publica
+    //     o count buffer e a finalizacao (ver acima), e ela o zera quando a flag esta ligada;
     //   - da entrada que falhou em diante, todas recebem `kGpuBatchOffsetPoison`. Deterministico e
     //     IGUAL nos dois lados, entao o teste compara elemento a elemento inclusive no caso de
     //     estouro. A entrada que falhou tambem entra: o `Acc` ali ainda e valido, mas o lote nao
@@ -357,7 +357,7 @@ namespace Smile {
     // antes do estouro". Nao ficavam: a CPU deixava os zeros do `assign` e a GPU deixava o conteudo
     // anterior do recurso — duas coisas diferentes, e nenhuma das duas a descrita.
     u32 PrefixBatchCounts(std::span<const u32> Counts, std::vector<u32>& OutOffsets,
-                          std::vector<u32>& OutDrawCounts, u32& OutOverflow);
+                          u32& OutOverflow);
     // Referencia CPU do dispatch. E o oraculo do teste WARP e, depois, o braco A/B.
     //
     // NAO consulta o `GpuClassifyPreflight`, e isso e deliberado: ela espelha o SHADER, que executa o
@@ -372,20 +372,54 @@ namespace Smile {
     u32 ClassifyCandidates(const FGpuClassifyInput& Input, std::vector<u32>& OutBatchCounts,
                            std::vector<u32>& OutCounters);
 
+    // === A cadeia, e o RESET que a abre =========================================================
+    //
+    //     reset -> classify -> prefixo -> scatter -> finalizacao -> ExecuteIndirect(DrawCounts)
+    //
+    // Quatro buffers ACUMULAM por `InterlockedAdd` e sao lidos por um passo seguinte: `BatchCounts` e
+    // os contadores do classify, `BatchCursors` e os contadores do scatter. Os quatro sao zerados por
+    // UM passo, o primeiro da cadeia, antes do classify — um dono, um invariante: "todo acumulador
+    // comeca a execucao em zero".
+    //
+    // ⚠️ Nao e arrumacao. Sem o reset, a segunda execucao comeca das contagens da primeira:
+    //
+    //   - `BatchCounts` INFLADO e o pior caso, porque nenhuma falha do scatter o enxerga — o cursor
+    //     nunca passa de uma contagem grande demais — e o count buffer publicaria posicoes que
+    //     ninguem escreveu;
+    //   - cursor SUJO desloca comandos para dentro do intervalo de outro lote;
+    //   - contador do scatter velho carregaria a falha de uma execucao para a seguinte.
+    //
+    // A finalizacao e a rede de seguranca, e ela so funciona com uma ANCORA. Comparar os acumuladores
+    // entre si nao pega o caso realista — esquecer o reset INTEIRO —, porque os quatro crescem em
+    // sincronia: as contagens dobram, os cursores continuam de onde pararam e terminam iguais a elas.
+    // A ancora e o numero de candidatos, escrito do zero no cbuffer a cada execucao; a partir dela a
+    // finalizacao encadeia quatro igualdades, uma por acumulador (ver EGpuFinalizeReason). Com isso,
+    // esquecer o reset nao desenha comando velho — desenha NADA. O reset continua obrigatorio porque um
+    // frame que nao desenha nada tambem e defeito, so que visivel.
+
     // === Scatter ================================================================================
     //
     // Segunda passada: cada candidato INDIRECT recebe `BatchOffsets[lote] + cursor` e o comando que o
-    // `GpuClassifyCandidate` ja montou. Depois de `Indirect`, NENHUMA recusa — a contagem ja reservou
-    // a posicao, e uma recusa deixaria ali o comando do frame passado.
+    // `GpuClassifyCandidate` ja montou.
+    //
+    // ⚠️ Depois de `Indirect`, nenhum ramo deixa de escrever SEM AVISAR. A contagem ja reservou a
+    // posicao; um candidato contado e nao escrito deixaria ali o comando do frame passado. Os dois
+    // ramos que nao escrevem registram FALHA, e a finalizacao zera o `DrawCounts` do frame inteiro.
+    // A versao anterior tinha um "canario" que pulava a escrita e so contava — que e exatamente uma
+    // recusa depois de contado, com outro nome.
     enum EGpuScatterCounter : u32 {
         GpuScatterCounterEmitted    = 0, // comandos escritos
         // Candidatos em que o scatter se ABSTEVE porque o prefixo nao fechou. Nao e o que suprime o
         // draw (isso e o `DrawCounts` zerado); e o que impede escrever com offset envenenado, que em
         // u32 da a volta: 0xFFFFFFFF + 1 = 0, em cima do primeiro comando do primeiro lote.
         GpuScatterCounterSuppressed = 1,
-        // Posicao fora de `IndirectArgs`. CANARIO de alocacao, inalcancavel sob preflight aprovado.
-        GpuScatterCounterOverflow   = 2,
-        GpuScatterCounterCount      = 3,
+        // FALHA: cursor alem da contagem do lote. Pega cursor sujo — todo inicio nao zero num lote com
+        // candidatos leva ao menos o ultimo alem da contagem — e contagem divergente. Invalida o frame.
+        GpuScatterCounterFaultCursor   = 2,
+        // FALHA: posicao fora de `IndirectArgs`. Inalcancavel sob preflight com o cursor dentro da
+        // contagem; se alcancada, nao ha onde escrever, e invalida o frame pelo mesmo motivo.
+        GpuScatterCounterFaultCapacity = 3,
+        GpuScatterCounterCount         = 4,
     };
 
     // Bytes de `IndirectArgs` para `_Commands` comandos.
@@ -426,7 +460,36 @@ namespace Smile {
     // A ORDEM dentro de um lote aqui e a dos candidatos; na GPU e a de chegada ao cursor, que nao e
     // deterministica. Nada no draw depende dela (o lote inteiro compartilha PSO e pool), e por isso o
     // teste compara cada intervalo como MULTICONJUNTO.
+    //
+    // `InOutCursors` e o estado dos cursores ANTES do scatter — normalmente o que o prefixo zerou. Ele
+    // e parametro, e nao zerado aqui dentro, para que o teste consiga reproduzir o cursor sujo que a
+    // falha de cursor existe para pegar.
     void ScatterIndirectArgs(const FGpuClassifyInput& Input, std::span<const u32> BatchOffsets,
-                             u32 PrefixOverflow, std::vector<FGpuIndirectDrawArgs>& InOutArgs,
+                             std::span<const u32> BatchCounts, u32 PrefixOverflow,
+                             std::vector<u32>& InOutCursors,
+                             std::vector<FGpuIndirectDrawArgs>& InOutArgs,
                              std::vector<u32>& OutCounters);
+
+    // Por que a finalizacao invalidou o frame. BITS, espelhando SMILE_FINALIZE_* do
+    // GpuBatchCounters.hlsli. Telemetria: nenhum draw depende deles.
+    enum EGpuFinalizeReason : u32 {
+        GpuFinalizePrefixOverflow = 1u << 0, // o prefixo nao fechou
+        GpuFinalizeFaultCursor    = 1u << 1, // falha de cursor registrada pelo scatter
+        GpuFinalizeFaultCapacity  = 1u << 2, // falha de capacidade registrada pelo scatter
+        // Os quatro elos da verificacao de RESET. O primeiro e a ANCORA: o numero de candidatos vem
+        // do cbuffer e nao acumula. Sem ele, esquecer o reset inteiro passaria — os acumuladores
+        // crescem juntos, e toda igualdade entre eles continua valendo.
+        GpuFinalizeClassifyAnchor = 1u << 3, // soma dos contadores do classify != candidatos
+        GpuFinalizeBatchSum       = 1u << 4, // soma dos lotes != indiretos
+        GpuFinalizeCursorMismatch = 1u << 5, // cursor != contagem em algum lote
+        GpuFinalizeScatterSum     = 1u << 6, // emitidos + falhas do scatter != indiretos
+    };
+
+    // Referencia CPU da FINALIZACAO. Publica o count buffer a partir das contagens e de TODA
+    // verificacao descrita no FinalizeDrawCounts.cs.hlsl. Devolve 1 quando o frame fechou e 0 quando
+    // foi invalidado — o mesmo `Status[0]` do shader —, e `OutReason` recebe o `Status[1]`.
+    u32 FinalizeDrawCounts(std::span<const u32> BatchCounts, std::span<const u32> PrefixCounters,
+                           std::span<const u32> ScatterCounters, std::span<const u32> BatchCursors,
+                           std::span<const u32> ClassifyCounters, u32 CandidateCount,
+                           std::vector<u32>& OutDrawCounts, u32& OutReason);
 }

@@ -14,11 +14,11 @@
 // e o teste WARP que compara com a referencia CPU continua servindo.
 //
 // ⚠️ NAO e in-place: `BatchOffsets` e separado de `BatchCounts`, e acumular por cima destruiria as
-// contagens de que o `DrawCounts` depende.
+// contagens, que a finalizacao ainda precisa ler para publicar o `DrawCounts`.
 //
-// ⚠️ `BatchCounts` NAO alimenta o `ExecuteIndirect`. O count buffer e o `DrawCounts`, sanitizado
-// aqui mesmo: ele le um uint32 em `CountBufferOffset`, entao o lote b usa `b * 4`. Ligar o draw no
-// `BatchCounts` faria o command processor executar comandos velhos sempre que o prefixo estourasse.
+// ⚠️ Este passo NAO publica o count buffer. Quem publica o `DrawCounts` e o FinalizeDrawCounts,
+// DEPOIS do scatter: o count buffer tem de ser a ultima palavra, escrita pelo ultimo passo capaz de
+// descobrir uma falha. Publicado aqui, ele ja estaria no ar quando o scatter falhasse.
 
 #include "GpuBatchCounters.hlsli"
 
@@ -30,9 +30,6 @@ StructuredBuffer<uint> BatchCounts : register(t0);
 
 RWStructuredBuffer<uint> BatchOffsets : register(u0);
 RWStructuredBuffer<uint> Counters     : register(u1);
-// O count buffer do ExecuteIndirect. Ver a nota do DrawCounts no GpuClassify.h: um `return` no
-// scatter nao suprime draw nenhum, porque o command processor le ESTE buffer e nao o shader.
-RWStructuredBuffer<uint> DrawCounts   : register(u2);
 
 [numthreads(1, 1, 1)]
 void main() {
@@ -60,17 +57,6 @@ void main() {
         BatchOffsets[I] = Acc;
         Acc += BatchCounts[I];
     }
-
-
-    // O COUNT BUFFER, sempre percorrendo TODOS os slots — inclusive depois de um `break`.
-    //
-    // Zerado por inteiro quando houve estouro: e assim, e nao com um early-out no scatter, que o
-    // draw e suprimido. O `ExecuteIndirect` le este buffer direto; com contagem nao zero ele
-    // executaria comandos velhos que o scatter deixou intactos.
-    //
-    // Laco proprio, e nao uma escrita dentro do laco do prefixo, porque `Estourou` so e conhecido
-    // quando aquele termina: uma entrada escrita antes do estouro ja teria publicado contagem.
-    for (uint K = 0u; K < Slots; ++K) DrawCounts[K] = Estourou ? 0u : BatchCounts[K];
     Counters[SMILE_PREFIX_TOTAL]    = Acc;
     Counters[SMILE_PREFIX_OVERFLOW] = Estourou;
 }

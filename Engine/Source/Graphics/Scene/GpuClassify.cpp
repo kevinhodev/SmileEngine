@@ -36,9 +36,8 @@ namespace Smile {
     }
 
     u32 PrefixBatchCounts(std::span<const u32> _Counts, std::vector<u32>& _OutOffsets,
-                          std::vector<u32>& _OutDrawCounts, u32& _OutOverflow) {
+                          u32& _OutOverflow) {
         _OutOffsets.assign(_Counts.size(), 0u);
-        _OutDrawCounts.assign(_Counts.size(), 0u);
         _OutOverflow = 0u;
 
         u32 Acc = 0;
@@ -50,25 +49,20 @@ namespace Smile {
                 _OutOverflow = 1u;
                 for (size_t J = I; J < _Counts.size(); ++J)
                     _OutOffsets[J] = kGpuBatchOffsetPoison;
-                // `_OutDrawCounts` ja esta TODO zerado pelo assign, e e assim que fica: count buffer
-                // zerado faz o ExecuteIndirect executar zero comandos. Nao e uma otimizacao de
-                // escrita — e o contrato.
-                return Acc;
+                break;
             }
             _OutOffsets[I] = Acc;
             Acc += _Counts[I];
         }
-        // Sem estouro: o count buffer e copia das contagens. A copia acontece depois do laco, e nao
-        // dentro dele, porque so aqui se sabe que o prefixo fechou inteiro.
-        for (size_t I = 0; I < _Counts.size(); ++I) _OutDrawCounts[I] = _Counts[I];
         return Acc;
     }
 
     void ScatterIndirectArgs(const FGpuClassifyInput& _In, std::span<const u32> _BatchOffsets,
-                             u32 _PrefixOverflow, std::vector<FGpuIndirectDrawArgs>& _InOutArgs,
+                             std::span<const u32> _BatchCounts, u32 _PrefixOverflow,
+                             std::vector<u32>& _InOutCursors,
+                             std::vector<FGpuIndirectDrawArgs>& _InOutArgs,
                              std::vector<u32>& _OutCounters) {
         _OutCounters.assign(GpuScatterCounterCount, 0u);
-        std::vector<u32> Cursores(_BatchOffsets.size(), 0u);
         const u32 Capacidade = static_cast<u32>(_InOutArgs.size());
 
         for (const u32 Slot : _In.Slots) {
@@ -82,15 +76,53 @@ namespace Smile {
                                                      _In.PoolCount, Cmd);
             if (Outcome != GpuClassifyIndirect) continue;
 
-            // ---- a partir daqui, nenhuma recusa ----
-            const u32 Cursor   = Cursores[Cmd.Batch]++;
+            // ---- a partir daqui a posicao esta reservada: falha e REGISTRADA, nunca silenciosa ----
+            const u32 Cursor = _InOutCursors[Cmd.Batch]++;
+            if (Cursor >= _BatchCounts[Cmd.Batch]) {
+                ++_OutCounters[GpuScatterCounterFaultCursor];
+                continue;
+            }
             const u32 Position = _BatchOffsets[Cmd.Batch] + Cursor;
             if (Position >= Capacidade) {
-                ++_OutCounters[GpuScatterCounterOverflow];
+                ++_OutCounters[GpuScatterCounterFaultCapacity];
                 continue;
             }
             _InOutArgs[Position] = Cmd.Args;
             ++_OutCounters[GpuScatterCounterEmitted];
         }
+    }
+
+    u32 FinalizeDrawCounts(std::span<const u32> _BatchCounts, std::span<const u32> _PrefixCounters,
+                           std::span<const u32> _ScatterCounters, std::span<const u32> _BatchCursors,
+                           std::span<const u32> _ClassifyCounters, u32 _CandidateCount,
+                           std::vector<u32>& _OutDrawCounts, u32& _OutReason) {
+        u32 Motivo = 0;
+        if (_PrefixCounters[GpuPrefixCounterOverflow] != 0u)       Motivo |= GpuFinalizePrefixOverflow;
+        if (_ScatterCounters[GpuScatterCounterFaultCursor] != 0u)   Motivo |= GpuFinalizeFaultCursor;
+        if (_ScatterCounters[GpuScatterCounterFaultCapacity] != 0u) Motivo |= GpuFinalizeFaultCapacity;
+
+        // A ancora: candidatos desta execucao, que nao acumulam. Ver o shader.
+        u32 SomaClassify = 0;
+        for (u32 K = 0; K < GpuClassifyOutcomeCount; ++K) SomaClassify += _ClassifyCounters[K];
+        if (SomaClassify != _CandidateCount) Motivo |= GpuFinalizeClassifyAnchor;
+
+        const u32 Indiretos = _ClassifyCounters[GpuClassifyIndirect];
+        u32 SomaLotes = 0;
+        for (size_t I = 0; I < _BatchCounts.size(); ++I) {
+            SomaLotes += _BatchCounts[I];
+            if (_BatchCursors[I] != _BatchCounts[I]) Motivo |= GpuFinalizeCursorMismatch;
+        }
+        if (SomaLotes != Indiretos) Motivo |= GpuFinalizeBatchSum;
+
+        const u32 Tratados = _ScatterCounters[GpuScatterCounterEmitted] +
+                             _ScatterCounters[GpuScatterCounterFaultCursor] +
+                             _ScatterCounters[GpuScatterCounterFaultCapacity];
+        if (Tratados != Indiretos) Motivo |= GpuFinalizeScatterSum;
+
+        _OutReason = Motivo;
+        _OutDrawCounts.assign(_BatchCounts.size(), 0u);
+        if (Motivo == 0u)
+            for (size_t J = 0; J < _BatchCounts.size(); ++J) _OutDrawCounts[J] = _BatchCounts[J];
+        return Motivo == 0u ? 1u : 0u;
     }
 }

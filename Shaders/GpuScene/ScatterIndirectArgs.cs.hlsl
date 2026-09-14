@@ -27,16 +27,12 @@ StructuredBuffer<uint> ExpandedSlots  : register(t0);
 // t1..t3 sao as tabelas, declaradas pelo GpuClassifyShared.hlsli.
 StructuredBuffer<uint> BatchOffsets   : register(t4);
 StructuredBuffer<uint> PrefixCounters : register(t5);
+// As contagens do classify, para LIMITAR o cursor. Ver a nota das falhas no main.
+StructuredBuffer<uint> BatchCounts    : register(t6);
 
 RWStructuredBuffer<GpuIndirectDrawArgs> IndirectArgs : register(u0);
 RWStructuredBuffer<uint>                BatchCursors : register(u1);
 RWStructuredBuffer<uint>                Counters     : register(u2);
-
-// Indices, espelhando EGpuScatterCounter.
-#define SMILE_SCATTER_EMITTED    0u
-#define SMILE_SCATTER_SUPPRESSED 1u
-#define SMILE_SCATTER_OVERFLOW   2u
-#define SMILE_SCATTER_COUNT      3u
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
@@ -45,8 +41,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     // Prefixo que nao fechou: o frame inteiro fica sem comando.
     //
-    // ⚠️ Isto NAO e o que suprime o draw — quem faz isso e o `DrawCounts` zerado que o prefixo
-    // publicou, porque o `ExecuteIndirect` le o count buffer e nao este shader. Este teste existe
+    // ⚠️ Isto NAO e o que suprime o draw — quem faz isso e o `DrawCounts` zerado que a finalizacao
+    // publica, porque o `ExecuteIndirect` le o count buffer e nao este shader. Este teste existe
     // por outro motivo: sob estouro os offsets estao envenenados, e u32 da a volta. O cursor 0 cairia
     // em 0xFFFFFFFF (fora, recusado), mas o cursor 1 cairia em 0xFFFFFFFF + 1 = 0 — e escreveria em
     // cima do primeiro comando do primeiro lote. O poison sozinho nao basta.
@@ -62,18 +58,36 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // daria dois registros do mesmo fato, e os dois poderiam discordar.
     if (C.Outcome != SMILE_CLASSIFY_INDIRECT) return;
 
-    // ---- a partir daqui, nenhuma recusa: a posicao ja foi reservada pela contagem ----
+    // ---- a partir daqui, a posicao ja foi reservada pela contagem ----
+    //
+    // ⚠️ Nao existe ramo que deixe de escrever SEM AVISAR. Um candidato contado e nao escrito deixa a
+    // posicao com o conteudo anterior, e o `ExecuteIndirect` o executaria. Os dois ramos de falha
+    // abaixo nao escrevem, e por isso registram FALHA — e a finalizacao, que roda depois deste passo,
+    // zera o `DrawCounts` do frame inteiro quando qualquer falha foi registrada. O resultado de uma
+    // falha e zero primitivas, e nunca um comando velho.
 
     uint Cursor;
     InterlockedAdd(BatchCursors[C.Batch], 1u, Cursor); // Cursor = valor ANTERIOR
-    const uint Position = BatchOffsets[C.Batch] + Cursor;
 
-    // Canario de ALOCACAO, e nao recusa de candidato. O `GpuScatterPreflight` exige capacidade de
-    // pelo menos um comando por candidato antes do dispatch, e cada candidato escreve no maximo um:
-    // sob preflight aprovado este ramo e inalcancavel. Se for alcancado, nao ha onde escrever — o
-    // indice esta fora do recurso — e o contador e tudo que resta.
+    // Cursor alem da contagem do lote. Pega cursor SUJO: se o lote comecou em s > 0, os N candidatos
+    // levam o cursor ate s + N - 1 >= N, e pelo menos o ultimo cai aqui — todo inicio nao zero num
+    // lote com candidatos e detectado. Pega tambem contagem divergente, que a decisao compartilhada
+    // torna impossivel e este teste verifica.
+    //
+    // Sem ele, um cursor sujo nem sempre estouraria a capacidade: poderia so deslocar comandos para
+    // dentro do intervalo do lote seguinte, sem contador nenhum disparar.
+    if (Cursor >= BatchCounts[C.Batch]) {
+        InterlockedAdd(Counters[SMILE_SCATTER_FAULT_CURSOR], 1u);
+        return;
+    }
+
+    // Posicao fora do recurso. Com o cursor dentro da contagem, a posicao fica abaixo do total do
+    // prefixo, e o `GpuScatterPreflight` garante total <= capacidade: inalcancavel sob preflight. Fica
+    // porque um indice fora do recurso nao tem onde ser escrito — e, pelo mesmo motivo do ramo acima,
+    // vira falha que invalida o frame, e nao um salto silencioso.
+    const uint Position = BatchOffsets[C.Batch] + Cursor;
     if (Position >= ScatterParams2.y) {
-        InterlockedAdd(Counters[SMILE_SCATTER_OVERFLOW], 1u);
+        InterlockedAdd(Counters[SMILE_SCATTER_FAULT_CAPACITY], 1u);
         return;
     }
 

@@ -17,20 +17,10 @@
 // e e proposital: os dois passes leem as mesmas tabelas, e deixar cada um escolher o seu
 // registrador seria abrir a porta para lerem tabelas diferentes.
 
+#include "GpuBatchCounters.hlsli"
 #include "../Scene/GpuIndirectDraw.hlsli"
 #include "../Scene/GpuSceneTables.hlsli"
 
-// Desfechos. Indices fixos, espelhando EGpuClassifyOutcome; o teste WARP le os nove de volta.
-#define SMILE_CLASSIFY_INDIRECT            0u
-#define SMILE_CLASSIFY_NO_SLOT             1u
-#define SMILE_CLASSIFY_INVALID_SLOT        2u
-#define SMILE_CLASSIFY_INVALID_MATERIAL_ID 3u
-#define SMILE_CLASSIFY_INVALID_MESH_ID     4u
-#define SMILE_CLASSIFY_INVALID_POOL_ID     5u
-#define SMILE_CLASSIFY_NOT_ELIGIBLE        6u
-#define SMILE_CLASSIFY_MESH_UNUSABLE       7u
-#define SMILE_CLASSIFY_OVERFLOW            8u
-#define SMILE_CLASSIFY_OUTCOME_COUNT       9u
 
 // Posicao sem candidato. TEM de valer o mesmo que o SMILE_EXPAND_NO_SLOT do produtor.
 #define SMILE_CLASSIFY_NO_SLOT_ID 0xFFFFFFFFu

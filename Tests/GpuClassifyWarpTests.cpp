@@ -204,8 +204,7 @@ namespace {
             const u32 Contagens[6]{ 2u, 0u, 5u, 1u, 0u, 3u };
             const u32 Esperado[6]{ 0u, 2u, 2u, 7u, 8u, 8u };
             std::vector<u32> Offsets; u32 Estourou = 0u;
-            std::vector<u32> Draw;
-            const u32 Total = PrefixBatchCounts(Contagens, Offsets, Draw, Estourou);
+            const u32 Total = PrefixBatchCounts(Contagens, Offsets, Estourou);
             CheckEq(Total, 11u, "o total e a soma das contagens");
             CheckEq(Estourou, 0u, "e nao estourou");
             Check(Offsets.size() == 6, "uma entrada por lote");
@@ -218,8 +217,7 @@ namespace {
         {
             // Lista vazia: nada a prefixar, total zero, sem tocar em nada.
             std::vector<u32> Offsets{ 7u, 7u }; u32 Estourou = 1u;
-            std::vector<u32> Draw{ 9u };
-            CheckEq(PrefixBatchCounts({}, Offsets, Draw, Estourou), 0u, "lista vazia soma zero");
+            CheckEq(PrefixBatchCounts({}, Offsets, Estourou), 0u, "lista vazia soma zero");
             CheckEq(Estourou, 0u, "e nao marca estouro");
             Check(Offsets.empty(), "e a saida fica vazia, e nao com o conteudo anterior");
         }
@@ -229,8 +227,7 @@ namespace {
             // da a volta aponta comandos para dentro dos comandos de outro lote.
             const u32 Contagens[3]{ 0xFFFFFFF0u, 0x20u, 1u };
             std::vector<u32> Offsets; u32 Estourou = 0u;
-            std::vector<u32> Draw;
-            PrefixBatchCounts(Contagens, Offsets, Draw, Estourou);
+            PrefixBatchCounts(Contagens, Offsets, Estourou);
             CheckEq(Estourou, 1u, "a soma que daria a volta e marcada");
             CheckEq(Offsets[0], 0u, "a entrada ANTERIOR ao estouro continua correta");
             CheckEq(Offsets[1], kGpuBatchOffsetPoison, "a entrada que FALHOU recebe poison");
@@ -573,20 +570,22 @@ namespace {
 
         std::vector<u32> Lotes, ContClassify;
         ClassifyCandidates(In, Lotes, ContClassify);
-        std::vector<u32> Offsets, Draw; u32 Estourou = 0u;
-        const u32 Total = PrefixBatchCounts(Lotes, Offsets, Draw, Estourou);
+        std::vector<u32> Offsets; u32 Estourou = 0u;
+        const u32 Total = PrefixBatchCounts(Lotes, Offsets, Estourou);
 
         const u32 Capacidade = static_cast<u32>(S.size());
         std::vector<FGpuIndirectDrawArgs> Args(Capacidade, ComandoPoison());
         std::vector<u32> Cont;
-        ScatterIndirectArgs(In, Offsets, Estourou, Args, Cont);
+        std::vector<u32> Cursores(Lotes.size(), 0u);
+        ScatterIndirectArgs(In, Offsets, Lotes, Estourou, Cursores, Args, Cont);
 
         // A contagem e a emissao olham o mesmo fato. Um scatter que recusasse alguem que o classify
         // contou apareceria AQUI, antes de virar comando velho no ExecuteIndirect.
         CheckEq(Cont[GpuScatterCounterEmitted], ContClassify[GpuClassifyIndirect],
                 "o scatter emite exatamente o que o classify contou");
         CheckEq(Cont[GpuScatterCounterSuppressed], 0u, "sem estouro, nada suprimido");
-        CheckEq(Cont[GpuScatterCounterOverflow], 0u, "preflight aprovado: sem overflow");
+        CheckEq(Cont[GpuScatterCounterFaultCursor], 0u, "cursores zerados: nenhuma falha de cursor");
+        CheckEq(Cont[GpuScatterCounterFaultCapacity], 0u, "preflight aprovado: nenhuma falha de capacidade");
 
         // Lote 0 (pool 0): slots 0 e 2, os dois na malha 0. Lote 1 (pool 1): slot 1, malha 1.
         const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
@@ -613,7 +612,6 @@ namespace {
         // acabou de escrever. Encadear na GPU e o ponto: na producao nao ha readback entre os dois.
         std::vector<u32> Offsets;
         std::vector<u32> PrefixCont;
-        std::vector<u32> DrawCounts;
     };
 
     // A sonda. Mesma forma da do expand; o que muda sao as views e o CB.
@@ -623,9 +621,11 @@ namespace {
         wrl::ComPtr<ID3D12RootSignature> Root;
         wrl::ComPtr<ID3D12RootSignature> RootPrefixo;
         wrl::ComPtr<ID3D12RootSignature> RootScatter;
+        wrl::ComPtr<ID3D12RootSignature> RootFinalize;
         wrl::ComPtr<ID3D12PipelineState> Pipeline;
         wrl::ComPtr<ID3D12PipelineState> PipelinePrefixo;
         wrl::ComPtr<ID3D12PipelineState> PipelineScatter;
+        wrl::ComPtr<ID3D12PipelineState> PipelineFinalize;
         wrl::ComPtr<ID3D12Fence>         Fence;
         wrl::ComPtr<ID3D12InfoQueue>     Info;
         u64  FenceValue = 0;
@@ -685,7 +685,7 @@ namespace {
         }
 
         void Construir(const std::vector<u8>& _Bytecode, const std::vector<u8>& _Prefixo,
-                       const std::vector<u8>& _Scatter) {
+                       const std::vector<u8>& _Scatter, const std::vector<u8>& _Finalize) {
             wrl::ComPtr<ID3D12Debug> Debug;
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&Debug)))) Debug->EnableDebugLayer();
 
@@ -725,15 +725,15 @@ namespace {
             Hr(Device->CreateComputePipelineState(&PSO, IID_PPV_ARGS(&Pipeline)),
                "CreateComputePipelineState");
 
-            // O prefixo tem root signature PROPRIA: uma SRV e TRES UAVs (offsets, contadores e o
-            // count buffer sanitizado). Reaproveitar a do classify
+            // O prefixo tem root signature PROPRIA: uma SRV e duas UAVs (offsets e contadores).
+            // Reaproveitar a do classify
             // deixaria tres SRVs do range ligados sem descritor inicializado, que e coisa que a
             // camada de debug reclama e que nao tem nada a ver com o que esta sob teste.
             D3D12_DESCRIPTOR_RANGE RangesP[2]{};
             RangesP[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
             RangesP[0].NumDescriptors = 1;
             RangesP[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-            RangesP[1].NumDescriptors = 3; // BatchOffsets, Counters, DrawCounts
+            RangesP[1].NumDescriptors = 2; // BatchOffsets, Counters
             D3D12_ROOT_PARAMETER ParamsP[3]{};
             ParamsP[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
             for (int I = 0; I < 2; ++I) {
@@ -760,7 +760,7 @@ namespace {
             // UAVs (argumentos, cursores, contadores).
             D3D12_DESCRIPTOR_RANGE RangesS[2]{};
             RangesS[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-            RangesS[0].NumDescriptors = 6;
+            RangesS[0].NumDescriptors = 7;
             RangesS[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
             RangesS[1].NumDescriptors = 3;
             D3D12_ROOT_PARAMETER ParamsS[3]{};
@@ -785,6 +785,35 @@ namespace {
             Hr(Device->CreateComputePipelineState(&PSOS, IID_PPV_ARGS(&PipelineScatter)),
                "CreateComputePipelineState (scatter)");
 
+            // A finalizacao: cinco SRVs (contagens, contadores do prefixo, contadores do scatter,
+            // cursores, contadores do classify) e duas UAVs (count buffer, status).
+            D3D12_DESCRIPTOR_RANGE RangesF[2]{};
+            RangesF[0].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            RangesF[0].NumDescriptors = 5;
+            RangesF[1].RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+            RangesF[1].NumDescriptors = 2;
+            D3D12_ROOT_PARAMETER ParamsF[3]{};
+            ParamsF[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+            for (int I = 0; I < 2; ++I) {
+                ParamsF[I + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                ParamsF[I + 1].DescriptorTable.NumDescriptorRanges = 1;
+                ParamsF[I + 1].DescriptorTable.pDescriptorRanges   = &RangesF[I];
+            }
+            D3D12_ROOT_SIGNATURE_DESC SigDescF{};
+            SigDescF.NumParameters = 3;
+            SigDescF.pParameters   = ParamsF;
+            wrl::ComPtr<ID3DBlob> SerialF, ErroF;
+            Hr(D3D12SerializeRootSignature(&SigDescF, D3D_ROOT_SIGNATURE_VERSION_1, &SerialF,
+                                           &ErroF), "SerializeRootSignature (finalizacao)");
+            Hr(Device->CreateRootSignature(0, SerialF->GetBufferPointer(), SerialF->GetBufferSize(),
+                                           IID_PPV_ARGS(&RootFinalize)),
+               "CreateRootSignature (finalizacao)");
+            D3D12_COMPUTE_PIPELINE_STATE_DESC PSOF{};
+            PSOF.pRootSignature = RootFinalize.Get();
+            PSOF.CS             = { _Finalize.data(), _Finalize.size() };
+            Hr(Device->CreateComputePipelineState(&PSOF, IID_PPV_ARGS(&PipelineFinalize)),
+               "CreateComputePipelineState (finalizacao)");
+
             D3D12_COMMAND_QUEUE_DESC QD{};
             Hr(Device->CreateCommandQueue(&QD, IID_PPV_ARGS(&Queue)), "CreateCommandQueue");
             Hr(Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&Fence)), "CreateFence");
@@ -795,7 +824,6 @@ namespace {
 
 
         struct FPrefixo {
-            std::vector<u32> DrawCounts;
             std::vector<u32> Offsets;
             std::vector<u32> Contadores;
         };
@@ -819,8 +847,6 @@ namespace {
                                      D3D12_RESOURCE_STATE_COMMON);
             auto BufCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, ContBytes, true,
                                   D3D12_RESOURCE_STATE_COMMON);
-            auto BufDraw = Buffer(D3D12_HEAP_TYPE_DEFAULT, OffBytes, true,
-                                  D3D12_RESOURCE_STATE_COMMON);
 
             const std::vector<u32> Semente(static_cast<size_t>(OffBytes / 4), 0xA5A5A5A5u);
             const u32 ZerosCont[GpuPrefixCounterCount]{};
@@ -831,13 +857,11 @@ namespace {
                                       D3D12_RESOURCE_STATE_COPY_DEST);
             auto LeituraCont = Buffer(D3D12_HEAP_TYPE_READBACK, ContBytes, false,
                                       D3D12_RESOURCE_STATE_COPY_DEST);
-            auto LeituraDraw = Buffer(D3D12_HEAP_TYPE_READBACK, OffBytes, false,
-                                      D3D12_RESOURCE_STATE_COPY_DEST);
 
             wrl::ComPtr<ID3D12DescriptorHeap> Heap;
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 4;
+            HD.NumDescriptors = 3;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
             auto CpuAt = [&](UINT I) {
@@ -864,7 +888,6 @@ namespace {
             };
             UAV(BufOffsets.Get(), Slots, 1);
             UAV(BufCont.Get(), GpuPrefixCounterCount, 2);
-            UAV(BufDraw.Get(), Slots, 3);
 
             alignas(16) u8 CB[256]{};
             const u32 P4[4]{ Slots, 0u, 0u, 0u };
@@ -890,14 +913,9 @@ namespace {
             };
             List->CopyBufferRegion(BufOffsets.Get(), 0, BufSemente.Get(), 0, OffBytes);
             List->CopyBufferRegion(BufCont.Get(), 0, BufZeros.Get(), 0, ContBytes);
-            // O DrawCounts tambem nasce com o padrao reconhecivel: zerado, nao daria para separar
-            // "o shader escreveu zero" de "o shader nao escreveu".
-            List->CopyBufferRegion(BufDraw.Get(), 0, BufSemente.Get(), 0, OffBytes);
             Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Transicao(BufDraw.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
@@ -917,11 +935,8 @@ namespace {
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Transicao(BufDraw.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
             List->CopyResource(LeituraOff.Get(), BufOffsets.Get());
             List->CopyResource(LeituraCont.Get(), BufCont.Get());
-            List->CopyResource(LeituraDraw.Get(), BufDraw.Get());
             Hr(List->Close(), "Close (prefixo)");
 
             ID3D12CommandList* Listas[] = { List.Get() };
@@ -957,14 +972,6 @@ namespace {
                 std::memcpy(Saida.Contadores.data(), P, ContBytes);
                 LeituraCont->Unmap(0, nullptr);
             }
-            Saida.DrawCounts.resize(Slots);
-            if (Slots > 0) {
-                const u32* P = nullptr;
-                Hr(LeituraDraw->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
-                   "Map draw counts isolados");
-                std::memcpy(Saida.DrawCounts.data(), P, Slots * sizeof(u32));
-                LeituraDraw->Unmap(0, nullptr);
-            }
             return Saida;
         }
 
@@ -980,6 +987,7 @@ namespace {
         // uma posicao que o scatter deixou de escrever aparece como poison, e uma escrita fora do
         // lote suja uma posicao que devia continuar poison.
         FScatter ExecutarScatter(const FGpuClassifyInput& _In, std::span<const u32> _Offsets,
+                                 std::span<const u32> _Counts, std::span<const u32> _Cursores,
                                  u32 _PrefixOverflow, u32 _ArgsCapacity) {
             auto Pisa = [](u64 _Bytes, u64 _Stride) { return std::max<u64>(_Stride, _Bytes); };
             auto BufSlots = Upload(_In.Slots.data(), Pisa(_In.Slots.size() * 4u, 4u));
@@ -995,6 +1003,7 @@ namespace {
             auto BufOff   = Upload(_Offsets.data(), Pisa(_Offsets.size() * 4u, 4u));
             const u32 PrefCont[GpuPrefixCounterCount]{ 0u, _PrefixOverflow };
             auto BufPref  = Upload(PrefCont, sizeof(PrefCont));
+            auto BufCounts = Upload(_Counts.data(), Pisa(_Counts.size() * 4u, 4u));
 
             // Pela porta de dimensionamento, e nunca `_ArgsCapacity * 28` em u32.
             const u64 ArgsBytes = GpuScatterArgsBytes(_ArgsCapacity);
@@ -1010,9 +1019,14 @@ namespace {
             const u32 NCmd = static_cast<u32>(ArgsBytes / sizeof(FGpuIndirectDrawArgs));
             const std::vector<FGpuIndirectDrawArgs> Semente(NCmd, ComandoPoison());
             auto BufSemArgs = Upload(Semente.data(), ArgsBytes);
-            const std::vector<u32> ZerosCur(static_cast<size_t>(CurBytes / 4), 0u);
+            std::vector<u32> CursoresSeed(static_cast<size_t>(CurBytes / 4), 0u);
+            for (size_t K = 0; K < _Cursores.size() && K < CursoresSeed.size(); ++K)
+                CursoresSeed[K] = _Cursores[K];
             const u32 ZerosCont[GpuScatterCounterCount]{};
-            auto BufZerosCur  = Upload(ZerosCur.data(), CurBytes);
+            // Os cursores INICIAIS vem do teste, e nao de zeros: e assim que se reproduz o cursor sujo
+            // de uma execucao anterior sem reset, que a falha de cursor e a finalizacao existem para
+            // pegar.
+            auto BufSemCur = Upload(CursoresSeed.data(), CurBytes);
             auto BufZerosCont = Upload(ZerosCont, ContBytes);
 
             auto LeituraArgs = Buffer(D3D12_HEAP_TYPE_READBACK, ArgsBytes, false,
@@ -1023,7 +1037,7 @@ namespace {
             wrl::ComPtr<ID3D12DescriptorHeap> Heap;
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 9;
+            HD.NumDescriptors = 10;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
             auto CpuAt = [&](UINT I) {
@@ -1054,9 +1068,10 @@ namespace {
             SRV(BufMesh.Get(), _In.Meshes.size(), sizeof(FGpuMeshRecord), 3);
             SRV(BufOff.Get(), _Offsets.size(), sizeof(u32), 4);
             SRV(BufPref.Get(), GpuPrefixCounterCount, sizeof(u32), 5);
-            UAV(BufArgs.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), 6);
-            UAV(BufCur.Get(), static_cast<u32>(CurBytes / 4), sizeof(u32), 7);
-            UAV(BufCont.Get(), GpuScatterCounterCount, sizeof(u32), 8);
+            SRV(BufCounts.Get(), _Counts.size(), sizeof(u32), 6);
+            UAV(BufArgs.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), 7);
+            UAV(BufCur.Get(), static_cast<u32>(CurBytes / 4), sizeof(u32), 8);
+            UAV(BufCont.Get(), GpuScatterCounterCount, sizeof(u32), 9);
 
             alignas(16) u8 CB[256]{};
             const u32 P8[8]{ static_cast<u32>(_In.Slots.size()), static_cast<u32>(_In.Meta.size()),
@@ -1083,7 +1098,7 @@ namespace {
                 List->ResourceBarrier(1, &Bar);
             };
             List->CopyBufferRegion(BufArgs.Get(), 0, BufSemArgs.Get(), 0, ArgsBytes);
-            List->CopyBufferRegion(BufCur.Get(), 0, BufZerosCur.Get(), 0, CurBytes);
+            List->CopyBufferRegion(BufCur.Get(), 0, BufSemCur.Get(), 0, CurBytes);
             List->CopyBufferRegion(BufCont.Get(), 0, BufZerosCont.Get(), 0, ContBytes);
             for (ID3D12Resource* R : { BufArgs.Get(), BufCur.Get(), BufCont.Get() })
                 Transicao(R, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1098,7 +1113,7 @@ namespace {
                 return H;
             };
             List->SetComputeRootDescriptorTable(1, GpuAt(0));
-            List->SetComputeRootDescriptorTable(2, GpuAt(6));
+            List->SetComputeRootDescriptorTable(2, GpuAt(7));
             const u32 Total = static_cast<u32>(_In.Slots.size());
             if (Total > 0) List->Dispatch((Total + 63u) / 64u, 1, 1);
 
@@ -1190,21 +1205,17 @@ namespace {
                                       D3D12_RESOURCE_STATE_COMMON);
             auto BufPrefCont = Buffer(D3D12_HEAP_TYPE_DEFAULT, PrefContBytes, true,
                                       D3D12_RESOURCE_STATE_COMMON);
-            auto BufDrawCounts = Buffer(D3D12_HEAP_TYPE_DEFAULT, LoteBytes, true,
-                                        D3D12_RESOURCE_STATE_COMMON);
             const u32 ZerosPref[GpuPrefixCounterCount]{};
             auto BufZerosPref = Upload(ZerosPref, PrefContBytes);
             auto LeituraOffsets  = Buffer(D3D12_HEAP_TYPE_READBACK, LoteBytes, false,
                                           D3D12_RESOURCE_STATE_COPY_DEST);
             auto LeituraPrefCont = Buffer(D3D12_HEAP_TYPE_READBACK, PrefContBytes, false,
                                           D3D12_RESOURCE_STATE_COPY_DEST);
-            auto LeituraDrawCounts = Buffer(D3D12_HEAP_TYPE_READBACK, LoteBytes, false,
-                                            D3D12_RESOURCE_STATE_COPY_DEST);
 
             wrl::ComPtr<ID3D12DescriptorHeap> Heap;
             D3D12_DESCRIPTOR_HEAP_DESC HD{};
             HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            HD.NumDescriptors = 10;
+            HD.NumDescriptors = 9;
             HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             Hr(Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
 
@@ -1240,7 +1251,6 @@ namespace {
             SRV(BufLotes.Get(), _In.BatchCapacity, sizeof(u32), 6);
             UAV(BufOffsets.Get(), _In.BatchCapacity, 7);
             UAV(BufPrefCont.Get(), GpuPrefixCounterCount, 8);
-            UAV(BufDrawCounts.Get(), _In.BatchCapacity, 9);
 
             alignas(16) u8 CB[256]{};
             const u32 P8[8]{ static_cast<u32>(_In.Slots.size()),
@@ -1272,7 +1282,6 @@ namespace {
             List->CopyBufferRegion(BufCont.Get(), 0, BufZerosCont.Get(), 0, ContBytes);
             List->CopyBufferRegion(BufOffsets.Get(), 0, BufZerosLote.Get(), 0, LoteBytes);
             List->CopyBufferRegion(BufPrefCont.Get(), 0, BufZerosPref.Get(), 0, PrefContBytes);
-            List->CopyBufferRegion(BufDrawCounts.Get(), 0, BufZerosLote.Get(), 0, LoteBytes);
             Transicao(BufLotes.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transicao(BufCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1280,8 +1289,6 @@ namespace {
             Transicao(BufOffsets.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             Transicao(BufPrefCont.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            Transicao(BufDrawCounts.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
@@ -1332,11 +1339,8 @@ namespace {
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             Transicao(BufPrefCont.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-            Transicao(BufDrawCounts.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
             List->CopyResource(LeituraOffsets.Get(), BufOffsets.Get());
             List->CopyResource(LeituraPrefCont.Get(), BufPrefCont.Get());
-            List->CopyResource(LeituraDrawCounts.Get(), BufDrawCounts.Get());
 
             // `BufLotes` ja saiu de UAV na transicao para o prefixo: parte de
             // NON_PIXEL_SHADER_RESOURCE. Um `StateBefore` errado aqui e recusado pela camada de
@@ -1400,16 +1404,353 @@ namespace {
                 std::memcpy(Saida.PrefixCont.data(), P, PrefContBytes);
                 LeituraPrefCont->Unmap(0, nullptr);
             }
-            Saida.DrawCounts.resize(_In.BatchCapacity);
-            if (_In.BatchCapacity > 0) {
-                const u32* P = nullptr;
-                Hr(LeituraDrawCounts->Map(0, nullptr,
-                                          reinterpret_cast<void**>(const_cast<u32**>(&P))),
-                   "Map draw counts");
-                std::memcpy(Saida.DrawCounts.data(), P, _In.BatchCapacity * sizeof(u32));
-                LeituraDrawCounts->Unmap(0, nullptr);
-            }
             return Saida;
+        }
+    };
+}
+
+namespace {
+    // A CADEIA inteira, sobre recursos PERSISTENTES:
+    //
+    //     reset -> classify -> prefixo -> scatter -> finalizacao
+    //
+    // Os executores de cima criam buffers novos a cada chamada, e por isso nao enxergam o defeito que
+    // esta estrutura existe para pegar: um acumulador que atravessa de uma execucao para a seguinte.
+    // Aqui os recursos sao criados UMA vez e `Rodar` pode ser chamado de novo sobre eles, como o
+    // frame faria.
+    //
+    // O estado de cada recurso e rastreado por uma tabela, e toda barreira parte do estado real.
+    // Com a camada de debug reprovando, um `StateBefore` errado entre execucoes vira falha de teste
+    // em vez de passar despercebido.
+    struct FCadeia {
+        FSonda&                  S;
+        const FGpuClassifyInput& In;
+        u32                      Slots      = 0; // slots de lote
+        u32                      Capacidade = 0; // comandos em IndirectArgs
+
+        wrl::ComPtr<ID3D12Resource> BufSlots, BufMeta, BufMats, BufMesh, BufZeros;
+        wrl::ComPtr<ID3D12Resource> Counts, ClassCont, Offsets, PrefCont;
+        wrl::ComPtr<ID3D12Resource> Args, Cursors, ScatCont, Draw, Status;
+        wrl::ComPtr<ID3D12DescriptorHeap> Heap;
+        std::vector<std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>> Estados;
+
+        struct FSaida {
+            std::vector<u32>                  Counts, Cursors, ScatCont, PrefCont, Draw, ClassCont;
+            std::vector<FGpuIndirectDrawArgs> Args;
+            u32                               Status = 0;
+            u32                               Reason = 0;
+        };
+
+        FCadeia(FSonda& _S, const FGpuClassifyInput& _In, u32 _Capacidade)
+            : S(_S), In(_In), Slots(_In.BatchCapacity), Capacidade(_Capacidade) {}
+
+        D3D12_RESOURCE_STATES& EstadoDe(ID3D12Resource* _R) {
+            for (auto& E : Estados) if (E.first == _R) return E.second;
+            Estados.push_back({ _R, D3D12_RESOURCE_STATE_COMMON });
+            return Estados.back().second;
+        }
+
+        void Criar() {
+            auto Pisa = [](u64 _B, u64 _S) { return std::max<u64>(_S, _B); };
+            BufSlots = S.Upload(In.Slots.data(), Pisa(In.Slots.size() * 4u, 4u));
+            BufMeta  = S.Upload(In.Meta.data(), Pisa(In.Meta.size() * sizeof(FGpuSceneInstanceMeta),
+                                                     sizeof(FGpuSceneInstanceMeta)));
+            BufMats  = S.Upload(In.Materials.data(),
+                                Pisa(In.Materials.size() * sizeof(FGpuMaterialRecord),
+                                     sizeof(FGpuMaterialRecord)));
+            BufMesh  = S.Upload(In.Meshes.data(), Pisa(In.Meshes.size() * sizeof(FGpuMeshRecord),
+                                                       sizeof(FGpuMeshRecord)));
+
+            const u64 LoteB = Pisa(Slots * 4u, 4u);
+            auto Uav = [&](u64 _Bytes) {
+                return S.Buffer(D3D12_HEAP_TYPE_DEFAULT, _Bytes, true, D3D12_RESOURCE_STATE_COMMON);
+            };
+            Counts    = Uav(LoteB);
+            ClassCont = Uav(GpuClassifyOutcomeCount * 4u);
+            Offsets   = Uav(LoteB);
+            PrefCont  = Uav(GpuPrefixCounterCount * 4u);
+            Args      = Uav(GpuScatterArgsBytes(Capacidade));
+            Cursors   = Uav(LoteB);
+            ScatCont  = Uav(GpuScatterCounterCount * 4u);
+            Draw      = Uav(LoteB);
+            Status    = Uav(8u);
+
+            // Zeros do tamanho do maior acumulador. O reset copia daqui.
+            const u64 MaiorB = std::max<u64>(LoteB, GpuClassifyOutcomeCount * 4u);
+            const std::vector<u8> Z(static_cast<size_t>(MaiorB), 0u);
+            BufZeros = S.Upload(Z.data(), MaiorB);
+
+            // `IndirectArgs` recebe o POISON uma unica vez, na criacao. Nas execucoes seguintes ele NAO
+            // e ressemeado: se uma execucao deixasse de escrever uma posicao, o que apareceria ali seria
+            // o comando da execucao anterior — exatamente o "comando velho" que a finalizacao existe
+            // para nunca deixar ser desenhado.
+            const u32 NCmd = static_cast<u32>(GpuScatterArgsBytes(Capacidade) / 28u);
+            const std::vector<FGpuIndirectDrawArgs> Sem(NCmd, ComandoPoison());
+            auto BufSem = S.Upload(Sem.data(), GpuScatterArgsBytes(Capacidade));
+            Executar([&](ID3D12GraphicsCommandList* L) {
+                Ir(L, Args.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+                L->CopyBufferRegion(Args.Get(), 0, BufSem.Get(), 0, GpuScatterArgsBytes(Capacidade));
+            }, "semente");
+
+            CriarDescritores();
+        }
+
+        // Transicao EXPLICITA a partir do estado rastreado. Nada aqui depende de promocao implicita:
+        // estado implicito decai no fim da command list, e um rastreador que o seguisse erraria o
+        // `StateBefore` da execucao seguinte.
+        void Ir(ID3D12GraphicsCommandList* _L, ID3D12Resource* _R, D3D12_RESOURCE_STATES _Novo) {
+            D3D12_RESOURCE_STATES& Atual = EstadoDe(_R);
+            if (Atual == _Novo) return;
+            D3D12_RESOURCE_BARRIER B{};
+            B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            B.Transition.pResource   = _R;
+            B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            B.Transition.StateBefore = Atual;
+            B.Transition.StateAfter  = _Novo;
+            _L->ResourceBarrier(1, &B);
+            Atual = _Novo;
+        }
+
+        // Grava, submete, espera a fence e drena a camada de debug. Uma command list por chamada.
+        template <typename TGravar>
+        void Executar(TGravar&& _Gravar, const char* _Quando) {
+            wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
+            wrl::ComPtr<ID3D12GraphicsCommandList> L;
+            Hr(S.Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                IID_PPV_ARGS(&Alloc)), "CreateCommandAllocator");
+            Hr(S.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Alloc.Get(), nullptr,
+                                           IID_PPV_ARGS(&L)), "CreateCommandList (cadeia)");
+            _Gravar(L.Get());
+            Hr(L->Close(), "Close (cadeia)");
+            ID3D12CommandList* Listas[] = { L.Get() };
+            S.Queue->ExecuteCommandLists(1, Listas);
+            ++S.FenceValue;
+            Hr(S.Queue->Signal(S.Fence.Get(), S.FenceValue), "Signal (cadeia)");
+            if (S.Fence->GetCompletedValue() < S.FenceValue) {
+                struct FEvent {
+                    HANDLE Value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                    ~FEvent() { if (Value) CloseHandle(Value); }
+                } Ev;
+                if (!Ev.Value) Hr(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
+                Hr(S.Fence->SetEventOnCompletion(S.FenceValue, Ev.Value), "SetEventOnCompletion");
+                if (WaitForSingleObject(Ev.Value, 30000) != WAIT_OBJECT_0)
+                    throw std::runtime_error("cadeia nao terminou");
+            }
+            S.Drenar(_Quando);
+        }
+
+        // Tabelas de descritores, uma por passo, na ordem das root signatures de cada um.
+        //   classify: SRV 0-3 (slots, meta, mats, mesh)          UAV 4-5 (counts, classcont)
+        //   prefixo:  SRV 6   (counts)                           UAV 7-8 (offsets, prefcont)
+        //   scatter:  SRV 9-15 (slots, meta, mats, mesh, offsets, prefcont, counts)
+        //                                                        UAV 16-18 (args, cursors, scatcont)
+        //   final:    SRV 19-23 (counts, prefcont, scatcont, cursors, classcont) UAV 24-25 (draw, status)
+        static constexpr UINT kClassSrv = 0, kClassUav = 4, kPrefSrv = 6, kPrefUav = 7;
+        static constexpr UINT kScatSrv = 9, kScatUav = 16, kFinSrv = 19, kFinUav = 24;
+
+        void CriarDescritores() {
+            D3D12_DESCRIPTOR_HEAP_DESC HD{};
+            HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            HD.NumDescriptors = 26;
+            HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            Hr(S.Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap");
+            auto At = [&](UINT I) {
+                auto H = Heap->GetCPUDescriptorHandleForHeapStart();
+                H.ptr += static_cast<SIZE_T>(I) * S.Step;
+                return H;
+            };
+            auto Srv = [&](ID3D12Resource* R, u64 N, u32 Stride, UINT I) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC D{};
+                D.Format                     = DXGI_FORMAT_UNKNOWN;
+                D.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                D.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+                D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(N));
+                D.Buffer.StructureByteStride = Stride;
+                S.Device->CreateShaderResourceView(R, &D, At(I));
+            };
+            auto Uav = [&](ID3D12Resource* R, u64 N, u32 Stride, UINT I) {
+                D3D12_UNORDERED_ACCESS_VIEW_DESC D{};
+                D.Format                     = DXGI_FORMAT_UNKNOWN;
+                D.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+                D.Buffer.NumElements         = std::max<u32>(1u, static_cast<u32>(N));
+                D.Buffer.StructureByteStride = Stride;
+                S.Device->CreateUnorderedAccessView(R, nullptr, &D, At(I));
+            };
+            const u32 NCmd = static_cast<u32>(GpuScatterArgsBytes(Capacidade) / 28u);
+            const u32 MetaStride = sizeof(FGpuSceneInstanceMeta);
+            const u32 MatStride  = sizeof(FGpuMaterialRecord);
+            const u32 MeshStride = sizeof(FGpuMeshRecord);
+            // classify
+            Srv(BufSlots.Get(), In.Slots.size(), 4u, kClassSrv + 0);
+            Srv(BufMeta.Get(), In.Meta.size(), MetaStride, kClassSrv + 1);
+            Srv(BufMats.Get(), In.Materials.size(), MatStride, kClassSrv + 2);
+            Srv(BufMesh.Get(), In.Meshes.size(), MeshStride, kClassSrv + 3);
+            Uav(Counts.Get(), Slots, 4u, kClassUav + 0);
+            Uav(ClassCont.Get(), GpuClassifyOutcomeCount, 4u, kClassUav + 1);
+            // prefixo
+            Srv(Counts.Get(), Slots, 4u, kPrefSrv);
+            Uav(Offsets.Get(), Slots, 4u, kPrefUav + 0);
+            Uav(PrefCont.Get(), GpuPrefixCounterCount, 4u, kPrefUav + 1);
+            // scatter
+            Srv(BufSlots.Get(), In.Slots.size(), 4u, kScatSrv + 0);
+            Srv(BufMeta.Get(), In.Meta.size(), MetaStride, kScatSrv + 1);
+            Srv(BufMats.Get(), In.Materials.size(), MatStride, kScatSrv + 2);
+            Srv(BufMesh.Get(), In.Meshes.size(), MeshStride, kScatSrv + 3);
+            Srv(Offsets.Get(), Slots, 4u, kScatSrv + 4);
+            Srv(PrefCont.Get(), GpuPrefixCounterCount, 4u, kScatSrv + 5);
+            Srv(Counts.Get(), Slots, 4u, kScatSrv + 6);
+            Uav(Args.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), kScatUav + 0);
+            Uav(Cursors.Get(), Slots, 4u, kScatUav + 1);
+            Uav(ScatCont.Get(), GpuScatterCounterCount, 4u, kScatUav + 2);
+            // finalizacao
+            Srv(Counts.Get(), Slots, 4u, kFinSrv + 0);
+            Srv(PrefCont.Get(), GpuPrefixCounterCount, 4u, kFinSrv + 1);
+            Srv(ScatCont.Get(), GpuScatterCounterCount, 4u, kFinSrv + 2);
+            Srv(Cursors.Get(), Slots, 4u, kFinSrv + 3);
+            Srv(ClassCont.Get(), GpuClassifyOutcomeCount, 4u, kFinSrv + 4);
+            Uav(Draw.Get(), Slots, 4u, kFinUav + 0);
+            Uav(Status.Get(), 2u, 4u, kFinUav + 1);
+        }
+
+        // Quais acumuladores o reset zera. `kResetTudo` e o frame normal; as mascaras parciais existem
+        // para o teste provar cada elo da finalizacao pela SUA causa — um reset esquecido de cada vez,
+        // com o motivo exato que ele tem de produzir.
+        static constexpr u32 kResetCounts = 1u, kResetClassCont = 2u, kResetCursors = 4u,
+                             kResetScatCont = 8u, kResetTudo = 15u;
+
+        // Uma execucao da cadeia.
+        FSaida Rodar(u32 _Reset) {
+            const u32 Total = static_cast<u32>(In.Slots.size());
+            const u32 NCmd  = static_cast<u32>(GpuScatterArgsBytes(Capacidade) / 28u);
+            auto Cb = [&](std::initializer_list<u32> _V) {
+                alignas(16) u8 B[256]{};
+                u32 K = 0;
+                for (u32 X : _V) { std::memcpy(B + 4u * K, &X, 4u); ++K; }
+                return S.Upload(B, sizeof(B));
+            };
+            auto CbClass = Cb({ Total, static_cast<u32>(In.Meta.size()),
+                                static_cast<u32>(In.Materials.size()),
+                                static_cast<u32>(In.Meshes.size()), In.PoolCount, Slots });
+            auto CbPref  = Cb({ Slots });
+            auto CbScat  = Cb({ Total, static_cast<u32>(In.Meta.size()),
+                                static_cast<u32>(In.Materials.size()),
+                                static_cast<u32>(In.Meshes.size()), In.PoolCount, NCmd });
+            auto CbFin   = Cb({ Slots, Total });
+
+            const u64 LoteB = std::max<u64>(4u, Slots * 4u);
+            auto Leitura = [&](u64 _B) {
+                return S.Buffer(D3D12_HEAP_TYPE_READBACK, _B, false, D3D12_RESOURCE_STATE_COPY_DEST);
+            };
+            auto LCounts = Leitura(LoteB), LCursors = Leitura(LoteB), LDraw = Leitura(LoteB);
+            auto LScat   = Leitura(GpuScatterCounterCount * 4u);
+            auto LPref   = Leitura(GpuPrefixCounterCount * 4u);
+            auto LStatus = Leitura(8u);
+            auto LClass  = Leitura(GpuClassifyOutcomeCount * 4u);
+            auto LArgs   = Leitura(GpuScatterArgsBytes(Capacidade));
+
+            auto GpuAt = [&](UINT I) {
+                auto H = Heap->GetGPUDescriptorHandleForHeapStart();
+                H.ptr += static_cast<UINT64>(I) * S.Step;
+                return H;
+            };
+
+            Executar([&](ID3D12GraphicsCommandList* L) {
+                const auto SRV_ = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                const auto UAV_ = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
+                L->SetDescriptorHeaps(1, Heaps);
+
+                // 0. RESET — os acumuladores que a mascara pede. Com `kResetTudo`, os quatro.
+                const std::pair<u32, ID3D12Resource*> Acumuladores[] = {
+                    { kResetCounts, Counts.Get() },     { kResetClassCont, ClassCont.Get() },
+                    { kResetCursors, Cursors.Get() },   { kResetScatCont, ScatCont.Get() },
+                };
+                for (const auto& A : Acumuladores) {
+                    if ((_Reset & A.first) == 0u) continue;
+                    Ir(L, A.second, D3D12_RESOURCE_STATE_COPY_DEST);
+                    L->CopyBufferRegion(A.second, 0, BufZeros.Get(), 0, A.second->GetDesc().Width);
+                }
+
+                // 1. classify
+                Ir(L, Counts.Get(), UAV_); Ir(L, ClassCont.Get(), UAV_);
+                L->SetPipelineState(S.Pipeline.Get());
+                L->SetComputeRootSignature(S.Root.Get());
+                L->SetComputeRootConstantBufferView(0, CbClass->GetGPUVirtualAddress());
+                L->SetComputeRootDescriptorTable(1, GpuAt(kClassSrv));
+                L->SetComputeRootDescriptorTable(2, GpuAt(kClassUav));
+                if (Total > 0) L->Dispatch((Total + 63u) / 64u, 1, 1);
+
+                // 2. prefixo
+                Ir(L, Counts.Get(), SRV_); Ir(L, Offsets.Get(), UAV_); Ir(L, PrefCont.Get(), UAV_);
+                L->SetPipelineState(S.PipelinePrefixo.Get());
+                L->SetComputeRootSignature(S.RootPrefixo.Get());
+                L->SetComputeRootConstantBufferView(0, CbPref->GetGPUVirtualAddress());
+                L->SetComputeRootDescriptorTable(1, GpuAt(kPrefSrv));
+                L->SetComputeRootDescriptorTable(2, GpuAt(kPrefUav));
+                L->Dispatch(1, 1, 1);
+
+                // 3. scatter
+                Ir(L, Offsets.Get(), SRV_); Ir(L, PrefCont.Get(), SRV_);
+                Ir(L, Args.Get(), UAV_); Ir(L, Cursors.Get(), UAV_); Ir(L, ScatCont.Get(), UAV_);
+                L->SetPipelineState(S.PipelineScatter.Get());
+                L->SetComputeRootSignature(S.RootScatter.Get());
+                L->SetComputeRootConstantBufferView(0, CbScat->GetGPUVirtualAddress());
+                L->SetComputeRootDescriptorTable(1, GpuAt(kScatSrv));
+                L->SetComputeRootDescriptorTable(2, GpuAt(kScatUav));
+                if (Total > 0) L->Dispatch((Total + 63u) / 64u, 1, 1);
+
+                // 4. finalizacao
+                Ir(L, ScatCont.Get(), SRV_); Ir(L, Cursors.Get(), SRV_); Ir(L, ClassCont.Get(), SRV_);
+                Ir(L, Draw.Get(), UAV_); Ir(L, Status.Get(), UAV_);
+                L->SetPipelineState(S.PipelineFinalize.Get());
+                L->SetComputeRootSignature(S.RootFinalize.Get());
+                L->SetComputeRootConstantBufferView(0, CbFin->GetGPUVirtualAddress());
+                L->SetComputeRootDescriptorTable(1, GpuAt(kFinSrv));
+                L->SetComputeRootDescriptorTable(2, GpuAt(kFinUav));
+                L->Dispatch(1, 1, 1);
+
+                // 5. leitura
+                const auto CS = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                for (ID3D12Resource* R : { Counts.Get(), Cursors.Get(), Draw.Get(), ScatCont.Get(),
+                                           ClassCont.Get(),
+                                           PrefCont.Get(), Status.Get(), Args.Get() })
+                    Ir(L, R, CS);
+                L->CopyResource(LCounts.Get(), Counts.Get());
+                L->CopyResource(LCursors.Get(), Cursors.Get());
+                L->CopyResource(LDraw.Get(), Draw.Get());
+                L->CopyResource(LScat.Get(), ScatCont.Get());
+                L->CopyResource(LPref.Get(), PrefCont.Get());
+                L->CopyResource(LStatus.Get(), Status.Get());
+                L->CopyResource(LClass.Get(), ClassCont.Get());
+                L->CopyResource(LArgs.Get(), Args.Get());
+            }, _Reset == kResetTudo ? "cadeia" : "cadeia com reset parcial");
+
+            auto Ler = [](ID3D12Resource* _R, u64 _Bytes) {
+                std::vector<u32> V(static_cast<size_t>(_Bytes / 4), 0u);
+                const u32* P = nullptr;
+                Hr(_R->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))), "Map");
+                std::memcpy(V.data(), P, static_cast<size_t>(_Bytes));
+                _R->Unmap(0, nullptr);
+                return V;
+            };
+            FSaida O;
+            O.Counts   = Ler(LCounts.Get(), Slots * 4u);
+            O.Cursors  = Ler(LCursors.Get(), Slots * 4u);
+            O.Draw     = Ler(LDraw.Get(), Slots * 4u);
+            O.ScatCont = Ler(LScat.Get(), GpuScatterCounterCount * 4u);
+            O.PrefCont = Ler(LPref.Get(), GpuPrefixCounterCount * 4u);
+            const std::vector<u32> St = Ler(LStatus.Get(), 8u);
+            O.Status    = St[0];
+            O.Reason    = St[1];
+            O.ClassCont = Ler(LClass.Get(), GpuClassifyOutcomeCount * 4u);
+            {
+                O.Args.resize(NCmd);
+                const u8* P = nullptr;
+                Hr(LArgs->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u8**>(&P))), "Map args");
+                std::memcpy(O.Args.data(), P, static_cast<size_t>(GpuScatterArgsBytes(Capacidade)));
+                LArgs->Unmap(0, nullptr);
+            }
+            return O;
         }
     };
 }
@@ -1445,9 +1786,15 @@ int main() try {
         std::cerr << "  (esperado em " << SMILE_SCATTER_INDIRECT_ARGS_CSO << ")\n";
         return 1;
     }
+    const std::vector<u8> BytecodeFinalize = LerArquivo(SMILE_FINALIZE_DRAW_COUNTS_CSO);
+    Check(!BytecodeFinalize.empty(), "a sonda da finalizacao foi encontrada");
+    if (BytecodeFinalize.empty()) {
+        std::cerr << "  (esperado em " << SMILE_FINALIZE_DRAW_COUNTS_CSO << ")\n";
+        return 1;
+    }
 
     FSonda S;
-    S.Construir(Bytecode, BytecodePrefixo, BytecodeScatter);
+    S.Construir(Bytecode, BytecodePrefixo, BytecodeScatter, BytecodeFinalize);
 
     const auto Mats = Materiais(); const auto Meshs = Malhas();
     const auto Metas = Meta();     const auto Slot = Slots();
@@ -1508,18 +1855,19 @@ int main() try {
     // (escrita fora do lote: comando onde devia continuar poison). A comparacao dentro do lote e por
     // MULTICONJUNTO, porque a ordem la depende de qual thread chega primeiro ao cursor.
     {
-        std::vector<u32> OffCpu, DrawCpu; u32 EstCpu = 0u;
-        const u32 TotalCmd = PrefixBatchCounts(LotesCpu, OffCpu, DrawCpu, EstCpu);
+        std::vector<u32> OffCpu; u32 EstCpu = 0u;
+        const u32 TotalCmd = PrefixBatchCounts(LotesCpu, OffCpu, EstCpu);
         const u32 Capacidade = static_cast<u32>(Slot.size());
         CheckEq(GpuScatterPreflight(Capacidade, Capacidade), GpuScatterPreflightOk,
                 "a capacidade do teste passa pelo preflight do scatter");
 
-        const FSonda::FScatter G = S.ExecutarScatter(In, OffCpu, 0u, Capacidade);
+        const FSonda::FScatter G = S.ExecutarScatter(In, OffCpu, LotesCpu, {}, 0u, Capacidade);
 
         CheckEq(G.Contadores[GpuScatterCounterEmitted], Gpu.Contadores[GpuClassifyIndirect],
                 "scatter na GPU emite exatamente o que o classify contou");
         CheckEq(G.Contadores[GpuScatterCounterSuppressed], 0u, "sem estouro, nada suprimido");
-        CheckEq(G.Contadores[GpuScatterCounterOverflow], 0u, "preflight aprovado: sem overflow");
+        CheckEq(G.Contadores[GpuScatterCounterFaultCursor], 0u, "cursores zerados: sem falha de cursor");
+        CheckEq(G.Contadores[GpuScatterCounterFaultCapacity], 0u, "preflight aprovado: sem falha de capacidade");
 
         // Oraculo escrito A MAO: lote 0 = slots 0 e 2 na malha 0; lote 1 = slot 1 na malha 1.
         const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
@@ -1544,7 +1892,8 @@ int main() try {
         // a MESMA semente, entao o que ficou intocado tambem tem de coincidir.
         std::vector<FGpuIndirectDrawArgs> ArgsCpu(Capacidade, ComandoPoison());
         std::vector<u32> ContScatterCpu;
-        ScatterIndirectArgs(In, OffCpu, 0u, ArgsCpu, ContScatterCpu);
+        std::vector<u32> CursoresCpu(LotesCpu.size(), 0u);
+        ScatterIndirectArgs(In, OffCpu, LotesCpu, 0u, CursoresCpu, ArgsCpu, ContScatterCpu);
         for (u32 B = 0; B < In.BatchCapacity; ++B) {
             if (LotesCpu[B] == 0u) continue;
             const auto A = Ordenados(&G.Args[OffCpu[B]], LotesCpu[B]);
@@ -1563,15 +1912,120 @@ int main() try {
         // passar offsets bons: e o caso do perigo real. Sem a abstencao, o cursor 1 do lote 0 cai em
         // 0xFFFFFFFF + 1 = 0 e escreve em cima da primeira posicao — que aqui tem de continuar poison.
         const std::vector<u32> OffPoison(OffCpu.size(), kGpuBatchOffsetPoison);
-        const FSonda::FScatter E = S.ExecutarScatter(In, OffPoison, 1u, Capacidade);
+        const FSonda::FScatter E = S.ExecutarScatter(In, OffPoison, LotesCpu, {}, 1u, Capacidade);
         CheckEq(E.Contadores[GpuScatterCounterSuppressed], static_cast<u32>(Slot.size()),
                 "sob estouro, todo candidato e suprimido");
         CheckEq(E.Contadores[GpuScatterCounterEmitted], 0u, "e nenhum comando e emitido");
-        CheckEq(E.Contadores[GpuScatterCounterOverflow], 0u,
-                "nem contado como overflow: a abstencao vem antes de qualquer posicao");
+        CheckEq(E.Contadores[GpuScatterCounterFaultCursor] + E.Contadores[GpuScatterCounterFaultCapacity], 0u,
+                "nem registrado como falha: a abstencao vem antes de qualquer cursor");
         for (u32 P = 0; P < Capacidade; ++P)
             Check(MesmoComando(E.Args[P], ComandoPoison()),
                   "sob estouro a posicao " + std::to_string(P) + " continua poison");
+    }
+
+    // ---- a CADEIA sobre recursos PERSISTENTES: reset -> classify -> prefixo -> scatter -> final ----
+    //
+    // Os executores acima criam buffers novos a cada chamada e por isso nao enxergam um acumulador que
+    // atravessa de uma execucao para a seguinte. Aqui a cadeia roda DUAS vezes sobre os mesmos
+    // recursos, como o frame faria, e depois uma terceira sem o reset.
+    {
+        const u32 Capacidade = static_cast<u32>(Slot.size());
+        FCadeia C(S, In, Capacidade);
+        C.Criar();
+
+        const FCadeia::FSaida R1 = C.Rodar(FCadeia::kResetTudo);
+        const FCadeia::FSaida R2 = C.Rodar(FCadeia::kResetTudo);
+
+        const u32 QueridoLote[8]{ 2u, 1u, 0u, 0u, 0u, 0u, 0u, 0u };
+        const FGpuIndirectDrawArgs L0[2]{ Esperado(0u, 0u), Esperado(2u, 0u) };
+        const auto Want0 = Ordenados(L0, 2u);
+        for (u32 Rodada = 1; Rodada <= 2u; ++Rodada) {
+            const FCadeia::FSaida& R = Rodada == 1u ? R1 : R2;
+            const std::string N = std::to_string(Rodada) + "a execucao";
+            CheckEq(R.Status, 1u, N + ": o frame fecha");
+            CheckEq(R.Reason, 0u, N + ": sem motivo de invalidacao");
+            for (u32 B = 0; B < In.BatchCapacity; ++B) {
+                CheckEq(R.Draw[B], QueridoLote[B], N + ": DrawCounts do lote " + std::to_string(B));
+                CheckEq(R.Cursors[B], R.Counts[B], N + ": cursor == contagem no lote " + std::to_string(B));
+            }
+            CheckEq(R.ScatCont[GpuScatterCounterEmitted], 3u, N + ": tres comandos emitidos");
+            const auto Got0 = Ordenados(&R.Args[0], 2u);
+            Check(MesmoComando(Got0[0], Want0[0]) && MesmoComando(Got0[1], Want0[1]),
+                  N + ": lote 0, multiconjunto exato");
+            Check(MesmoComando(R.Args[2], Esperado(1u, 1u)), N + ": lote 1, comando exato");
+            for (u32 P = 3; P < Capacidade; ++P)
+                Check(MesmoComando(R.Args[P], ComandoPoison()),
+                      N + ": posicao " + std::to_string(P) + " continua poison");
+        }
+
+        // As duas execucoes com reset produzem o MESMO resultado. E isto que prova que nada atravessou
+        // de uma para a outra — um cursor ou uma contagem acumulada apareceria na segunda.
+        for (u32 B = 0; B < In.BatchCapacity; ++B)
+            CheckEq(R2.Draw[B], R1.Draw[B], "2a == 1a no DrawCounts do lote " + std::to_string(B));
+
+        // ---- a REDE DE SEGURANCA: terceira execucao SEM reset ----
+        //
+        // Sem reset os quatro acumuladores crescem EM SINCRONIA: as contagens dobram para {4, 2}, os
+        // cursores continuam de {2, 1} e terminam em {4, 2}, os emitidos vao a 6. Toda igualdade ENTRE
+        // acumuladores continua valendo. So a ANCORA — candidatos desta execucao, vindos do cbuffer —
+        // enxerga que os contadores do classify somam 28, e nao 14.
+        const FCadeia::FSaida R3 = C.Rodar(0u);
+        CheckEq(R3.Counts[0], 4u, "sem reset BatchCounts acumula: 2 + 2");
+        CheckEq(R3.Cursors[0], R3.Counts[0],
+                "e os cursores acumulam JUNTO — por isso cursor == contagem nao basta");
+        CheckEq(R3.Status, 0u, "sem reset o frame e invalidado");
+        CheckEq(R3.Reason, static_cast<u32>(GpuFinalizeClassifyAnchor),
+                "e o UNICO motivo e a ancora: sem ela, esquecer o reset inteiro passaria");
+        for (u32 B = 0; B < In.BatchCapacity; ++B)
+            CheckEq(R3.Draw[B], 0u, "sem reset o count buffer sai zerado no lote " + std::to_string(B));
+
+        // A referencia CPU da finalizacao, sobre os MESMOS numeros lidos da GPU, chega ao mesmo veredito.
+        std::vector<u32> DrawCpu; u32 MotivoCpu = 0u;
+        const u32 StatusCpu = FinalizeDrawCounts(R3.Counts, R3.PrefCont, R3.ScatCont, R3.Cursors,
+                                                 R3.ClassCont, Capacidade, DrawCpu, MotivoCpu);
+        CheckEq(StatusCpu, R3.Status, "finalizacao CPU == GPU no status");
+        CheckEq(MotivoCpu, R3.Reason, "finalizacao CPU == GPU no motivo");
+
+        // ---- cada elo da finalizacao, pela SUA causa: um acumulador sem reset de cada vez ----
+        //
+        // Antes de cada cenario, uma execucao limpa — que tambem prova que o reset completo recupera
+        // de qualquer estado parcial. Os motivos esperados foram calculados a mao a partir do estado
+        // que a execucao limpa deixa (contagens {2,1}, cursores {2,1}, 3 emitidos, 14 candidatos):
+        //
+        //   sem reset dos CURSORES   : comecam em {2,1}, todos os tres passam da contagem
+        //                              -> falha de cursor + cursor != contagem
+        //   sem reset das CONTAGENS  : viram {4,2} contra 3 indiretos frescos
+        //                              -> soma dos lotes + cursor != contagem
+        //   sem reset do SCATTER     : 6 emitidos contra 3 indiretos -> soma do scatter
+        //   sem reset do CLASSIFY    : 28 contra 14 candidatos, 6 indiretos contra 3 nos lotes e no
+        //                              scatter -> ancora + soma dos lotes + soma do scatter
+        struct FCenario { const char* Nome; u32 Reset; u32 Motivo; };
+        const FCenario Cenarios[] = {
+            { "cursores",  FCadeia::kResetTudo & ~FCadeia::kResetCursors,
+              GpuFinalizeFaultCursor | GpuFinalizeCursorMismatch },
+            { "contagens", FCadeia::kResetTudo & ~FCadeia::kResetCounts,
+              GpuFinalizeBatchSum | GpuFinalizeCursorMismatch },
+            { "scatter",   FCadeia::kResetTudo & ~FCadeia::kResetScatCont, GpuFinalizeScatterSum },
+            { "classify",  FCadeia::kResetTudo & ~FCadeia::kResetClassCont,
+              GpuFinalizeClassifyAnchor | GpuFinalizeBatchSum | GpuFinalizeScatterSum },
+        };
+        for (const FCenario& Cn : Cenarios) {
+            const FCadeia::FSaida Limpa = C.Rodar(FCadeia::kResetTudo);
+            CheckEq(Limpa.Status, 1u, std::string("reset completo recupera antes de '") + Cn.Nome + "'");
+            const FCadeia::FSaida R = C.Rodar(Cn.Reset);
+            const std::string N = std::string("sem reset de ") + Cn.Nome;
+            CheckEq(R.Status, 0u, N + ": frame invalidado");
+            CheckEq(R.Reason, Cn.Motivo, N + ": o motivo exato");
+            for (u32 B = 0; B < In.BatchCapacity; ++B)
+                CheckEq(R.Draw[B], 0u, N + ": count buffer zerado no lote " + std::to_string(B));
+            // A referencia CPU da finalizacao chega ao mesmo motivo sobre os mesmos numeros. Sem isto o
+            // espelho seria verificado so no cenario sem reset nenhum, e um elo divergente nos outros
+            // passaria.
+            std::vector<u32> DCpu; u32 MCpu = 0u;
+            FinalizeDrawCounts(R.Counts, R.PrefCont, R.ScatCont, R.Cursors, R.ClassCont, Capacidade,
+                               DCpu, MCpu);
+            CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
+        }
     }
 
     // O prefixo com `BatchCounts` SEMEADO, fora do fluxo encadeado.
@@ -1591,16 +2045,9 @@ int main() try {
 
         // E a referencia CPU sobre as mesmas contagens.
         std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
-        std::vector<u32> DrawCpu;
-        PrefixBatchCounts(Contagens, OffCpu, DrawCpu, EstourouCpu);
+        PrefixBatchCounts(Contagens, OffCpu, EstourouCpu);
         for (u32 I = 0; I < 6u; ++I)
             CheckEq(OffCpu[I], P.Offsets[I], "prefixo isolado, CPU x GPU em " + std::to_string(I));
-        // O COUNT BUFFER sanitizado. Sem estouro, ele e copia das contagens.
-        for (u32 I = 0; I < 6u; ++I)
-            CheckEq(P.DrawCounts[I], Contagens[I],
-                    "sem estouro, DrawCounts copia BatchCounts em " + std::to_string(I));
-        for (u32 I = 0; I < 6u; ++I)
-            CheckEq(DrawCpu[I], P.DrawCounts[I], "DrawCounts CPU x GPU em " + std::to_string(I));
     }
     {
         // O ESTOURO, que o fluxo encadeado nao alcanca. A soma passa de u32 no indice 1.
@@ -1616,23 +2063,10 @@ int main() try {
         // Elemento a elemento contra a referencia CPU, inclusive o poison: e o que prova que os dois
         // lados implementam o MESMO contrato pos-estouro, e nao dois contratos parecidos.
         std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
-        std::vector<u32> DrawCpu;
-        PrefixBatchCounts(Contagens, OffCpu, DrawCpu, EstourouCpu);
+        PrefixBatchCounts(Contagens, OffCpu, EstourouCpu);
         CheckEq(EstourouCpu, P.Contadores[GpuPrefixCounterOverflow], "os dois marcam estouro");
         for (u32 I = 0; I < 4u; ++I)
             CheckEq(OffCpu[I], P.Offsets[I], "pos-estouro, CPU x GPU em " + std::to_string(I));
-
-        // ⚠️ O ponto do achado: um `return` no scatter NAO suprime draw nenhum, porque o
-        // `ExecuteIndirect` le o count buffer direto e executaria as contagens antigas sobre
-        // argumentos que o scatter deixou intactos. Sob estouro, TODAS as entradas do count buffer
-        // tem de sair zeradas — e zeradas de verdade, escritas pelo shader: o buffer nasce com
-        // 0xA5A5A5A5 justamente para que "nao escreveu" nao passe por "escreveu zero".
-        for (u32 I = 0; I < 4u; ++I)
-            CheckEq(P.DrawCounts[I], 0u,
-                    "sob estouro o count buffer sai ZERADO em " + std::to_string(I));
-        for (u32 I = 0; I < 4u; ++I)
-            CheckEq(DrawCpu[I], P.DrawCounts[I],
-                    "count buffer pos-estouro, CPU x GPU em " + std::to_string(I));
     }
     // O prefixo, sobre o `BatchCounts` que o classify acabou de escrever — sem readback entre os
     // dois, como sera na producao. O oraculo continua escrito a mao.
@@ -1646,8 +2080,7 @@ int main() try {
 
         // E a referencia CPU sobre as MESMAS contagens.
         std::vector<u32> OffCpu; u32 EstourouCpu = 0u;
-        std::vector<u32> DrawCpu2;
-        const u32 TotalCpu = PrefixBatchCounts(LotesCpu, OffCpu, DrawCpu2, EstourouCpu);
+        const u32 TotalCpu = PrefixBatchCounts(LotesCpu, OffCpu, EstourouCpu);
         CheckEq(TotalCpu, Gpu.PrefixCont[GpuPrefixCounterTotal], "GPU e CPU somam o mesmo total");
         for (u32 B = 0; B < In.BatchCapacity; ++B)
             CheckEq(OffCpu[B], Gpu.Offsets[B], "offset do lote " + std::to_string(B) + ": CPU x GPU");
