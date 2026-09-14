@@ -148,6 +148,7 @@ smile_graphics_domain(Scene
     GBuffer
     GpuClassify
     GpuIndirectDraw
+    GpuIndirectRecord
     GpuInstanceTransform
     GpuMaterialRecord
     GpuSceneCandidates

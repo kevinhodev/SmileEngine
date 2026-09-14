@@ -47,6 +47,7 @@
 
 #include "Smile/Graphics/Scene/GpuClassify.h"
 #include "Smile/Graphics/Scene/GpuSceneCandidates.h"
+#include "Smile/Graphics/Scene/GpuIndirectRecord.h"
 
 namespace wrl = Microsoft::WRL;
 using namespace Smile;
@@ -803,6 +804,21 @@ namespace {
         return P;
     }
 
+    // O poison que pode ser EXECUTADO, para os testes que desenham.
+    //
+    // O `ComandoPoison` tem 0xA5A5A5A5 em todo campo: um `ExecuteIndirect` que o lesse pediria 2,7
+    // bilhoes de indices, e o teste travaria em vez de reprovar. Este desenha UM triangulo, dos indices
+    // 0..2 — enchimento em todo pool —, com um slot acima do teto da sonda. Executado, ele aparece como
+    // marca na linha "fora do teto" e como uma primitiva a mais, e nunca como geometria da cena.
+    FGpuIndirectDrawArgs ComandoSeguro() {
+        FGpuIndirectDrawArgs P{};
+        P.MaterialRow           = 0xA5A5A5A5u;
+        P.InstanceSlot          = 0xA5A5A5A5u;
+        P.IndexCountPerInstance = 3u;
+        P.InstanceCount         = 1u;
+        return P;
+    }
+
     bool MesmoComando(const FGpuIndirectDrawArgs& A, const FGpuIndirectDrawArgs& B) {
         return std::memcmp(&A, &B, sizeof(FGpuIndirectDrawArgs)) == 0;
     }
@@ -1002,8 +1018,13 @@ namespace {
         }
 
         // Fecha, submete, espera a fence e drena a camada de debug.
+        //
+        // Um `Close` recusado drena ANTES de lancar: o HRESULT sozinho (E_INVALIDARG) nao diz qual das
+        // chamadas gravadas o runtime rejeitou, e a mensagem que diz fica na fila da camada de debug.
         void Submeter(ID3D12GraphicsCommandList* _L, const char* _Quando) {
-            Hr(_L->Close(), "Close");
+            const HRESULT Fechou = _L->Close();
+            if (FAILED(Fechou)) Drenar(_Quando);
+            Hr(Fechou, "Close");
             ID3D12CommandList* Listas[] = { _L };
             Queue->ExecuteCommandLists(1, Listas);
             ++FenceValue;
@@ -1473,7 +1494,10 @@ namespace {
             return Estados.back().second;
         }
 
-        void Criar() {
+        // `_Semente` e o comando que ocupa `IndirectArgs` antes de qualquer execucao. O poison de byte
+        // (`ComandoPoison`) serve a quem so rele o buffer; quem DESENHA usa o `ComandoSeguro`, que pode
+        // ser executado sem travar o WARP.
+        void Criar(const FGpuIndirectDrawArgs& _Semente = ComandoPoison()) {
             auto Pisa = [](u64 _B, u64 _S) { return std::max<u64>(_S, _B); };
             BufSlots = S.Upload(In.Slots.data(), Pisa(In.Slots.size() * 4u, 4u));
             BufMeta  = S.Upload(In.Meta.data(), Pisa(In.Meta.size() * sizeof(FGpuSceneInstanceMeta),
@@ -1506,7 +1530,7 @@ namespace {
             // o comando da execucao anterior — exatamente o "comando velho" que a finalizacao existe
             // para nunca deixar ser desenhado.
             const u32 NCmd = static_cast<u32>(GpuScatterArgsBytes(Capacidade) / 28u);
-            const std::vector<FGpuIndirectDrawArgs> Sem(NCmd, ComandoPoison());
+            const std::vector<FGpuIndirectDrawArgs> Sem(NCmd, _Semente);
             auto BufSem = S.Upload(Sem.data(), GpuScatterArgsBytes(Capacidade));
             Executar([&](ID3D12GraphicsCommandList* L) {
                 Ir(L, Args.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1761,6 +1785,266 @@ namespace {
     };
 }
 
+namespace {
+    // Espelhos de SMILE_STREAM_PROBE_TAGS e SMILE_STREAM_PROBE_SLOTS (IndirectDrawStreamProbe.vs.hlsl).
+    constexpr u32 kProbeTags  = 128u;
+    constexpr u32 kProbeSlots = 32u; // a linha `kProbeSlots` e a "fora do teto"
+
+    // Os dois pools do desenho: VB e IB PROPRIOS por pool, do mesmo tamanho, com conteudo escolhido para
+    // que QUALQUER combinacao de comando e pool fique dentro dos recursos:
+    //
+    //   VB[k] = tag de ENCHIMENTO do pool, exceto na malha do pool: VB[VertexOffset + i] = tag(pool, i)
+    //   IB[k] = 0,                         exceto na malha do pool: IB[IndexOffset + i]  = i
+    //
+    // Um lote desenhado com o par do OUTRO pool le indice 0 e o vertice `VertexOffset` de la, que e
+    // enchimento. Aparece como tag errada, e nao como leitura fora do recurso: o teste reprova pela
+    // identidade em vez de travar o WARP.
+    constexpr u32 kPoolVertices  = 2100u; // cobre 2013 + 60, o fim da malha 1
+    constexpr u32 kPoolIndices   = 300u;  // cobre 207 + 60
+    constexpr u32 kTagsPorPool   = 64u;
+    constexpr u32 kTagEnchimento = 63u;
+
+    u32 TagDe(u32 _Pool, u32 _I) { return _Pool * kTagsPorPool + _I; }
+
+    // O PASSE da sonda: root signature com o bloco de constantes de producao, PSO so de VS, a command
+    // signature de PRODUCAO e os dois pools. A gravacao e a de producao, `GpuRecordIndirectDraws`.
+    struct FDesenho {
+        FSonda&                             S;
+        wrl::ComPtr<ID3D12RootSignature>    Root;
+        wrl::ComPtr<ID3D12PipelineState>    Pso;
+        wrl::ComPtr<ID3D12CommandSignature> Signature;
+        wrl::ComPtr<ID3D12Resource>         Vb[2], Ib[2];
+        std::vector<FGpuPoolViews>          Pools;
+        wrl::ComPtr<ID3D12Resource>         Seen, Zeros, LeituraSeen, LeituraStats;
+        wrl::ComPtr<ID3D12DescriptorHeap>   Heap;
+        wrl::ComPtr<ID3D12QueryHeap>        Queries;
+        // `Seen` e deste passe, e nao da cadeia: rastreado aqui, porque passa por cadeias diferentes.
+        D3D12_RESOURCE_STATES               EstadoSeen = D3D12_RESOURCE_STATE_COMMON;
+
+        static constexpr u32 kRootUav = 0, kRootConstantes = 1;
+        static constexpr u32 kSeenEntradas = (kProbeSlots + 1u) * kProbeTags;
+
+        struct FResultado {
+            std::vector<u32>                     Seen;
+            D3D12_QUERY_DATA_PIPELINE_STATISTICS Stats{};
+            u32                                  Motivo   = 0;
+            u32                                  Chamadas = 0;
+        };
+
+        void Criar(const std::vector<u8>& _Vs, std::span<const FGpuMeshRecord> _Malhas) {
+            D3D12_DESCRIPTOR_RANGE Range{};
+            Range.RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+            Range.NumDescriptors = 1;
+            D3D12_ROOT_PARAMETER P[2]{};
+            P[kRootUav].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            P[kRootUav].DescriptorTable.NumDescriptorRanges = 1;
+            P[kRootUav].DescriptorTable.pDescriptorRanges   = &Range;
+            P[kRootUav].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+            // O bloco de PRODUCAO: cinco constantes em b4. Nao no indice 0 de proposito, como no teste
+            // de ABI: a descricao compartilhada recebe o indice, e nao pode crava-lo.
+            P[kRootConstantes].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+            P[kRootConstantes].Constants.ShaderRegister = 4;
+            P[kRootConstantes].Constants.Num32BitValues = GpuDrawConstants::kCount;
+            P[kRootConstantes].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
+            D3D12_ROOT_SIGNATURE_DESC RD{};
+            RD.NumParameters = 2;
+            RD.pParameters   = P;
+            RD.Flags         = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+            wrl::ComPtr<ID3DBlob> Serial, Erro;
+            Hr(D3D12SerializeRootSignature(&RD, D3D_ROOT_SIGNATURE_VERSION_1, &Serial, &Erro),
+               "SerializeRootSignature (desenho)");
+            Hr(S.Device->CreateRootSignature(0, Serial->GetBufferPointer(), Serial->GetBufferSize(),
+                                             IID_PPV_ARGS(&Root)), "CreateRootSignature (desenho)");
+
+            D3D12_INDIRECT_ARGUMENT_DESC Descs[3]{};
+            const D3D12_COMMAND_SIGNATURE_DESC SigDesc =
+                MakeIndirectDrawSignatureDesc(Descs, kRootConstantes);
+            Hr(S.Device->CreateCommandSignature(&SigDesc, Root.Get(), IID_PPV_ARGS(&Signature)),
+               "CreateCommandSignature (desenho)");
+
+            // Sem pixel shader e sem render target: a sonda so existe pelo efeito colateral do UAV.
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC G{};
+            G.pRootSignature        = Root.Get();
+            G.VS                    = { _Vs.data(), _Vs.size() };
+            G.SampleMask            = UINT_MAX;
+            G.SampleDesc.Count      = 1;
+            G.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+            D3D12_INPUT_ELEMENT_DESC Elemento{};
+            Elemento.SemanticName   = "TEXCOORD";
+            Elemento.Format         = DXGI_FORMAT_R32_UINT;
+            Elemento.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+            G.InputLayout.pInputElementDescs = &Elemento;
+            G.InputLayout.NumElements        = 1;
+            G.NumRenderTargets                = 0;
+            G.DSVFormat                       = DXGI_FORMAT_UNKNOWN;
+            G.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+            G.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+            G.RasterizerState.DepthClipEnable = TRUE;
+            G.DepthStencilState.DepthEnable   = FALSE;
+            Hr(S.Device->CreateGraphicsPipelineState(&G, IID_PPV_ARGS(&Pso)),
+               "CreateGraphicsPipelineState (desenho)");
+
+            // Os pools: a malha 0 mora no pool 0 e a malha 1 no pool 1, como na tabela da cena.
+            Pools.assign(2, FGpuPoolViews{});
+            for (u32 Pool = 0; Pool < 2u; ++Pool) {
+                const FGpuMeshRecord& M = _Malhas[Pool];
+                const u64 FimVertices = static_cast<u64>(static_cast<u32>(M.VertexOffset)) + M.IndexCount;
+                const u64 FimIndices  = static_cast<u64>(M.IndexOffset) + M.IndexCount;
+                if (M.GeometryPoolId != Pool || FimVertices > kPoolVertices || FimIndices > kPoolIndices ||
+                    M.IndexCount > kTagEnchimento)
+                    throw std::runtime_error("a malha da cena nao cabe no pool do desenho");
+                std::vector<u32> V(kPoolVertices, TagDe(Pool, kTagEnchimento));
+                std::vector<u32> I(kPoolIndices, 0u);
+                for (u32 K = 0; K < M.IndexCount; ++K) {
+                    I[M.IndexOffset + K]                    = K;
+                    V[static_cast<u32>(M.VertexOffset) + K] = TagDe(Pool, K);
+                }
+                Vb[Pool] = S.Upload(V.data(), V.size() * sizeof(u32));
+                Ib[Pool] = S.Upload(I.data(), I.size() * sizeof(u32));
+                Pools[Pool].Vertex.BufferLocation = Vb[Pool]->GetGPUVirtualAddress();
+                Pools[Pool].Vertex.SizeInBytes    = kPoolVertices * static_cast<u32>(sizeof(u32));
+                Pools[Pool].Vertex.StrideInBytes  = static_cast<u32>(sizeof(u32));
+                Pools[Pool].Index.BufferLocation  = Ib[Pool]->GetGPUVirtualAddress();
+                Pools[Pool].Index.SizeInBytes     = kPoolIndices * static_cast<u32>(sizeof(u32));
+                Pools[Pool].Index.Format          = DXGI_FORMAT_R32_UINT;
+            }
+
+            const u64 SeenBytes = static_cast<u64>(kSeenEntradas) * sizeof(u32);
+            Seen = S.Buffer(D3D12_HEAP_TYPE_DEFAULT, SeenBytes, true, D3D12_RESOURCE_STATE_COMMON);
+            const std::vector<u8> Z(static_cast<size_t>(SeenBytes), 0u);
+            Zeros        = S.Upload(Z.data(), SeenBytes);
+            LeituraSeen  = S.Buffer(D3D12_HEAP_TYPE_READBACK, SeenBytes, false,
+                                    D3D12_RESOURCE_STATE_COPY_DEST);
+            LeituraStats = S.Buffer(D3D12_HEAP_TYPE_READBACK,
+                                    sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS), false,
+                                    D3D12_RESOURCE_STATE_COPY_DEST);
+
+            D3D12_DESCRIPTOR_HEAP_DESC HD{};
+            HD.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            HD.NumDescriptors = 1;
+            HD.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            Hr(S.Device->CreateDescriptorHeap(&HD, IID_PPV_ARGS(&Heap)), "CreateDescriptorHeap (desenho)");
+            D3D12_UNORDERED_ACCESS_VIEW_DESC U{};
+            U.Format                     = DXGI_FORMAT_UNKNOWN;
+            U.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
+            U.Buffer.NumElements         = kSeenEntradas;
+            U.Buffer.StructureByteStride = sizeof(u32);
+            S.Device->CreateUnorderedAccessView(Seen.Get(), nullptr, &U,
+                                                Heap->GetCPUDescriptorHandleForHeapStart());
+
+            D3D12_QUERY_HEAP_DESC QD{};
+            QD.Type  = D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS;
+            QD.Count = 1;
+            Hr(S.Device->CreateQueryHeap(&QD, IID_PPV_ARGS(&Queries)), "CreateQueryHeap (pipeline statistics)");
+            S.Drenar("criacao do desenho");
+        }
+
+        // Um passe de desenho sobre os argumentos da cadeia `_C`, gravado por `GpuRecordIndirectDraws`
+        // com o layout `_Gravacao`. `_CountBuffer` e o `Draw` da cadeia — o count buffer da finalizacao.
+        //
+        // Nenhuma leitura entre a cadeia e este passe decide nada: o que o command processor executa
+        // sai do count buffer que a GPU publicou. As leituras daqui sao so o oraculo do teste.
+        FResultado Desenhar(FCadeia& _C, const FGpuIndirectLayout& _Gravacao,
+                            ID3D12Resource* _CountBuffer) {
+            FResultado O;
+            auto IrSeen = [&](ID3D12GraphicsCommandList* _L, D3D12_RESOURCE_STATES _Novo) {
+                if (EstadoSeen == _Novo) return;
+                D3D12_RESOURCE_BARRIER B{};
+                B.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                B.Transition.pResource   = Seen.Get();
+                B.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                B.Transition.StateBefore = EstadoSeen;
+                B.Transition.StateAfter  = _Novo;
+                _L->ResourceBarrier(1, &B);
+                EstadoSeen = _Novo;
+            };
+            const u64 SeenBytes = static_cast<u64>(kSeenEntradas) * sizeof(u32);
+            _C.Executar([&](ID3D12GraphicsCommandList* L) {
+                IrSeen(L, D3D12_RESOURCE_STATE_COPY_DEST);
+                L->CopyBufferRegion(Seen.Get(), 0, Zeros.Get(), 0, SeenBytes);
+                IrSeen(L, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                _C.Ir(L, _C.Args.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+                _C.Ir(L, _CountBuffer, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+
+                ID3D12DescriptorHeap* Heaps[] = { Heap.Get() };
+                L->SetDescriptorHeaps(1, Heaps);
+                L->SetPipelineState(Pso.Get());
+                L->SetGraphicsRootSignature(Root.Get());
+                L->SetGraphicsRootDescriptorTable(kRootUav, Heap->GetGPUDescriptorHandleForHeapStart());
+                const u32 Bloco[GpuDrawConstants::kCount]{};
+                L->SetGraphicsRoot32BitConstants(kRootConstantes, GpuDrawConstants::kCount, Bloco, 0);
+                D3D12_VIEWPORT Viewport{ 0.0f, 0.0f, 16.0f, 16.0f, 0.0f, 1.0f };
+                D3D12_RECT     Scissor{ 0, 0, 16, 16 };
+                L->RSSetViewports(1, &Viewport);
+                L->RSSetScissorRects(1, &Scissor);
+                L->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+                L->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+                L->BeginQuery(Queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
+                const FGpuIndirectDrawTargets Alvos{ Signature.Get(), _C.Args.Get(), _CountBuffer };
+                O.Motivo = GpuRecordIndirectDraws(L, _Gravacao, GpuPipelineClassOpaqueOneSided, Pools,
+                                                  Alvos, O.Chamadas);
+                L->EndQuery(Queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0);
+                L->ResolveQueryData(Queries.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0, 1,
+                                    LeituraStats.Get(), 0);
+
+                IrSeen(L, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                L->CopyResource(LeituraSeen.Get(), Seen.Get());
+            }, "desenho indireto");
+
+            O.Seen.resize(kSeenEntradas);
+            {
+                const u32* P = nullptr;
+                Hr(LeituraSeen->Map(0, nullptr, reinterpret_cast<void**>(const_cast<u32**>(&P))),
+                   "Map seen");
+                std::memcpy(O.Seen.data(), P, static_cast<size_t>(SeenBytes));
+                LeituraSeen->Unmap(0, nullptr);
+            }
+            {
+                void* P = nullptr;
+                Hr(LeituraStats->Map(0, nullptr, &P), "Map stats");
+                std::memcpy(&O.Stats, P, sizeof(O.Stats));
+                LeituraStats->Unmap(0, nullptr);
+            }
+            return O;
+        }
+    };
+
+    // O frame VALIDO da cena, sob o layout atual, marca EXATAMENTE — oraculo escrito a mao a partir das
+    // tabelas do fixture:
+    //
+    //   slots 0 e 2 (malha 0, no pool 0): tags do pool 0, 0..29
+    //   slot 1      (malha 1, no pool 1): tags do pool 1, 0..59
+    //
+    // e nada mais: nem enchimento, nem tag de outro pool, nem a linha "fora do teto".
+    void ConferirVistos(std::span<const u32> _Seen, const std::string& _Quem) {
+        u32 Faltando = 0, Sobrando = 0;
+        for (u32 Slot = 0; Slot <= kProbeSlots; ++Slot) {
+            for (u32 Tag = 0; Tag < kProbeTags; ++Tag) {
+                const bool Devia = ((Slot == 0u || Slot == 2u) && Tag >= TagDe(0u, 0u) && Tag < TagDe(0u, 30u)) ||
+                                   (Slot == 1u && Tag >= TagDe(1u, 0u) && Tag < TagDe(1u, 60u));
+                const bool Visto = _Seen[Slot * kProbeTags + Tag] != 0u;
+                if (Devia && !Visto) ++Faltando;
+                if (!Devia && Visto) ++Sobrando;
+            }
+        }
+        CheckEq(Faltando, 0u,
+                _Quem + ": todo vertice da malha certa, do pool certo, foi lido pela instancia certa");
+        CheckEq(Sobrando, 0u,
+                _Quem + ": nenhum outro vertice foi lido — nem enchimento, nem de outro pool, nem fora da cena");
+    }
+
+    // O caminho de FALHA: nada executado. Primitivas zero E nenhum vertice lido — uma so das duas
+    // coisas deixaria passar um comando executado sem primitiva completa, ou uma contagem sem sonda.
+    void ConferirNada(const FDesenho::FResultado& _R, const std::string& _Quem) {
+        CheckEq64(_R.Stats.IAPrimitives, 0ull, _Quem + ": zero primitivas");
+        CheckEq64(_R.Stats.VSInvocations, 0ull, _Quem + ": nenhuma invocacao de vertice");
+        u32 Vistos = 0;
+        for (const u32 X : _R.Seen) Vistos += X != 0u ? 1u : 0u;
+        CheckEq(Vistos, 0u, _Quem + ": nenhum vertice lido");
+    }
+}
+
 int main() try {
     std::cout << "Smile.GpuClassifyWarp\n";
 
@@ -1793,6 +2077,12 @@ int main() try {
     Check(!BytecodeFinalize.empty(), "a sonda da finalizacao foi encontrada");
     if (BytecodeFinalize.empty()) {
         std::cerr << "  (esperado em " << SMILE_FINALIZE_DRAW_COUNTS_CSO << ")\n";
+        return 1;
+    }
+    const std::vector<u8> BytecodeDesenho = LerArquivo(SMILE_INDIRECT_DRAW_STREAM_PROBE_VS_CSO);
+    Check(!BytecodeDesenho.empty(), "a sonda de vertice do desenho foi encontrada");
+    if (BytecodeDesenho.empty()) {
+        std::cerr << "  (esperado em " << SMILE_INDIRECT_DRAW_STREAM_PROBE_VS_CSO << ")\n";
         return 1;
     }
 
@@ -2217,6 +2507,156 @@ int main() try {
             FinalizeDrawCounts(R.Counts, Rr.Tabela, R.ScatCont, R.Cursors, R.ClassCont, Candidatos,
                                DCpu, MCpu);
             CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
+        }
+    }
+
+    // ---- a GRAVACAO: ExecuteIndirect de verdade, dois pools, identidade de vertice ----------------
+    //
+    // O que so o desenho prova. A cadeia acima confere onde cada comando foi ESCRITO; aqui o command
+    // processor LE — cada lote com o par VB/IB do seu pool, pela gravacao de producao — e a sonda relata
+    // qual vertice cada instancia leu.
+    //
+    // Pipeline statistics conta primitivas e prova o caminho de FALHA: zero. No caminho valido ele nao
+    // basta — trocar os pools mantem as 40 primitivas e troca a geometria —, e quem prova e a identidade.
+    {
+        FDesenho D{ S };
+        D.Criar(BytecodeDesenho, Meshs);
+
+        // A cadeia com o poison EXECUTAVEL. O frame valido escreve comandos reais; os cenarios de falha
+        // seguintes encontram esses comandos VELHOS e validos no buffer, e contagens nao zero em
+        // `BatchCounts` — e tem de desenhar zero mesmo assim.
+        FCadeia C(S, In, Layout, TotalReg);
+        C.Criar(ComandoSeguro());
+
+        // ---- a porta da gravacao ----
+        {
+            const FGpuIndirectDrawTargets Alvos{ D.Signature.Get(), C.Args.Get(), C.Draw.Get() };
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, Alvos),
+                    GpuIndirectRecordOk, "a porta da gravacao aprova a cena");
+
+            FGpuIndirectDrawTargets SemSignature = Alvos;
+            SemSignature.Signature = nullptr;
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, SemSignature),
+                    GpuIndirectRecordMissingTarget, "sem command signature reprova");
+            CheckEq(GpuIndirectRecordPreflight(FGpuIndirectLayout{}, GpuPipelineClassOpaqueOneSided,
+                                               D.Pools, Alvos),
+                    GpuIndirectRecordInvalidLayout, "layout nunca construido reprova");
+            CheckEq(GpuIndirectRecordPreflight(Layout, kGpuPipelineClassCount, D.Pools, Alvos),
+                    GpuIndirectRecordInvalidClass, "classe fora da tabela reprova");
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided,
+                                               std::span<const FGpuPoolViews>{}, Alvos),
+                    GpuIndirectRecordBadPoolCount, "sem pool reprova");
+
+            // Um layout de DOIS lotes para dois pools, que pedem oito.
+            const u64 DoisLotes[2]{ 4ull, 2ull };
+            FGpuIndirectLayout Curto;
+            GpuBuildIndirectLayout(DoisLotes, Versoes.Next(), Curto);
+            CheckEq(GpuIndirectRecordPreflight(Curto, GpuPipelineClassOpaqueOneSided, D.Pools, Alvos),
+                    GpuIndirectRecordSmallRegionTable, "layout sem regiao para todo lote dos pools reprova");
+
+            FGpuIndirectDrawTargets ArgsCurto = Alvos;
+            ArgsCurto.Args = C.Counts.Get(); // 32 B, contra 6 comandos de 28 B
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ArgsCurto),
+                    GpuIndirectRecordSmallArgsBuffer, "IndirectArgs menor que o total do layout reprova");
+            FGpuIndirectDrawTargets ContagemCurta = Alvos;
+            ContagemCurta.DrawCounts = C.Status.Get(); // 8 B, contra uma entrada por lote de oito
+            CheckEq(GpuIndirectRecordPreflight(Layout, GpuPipelineClassOpaqueOneSided, D.Pools, ContagemCurta),
+                    GpuIndirectRecordSmallCountBuffer, "count buffer sem uma entrada por lote reprova");
+
+            // A gravacao refaz a porta, e recusada nao grava nada; e a regiao VAZIA nao ganha chamada.
+            // Gravado numa command list que nunca e submetida: o que se confere e a gravacao.
+            wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
+            wrl::ComPtr<ID3D12GraphicsCommandList> L;
+            Hr(S.Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&Alloc)),
+               "CreateCommandAllocator (gravacao)");
+            Hr(S.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Alloc.Get(), nullptr,
+                                           IID_PPV_ARGS(&L)), "CreateCommandList (gravacao)");
+            // O estado do PASSE, que a gravacao pressupoe: a command signature so vale contra a root
+            // signature com que foi criada.
+            L->SetPipelineState(D.Pso.Get());
+            L->SetGraphicsRootSignature(D.Root.Get());
+            L->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            u32 Chamadas = 77u;
+            CheckEq(GpuRecordIndirectDraws(L.Get(), Layout, GpuPipelineClassOpaqueOneSided, D.Pools,
+                                           SemSignature, Chamadas),
+                    GpuIndirectRecordMissingTarget, "a gravacao refaz a porta");
+            CheckEq(Chamadas, 0u, "e recusada nao grava chamada nenhuma");
+
+            const u64 SoPool0[8]{ 4ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull };
+            FGpuIndirectLayout Vazio1;
+            GpuBuildIndirectLayout(SoPool0, Versoes.Next(), Vazio1);
+            CheckEq(GpuRecordIndirectDraws(L.Get(), Vazio1, GpuPipelineClassOpaqueOneSided, D.Pools,
+                                           Alvos, Chamadas),
+                    GpuIndirectRecordOk, "um layout com o pool 1 sem regiao grava");
+            CheckEq(Chamadas, 1u, "uma chamada so: a regiao vazia do pool 1 nao ganha ExecuteIndirect");
+            Hr(L->Close(), "Close (gravacao)");
+            S.Drenar("gravacao sem submissao");
+        }
+
+        // ---- o frame VALIDO ----
+        const FCadeia::FSaida Valido = C.Rodar(FCadeia::kResetTudo);
+        CheckEq(Valido.Status, 1u, "desenho: o frame valido fecha");
+        const FDesenho::FResultado V = D.Desenhar(C, Layout, C.Draw.Get());
+        CheckEq(V.Motivo, GpuIndirectRecordOk, "desenho: a gravacao aceita o layout da cena");
+        CheckEq(V.Chamadas, 2u, "desenho: uma chamada por pool com regiao");
+        CheckEq64(V.Stats.IAPrimitives, 40ull,
+                  "desenho: 40 primitivas — 10 + 10 da malha 0 (slots 0 e 2) e 20 da malha 1 (slot 1)");
+        ConferirVistos(V.Seen, "desenho valido");
+
+        // ---- falhas sobre comandos VELHOS e validos ----
+        //
+        // O cenario que o count buffer existe para conter: `IndirectArgs` guarda os comandos reais do
+        // frame valido de antes, `BatchCounts` tem contagem nao zero, e a falha acontece. Um `return`
+        // no scatter, ou um draw ligado a `BatchCounts`, executaria os comandos velhos.
+        std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u, Versao });
+        Curta[0] = { 0u, 1u, Versao };
+        Curta[1] = { 1u, 2u, Versao };
+        struct FFalha {
+            const char*                     Nome;
+            u32                             Reset;
+            std::vector<FGpuIndirectRegion> Tabela;
+            u32                             Motivo;
+        };
+        const FFalha Falhas[] = {
+            { "desenho com regiao curta", FCadeia::kResetTudo, Curta,
+              GpuFinalizeRegionOverflow | GpuFinalizeFaultRegion },
+            { "desenho sem reset", 0u, std::vector<FGpuIndirectRegion>(Regioes.begin(), Regioes.end()),
+              GpuFinalizeClassifyAnchor },
+        };
+        for (const FFalha& F : Falhas) {
+            C.Publicar(Layout);
+            CheckEq(C.Rodar(FCadeia::kResetTudo).Status, 1u,
+                    std::string("o layout publicado fecha antes de '") + F.Nome + "'");
+            C.TabelaNaGpu = F.Tabela;
+            const FCadeia::FSaida R = C.Rodar(F.Reset);
+            const std::string N = F.Nome;
+            CheckEq(R.Status, 0u, N + ": frame invalidado");
+            CheckEq(R.Reason, F.Motivo, N + ": o motivo exato");
+            Check(R.Counts[0] != 0u && R.Counts[1] != 0u,
+                  N + ": BatchCounts continua nao zero — quem suprime o draw e so o count buffer");
+            const FDesenho::FResultado X = D.Desenhar(C, Layout, C.Draw.Get() /* count buffer da finalizacao */);
+            CheckEq(X.Motivo, GpuIndirectRecordOk, N + ": a gravacao grava normalmente");
+            CheckEq(X.Chamadas, 2u, N + ": as duas chamadas — quem zera e o count buffer, e nao a CPU");
+            ConferirNada(X, N);
+        }
+
+        // ---- layout A na GPU, gravacao com o atual ----
+        //
+        // Sobre argumentos FRESCOS, so com o poison executavel — e fresco de proposito. Na cadeia de cima,
+        // a posicao 4 guarda o comando do slot 1 de um frame valido: uma tabela trocada que escrevesse
+        // nos offsets de A desenharia CERTO por acaso, lendo o comando velho. Aqui a posicao 4 so tem
+        // poison, e sem a versao o desenho leria exatamente ele.
+        {
+            FCadeia C2(S, In, Layout, TotalReg);
+            C2.Criar(ComandoSeguro());
+            C2.TabelaNaGpu.assign(LayoutA.Regions().begin(), LayoutA.Regions().end());
+            const FCadeia::FSaida R = C2.Rodar(FCadeia::kResetTudo);
+            const std::string N = "desenho com o layout A na GPU e gravacao com o atual";
+            CheckEq(R.Status, 0u, N + ": frame invalidado");
+            CheckEq(R.Reason, static_cast<u32>(GpuFinalizeFaultLayoutVersion), N + ": o motivo exato");
+            const FDesenho::FResultado X = D.Desenhar(C2, Layout, C2.Draw.Get());
+            CheckEq(X.Motivo, GpuIndirectRecordOk, N + ": a gravacao grava normalmente");
+            ConferirNada(X, N);
         }
     }
 

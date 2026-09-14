@@ -39,6 +39,9 @@ smile_compile_shader(Scene/InstanceTransformProbe.cs.hlsl cs_6_0 main SHADER_OUT
 # shader valida isso.
 smile_compile_shader(Scene/IndirectArgsProbe.cs.hlsl cs_6_0 main SHADER_OUTPUTS)
 smile_compile_shader(Scene/IndirectArgsProbe.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
+# Sonda da GRAVACAO com dois pools: relata qual vertice (de qual pool) cada instancia leu. Contar
+# primitivas nao prova a gravacao -- trocar os pools mantem a contagem e troca a geometria.
+smile_compile_shader(Scene/IndirectDrawStreamProbe.vs.hlsl vs_6_0 main SHADER_OUTPUTS)
 
 # Deferred shading — geometry pass (preenche o G-buffer MRT) + lighting fullscreen + debug
 smile_compile_shader(GBuffer.ps.hlsl          ps_6_0 main SHADER_OUTPUTS)
