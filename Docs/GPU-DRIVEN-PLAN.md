@@ -35,7 +35,7 @@ CPU/editor                         GPU persistente
 handles estáveis            ────>  instance/meta/transform tables
 dirty pages                 ────>  mesh/material tables
 spatial nodes aprovados     ────>  candidate instance ranges
-regiões por lote (estáveis) ────>  {Offset, Capacity} de cada lote
+regiões por lote (estáveis) ────>  {Offset, Capacity, Version} de cada lote (12 B)
                                           │
                                           ▼
                                 expandir ranges + culling
@@ -461,10 +461,10 @@ Buffers transitórios mínimos:
 - `CandidateInstanceRanges`;
 - `CandidateInstanceIds`;
 - `PassedInstanceIds`/`PassedSubmeshIds`;
-- `BatchCounts`, `BatchCursors`, `DrawCounts` e a tabela de regiões `{Offset, Capacity}` por lote,
-  dimensionada pela CPU (ver a decisão da Fase 5);
+- `BatchCounts`, `BatchCursors`, `DrawCounts` e a tabela de regiões `{Offset, Capacity, Version}`
+  (12 B por lote), dimensionada e versionada pela CPU (ver a decisão da Fase 5);
 - `InstanceInfos` compactado;
-- `IndirectArgs` e `IndirectCount`;
+- `IndirectArgs`, cujo count buffer é o `DrawCounts` acima;
 - contadores de overflow e diagnóstico.
 
 O MVP usa batch IDs conhecidos no load/cooker. Hash GPU ou radix sort só entram quando conteúdo
@@ -1554,7 +1554,8 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > que a regra 7 proíbe — e nenhuma cena de gate teria exposto isso, porque Bistro, Emerald e as
 > sintéticas cabem num pool só (MEASURE_ONE/SEVEN têm dois).
 >
-> A CPU reserva uma REGIÃO `{Offset, Capacity}` por lote a partir de um limite **estável**:
+> A CPU reserva uma REGIÃO por lote — `{Offset, Capacity, Version}`, 12 B, com a versão explicada
+> abaixo — a partir de um limite **estável**:
 > instâncias vivas por `{PipelineClass, GeometryPoolId}` que o indireto pode emitir, recalculado só
 > quando associação, classe ou pool mudam — nunca sobre a lista frustum-visible. A GPU decide quantos
 > comandos existem; o culling da Fase 6 só reduz o `DrawCounts` dentro dessas regiões. É o padrão da
