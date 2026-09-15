@@ -1633,6 +1633,17 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 >   deixou. `IndirectArgs` e `DrawCounts` repousam em `INDIRECT_ARGUMENT`, que é o que os passes leem.
 > - Um reset só zera os cinco acumuladores, incluindo os contadores do expand, e a finalização roda
 >   sempre: o frame vazio depois de um cheio publica zeros.
+>
+> **Decisão registrada em 2026-09-15 — canário invalida o frame.** A soma dos desfechos só prova que
+> cada candidato foi contado; ela não separa política de corrupção. Com `NoSlot`, `InvalidSlot`, ids ou
+> pool inválidos e `Overflow` presentes, a finalização fechava o frame e publicava os outros lotes: um
+> objeto elegível ficava fora do indireto e do fallback, e sumia em silêncio. Agora ela zera todo o
+> `DrawCounts` quando o classify registra qualquer desfecho fora da lista FECHADA de política
+> (`NotEligible`, `MeshUnusable`) — um desfecho novo nasce canário — e quando o expand recusa um
+> candidato (slot inválido, `RaytracingOnly` alcançado, overflow da saída). Os contadores do expand
+> entram na verificação do reset com a mesma âncora dos candidatos. Cada caso publica o seu motivo
+> (`ClassifyCanary`, `ExpandCanary`, `ExpandAnchor`). O frame zerado é um defeito visível; a perda
+> parcial não era.
 
 ### Trabalho
 

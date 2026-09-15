@@ -23,7 +23,9 @@
 //     parte do repouso de cada um, e a camada de debug reprova a barreira quando a cadeia nao terminou
 //     nele. Sozinha, entre duas listas, a camada de debug NAO compara o estado de buffer — medido: sem a
 //     barreira de volta dos argumentos e sem a leitura deles, nenhum erro aparece;
-//  7. a telemetria da GPU ser a da cadeia anterior do mesmo slot.
+//  7. a telemetria da GPU ser a da cadeia anterior do mesmo slot;
+//  8. um CANARIO produzido pela propria cena — um candidato que o expand recusa — invalidar o frame
+//     inteiro, com a marca do expand, enquanto o masked da cena, que e politica, deixa o frame fechar.
 //
 // O que ele NAO enxerga: a tabela de descritores ser POR frame slot. Os dois frames em voo copiam os
 // mesmos descritores, dos mesmos recursos, e reescrever um descritor com o mesmo conteudo nao muda o que a
@@ -410,7 +412,7 @@ namespace {
             E.Contagens.resize(E.Lotes);
             E.Cursores.resize(E.Lotes);
             E.Status = FinalizeDrawCounts(E.Contagens, E.Regioes, E.Scatter, E.Cursores, E.Classify,
-                                          static_cast<u32>(E.Slots.size()), E.Draw, E.Reason);
+                                          E.Expand, static_cast<u32>(E.Slots.size()), E.Draw, E.Reason);
             return E;
         }
 
@@ -630,8 +632,8 @@ int main() try {
         CheckEq(G.View.BatchCapacity(), 8u, "dois pools: oito lotes");
         const u64 Esperado = Slots * (8u + 4u + 28u) + FGpuIndirectMainView::kRangeCapacity * (8u + 4u) +
                              Lotes * (12u + 3u * 4u) +
-                             (GpuExpandCounterCount + GpuClassifyOutcomeCount + GpuScatterCounterCount +
-                              2u) * 4u;
+                             (static_cast<u32>(GpuExpandCounterCount) + GpuClassifyOutcomeCount +
+                              GpuScatterCounterCount + 2u) * 4u;
         CheckEq64(G.View.ResidentBytes(), Esperado, "os bytes residentes da cadeia");
     }
     CheckEq(G.View.Prepare(G.Scene, G.Meshes, nullptr), GpuMainViewNoCommandList,
@@ -750,6 +752,43 @@ int main() try {
         CheckEq(G.View.Stats().Outputs, 6u, "depois da recusa: sem o escondido");
         G.Mostrar(G.IdTroca[0], true);
         CheckEq(G.Frame(Passes, "mostrado").Gravacao, GpuMainViewOk, "mostrado: a cadeia e gravada");
+    }
+
+    // --- CANARIO na cadeia de verdade: o frame e invalidado inteiro ---------------------------------
+    //
+    // Um objeto vira RaytracingOnly e so o transform e bumpado. A tabela de instancias republica a linha
+    // — o produtor dela recompoe as colunas de quem foi tocado —, mas a lista de candidatos nao e refeita,
+    // porque nem estrutura nem static casters mudaram. O candidato chega ao expand, que o recusa e deixa a
+    // sentinela, e o classify conta `NoSlot`. Os outros comandos continuam contados: sem os canarios na
+    // finalizacao, o frame fecharia desenhando-os, com o objeto sumido. O motivo tem as DUAS marcas, e so
+    // a do expand prova que a finalizacao da engine le os contadores dele.
+    {
+        const u64 Id = G.IdOpaco[2];
+        G.R(Id).RaytracingOnly = true;
+        G.Scene.BumpTransformsVersion(G.Indice(Id));
+        const FResultado R = G.Frame(Passes, "canario");
+        CheckEq(R.Gravacao, GpuMainViewOk, "canario: a cadeia e gravada — nenhuma porta da CPU o ve");
+        CheckEq(G.UltimaCadeia.Status, 0u, "canario: o frame e invalidado");
+        CheckEq(G.UltimaCadeia.Reason, GpuFinalizeClassifyCanary | GpuFinalizeExpandCanary,
+                "canario: pelo classify e pelo expand");
+        CheckEq(G.UltimaCadeia.Expand[GpuExpandCounterRtOnly], 1u, "canario: o expand recusa o RaytracingOnly");
+        CheckEq(G.UltimaCadeia.Classify[GpuClassifyNoSlot], 1u, "canario: o classify ve a sentinela");
+        Check(!G.UltimaCadeia.Contagens.empty() && G.UltimaCadeia.Contagens[0] != 0u,
+              "canario: os outros comandos continuam contados");
+        for (u32 D : G.UltimaCadeia.Draw) CheckEq(D, 0u, "canario: o count buffer sai zerado");
+
+        // Com o bump que faltou, a lista e refeita sem o objeto, e o frame fecha.
+        G.Scene.BumpStaticCastersVersion(G.Indice(Id));
+        const FResultado R2 = G.Frame(Passes, "canario corrigido");
+        CheckEq(R2.Gravacao, GpuMainViewOk, "canario corrigido: a cadeia e gravada");
+        CheckEq(G.UltimaCadeia.Status, 1u, "canario corrigido: o frame fecha");
+        CheckEq(G.View.Stats().Outputs, 6u, "canario corrigido: o RaytracingOnly saiu da lista");
+
+        G.R(Id).RaytracingOnly = false;
+        G.Scene.BumpStaticCastersVersion(G.Indice(Id));
+        CheckEq(G.Frame(Passes, "sem RaytracingOnly").Gravacao, GpuMainViewOk, "sem RaytracingOnly: grava");
+        CheckEq(G.UltimaCadeia.Status, 1u, "sem RaytracingOnly: o frame fecha");
+        CheckEq(G.View.Stats().Outputs, 7u, "sem RaytracingOnly: os sete de volta");
     }
 
     // --- preparada para uma lista, gravada em outra -------------------------------------------------

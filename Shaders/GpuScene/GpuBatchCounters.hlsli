@@ -1,11 +1,21 @@
 #ifndef SMILE_GPUSCENE_GPUBATCHCOUNTERS_HLSLI
 #define SMILE_GPUSCENE_GPUBATCHCOUNTERS_HLSLI
 
-// Os contadores e estruturas que atravessam a cadeia classify -> scatter -> finalizacao (Fase 5).
+// Os contadores e estruturas que atravessam a cadeia expand -> classify -> scatter -> finalizacao
+// (Fases 4 e 5).
 //
 // Moram juntos porque cada passo le os do anterior. Uma copia de indice divergente num deles faria o
 // passo ler o numero errado exatamente no frame em que devia invalidar — por exemplo, a finalizacao
 // lendo `EMITTED` no lugar de uma falha e publicando contagens sobre argumentos que nao existem.
+
+// Do EXPAND. Espelha EGpuExpandCounter; o teste WARP le os quatro de volta.
+//
+// Moram aqui, e nao no ExpandInstanceRanges.cs.hlsl, porque a finalizacao os le.
+#define SMILE_EXPAND_COUNTER_EXPANDED     0u // slots escritos na saida
+#define SMILE_EXPAND_COUNTER_INVALID_SLOT 1u // slot fora da tabela/lista, ou generation que nao bate
+#define SMILE_EXPAND_COUNTER_RT_ONLY      2u // linha marcada RaytracingOnly: o produtor falhou
+#define SMILE_EXPAND_COUNTER_OVERFLOW     3u // nao coube na capacidade da saida
+#define SMILE_EXPAND_COUNTER_COUNT        4u
 
 // Do CLASSIFY. Espelha EGpuClassifyOutcome; o teste WARP le os nove de volta.
 //
@@ -47,6 +57,9 @@ struct GpuIndirectRegion {
 #define SMILE_FINALIZE_BATCH_SUM              64u  // soma dos lotes != indiretos: BatchCounts sem reset
 #define SMILE_FINALIZE_CURSOR_MISMATCH        128u // cursor != contagem em algum lote
 #define SMILE_FINALIZE_SCATTER_SUM            256u // emitidos + falhas != indiretos: contadores sem reset
+#define SMILE_FINALIZE_CLASSIFY_CANARY        512u // algum desfecho do classify que nao e comando nem politica
+#define SMILE_FINALIZE_EXPAND_CANARY          1024u // algum candidato recusado pelo expand
+#define SMILE_FINALIZE_EXPAND_ANCHOR          2048u // contadores do expand != candidatos: sem reset
 
 // Do SCATTER. Espelha EGpuScatterCounter.
 #define SMILE_SCATTER_EMITTED              0u

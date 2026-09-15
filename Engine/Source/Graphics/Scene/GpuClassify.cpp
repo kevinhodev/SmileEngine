@@ -145,7 +145,8 @@ namespace Smile {
     u32 FinalizeDrawCounts(std::span<const u32> _BatchCounts,
                            std::span<const FGpuIndirectRegion> _Regions,
                            std::span<const u32> _ScatterCounters, std::span<const u32> _BatchCursors,
-                           std::span<const u32> _ClassifyCounters, u32 _CandidateCount,
+                           std::span<const u32> _ClassifyCounters,
+                           std::span<const u32> _ExpandCounters, u32 _CandidateCount,
                            std::vector<u32>& _OutDrawCounts, u32& _OutReason) {
         u32 Motivo = 0;
         if (_ScatterCounters[GpuScatterCounterFaultCursor] != 0u)   Motivo |= GpuFinalizeFaultCursor;
@@ -154,10 +155,21 @@ namespace Smile {
         if (_ScatterCounters[GpuScatterCounterFaultRegion] != 0u)   Motivo |= GpuFinalizeFaultRegion;
         if (_ScatterCounters[GpuScatterCounterFaultCapacity] != 0u) Motivo |= GpuFinalizeFaultCapacity;
 
-        // A ancora: candidatos desta execucao, que nao acumulam. Ver o shader.
+        // As ancoras: candidatos desta execucao, que nao acumulam. Ver o shader.
+        u32 SomaExpand = 0;
+        for (u32 E = 0; E < GpuExpandCounterCount; ++E) SomaExpand += _ExpandCounters[E];
+        if (SomaExpand != _CandidateCount) Motivo |= GpuFinalizeExpandAnchor;
+
         u32 SomaClassify = 0;
         for (u32 K = 0; K < GpuClassifyOutcomeCount; ++K) SomaClassify += _ClassifyCounters[K];
         if (SomaClassify != _CandidateCount) Motivo |= GpuFinalizeClassifyAnchor;
+
+        // Os canarios. Pela funcao da lista fechada, e nao por uma soma de indices escrita aqui: o shader
+        // subtrai a politica da soma, e os dois so concordam se a lista for a mesma.
+        for (u32 K = 0; K < GpuClassifyOutcomeCount; ++K)
+            if (GpuClassifyOutcomeIsCanary(K) && _ClassifyCounters[K] != 0u)
+                Motivo |= GpuFinalizeClassifyCanary;
+        if (SomaExpand != _ExpandCounters[GpuExpandCounterExpanded]) Motivo |= GpuFinalizeExpandCanary;
 
         const u32 Indiretos = _ClassifyCounters[GpuClassifyIndirect];
         u32 SomaLotes = 0;

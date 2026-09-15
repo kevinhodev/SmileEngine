@@ -6,7 +6,8 @@
 //     seu lote, e um comando fora da regiao certa desenha outra geometria sem erro de API nenhum;
 //  2. um candidato receber DOIS resultados de classificacao, ou nenhum. A contabilidade e o que
 //     permite auditar a fatia; ela NAO prova "desenhado exatamente uma vez" — ver a nota do
-//     GpuClassify.h sobre o que a soma prova e o que ela nao prova;
+//     GpuClassify.h sobre o que a soma prova e o que ela nao prova. E por isso um CANARIO, do expand ou
+//     do classify, tem de invalidar o frame inteiro, enquanto as recusas de POLITICA o deixam fechar;
 //  3. a leitura de uma linha ANTES de validar o indice. Load fora do StructuredBuffer nao trava —
 //     o D3D12 devolve zero —, e zero e a linha do material default e a da malha ausente. O
 //     candidato passaria a desenhar algo PLAUSIVEL e errado;
@@ -1307,9 +1308,9 @@ namespace {
             CriarPasso(4, 2, _Classify, Root, Pipeline, "classify");
             // scatter: slots + tres tabelas + regioes + contagens; argumentos, cursores, contadores.
             CriarPasso(6, 3, _Scatter, RootScatter, PipelineScatter, "scatter");
-            // finalizacao: contagens, regioes, contadores do scatter, cursores, contadores do
-            // classify; count buffer + status.
-            CriarPasso(5, 2, _Finalize, RootFinalize, PipelineFinalize, "finalizacao");
+            // finalizacao: contagens, regioes, contadores do scatter, cursores, contadores do classify e
+            // do expand; count buffer + status.
+            CriarPasso(6, 2, _Finalize, RootFinalize, PipelineFinalize, "finalizacao");
 
             D3D12_COMMAND_QUEUE_DESC QD{};
             Hr(Device->CreateCommandQueue(&QD, IID_PPV_ARGS(&Queue)), "CreateCommandQueue");
@@ -1649,12 +1650,16 @@ namespace {
 namespace {
     // A CADEIA inteira, sobre recursos PERSISTENTES:
     //
-    //     reset -> classify -> scatter -> finalizacao
+    //     reset -> [expand] -> classify -> scatter -> finalizacao
     //
     // Os executores de cima criam buffers novos a cada chamada, e por isso nao enxergam o defeito que
     // esta estrutura existe para pegar: um acumulador que atravessa de uma execucao para a seguinte.
     // Aqui os recursos sao criados UMA vez e `Rodar` pode ser chamado de novo sobre eles, como o
     // frame faria.
+    //
+    // O expand NAO roda aqui: a lista de slots entra pronta, e os contadores dele sao uma ENTRADA da
+    // finalizacao (`ExpandNaGpu`). E assim que o teste separa o canario do expand do canario do classify.
+    // A cadeia inteira, com o expand de verdade, e a do Smile.GpuIndirectMainView.
     //
     // O estado de cada recurso e rastreado por uma tabela, e toda barreira parte do estado real.
     // Com a camada de debug reprovando, um `StateBefore` errado entre execucoes vira falha de teste
@@ -1673,7 +1678,14 @@ namespace {
         u32                             VersaoGravacao   = 0;
         u32                             CapacidadeShader = 0;
 
-        wrl::ComPtr<ID3D12Resource> BufSlots, BufMeta, BufMats, BufMesh, BufZeros;
+        // A lista de candidatos, os contadores do expand que a produziu e a capacidade de lote que o
+        // classify recebe — tambem por execucao. `Candidatos` e o caminho normal: expand limpo, um
+        // `Expanded` por posicao, e a capacidade do recurso.
+        std::vector<u32>                        CandidatosNaGpu;
+        std::array<u32, GpuExpandCounterCount>  ExpandNaGpu{};
+        u32                                     CapacidadeDeLoteShader = 0;
+
+        wrl::ComPtr<ID3D12Resource> BufMeta, BufMats, BufMesh, BufZeros;
         wrl::ComPtr<ID3D12Resource> Counts, ClassCont;
         wrl::ComPtr<ID3D12Resource> Args, Cursors, ScatCont, Draw, Status;
         wrl::ComPtr<ID3D12DescriptorHeap> Heap;
@@ -1684,12 +1696,16 @@ namespace {
             std::vector<FGpuIndirectDrawArgs> Args;
             u32                               Status = 0;
             u32                               Reason = 0;
+            // As ENTRADAS da execucao que a referencia CPU da finalizacao precisa receber iguais.
+            std::array<u32, GpuExpandCounterCount> ExpCont{};
+            u32                                    Candidatos = 0;
         };
 
         FCadeia(FSonda& _S, const FGpuClassifyInput& _In, const FGpuIndirectLayout& _Layout,
                 u32 _Capacidade)
             : S(_S), In(_In), Slots(_In.BatchCapacity), Capacidade(_Capacidade) {
             Publicar(_Layout);
+            Candidatos(_In.Slots);
         }
 
         // O caminho normal: tabela e versao do MESMO layout, e o shader com a capacidade do recurso.
@@ -1697,6 +1713,13 @@ namespace {
             TabelaNaGpu.assign(_Layout.Regions().begin(), _Layout.Regions().end());
             VersaoGravacao   = _Layout.Version();
             CapacidadeShader = Capacidade;
+        }
+
+        void Candidatos(std::span<const u32> _Slots) {
+            CandidatosNaGpu.assign(_Slots.begin(), _Slots.end());
+            ExpandNaGpu = {};
+            ExpandNaGpu[GpuExpandCounterExpanded] = static_cast<u32>(_Slots.size());
+            CapacidadeDeLoteShader                = Slots;
         }
 
         D3D12_RESOURCE_STATES& EstadoDe(ID3D12Resource* _R) {
@@ -1710,7 +1733,6 @@ namespace {
         // ser executado sem travar o WARP.
         void Criar(const FGpuIndirectDrawArgs& _Semente = ComandoPoison()) {
             auto Pisa = [](u64 _B, u64 _S) { return std::max<u64>(_S, _B); };
-            BufSlots = S.Upload(In.Slots.data(), Pisa(In.Slots.size() * 4u, 4u));
             BufMeta  = S.Upload(In.Meta.data(), Pisa(In.Meta.size() * sizeof(FGpuSceneInstanceMeta),
                                                      sizeof(FGpuSceneInstanceMeta)));
             BufMats  = S.Upload(In.Materials.data(),
@@ -1781,13 +1803,14 @@ namespace {
         }
 
         // Tabelas de descritores, uma por passo, na ordem das root signatures de cada um.
-        //   classify: SRV 0-3   (slots, meta, mats, mesh)                        UAV 4-5   (counts, classcont)
-        //   scatter:  SRV 6-11  (slots, meta, mats, mesh, regioes, counts)       UAV 12-14 (args, cursors, scatcont)
-        //   final:    SRV 15-19 (counts, regioes, scatcont, cursors, classcont)  UAV 20-21 (draw, status)
+        //   classify: SRV 0-3   (slots, meta, mats, mesh)                                  UAV 4-5   (counts, classcont)
+        //   scatter:  SRV 6-11  (slots, meta, mats, mesh, regioes, counts)                 UAV 12-14 (args, cursors, scatcont)
+        //   final:    SRV 15-20 (counts, regioes, scatcont, cursors, classcont, expcont)   UAV 21-22 (draw, status)
         //
-        // As duas SRVs de REGIOES (10 e 16) sao escritas a cada execucao, junto do upload da tabela.
+        // As SRVs dos SLOTS (0 e 6), das REGIOES (10 e 16) e dos contadores do EXPAND (20) sao escritas a
+        // cada execucao, junto do upload do que elas enxergam.
         static constexpr UINT kClassSrv = 0, kClassUav = 4, kScatSrv = 6, kScatUav = 12;
-        static constexpr UINT kFinSrv = 15, kFinUav = 20, kDescritores = 22;
+        static constexpr UINT kFinSrv = 15, kFinUav = 21, kDescritores = 23;
 
         D3D12_CPU_DESCRIPTOR_HANDLE CpuAt(UINT _I) const {
             auto H = Heap->GetCPUDescriptorHandleForHeapStart();
@@ -1822,15 +1845,13 @@ namespace {
             const u32 MetaStride = sizeof(FGpuSceneInstanceMeta);
             const u32 MatStride  = sizeof(FGpuMaterialRecord);
             const u32 MeshStride = sizeof(FGpuMeshRecord);
-            // classify
-            Srv(BufSlots.Get(), In.Slots.size(), 4u, kClassSrv + 0);
+            // classify (a SRV 0, dos slots, e escrita por execucao)
             Srv(BufMeta.Get(), In.Meta.size(), MetaStride, kClassSrv + 1);
             Srv(BufMats.Get(), In.Materials.size(), MatStride, kClassSrv + 2);
             Srv(BufMesh.Get(), In.Meshes.size(), MeshStride, kClassSrv + 3);
             Uav(Counts.Get(), Slots, 4u, kClassUav + 0);
             Uav(ClassCont.Get(), GpuClassifyOutcomeCount, 4u, kClassUav + 1);
-            // scatter (a SRV 4, das regioes, e escrita por execucao)
-            Srv(BufSlots.Get(), In.Slots.size(), 4u, kScatSrv + 0);
+            // scatter (as SRVs 0 e 4, dos slots e das regioes, sao escritas por execucao)
             Srv(BufMeta.Get(), In.Meta.size(), MetaStride, kScatSrv + 1);
             Srv(BufMats.Get(), In.Materials.size(), MatStride, kScatSrv + 2);
             Srv(BufMesh.Get(), In.Meshes.size(), MeshStride, kScatSrv + 3);
@@ -1838,7 +1859,7 @@ namespace {
             Uav(Args.Get(), NCmd, sizeof(FGpuIndirectDrawArgs), kScatUav + 0);
             Uav(Cursors.Get(), Slots, 4u, kScatUav + 1);
             Uav(ScatCont.Get(), GpuScatterCounterCount, 4u, kScatUav + 2);
-            // finalizacao (a SRV 1, das regioes, e escrita por execucao)
+            // finalizacao (as SRVs 1 e 5, das regioes e dos contadores do expand, sao escritas por execucao)
             Srv(Counts.Get(), Slots, 4u, kFinSrv + 0);
             Srv(ScatCont.Get(), GpuScatterCounterCount, 4u, kFinSrv + 2);
             Srv(Cursors.Get(), Slots, 4u, kFinSrv + 3);
@@ -1855,7 +1876,7 @@ namespace {
 
         // Uma execucao da cadeia.
         FSaida Rodar(u32 _Reset) {
-            const u32 Total = static_cast<u32>(In.Slots.size());
+            const u32 Total = static_cast<u32>(CandidatosNaGpu.size());
             const u32 NCmd  = static_cast<u32>(GpuScatterArgsBytes(Capacidade) / 28u);
             auto Cb = [&](std::initializer_list<u32> _V) {
                 alignas(16) u8 B[256]{};
@@ -1865,7 +1886,8 @@ namespace {
             };
             auto CbClass = Cb({ Total, static_cast<u32>(In.Meta.size()),
                                 static_cast<u32>(In.Materials.size()),
-                                static_cast<u32>(In.Meshes.size()), In.PoolCount, Slots });
+                                static_cast<u32>(In.Meshes.size()), In.PoolCount,
+                                CapacidadeDeLoteShader });
             auto CbScat  = Cb({ Total, static_cast<u32>(In.Meta.size()),
                                 static_cast<u32>(In.Materials.size()),
                                 static_cast<u32>(In.Meshes.size()), In.PoolCount, CapacidadeShader,
@@ -1879,6 +1901,13 @@ namespace {
                                                  TabelaNaGpu.size() * sizeof(FGpuIndirectRegion)));
             Srv(BufReg.Get(), TabelaNaGpu.size(), sizeof(FGpuIndirectRegion), kScatSrv + 4);
             Srv(BufReg.Get(), TabelaNaGpu.size(), sizeof(FGpuIndirectRegion), kFinSrv + 1);
+
+            // Os candidatos e os contadores do expand DESTA execucao.
+            auto BufSlots = S.Upload(CandidatosNaGpu.data(), std::max<u64>(4u, Total * 4u));
+            Srv(BufSlots.Get(), Total, 4u, kClassSrv + 0);
+            Srv(BufSlots.Get(), Total, 4u, kScatSrv + 0);
+            auto BufExpCont = S.Upload(ExpandNaGpu.data(), GpuExpandCounterCount * 4u);
+            Srv(BufExpCont.Get(), GpuExpandCounterCount, 4u, kFinSrv + 5);
 
             const u64 LoteB = std::max<u64>(4u, Slots * 4u);
             auto Leitura = [&](u64 _B) {
@@ -1976,6 +2005,8 @@ namespace {
                 return V;
             };
             FSaida O;
+            O.ExpCont    = ExpandNaGpu;
+            O.Candidatos = Total;
             O.Counts   = Ler(LCounts.Get(), Slots * 4u);
             O.Cursors  = Ler(LCursors.Get(), Slots * 4u);
             O.Draw     = Ler(LDraw.Get(), Slots * 4u);
@@ -2597,13 +2628,42 @@ int main() try {
         }
     }
 
+    // ---- a lista LIMPA: comandos e POLITICA, sem canario ------------------------------------------
+    //
+    // As oito primeiras linhas: os tres comandos e as cinco recusas de politica — two-sided, masked,
+    // blend, o caso de dois termos (NotEligible) e a malha irrepresentavel (MeshUnusable). A CPU desenha
+    // as cinco pelo caminho classico, entao um frame so com elas FECHA. E a lista das cadeias e do
+    // desenho abaixo. Os seis canarios da lista completa ficam fora, e cada um volta sozinho num cenario
+    // proprio: com qualquer um deles o frame tem de ser invalidado.
+    std::vector<u32> SlotsLimpos;
+    for (u32 I = 0; I < 8u; ++I) SlotsLimpos.push_back(I);
+    FGpuClassifyInput InLimpo = In;
+    InLimpo.Slots = SlotsLimpos;
+    {
+        std::vector<u32> LotesL, ContL;
+        ClassifyCandidates(InLimpo, LotesL, ContL);
+        CheckEq(ContL[GpuClassifyIndirect], 3u, "lista limpa: os tres comandos");
+        CheckEq(ContL[GpuClassifyNotEligible], 4u, "lista limpa: quatro recusas de classe");
+        CheckEq(ContL[GpuClassifyMeshUnusable], 1u, "lista limpa: a malha inutilizavel");
+        u32 CanariosL = 0;
+        for (u32 O = 0; O < GpuClassifyOutcomeCount; ++O)
+            if (GpuClassifyOutcomeIsCanary(O)) CanariosL += ContL[O];
+        CheckEq(CanariosL, 0u, "lista limpa: nenhum canario");
+        // A particao, desfecho a desfecho: so os tres que mantem o frame nao sao canario.
+        for (u32 O = 0; O < GpuClassifyOutcomeCount; ++O)
+            Check(GpuClassifyOutcomeIsCanary(O) ==
+                      (O != GpuClassifyIndirect && O != GpuClassifyNotEligible &&
+                       O != GpuClassifyMeshUnusable),
+                  std::string("particao politica/canario em ") + NomeDesfecho(O));
+    }
+
     // ---- a CADEIA sobre recursos PERSISTENTES: reset -> classify -> scatter -> finalizacao ----
     //
     // Os executores acima criam buffers novos a cada chamada e por isso nao enxergam um acumulador que
     // atravessa de uma execucao para a seguinte. Aqui a cadeia roda DUAS vezes sobre os mesmos
     // recursos, como o frame faria, e depois uma terceira sem o reset.
     {
-        FCadeia C(S, In, Layout, TotalReg);
+        FCadeia C(S, InLimpo, Layout, TotalReg);
         C.Criar();
 
         const FCadeia::FSaida R1 = C.Rodar(FCadeia::kResetTudo);
@@ -2623,6 +2683,9 @@ int main() try {
                       N + ": DrawCounts dentro da regiao do lote " + std::to_string(B));
             }
             CheckEq(R.ScatCont[GpuScatterCounterEmitted], 3u, N + ": tres comandos emitidos");
+            // A POLITICA nao invalida: o frame fecha com as cinco recusas previstas contadas.
+            CheckEq(R.ClassCont[GpuClassifyNotEligible], 4u, N + ": masked, two-sided e blend contados");
+            CheckEq(R.ClassCont[GpuClassifyMeshUnusable], 1u, N + ": a malha inutilizavel contada");
             ConferirArgsDaCena(R.Args, N);
         }
 
@@ -2637,7 +2700,7 @@ int main() try {
         // cursores continuam de {2, 1} e terminam em {4, 2}, os emitidos vao a 6. Toda igualdade ENTRE
         // acumuladores continua valendo — e, com a FOLGA das regioes, a contagem dobrada ainda cabe
         // nelas. So a ANCORA — candidatos desta execucao, vindos do cbuffer — enxerga que os
-        // contadores do classify somam 28, e nao 14.
+        // contadores do classify somam 16, e nao 8.
         const FCadeia::FSaida R3 = C.Rodar(0u);
         CheckEq(R3.Counts[0], 4u, "sem reset BatchCounts acumula: 2 + 2");
         CheckEq(R3.Cursors[0], R3.Counts[0],
@@ -2653,7 +2716,8 @@ int main() try {
         // A referencia CPU da finalizacao, sobre os MESMOS numeros lidos da GPU, chega ao mesmo veredito.
         std::vector<u32> DrawCpu; u32 MotivoCpu = 0u;
         const u32 StatusCpu = FinalizeDrawCounts(R3.Counts, Regioes, R3.ScatCont, R3.Cursors,
-                                                 R3.ClassCont, Candidatos, DrawCpu, MotivoCpu);
+                                                 R3.ClassCont, R3.ExpCont, R3.Candidatos, DrawCpu,
+                                                 MotivoCpu);
         CheckEq(StatusCpu, R3.Status, "finalizacao CPU == GPU no status");
         CheckEq(MotivoCpu, R3.Reason, "finalizacao CPU == GPU no motivo");
 
@@ -2661,7 +2725,7 @@ int main() try {
         //
         // Antes de cada cenario, uma execucao limpa — que tambem prova que o reset completo recupera
         // de qualquer estado parcial. Os motivos esperados foram calculados a mao a partir do estado
-        // que a execucao limpa deixa (contagens {2,1}, cursores {2,1}, 3 emitidos, 14 candidatos,
+        // que a execucao limpa deixa (contagens {2,1}, cursores {2,1}, 3 emitidos, 8 candidatos,
         // regioes {4,2}):
         //
         //   sem reset dos CURSORES   : comecam em {2,1}, todos os tres passam da contagem
@@ -2669,8 +2733,9 @@ int main() try {
         //   sem reset das CONTAGENS  : viram {4,2} contra 3 indiretos frescos; cabem nas regioes
         //                              -> soma dos lotes + cursor != contagem
         //   sem reset do SCATTER     : 6 emitidos contra 3 indiretos -> soma do scatter
-        //   sem reset do CLASSIFY    : 28 contra 14 candidatos, 6 indiretos contra 3 nos lotes e no
-        //                              scatter -> ancora + soma dos lotes + soma do scatter
+        //   sem reset do CLASSIFY    : 16 contra 8 candidatos, 6 indiretos contra 3 nos lotes e no
+        //                              scatter -> ancora + soma dos lotes + soma do scatter. As recusas
+        //                              de politica tambem dobram, e nenhum canario aparece.
         struct FCenario { const char* Nome; u32 Reset; u32 Motivo; };
         const FCenario Cenarios[] = {
             { "cursores",  FCadeia::kResetTudo & ~FCadeia::kResetCursors,
@@ -2694,9 +2759,103 @@ int main() try {
             // espelho seria verificado so no cenario sem reset nenhum, e um elo divergente nos outros
             // passaria.
             std::vector<u32> DCpu; u32 MCpu = 0u;
-            FinalizeDrawCounts(R.Counts, Regioes, R.ScatCont, R.Cursors, R.ClassCont, Candidatos,
-                               DCpu, MCpu);
+            FinalizeDrawCounts(R.Counts, Regioes, R.ScatCont, R.Cursors, R.ClassCont, R.ExpCont,
+                               R.Candidatos, DCpu, MCpu);
             CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
+        }
+
+        // ---- CANARIO invalida o frame; POLITICA nao ----
+        //
+        // A soma dos desfechos prova que cada candidato foi CONTADO, e nao separa politica de corrupcao.
+        // Cada canario entra SOZINHO na lista limpa — que fecha, com as cinco recusas de politica — e o
+        // frame tem de ser invalidado com o motivo exato, TODO o count buffer zerado. `BatchCounts` continua
+        // com os tres comandos dos outros candidatos: e exatamente o frame que antes fechava, desenhando os
+        // outros lotes enquanto o candidato do canario sumia em silencio.
+        //
+        // O `Overflow` nao entra como slot: e o candidato do pool 1 com o classify recebendo capacidade de
+        // UM lote — a entrada que o preflight proibe. Ele e o unico canario que outra defesa tambem enxerga:
+        // o scatter nao conhece a capacidade do classify, trata o candidato como comando do lote 1 e acha o
+        // cursor alem da contagem zero. O motivo exato inclui as tres marcas disso e o canario.
+        {
+            struct FCanario {
+                const char* Nome;
+                u32         SlotExtra; // kSemExtra: nenhum
+                u32         CapacidadeDeLote;
+                u32         Desfecho;
+                u32         Motivo;
+            };
+            constexpr u32 kSemExtra = 0xFFFFFFFEu;
+            const u32 Canario = GpuFinalizeClassifyCanary;
+            const FCanario Canarios[] = {
+                { "NoSlot", kGpuExpandNoSlot, In.BatchCapacity, GpuClassifyNoSlot, Canario },
+                { "InvalidSlot (linha sem ocupante)", 11u, In.BatchCapacity, GpuClassifyInvalidSlot, Canario },
+                { "InvalidSlot (slot fora da tabela)", 999u, In.BatchCapacity, GpuClassifyInvalidSlot,
+                  Canario },
+                { "InvalidMaterialId", 9u, In.BatchCapacity, GpuClassifyInvalidMaterialId, Canario },
+                { "InvalidMeshId", 10u, In.BatchCapacity, GpuClassifyInvalidMeshId, Canario },
+                { "InvalidPoolId", 8u, In.BatchCapacity, GpuClassifyInvalidPoolId, Canario },
+                { "Overflow", kSemExtra, 1u, GpuClassifyOverflow,
+                  Canario | GpuFinalizeFaultCursor | GpuFinalizeCursorMismatch | GpuFinalizeScatterSum },
+            };
+            for (const FCanario& Ca : Canarios) {
+                C.Publicar(Layout);
+                C.Candidatos(SlotsLimpos);
+                const FCadeia::FSaida Limpa = C.Rodar(FCadeia::kResetTudo);
+                CheckEq(Limpa.Status, 1u, std::string("a lista limpa fecha antes do canario ") + Ca.Nome);
+
+                std::vector<u32> ComCanario = SlotsLimpos;
+                if (Ca.SlotExtra != kSemExtra) ComCanario.push_back(Ca.SlotExtra);
+                C.Candidatos(ComCanario);
+                C.CapacidadeDeLoteShader = Ca.CapacidadeDeLote;
+                const FCadeia::FSaida R = C.Rodar(FCadeia::kResetTudo);
+                const std::string N = std::string("canario ") + Ca.Nome;
+                CheckEq(R.ClassCont[Ca.Desfecho], 1u, N + ": o classify registra o desfecho");
+                CheckEq(R.Status, 0u, N + ": frame invalidado");
+                CheckEq(R.Reason, Ca.Motivo, N + ": o motivo exato");
+                Check(R.Counts[0] != 0u, N + ": os outros lotes continuam contados em BatchCounts");
+                for (u32 B = 0; B < In.BatchCapacity; ++B)
+                    CheckEq(R.Draw[B], 0u, N + ": count buffer zerado no lote " + std::to_string(B));
+                std::vector<u32> DCpu; u32 MCpu = 0u;
+                const u32 SCpu = FinalizeDrawCounts(R.Counts, Regioes, R.ScatCont, R.Cursors, R.ClassCont,
+                                                    R.ExpCont, R.Candidatos, DCpu, MCpu);
+                CheckEq(SCpu, R.Status, N + ": finalizacao CPU == GPU no status");
+                CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
+            }
+
+            // Os canarios do EXPAND, pela entrada: a lista de slots e a limpa, e so os contadores do expand
+            // dizem que um candidato nao passou. Com a lista toda contada, a ancora do expand fecha, e o
+            // unico motivo e o canario. Sem reset, a ancora deixa de fechar.
+            const u32 Lim = static_cast<u32>(SlotsLimpos.size());
+            struct FExpand {
+                const char*                            Nome;
+                std::array<u32, GpuExpandCounterCount> Contadores;
+                u32                                    Motivo;
+            };
+            const FExpand Expands[] = {
+                { "expand com overflow", { Lim - 1u, 0u, 0u, 1u }, GpuFinalizeExpandCanary },
+                { "expand com slot invalido", { Lim - 1u, 1u, 0u, 0u }, GpuFinalizeExpandCanary },
+                { "expand com RaytracingOnly", { Lim - 1u, 0u, 1u, 0u }, GpuFinalizeExpandCanary },
+                { "expand sem reset", { 2u * Lim, 0u, 0u, 0u }, GpuFinalizeExpandAnchor },
+                { "expand sem reset e com overflow", { 2u * Lim - 1u, 0u, 0u, 1u },
+                  GpuFinalizeExpandAnchor | GpuFinalizeExpandCanary },
+            };
+            for (const FExpand& Ex : Expands) {
+                C.Candidatos(SlotsLimpos);
+                CheckEq(C.Rodar(FCadeia::kResetTudo).Status, 1u,
+                        std::string("a lista limpa fecha antes de '") + Ex.Nome + "'");
+                C.ExpandNaGpu = Ex.Contadores;
+                const FCadeia::FSaida R = C.Rodar(FCadeia::kResetTudo);
+                const std::string N = Ex.Nome;
+                CheckEq(R.Status, 0u, N + ": frame invalidado");
+                CheckEq(R.Reason, Ex.Motivo, N + ": o motivo exato");
+                for (u32 B = 0; B < In.BatchCapacity; ++B)
+                    CheckEq(R.Draw[B], 0u, N + ": count buffer zerado no lote " + std::to_string(B));
+                std::vector<u32> DCpu; u32 MCpu = 0u;
+                FinalizeDrawCounts(R.Counts, Regioes, R.ScatCont, R.Cursors, R.ClassCont, R.ExpCont,
+                                   R.Candidatos, DCpu, MCpu);
+                CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
+            }
+            C.Candidatos(SlotsLimpos);
         }
 
         // ---- TABELAS que a CPU nao aprovaria, entregues a cadeia inteira ----
@@ -2750,8 +2909,8 @@ int main() try {
             for (u32 B = 0; B < In.BatchCapacity; ++B)
                 CheckEq(R.Draw[B], 0u, N + ": count buffer zerado no lote " + std::to_string(B));
             std::vector<u32> DCpu; u32 MCpu = 0u;
-            FinalizeDrawCounts(R.Counts, Rr.Tabela, R.ScatCont, R.Cursors, R.ClassCont, Candidatos,
-                               DCpu, MCpu);
+            FinalizeDrawCounts(R.Counts, Rr.Tabela, R.ScatCont, R.Cursors, R.ClassCont, R.ExpCont,
+                               R.Candidatos, DCpu, MCpu);
             CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
         }
     }
@@ -2770,8 +2929,9 @@ int main() try {
 
         // A cadeia com o poison EXECUTAVEL. O frame valido escreve comandos reais; os cenarios de falha
         // seguintes encontram esses comandos VELHOS e validos no buffer, e contagens nao zero em
-        // `BatchCounts` — e tem de desenhar zero mesmo assim.
-        FCadeia C(S, In, Layout, TotalReg);
+        // `BatchCounts` — e tem de desenhar zero mesmo assim. Sobre a lista LIMPA: com a completa, os seis
+        // canarios invalidariam ate o frame valido.
+        FCadeia C(S, InLimpo, Layout, TotalReg);
         C.Criar(ComandoSeguro());
 
         // ---- a porta da gravacao ----
@@ -2983,23 +3143,42 @@ int main() try {
         std::vector<FGpuIndirectRegion> Curta(In.BatchCapacity, FGpuIndirectRegion{ 3u, 0u, Versao });
         Curta[0] = { 0u, 1u, Versao };
         Curta[1] = { 1u, 2u, Versao };
+        //
+        // Os dois CANARIOS entram aqui pelo mesmo motivo: sao o frame que antes fechava desenhando os outros
+        // lotes. Um candidato com pool invalido no classify, e um overflow nos contadores do expand.
         struct FFalha {
             const char*                     Nome;
             u32                             Reset;
             std::vector<FGpuIndirectRegion> Tabela;
             u32                             Motivo;
+            u32                             SlotCanario    = kGpuExpandNoSlot - 1u; // nenhum
+            bool                            ExpandOverflow = false;
         };
+        const std::vector<FGpuIndirectRegion> RegioesDaCena(Regioes.begin(), Regioes.end());
         const FFalha Falhas[] = {
             { "desenho com regiao curta", FCadeia::kResetTudo, Curta,
               GpuFinalizeRegionOverflow | GpuFinalizeFaultRegion },
-            { "desenho sem reset", 0u, std::vector<FGpuIndirectRegion>(Regioes.begin(), Regioes.end()),
-              GpuFinalizeClassifyAnchor },
+            { "desenho sem reset", 0u, RegioesDaCena, GpuFinalizeClassifyAnchor },
+            { "desenho com canario do classify (pool invalido)", FCadeia::kResetTudo, RegioesDaCena,
+              GpuFinalizeClassifyCanary, 8u },
+            { "desenho com canario do expand (overflow)", FCadeia::kResetTudo, RegioesDaCena,
+              GpuFinalizeExpandCanary, kGpuExpandNoSlot - 1u, true },
         };
         for (const FFalha& F : Falhas) {
             C.Publicar(Layout);
+            C.Candidatos(SlotsLimpos);
             CheckEq(C.Rodar(FCadeia::kResetTudo).Status, 1u,
                     std::string("o layout publicado fecha antes de '") + F.Nome + "'");
             C.TabelaNaGpu = F.Tabela;
+            if (F.SlotCanario != kGpuExpandNoSlot - 1u) {
+                std::vector<u32> ComCanario = SlotsLimpos;
+                ComCanario.push_back(F.SlotCanario);
+                C.Candidatos(ComCanario);
+            }
+            if (F.ExpandOverflow) {
+                const u32 Lim = static_cast<u32>(SlotsLimpos.size());
+                C.ExpandNaGpu = { Lim - 1u, 0u, 0u, 1u };
+            }
             const FCadeia::FSaida R = C.Rodar(F.Reset);
             const std::string N = F.Nome;
             CheckEq(R.Status, 0u, N + ": frame invalidado");
@@ -3012,6 +3191,7 @@ int main() try {
             CheckEq(X.Chamadas, 2u, N + ": as duas chamadas — quem zera e o count buffer, e nao a CPU");
             ConferirNada(X, N);
         }
+        C.Candidatos(SlotsLimpos);
 
         // ---- layout A na GPU, gravacao com o atual ----
         //
@@ -3020,7 +3200,7 @@ int main() try {
         // nos offsets de A desenharia CERTO por acaso, lendo o comando velho. Aqui a posicao 4 so tem
         // poison, e sem a versao o desenho leria exatamente ele.
         {
-            FCadeia C2(S, In, Layout, TotalReg);
+            FCadeia C2(S, InLimpo, Layout, TotalReg);
             C2.Criar(ComandoSeguro());
             C2.TabelaNaGpu.assign(LayoutA.Regions().begin(), LayoutA.Regions().end());
             const FCadeia::FSaida R = C2.Rodar(FCadeia::kResetTudo);

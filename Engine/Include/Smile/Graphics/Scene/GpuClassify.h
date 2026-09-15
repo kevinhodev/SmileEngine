@@ -24,16 +24,22 @@
 //
 // Isso parte os desfechos em duas naturezas, e confundi-las e o erro que custa geometria:
 //
-//   POLITICA  — `NotEligible` e `Unrepresentable`. Recusas previstas, e a CPU desenha esses
+//   POLITICA  — `NotEligible` e `MeshUnusable`. Recusas previstas, e a CPU desenha esses
 //               renderaveis pelo caminho classico. Crescem normalmente (masked, two-sided e Blend
 //               existem em toda cena). Os dois lados avaliam o MESMO predicado sobre a MESMA linha,
 //               entao a recusa da GPU e o desenho da CPU sao o mesmo fato visto de dois lugares.
 //
 //   CANARIO   — `NoSlot`, `InvalidSlot`, `InvalidMaterialId`, `InvalidMeshId`, `InvalidPoolId` e
 //               `Overflow`. Significam invariante quebrado: as tabelas discordam do que a CPU acha
-//               que existe. Sao DIAGNOSTICO, nunca entrada de roteamento — quando eles aparecem, o
-//               estrago daquele frame ja aconteceu, e "voltar para a CPU no frame seguinte" seria
-//               justamente a decisao por readback que a regra 7 proibe.
+//               que existe. Nunca sao entrada de roteamento — "voltar para a CPU no frame seguinte"
+//               seria justamente a decisao por readback que a regra 7 proibe —, e por isso a
+//               FINALIZACAO invalida o frame inteiro quando qualquer um aparece, no mesmo frame e
+//               dentro da GPU: todo o `DrawCounts` sai zerado. Os canarios do EXPAND (slot invalido,
+//               RaytracingOnly alcancado, overflow da saida) tambem.
+//
+//               A politica e uma lista FECHADA (`GpuClassifyOutcomeIsCanary`). Um desfecho novo nasce
+//               canario ate alguem declara-lo politica: o erro por omissao zera o frame, e nao some
+//               com geometria.
 //
 //               `Overflow` e o unico que nao deveria ser alcancavel: o preflight exige
 //               `BatchCapacity >= GpuBatchSlotCount(PoolCount)`, e com isso o indice do lote esta
@@ -62,7 +68,8 @@
 // `GpuIndirectEligible(...) E ids validos`. O conjunto exposto e portanto `elegivel E canario`, e
 // ninguem o desenha. Pior: nos canarios de id (`InvalidMaterialId`, `InvalidSlot`) a classe nem
 // chega a ser conhecida, entao nao da para saber se o candidato estava exposto — o que obriga a
-// tratar QUALQUER canario como possivel geometria perdida.
+// tratar QUALQUER canario como possivel geometria perdida. E e o que a finalizacao faz: um frame que
+// fechasse com os outros lotes desenhando esconderia a perda parcial; zerado, o defeito aparece.
 //
 // A prova de "desenhado exatamente uma vez" so pode existir quando o fallback e o scatter
 // existirem, e exige que os dois bracos leiam a MESMA versao das linhas canonicas. Ela pertence
@@ -101,6 +108,14 @@ namespace Smile {
         GpuClassifyOverflow          = 8, // lote fora da capacidade de BatchCounts — CANARIO
         GpuClassifyOutcomeCount      = 9,
     };
+
+    // CANARIO e tudo o que NAO esta na lista fechada dos desfechos que mantem o frame: o comando e as
+    // duas recusas de politica, que a CPU desenha pelo caminho classico. Um desfecho acrescentado sem
+    // passar por aqui nasce canario. Espelhado na finalizacao (FinalizeDrawCounts.cs.hlsl).
+    inline bool GpuClassifyOutcomeIsCanary(u32 _Outcome) {
+        return _Outcome != GpuClassifyIndirect && _Outcome != GpuClassifyNotEligible &&
+               _Outcome != GpuClassifyMeshUnusable;
+    }
 
     // O lote a que um comando pertence.
     //
@@ -527,9 +542,9 @@ namespace Smile {
     //
     // `DrawCounts[b]` = `BatchCounts[b]` quando o frame fechou inteiro, e ZERO em todas as entradas
     // quando QUALQUER falha foi registrada — contagem alem da regiao, cursor alem da contagem, regiao de
-    // outro layout, regiao fora do recurso, ou um elo da verificacao de reset. Count buffer zerado faz
-    // o `ExecuteIndirect`
-    // executar zero comandos, e essa e a unica forma de suprimir o draw sem readback.
+    // outro layout, regiao fora do recurso, um elo da verificacao de reset, ou um CANARIO do expand ou do
+    // classify. Count buffer zerado faz o `ExecuteIndirect` executar zero comandos, e essa e a unica
+    // forma de suprimir o draw sem readback.
     //
     // ⚠️ Publicado DEPOIS do scatter. O count buffer tem de ser a ultima palavra, escrita pelo ultimo
     // passo capaz de descobrir uma falha: publicado antes, ele ja estaria no ar quando o scatter
@@ -557,12 +572,12 @@ namespace Smile {
 
     // === A cadeia, e o RESET que a abre =========================================================
     //
-    //     reset -> classify -> scatter -> finalizacao -> ExecuteIndirect(DrawCounts), um por lote
+    //     reset -> expand -> classify -> scatter -> finalizacao -> ExecuteIndirect(DrawCounts), um por lote
     //
-    // Quatro buffers ACUMULAM por `InterlockedAdd` e sao lidos por um passo seguinte: `BatchCounts` e
-    // os contadores do classify, `BatchCursors` e os contadores do scatter. Os quatro sao zerados por
-    // UM passo, o primeiro da cadeia, antes do classify — um dono, um invariante: "todo acumulador
-    // comeca a execucao em zero". A tabela de regioes nao entra no reset: ela nao acumula, e e da CPU.
+    // Cinco buffers ACUMULAM por `InterlockedAdd` e sao lidos pela finalizacao: os contadores do expand,
+    // `BatchCounts` e os contadores do classify, `BatchCursors` e os contadores do scatter. Os cinco sao
+    // zerados por UM passo, o primeiro da cadeia — um dono, um invariante: "todo acumulador comeca a
+    // execucao em zero". A tabela de regioes nao entra no reset: ela nao acumula, e e da CPU.
     //
     // ⚠️ Nao e arrumacao. Sem o reset, a segunda execucao comeca das contagens da primeira:
     //
@@ -576,7 +591,7 @@ namespace Smile {
     // entre si nao pega o caso realista — esquecer o reset INTEIRO —, porque os quatro crescem em
     // sincronia: as contagens dobram, os cursores continuam de onde pararam e terminam iguais a elas.
     // A ancora e o numero de candidatos, escrito do zero no cbuffer a cada execucao; a partir dela a
-    // finalizacao encadeia quatro igualdades, uma por acumulador (ver EGpuFinalizeReason). Com isso,
+    // finalizacao encadeia cinco igualdades, uma por acumulador (ver EGpuFinalizeReason). Com isso,
     // esquecer o reset nao desenha comando velho — desenha NADA. O reset continua obrigatorio porque um
     // frame que nao desenha nada tambem e defeito, so que visivel.
     //
@@ -670,14 +685,24 @@ namespace Smile {
         GpuFinalizeBatchSum            = 1u << 6, // soma dos lotes != indiretos
         GpuFinalizeCursorMismatch      = 1u << 7, // cursor != contagem em algum lote
         GpuFinalizeScatterSum          = 1u << 8, // emitidos + falhas do scatter != indiretos
+        // CANARIOS: um candidato que nenhum dos dois caminhos desenha. A soma dos desfechos prova que
+        // cada candidato foi CONTADO, e nao separa politica de corrupcao — com um canario, os outros lotes
+        // desenhariam num frame que fecha, e a perda seria parcial e silenciosa.
+        GpuFinalizeClassifyCanary      = 1u << 9,  // algum desfecho `GpuClassifyOutcomeIsCanary`
+        GpuFinalizeExpandCanary        = 1u << 10, // slot invalido, RaytracingOnly ou overflow no expand
+        // O quinto elo do reset: os contadores do expand tambem somam os candidatos desta execucao.
+        GpuFinalizeExpandAnchor        = 1u << 11,
     };
 
     // Referencia CPU da FINALIZACAO. Publica o count buffer a partir das contagens e de TODA
     // verificacao descrita no FinalizeDrawCounts.cs.hlsl. Devolve 1 quando o frame fechou e 0 quando
     // foi invalidado — o mesmo `Status[0]` do shader —, e `OutReason` recebe o `Status[1]`.
+    //
+    // `ExpandCounters` tem `GpuExpandCounterCount` entradas e `ClassifyCounters`,
+    // `GpuClassifyOutcomeCount`: as mesmas leituras do shader.
     u32 FinalizeDrawCounts(std::span<const u32> BatchCounts,
                            std::span<const FGpuIndirectRegion> Regions,
                            std::span<const u32> ScatterCounters, std::span<const u32> BatchCursors,
-                           std::span<const u32> ClassifyCounters, u32 CandidateCount,
-                           std::vector<u32>& OutDrawCounts, u32& OutReason);
+                           std::span<const u32> ClassifyCounters, std::span<const u32> ExpandCounters,
+                           u32 CandidateCount, std::vector<u32>& OutDrawCounts, u32& OutReason);
 }

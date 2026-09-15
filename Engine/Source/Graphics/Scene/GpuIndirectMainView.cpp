@@ -20,7 +20,8 @@ namespace Smile {
         //   expand:   t0 ranges  t1 prefixos  t2 candidatos  t3 meta                       u0 saidas  u1 contadores
         //   classify: t0 saidas  t1 meta  t2 materiais  t3 malhas                          u0 lotes   u1 contadores
         //   scatter:  t0 saidas  t1-t3 tabelas  t4 regioes  t5 lotes                        u0 args  u1 cursores  u2 contadores
-        //   final:    t0 lotes  t1 regioes  t2 cont. scatter  t3 cursores  t4 cont. classify u0 DrawCounts  u1 status
+        //   final:    t0 lotes  t1 regioes  t2 cont. scatter  t3 cursores  t4 cont. classify  t5 cont. expand
+        //                                                                                    u0 DrawCounts  u1 status
         struct FPasso {
             u32 Srv;
             u32 NumSrv;
@@ -30,8 +31,8 @@ namespace Smile {
         constexpr FPasso kExpand   { 0u, 4u, 4u, 2u };
         constexpr FPasso kClassify { 6u, 4u, 10u, 2u };
         constexpr FPasso kScatter  { 12u, 6u, 18u, 3u };
-        constexpr FPasso kFinalize { 21u, 5u, 26u, 2u };
-        constexpr u32 kDescriptorsPerSlot = 28u;
+        constexpr FPasso kFinalize { 21u, 6u, 27u, 2u };
+        constexpr u32 kDescriptorsPerSlot = 29u;
         static_assert(kExpand.Uav == kExpand.Srv + kExpand.NumSrv &&
                       kClassify.Srv == kExpand.Uav + kExpand.NumUav &&
                       kClassify.Uav == kClassify.Srv + kClassify.NumSrv &&
@@ -192,6 +193,7 @@ namespace Smile {
                 Srv(ScatterCounters_.Get(), GpuScatterCounterCount, Dword, Base + kFinalize.Srv + 2u);
                 Srv(BatchCursors_.Get(), LinhasDeLote, Dword, Base + kFinalize.Srv + 3u);
                 Srv(ClassifyCounters_.Get(), GpuClassifyOutcomeCount, Dword, Base + kFinalize.Srv + 4u);
+                Srv(ExpandCounters_.Get(), GpuExpandCounterCount, Dword, Base + kFinalize.Srv + 5u);
                 UavView(DrawCounts_.Get(), LinhasDeLote, Dword, Base + kFinalize.Uav + 0u);
                 UavView(Status_.Get(), 2u, Dword, Base + kFinalize.Uav + 1u);
             }
@@ -527,12 +529,14 @@ namespace Smile {
         if (Grupos > 0) _CommandList->Dispatch(Grupos, 1, 1);
 
         // 4. finalizacao, SEMPRE: e ela que escreve TODO o `DrawCounts`. Pulada no frame vazio, o count
-        // buffer do frame cheio anterior continuaria no ar.
+        // buffer do frame cheio anterior continuaria no ar. Le os contadores dos TRES passos por candidato:
+        // um canario em qualquer um deles zera o frame.
         {
             FBarrierBatch B;
             B.Transition(ScatterCounters_.Get(), UAV, SRV);
             B.Transition(BatchCursors_.Get(), UAV, SRV);
             B.Transition(ClassifyCounters_.Get(), UAV, SRV);
+            B.Transition(ExpandCounters_.Get(), UAV, SRV);
             B.Transition(DrawCounts_.Get(), kDrawCountsRestState, UAV);
             B.Transition(Status_.Get(), kCountersRestState, UAV);
             B.Flush(_CommandList);
@@ -547,7 +551,7 @@ namespace Smile {
             B.Transition(IndirectArgs_.Get(), UAV, kArgsRestState);
             B.Transition(DrawCounts_.Get(), UAV, kDrawCountsRestState);
             B.Transition(Status_.Get(), UAV, kCountersRestState);
-            B.Transition(ExpandCounters_.Get(), UAV, kCountersRestState);
+            B.Transition(ExpandCounters_.Get(), SRV, kCountersRestState);
             B.Transition(ClassifyCounters_.Get(), SRV, kCountersRestState);
             B.Transition(ScatterCounters_.Get(), SRV, kCountersRestState);
             B.Flush(_CommandList);

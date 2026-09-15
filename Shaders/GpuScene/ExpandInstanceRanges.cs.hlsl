@@ -12,6 +12,7 @@
 //
 // O range endereca a LISTA, nunca um intervalo de slots. Ver a nota do D5 no plano.
 
+#include "GpuBatchCounters.hlsli"
 #include "../Scene/GpuSceneTables.hlsli"
 
 struct GpuInstanceRange {
@@ -26,13 +27,8 @@ struct GpuCandidateId {
     uint Generation; // 0 = invalido, mesma convencao do FGpuSceneHandle
 };
 
-// Contadores. Indices fixos, porque o consumidor e a CPU e um enum compartilhado seria um terceiro
-// espelho a manter em dia.
-#define SMILE_EXPAND_COUNTER_EXPANDED     0u // slots escritos na saida
-#define SMILE_EXPAND_COUNTER_INVALID_SLOT 1u // slot fora da tabela/lista, ou generation que nao bate
-#define SMILE_EXPAND_COUNTER_RT_ONLY      2u // linha marcada RaytracingOnly: o produtor falhou
-#define SMILE_EXPAND_COUNTER_OVERFLOW     3u // nao coube na capacidade da saida; ver abaixo
-#define SMILE_EXPAND_COUNTER_COUNT        4u
+// Os indices dos contadores (SMILE_EXPAND_COUNTER_*) moram no GpuBatchCounters.hlsli: a finalizacao da
+// cadeia os le, e um candidato recusado aqui invalida o frame la.
 
 // Marca uma posicao de saida que nao recebeu candidato. Nao e zero: zero e um slot legitimo.
 #define SMILE_EXPAND_NO_SLOT 0xFFFFFFFFu
@@ -83,8 +79,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     // ⚠️ O overflow aqui e CANARIO, e nao politica. Um shader nao tem como cair no fallback CPU, e
     // uma saida truncada seria geometria sumindo — o que a regra 6 do plano proibe. Quem impede
     // isso e o dimensionamento: a CPU conhece `Stats().Candidates` (que conta inclusive quem nao
-    // coube) e aloca a saida por ele. Este contador tem de ser ZERO; diferente de zero significa
-    // que a lista deste frame nao pode ser consumida.
+    // coube) e aloca a saida por ele. Este contador tem de ser ZERO; diferente de zero, a lista
+    // deste frame nao pode ser consumida — e a finalizacao da cadeia zera o count buffer do frame.
+    // O mesmo vale para os outros dois canarios deste arquivo: slot invalido e RaytracingOnly.
     if (Index >= OutCapacity) {
         InterlockedAdd(Counters[SMILE_EXPAND_COUNTER_OVERFLOW], 1u);
         return;
