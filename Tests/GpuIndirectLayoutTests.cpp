@@ -74,20 +74,30 @@ namespace wrl = Microsoft::WRL;
 namespace {
     thread_local bool GContarAlocacoes = false;
     thread_local u64  GAlocacoes       = 0;
+    // Falta de memoria simulada: toda alocacao da thread lanca bad_alloc enquanto ligada.
+    thread_local bool GFalharAlocacoes = false;
 
     void* Alocar(std::size_t _Bytes) {
         if (GContarAlocacoes) ++GAlocacoes;
+        if (GFalharAlocacoes) throw std::bad_alloc();
         if (void* P = std::malloc(_Bytes != 0 ? _Bytes : 1)) return P;
         throw std::bad_alloc();
     }
 
     void* AlocarAlinhado(std::size_t _Bytes, std::align_val_t _Alinhamento) {
         if (GContarAlocacoes) ++GAlocacoes;
+        if (GFalharAlocacoes) throw std::bad_alloc();
         if (void* P = _aligned_malloc(_Bytes != 0 ? _Bytes : 1,
                                       static_cast<std::size_t>(_Alinhamento)))
             return P;
         throw std::bad_alloc();
     }
+
+    // Durante a vida do escopo, toda alocacao desta thread falha.
+    struct FFaltaDeMemoria {
+        FFaltaDeMemoria() { GFalharAlocacoes = true; }
+        ~FFaltaDeMemoria() { GFalharAlocacoes = false; }
+    };
 
     // Conta as alocacoes desta thread entre a construcao e o `Total`.
     struct FContagemDeAlocacoes {
@@ -137,6 +147,18 @@ static_assert(noexcept(GpuSceneRecordPublication(std::declval<FGpuMaterialTable&
                                                  std::declval<FGpuSceneInstanceTable&>(),
                                                  nullptr, 0u)),
               "a gravacao da publicacao do frame e noexcept");
+
+// E o ROLLBACK tambem nao lanca: uma excecao no meio de uma liberacao a interromperia, com range
+// vazado, buffers presos e as tabelas seguintes intactas.
+static_assert(noexcept(std::declval<FTextureSRVHeap&>().Free(0u, 1u)),
+              "devolver slot ao heap e noexcept");
+static_assert(noexcept(std::declval<FGpuTableStorage&>().Release(std::declval<FTextureSRVHeap&>())),
+              "liberar o armazenamento e noexcept");
+static_assert(noexcept(GpuSceneReleaseTables(std::declval<FGpuMaterialTable&>(),
+                                             std::declval<FGpuMeshTable&>(),
+                                             std::declval<FGpuSceneInstanceTable&>(),
+                                             std::declval<FTextureSRVHeap&>())),
+              "liberar as tres tabelas e noexcept");
 
 namespace {
     int Failures = 0;
@@ -595,6 +617,42 @@ int main() try {
         S.Release(G.Heap);
         CheckEq(G.Heap.UsedSlots(), Usados, "o Release devolve o descritor");
         G.Drenar("atomico");
+    }
+
+    // --- o heap devolve slots SEM ALOCAR, ate com a free list no maximo -------------------------
+    //
+    // O rollback de falta de memoria devolve descritores, e o Free era a peca que alocava: a insercao
+    // na free list podia realocar. Aqui o heap e levado ao pior caso — todo slot alocado, e depois os
+    // pares devolvidos, um range isolado por slot, a free list no maximo de ranges disjuntos — e os
+    // impares devolvidos por cima, cada um fundindo dois vizinhos. Nenhuma alocacao em nenhum passo.
+    {
+        FTextureSRVHeap H;
+        H.Initialize(G.Device.Get());
+        std::vector<u32> Slots(FTextureSRVHeap::kCapacity);
+        for (u32& Slot : Slots) Slot = H.Allocate(1u);
+        CheckEq(H.UsedSlots(), FTextureSRVHeap::kCapacity, "heap: todos os slots alocados");
+
+        u64 AlocacoesPares = 0, AlocacoesImpares = 0;
+        {
+            FContagemDeAlocacoes Contagem;
+            // Os pares em ordem crescente: cada um vira um range isolado no fim da lista.
+            for (u32 I = 0; I < FTextureSRVHeap::kCapacity; I += 2u) H.Free(Slots[I], 1u);
+            AlocacoesPares = Contagem.Total();
+        }
+        {
+            FContagemDeAlocacoes Contagem;
+            // Os impares de tras para frente: cada um funde os dois vizinhos.
+            for (u32 I = FTextureSRVHeap::kCapacity - 1u; I < FTextureSRVHeap::kCapacity; I -= 2u)
+                H.Free(Slots[I], 1u);
+            AlocacoesImpares = Contagem.Total();
+        }
+        CheckEq64(AlocacoesPares, 0ull,
+                  "heap: devolver slots isolados nao aloca, com a free list chegando ao maximo");
+        CheckEq64(AlocacoesImpares, 0ull,
+                  "heap: devolver slots que fundem vizinhos nao aloca, com a free list no maximo");
+        CheckEq(H.UsedSlots(), 0u, "heap: tudo devolvido");
+        CheckEq(H.TryAllocate(FTextureSRVHeap::kCapacity), 0u,
+                "heap: os ranges voltaram a ser um so, do slot zero ao fim");
     }
 
     // --- a contagem de alocacoes enxerga a engine ----------------------------------------------
@@ -1171,6 +1229,38 @@ int main() try {
         Check(!G.Materials.PublishedRows().empty() && !G.Meshes.PublishedRows().empty() &&
                   !G.Instances.PublishedMeta().empty(),
               "transacao refeita: as tres tem linhas publicadas");
+
+        // Falta de memoria DENTRO do rollback. Com as tres montadas e toda alocacao da thread
+        // falhando, o Setup do material lanca na primeira, e o rollback — o dele e o da transacao —
+        // tem de liberar as tres sem pedir memoria nenhuma: sem descritor preso e sem buffer vivo.
+        {
+            bool BadAlloc = false;
+            {
+                FFaltaDeMemoria Falta;
+                try {
+                    Montar();
+                } catch (const std::bad_alloc&) {
+                    BadAlloc = true;
+                }
+            }
+            Check(BadAlloc, "sem memoria: a transacao lanca bad_alloc");
+            Check(!G.Materials.IsBuilt() && !G.Meshes.IsBuilt() && !G.Instances.IsBuilt(),
+                  "sem memoria: o rollback libera as tres tabelas");
+            Check(G.Materials.Resource() == nullptr && G.Meshes.Resource() == nullptr &&
+                      G.Instances.MetaResource() == nullptr &&
+                      G.Instances.BoundsResource() == nullptr &&
+                      G.Instances.TransformResource() == nullptr &&
+                      G.Instances.PrevTransformResource() == nullptr,
+                  "sem memoria: nenhum buffer ficou vivo");
+            CheckEq(G.Heap.UsedSlots(), SemTabelas, "sem memoria: nenhum descritor ficou preso");
+            G.Frame();
+            CheckEq(G.Publicacao, GpuScenePublicationMaterialsNotBuilt,
+                    "sem memoria: a porta recusa o frame");
+        }
+        Montar();
+        CheckEq(G.Heap.UsedSlots(), ComTres, "depois da falta de memoria: a conta de descritores volta");
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "depois da falta de memoria: o frame publica");
 
         // A cena CRESCE alem da tabela sem o Setup que acompanha: o produtor nao cabe, e o frame nao
         // existe ate o Setup chegar.

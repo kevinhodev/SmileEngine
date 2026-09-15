@@ -1596,7 +1596,9 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > isso:
 >
 > - `FGpuTableStorage::Create` é atômico;
-> - cada Setup só marca a tabela pronta no fim e, se lança, a libera;
+> - cada Setup só marca a tabela pronta no fim e, se lança, a libera. A liberação não aloca nem
+>   lança: a free list do heap de descritores reserva no `Initialize` o máximo de ranges disjuntos e
+>   funde no lugar, então o rollback de uma falta de memória não pode falhar por cima dela;
 > - `RebuildSceneTables` monta as três tabelas como UMA transação (`GpuSceneSetupTables`), liberando
 >   as três quando qualquer uma falha;
 > - a porta recusa tabela incompleta, e também a cena que cresceu além da tabela de instâncias;

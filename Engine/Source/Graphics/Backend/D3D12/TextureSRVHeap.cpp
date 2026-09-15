@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include <algorithm>
 #include <string>
 #include <stdexcept>
 
@@ -19,7 +20,10 @@ namespace Smile {
         HandleSize = _Device->GetDescriptorHandleIncrementSize(
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+        // Toda a capacidade que a free list pode precisar, de uma vez: devolver slot nunca aloca.
+        // Sao 32.768 ranges de 8 B, ~256 KB de host.
         FreeList.clear();
+        FreeList.reserve(kMaxFreeRanges);
         FreeList.push_back({ 0u, kCapacity });
     }
 
@@ -58,24 +62,33 @@ namespace Smile {
     // So o free list. Separado do Free porque o CollectRetired tambem devolve range, e la o slot
     // ja saiu de UsedSlots_ quando foi aposentado — descontar de novo faria a ocupacao cair
     // abaixo do real e acabaria em zero com o heap cheio.
-    void FTextureSRVHeap::InsertFreeRange(u32 _Slot, u32 _Count) {
-        size_t i = 0;
-        while (i < FreeList.size() && FreeList[i].Offset < _Slot) ++i;
-        FreeList.insert(FreeList.begin() + i, { _Slot, _Count });
+    void FTextureSRVHeap::InsertFreeRange(u32 _Slot, u32 _Count) noexcept {
+        // O primeiro range que comeca depois do devolvido. Busca binaria: a lista chega a dezenas de
+        // milhares de ranges quando o heap fragmenta.
+        const auto Depois = std::lower_bound(
+            FreeList.begin(), FreeList.end(), _Slot,
+            [](const FFreeRange& _Range, u32 _Offset) { return _Range.Offset < _Offset; });
+        const bool TocaAntes = Depois != FreeList.begin() &&
+                               (Depois - 1)->Offset + (Depois - 1)->Count == _Slot;
+        const bool TocaDepois = Depois != FreeList.end() && _Slot + _Count == Depois->Offset;
 
-        if (i + 1 < FreeList.size() &&
-            FreeList[i].Offset + FreeList[i].Count == FreeList[i + 1].Offset) {
-            FreeList[i].Count += FreeList[i + 1].Count;
-            FreeList.erase(FreeList.begin() + i + 1);
-        }
-        if (i > 0 &&
-            FreeList[i - 1].Offset + FreeList[i - 1].Count == FreeList[i].Offset) {
-            FreeList[i - 1].Count += FreeList[i].Count;
-            FreeList.erase(FreeList.begin() + i);
+        // Fundir e sempre NO LUGAR. Inserir-e-depois-fundir, como antes, cresce a lista em um mesmo
+        // quando o range vai sumir na fusao — e com a free list no maximo esse um a mais realocava.
+        if (TocaAntes && TocaDepois) {
+            (Depois - 1)->Count += _Count + Depois->Count;
+            FreeList.erase(Depois);
+        } else if (TocaAntes) {
+            (Depois - 1)->Count += _Count;
+        } else if (TocaDepois) {
+            Depois->Offset = _Slot;
+            Depois->Count += _Count;
+        } else {
+            // Isolado: o unico caso que acrescenta um range, e ele cabe em `kMaxFreeRanges`.
+            FreeList.insert(Depois, { _Slot, _Count });
         }
     }
 
-    void FTextureSRVHeap::Free(u32 _Slot, u32 _Count) {
+    void FTextureSRVHeap::Free(u32 _Slot, u32 _Count) noexcept {
         if (_Count == 0) return;
         UsedSlots_ -= (_Count <= UsedSlots_) ? _Count : UsedSlots_;
         InsertFreeRange(_Slot, _Count);
@@ -108,7 +121,7 @@ namespace Smile {
         return Collected;
     }
 
-    void FTextureSRVHeap::Release(u32& _Slot, u32 _Count) {
+    void FTextureSRVHeap::Release(u32& _Slot, u32 _Count) noexcept {
         if (_Slot == kInvalidSlot || _Count == 0) return;
         Free(_Slot, _Count);
         _Slot = kInvalidSlot;

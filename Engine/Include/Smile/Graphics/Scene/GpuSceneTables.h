@@ -584,7 +584,8 @@ namespace Smile {
         // antes — e ja drena hoje, porque isto so acontece em carga/troca de cena.
         void Create(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 RowBytes, u32 Capacity,
                     const char* Label);
-        void Release(FTextureSRVHeap& SRVHeap);
+        // Nao aloca nem lanca: e o que os rollbacks de falta de memoria chamam.
+        void Release(FTextureSRVHeap& SRVHeap) noexcept;
 
         // A copia destas linhas pode ser gravada? Lista, recurso e staging existem, e toda linha cabe
         // no buffer. Nada a copiar e aceito. Sem efeito nenhum: e a porta que as tabelas consultam
@@ -641,7 +642,8 @@ namespace Smile {
         // descritor preso —, e `IsBuilt` so volta a valer quando um Setup chega ao fim.
         void SetupForMaterials(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                std::span<FMaterial* const> Materials);
-        void Release(FTextureSRVHeap& SRVHeap);
+        // Nao aloca nem lanca, como o do armazenamento: o rollback do Setup passa por aqui.
+        void Release(FTextureSRVHeap& SRVHeap) noexcept;
 
         // "Algum material mudou." Nao diz qual, porque quem chama tambem nao sabe (ver a nota 2 do
         // topo). O conjunto real sai da comparacao feita no PrepareUpload. Invalida uma publicacao
@@ -750,7 +752,7 @@ namespace Smile {
         // linhas. Mesmo contrato de dreno do FGpuTableStorage::Create, e fail-closed como o do
         // material: lancou, sai liberada, com o range de descritores de geometria devolvido.
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
-        void Release(FTextureSRVHeap& SRVHeap);
+        void Release(FTextureSRVHeap& SRVHeap) noexcept;
 
         // Mesma publicacao em duas fases do FGpuMaterialTable: preparar antes do BeginFrame (aloca,
         // pode lancar, fail-closed), gravar depois (sem alocar nem lancar, so com preparacao valida).
@@ -856,7 +858,7 @@ namespace Smile {
         // Fail-closed como as outras: lancou em qualquer das quatro colunas, ou nos vetores de CPU, a
         // tabela sai liberada e `IsBuilt` so volta a valer no fim de um Setup.
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
-        void Release(FTextureSRVHeap& SRVHeap);
+        void Release(FTextureSRVHeap& SRVHeap) noexcept;
 
         // Atualiza a imagem CPU apenas quando estrutura/transform/static-casters mudaram ou quando
         // o previous transform precisa assentar em current no frame seguinte. No frame estavel nao
@@ -1090,6 +1092,8 @@ namespace Smile {
                              FGpuSceneInstanceTable& Instances, ID3D12Device* Device,
                              FTextureSRVHeap& SRVHeap, std::span<FMaterial* const> MaterialList,
                              const FScene& Scene);
+    // Nao aloca nem lanca: e o rollback da transacao, e uma liberacao interrompida no meio deixaria
+    // as tabelas seguintes intactas.
     void GpuSceneReleaseTables(FGpuMaterialTable& Materials, FGpuMeshTable& Meshes,
-                               FGpuSceneInstanceTable& Instances, FTextureSRVHeap& SRVHeap);
+                               FGpuSceneInstanceTable& Instances, FTextureSRVHeap& SRVHeap) noexcept;
 }

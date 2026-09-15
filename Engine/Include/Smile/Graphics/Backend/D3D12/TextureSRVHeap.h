@@ -28,8 +28,12 @@ namespace Smile {
         // um callback do Qt deixaria material e tabela GPU divergentes — ou terminaria o
         // processo. Quem publica descritor com a cena viva usa esta.
         u32  TryAllocate(u32 Count = 1);
-        void Free(u32 Slot, u32 Count = 1);
-        void Release(u32& Slot, u32 Count = 1);
+        // Devolver NUNCA aloca, e por isso nao lanca. E o caminho dos rollbacks de falta de
+        // memoria: um Setup que lanca libera o que ja tinha pego, e uma excecao aqui dentro
+        // interromperia a liberacao no meio — range vazado, buffers presos, as tabelas seguintes
+        // intactas. Ver `kMaxFreeRanges`.
+        void Free(u32 Slot, u32 Count = 1) noexcept;
+        void Release(u32& Slot, u32 Count = 1) noexcept;
 
         // Libera um range SO DEPOIS que as duas filas passarem de Required.
         //
@@ -85,15 +89,22 @@ namespace Smile {
         // esta vazando descritor.
         u32 AllocationFailures() const { return AllocationFailures_; }
 
+        // O maximo de ranges livres ao mesmo tempo: livre, usado, livre, usado... Os ranges sao
+        // sempre maximos — a insercao funde com os vizinhos —, entao entre dois deles ha pelo menos
+        // um slot usado. O Initialize reserva esta capacidade, e a free list nunca realoca.
+        static constexpr u32 kMaxFreeRanges = (kCapacity + 1) / 2;
+
     private:
         struct FFreeRange { u32 Offset; u32 Count; };
         // Range aposentado: as mesmas coordenadas do FFreeRange mais ate onde cada fila precisa
         // chegar antes de ele poder voltar ao free list.
         struct FRetiredRange { u32 Offset; u32 Count; FGpuFenceSet Required; };
 
-        // So mexe no free list (insere ordenado e coalesce). O Free desconta de UsedSlots_ antes
-        // de chamar; o CollectRetired nao, porque o aposentado ja saiu daquela conta.
-        void InsertFreeRange(u32 Slot, u32 Count);
+        // So mexe no free list (acha o lugar e coalesce). O Free desconta de UsedSlots_ antes de
+        // chamar; o CollectRetired nao, porque o aposentado ja saiu daquela conta. Sem alocacao:
+        // funde NO LUGAR quando o range toca um vizinho, e so insere quando ele fica isolado — que e
+        // justamente quando cabe na capacidade reservada.
+        void InsertFreeRange(u32 Slot, u32 Count) noexcept;
 
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> Heap;        
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> StagingHeap; 

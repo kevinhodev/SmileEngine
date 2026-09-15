@@ -77,9 +77,10 @@ namespace Smile {
         _SRVHeap.CreateSRV(_Device, Buffer_.Get(), Desc, SrvSlot_);
     }
 
-    void FGpuTableStorage::Release(FTextureSRVHeap& _SRVHeap) {
-        // O slot sai do membro ANTES do Free: se o Free lancar, o slot vaza, mas uma segunda
-        // liberacao nao o devolve duas vezes ao heap.
+    void FGpuTableStorage::Release(FTextureSRVHeap& _SRVHeap) noexcept {
+        // Nada aqui aloca: o Free do heap devolve o slot na capacidade que o Initialize reservou, e
+        // soltar ComPtr e mapeamento nao pede memoria. O slot sai do membro antes do Free para uma
+        // segunda liberacao nunca devolve-lo duas vezes.
         const u32 Slot = SrvSlot_;
         SrvSlot_ = kInvalidSlot;
         if (Slot != kInvalidSlot) _SRVHeap.Free(Slot, 1);
@@ -202,9 +203,9 @@ namespace Smile {
         Built_             = true;
     }
 
-    void FGpuMaterialTable::Release(FTextureSRVHeap& _SRVHeap) {
-        // A marca PRIMEIRO: o Free do heap pode alocar, e uma excecao no meio da liberacao nao pode
-        // deixar a tabela dizendo que esta pronta.
+    void FGpuMaterialTable::Release(FTextureSRVHeap& _SRVHeap) noexcept {
+        // Sem alocacao — e o rollback do Setup sob falta de memoria. A marca vem primeiro mesmo
+        // assim: a tabela deixa de estar pronta antes de qualquer coisa ser solta.
         Built_    = false;
         Prepared_ = false;
         Storage_.Release(_SRVHeap);
@@ -418,9 +419,9 @@ namespace Smile {
         }
     }
 
-    void FGpuMeshTable::Release(FTextureSRVHeap& _SRVHeap) {
-        // A marca primeiro, como no material. E o range sai dos membros ANTES do Free: se o Free
-        // lancar, o range vaza, mas uma segunda liberacao nao o devolve duas vezes ao heap.
+    void FGpuMeshTable::Release(FTextureSRVHeap& _SRVHeap) noexcept {
+        // Sem alocacao, como no material. O range sai dos membros antes do Free para uma segunda
+        // liberacao nunca devolve-lo duas vezes ao heap.
         Built_    = false;
         Prepared_ = false;
         const u32 Base  = DescriptorBase_;
@@ -547,8 +548,8 @@ namespace Smile {
         Built_ = true;
     }
 
-    void FGpuSceneInstanceTable::Release(FTextureSRVHeap& _SRVHeap) {
-        // A marca primeiro, como no material.
+    void FGpuSceneInstanceTable::Release(FTextureSRVHeap& _SRVHeap) noexcept {
+        // Sem alocacao e com a marca primeiro, como no material.
         Built_    = false;
         Prepared_ = false;
         MetaStorage_.Release(_SRVHeap);
@@ -926,7 +927,8 @@ namespace Smile {
     }
 
     void GpuSceneReleaseTables(FGpuMaterialTable& _Materials, FGpuMeshTable& _Meshes,
-                               FGpuSceneInstanceTable& _Instances, FTextureSRVHeap& _SRVHeap) {
+                               FGpuSceneInstanceTable& _Instances,
+                               FTextureSRVHeap& _SRVHeap) noexcept {
         _Materials.Release(_SRVHeap);
         _Meshes.Release(_SRVHeap);
         _Instances.Release(_SRVHeap);
