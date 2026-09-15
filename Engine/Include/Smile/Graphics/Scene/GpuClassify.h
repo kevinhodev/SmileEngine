@@ -419,6 +419,10 @@ namespace Smile {
     //
     // `OutLayout` so e escrito sob `Ok`: um layout recusado nao pode deixar regioes plausiveis — nem
     // uma versao — na mao do chamador.
+    //
+    // As regioes sao escritas NO LUGAR, depois das portas: com a capacidade de `OutLayout` ja reservada
+    // (`FGpuIndirectLayoutState::Reserve`), a montagem nao aloca. Sem ela, o `resize` aloca, e se falhar
+    // falha antes de mudar qualquer campo.
     u32 GpuBuildIndirectLayout(std::span<const u64> Capacities, u32 Version,
                                FGpuIndirectLayout& OutLayout);
 
@@ -436,6 +440,19 @@ namespace Smile {
 
     private:
         friend u32 GpuBuildIndirectLayout(std::span<const u64>, u32, FGpuIndirectLayout&);
+        // O estado vivo nao PREENCHE o layout — isso continua so do `GpuBuildIndirectLayout` —, mas o
+        // invalida e reserva a memoria da proxima montagem.
+        friend class FGpuIndirectLayoutState;
+
+        // Desfaz o layout SEM soltar a memoria das regioes. Atribuir um layout vazio tambem invalidaria,
+        // mas levaria a reserva junto, e a montagem seguinte voltaria a alocar.
+        void Invalidate() noexcept {
+            Version_ = 0;
+            Total_   = 0;
+            Regions_.clear();
+        }
+        void   Reserve(size_t Regions) { Regions_.reserve(Regions); }
+        size_t ReservedRegions() const noexcept { return Regions_.capacity(); }
 
         u32                             Version_ = 0;
         u32                             Total_   = 0;

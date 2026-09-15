@@ -148,6 +148,10 @@ static_assert(noexcept(GpuSceneRecordPublication(std::declval<FGpuMaterialTable&
                                                  std::declval<FGpuSceneInstanceTable&>(),
                                                  nullptr, 0u)),
               "a gravacao da publicacao do frame e noexcept");
+// A recontagem do layout le as linhas que a gravacao acabou de publicar, com a mesma lista aberta.
+static_assert(noexcept(std::declval<FGpuIndirectLayoutState&>().Refresh(
+                  std::declval<const FGpuLayoutInputs&>())),
+              "recontar o layout e noexcept");
 
 // E o ROLLBACK tambem nao lanca: uma excecao no meio de uma liberacao a interromperia, com range
 // vazado, buffers presos e as tabelas seguintes intactas.
@@ -236,6 +240,9 @@ namespace {
         FGpuSceneInstanceTable  Instances;
         FGpuIndirectLayoutState Layout;
         u32 Motivo = 0;
+        // Consultas que RECONTARAM. Sem este numero, "recontar nao aloca" passaria verde num teste em
+        // que nenhuma consulta chegou a recontar.
+        u32 Remontagens = 0;
         u32 Publicacao = GpuScenePublicationOk; // a decisao da fronteira no ultimo frame
 
         // Ids dos renderaveis, porque remover desloca os indices da cauda.
@@ -322,13 +329,27 @@ namespace {
 
         // O layout, lido das linhas PUBLICADAS. Chamado pela gravacao depois dos uploads — a ordem do
         // RendererFrame —, e sozinho para olhar a janela entre um Setup (ou Release) e a publicacao.
+        //
+        // A recontagem roda com a lista aberta, entao nao pode alocar: a reserva vem antes, e a contagem
+        // de alocacoes cobre a consulta inteira — inclusive os frames em que as versoes mudaram e o
+        // layout foi remontado.
         void Consultar() {
+            const u32 Pools = static_cast<u32>(Meshes.GeometryPools().size());
+            Layout.Reserve(Pools);
             const FGpuLayoutInputs In{
-                Instances.PublishedMeta(), Materials.PublishedRows(), Meshes.PublishedRows(),
-                static_cast<u32>(Meshes.GeometryPools().size()), Instances.LayoutInputsVersion(),
-                Materials.LayoutInputsVersion(), Meshes.LayoutInputsVersion()
+                Instances.PublishedMeta(), Materials.PublishedRows(), Meshes.PublishedRows(), Pools,
+                Instances.LayoutInputsVersion(), Materials.LayoutInputsVersion(),
+                Meshes.LayoutInputsVersion()
             };
-            Motivo = Layout.Refresh(In);
+            const u64 TentativasAntes = Layout.RebuildAttempts();
+            u64 Alocacoes = 0;
+            {
+                FContagemDeAlocacoes Contagem;
+                Motivo    = Layout.Refresh(In);
+                Alocacoes = Contagem.Total();
+            }
+            CheckEq64(Alocacoes, 0ull, "recontar o layout nao aloca");
+            if (Layout.RebuildAttempts() != TentativasAntes) ++Remontagens;
         }
 
         // Grava um frame no slot, na ordem do RendererFrame. O produtor e a preparacao da publicacao
@@ -1078,6 +1099,10 @@ int main() try {
     G.Instances.Release(G.Heap);
     G.Consultar();
     CheckEq64(G.Layout.RebuildAttempts(), 18ull, "o Release das instancias reconta");
+    // "Recontar nao aloca" so diz algo se as consultas contadas recontaram: todas as 18 passaram pela
+    // contagem — classe, RaytracingOnly, associacao, pool, Setup e Release.
+    CheckEq64(G.Remontagens, G.Layout.RebuildAttempts(),
+              "toda recontagem do teste passou pela contagem de alocacoes");
 
     // --- Setup INTERROMPIDO: a tabela sai liberada, e o frame nao existe --------------------------
     //

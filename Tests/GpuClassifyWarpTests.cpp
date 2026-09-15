@@ -650,6 +650,12 @@ namespace {
         FGpuLayoutInputs In{ Metas, Mats, Meshs, kPoolCount, 1ull, 1ull, 1ull };
         FGpuIndirectLayoutState S;
 
+        // Sem reserva, a recontagem RECUSA em vez de alocar — ela roda com a lista do frame aberta. E a
+        // recusa nao conta como tentativa: depois da reserva, as MESMAS entradas recontam.
+        CheckEq(S.Refresh(In), GpuLayoutRefreshNotReserved, "estado: sem reserva recusa");
+        CheckEq(S.Layout().Version(), 0u, "estado: sem reserva nao ha layout");
+        CheckEq64(S.RebuildAttempts(), 0ull, "estado: sem reserva nada foi contado");
+        S.Reserve(kPoolCount);
         CheckEq(S.Refresh(In), GpuLayoutRefreshOk, "estado: a primeira consulta monta o layout");
         CheckEq64(S.RebuildAttempts(), 1ull, "estado: com uma contagem");
         CheckEq(S.Layout().Version(), 1u, "estado: na versao 1");
@@ -682,7 +688,13 @@ namespace {
         In.MeshVersion = 2ull;
         S.Refresh(In);
         CheckEq64(S.RebuildAttempts(), 4ull, "estado: a versao da malha sozinha reconta");
+        // Um pool a mais pede mais regioes do que a reserva de dois cobre: recusa, invalida o layout de
+        // dois pools, e so reconta depois de reservar para tres.
         In.PoolCount = 3u;
+        CheckEq(S.Refresh(In), GpuLayoutRefreshNotReserved, "estado: pools alem da reserva recusam");
+        CheckEq(S.Layout().Version(), 0u, "estado: e o layout de dois pools deixa de valer");
+        CheckEq64(S.RebuildAttempts(), 4ull, "estado: a recusa por reserva nao conta como tentativa");
+        S.Reserve(3u);
         S.Refresh(In);
         CheckEq64(S.RebuildAttempts(), 5ull, "estado: o numero de pools sozinho reconta");
         CheckEq(static_cast<u32>(S.Layout().Regions().size()), 12u, "estado: com uma regiao por lote dos tres pools");
@@ -708,6 +720,7 @@ namespace {
         // A fonte de versoes esgota e fica esgotada.
         FGpuIndirectLayoutState E(UINT32_MAX - 1u);
         In.PoolCount = kPoolCount;
+        E.Reserve(kPoolCount);
         CheckEq(E.Refresh(In), GpuLayoutRefreshOk, "estado: a ultima versao valida monta");
         CheckEq(E.Layout().Version(), UINT32_MAX, "estado: e e UINT32_MAX");
         In.MetaVersion = 3ull;

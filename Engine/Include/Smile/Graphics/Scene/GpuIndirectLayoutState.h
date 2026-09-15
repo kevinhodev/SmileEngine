@@ -44,6 +44,9 @@ namespace Smile {
         GpuLayoutRefreshTooManyCommands = 3,
         // A fonte de versoes esgotou (`FGpuIndirectLayoutVersions`). Permanente.
         GpuLayoutRefreshVersionsExhausted = 4,
+        // Sem `Reserve` para o numero de pools destas entradas: recontar alocaria. Nao e registrado
+        // como tentativa — a chamada seguinte, depois da reserva, reconta.
+        GpuLayoutRefreshNotReserved = 5,
     };
 
     class FGpuIndirectLayoutState {
@@ -51,6 +54,12 @@ namespace Smile {
         // `_LastVersion` e a ultima versao ja entregue, como no `FGpuIndirectLayoutVersions`: existe
         // para o teste alcancar a exaustao.
         explicit FGpuIndirectLayoutState(u32 _LastVersion = 0u) : Versions_(_LastVersion) {}
+
+        // Reserva, para `PoolCount` pools, tudo o que a recontagem escreve: a capacidade de cada lote e
+        // as regioes do layout. ALOCA, e por isso fica antes do BeginFrame; com a reserva ja feita, nao
+        // faz nada. Sem pool, ou com pools demais para a tabela de lotes, nao ha o que reservar — a
+        // recontagem recusa pelo mesmo motivo, sem escrever nada.
+        void Reserve(u32 PoolCount);
 
         // Reconstroi o layout quando alguma das tres versoes, ou o numero de pools, difere da ultima
         // TENTATIVA — bem-sucedida ou nao. Devolve o motivo da tentativa vigente.
@@ -60,7 +69,11 @@ namespace Smile {
         //
         // O layout anterior deixa de valer ANTES da tentativa: uma recusa nao pode deixar a gravacao
         // com regioes contadas sobre outras linhas.
-        u32 Refresh(const FGpuLayoutInputs& Inputs);
+        //
+        // Nao aloca nem lanca. As entradas sao as linhas PUBLICADAS, que so existem depois da gravacao
+        // da publicacao — com a lista do frame aberta, onde uma excecao a deixaria pela metade. Sem a
+        // reserva para os pools destas entradas, recusa (`NotReserved`) em vez de alocar.
+        u32 Refresh(const FGpuLayoutInputs& Inputs) noexcept;
 
         const FGpuIndirectLayout& Layout() const { return Layout_; }
         u32 LastReason() const { return LastReason_; }

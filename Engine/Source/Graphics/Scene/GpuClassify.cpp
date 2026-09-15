@@ -81,18 +81,21 @@ namespace Smile {
             Total += C;
         }
 
-        // Daqui para baixo toda conversao e segura: cada offset e cada capacidade sao <= Total. As
-        // regioes sao montadas num vetor proprio e so entao entregues, para o layout de saida nunca
-        // ficar pela metade.
-        std::vector<FGpuIndirectRegion> Regioes(_Capacities.size());
+        // Daqui para baixo toda conversao e segura: cada offset e cada capacidade sao <= Total.
+        //
+        // As regioes vao direto para o layout de saida, sem vetor temporario: um vetor por montagem
+        // alocaria a cada recontagem, e ela roda com a lista do frame aberta. O layout nao fica pela
+        // metade mesmo assim — as portas ja passaram, e o `resize` e a unica coisa que ainda pode
+        // falhar; falhando, falha antes de mudar qualquer campo. Com a capacidade reservada, nao aloca.
+        _OutLayout.Regions_.resize(_Capacities.size());
         u64 Acc = 0;
         for (size_t B = 0; B < _Capacities.size(); ++B) {
-            Regioes[B].Offset   = static_cast<u32>(Acc);
-            Regioes[B].Capacity = static_cast<u32>(_Capacities[B]);
-            Regioes[B].Version  = _Version;
+            FGpuIndirectRegion& R = _OutLayout.Regions_[B];
+            R.Offset   = static_cast<u32>(Acc);
+            R.Capacity = static_cast<u32>(_Capacities[B]);
+            R.Version  = _Version;
             Acc += _Capacities[B];
         }
-        _OutLayout.Regions_ = std::move(Regioes);
         _OutLayout.Total_   = static_cast<u32>(Total);
         _OutLayout.Version_ = _Version;
         return GpuRegionLayoutOk;
