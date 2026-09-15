@@ -100,7 +100,8 @@ namespace {
         // Um ciclo de frame do renderer: produtor, depois upload.
         void Frame() {
             Instances.PrepareFrame(Scene, Meshes, Materials);
-            Check(Instances.RecordUpload(List.Get(), 0), "a gravacao do frame e aceita");
+            Check(Instances.PrepareUpload(List.Get()) && Instances.RecordUpload(List.Get(), 0),
+                  "a publicacao do frame e preparada e gravada");
         }
     };
 }

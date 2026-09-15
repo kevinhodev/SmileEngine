@@ -834,12 +834,13 @@ namespace Smile {
         // Antes do ObjectCB porque a necessidade dele depende de as tabelas estarem prontas: com
         // elas incompletas, a reconciliacao realocaria centenas de MB para um frame que nao existe.
         //
-        // O produtor vem para ca junto, porque a porta das instancias confere os slots que ele toca.
-        // Ele so escreve memoria de CPU; o staging do slot continua sendo escrito so depois do
-        // BeginFrame, que espera a fence que o libera.
+        // E a FASE 1 da publicacao: o produtor e a preparacao das tres tabelas fazem aqui tudo o que
+        // aloca ou pode lancar — diffs, reservas dos shadows, portas. Uma excecao aqui sai com a lista
+        // fechada e nenhum shadow avancado. Nada disto escreve o staging do slot: ele so e escrito na
+        // fase 2, depois do BeginFrame, que espera a fence que o libera.
         InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
-        if (const u32 Recusa = GpuScenePublicationGate(MaterialTable, MeshTable, InstanceTable,
-                                                        Backend->DirectQueue.List());
+        if (const u32 Recusa = GpuScenePreparePublication(MaterialTable, MeshTable, InstanceTable,
+                                                           Backend->DirectQueue.List());
             Recusa != GpuScenePublicationOk) {
             // Uma vez por episodio, como a falta do ObjectCB.
             if (!ScenePublicationFailureLogged) {
@@ -900,16 +901,15 @@ namespace Smile {
         // reutilizar com seguranca os slices do slot. No caso comum nao emite nada — nenhuma linha
         // suja, nenhuma barreira.
         //
-        // A porta la de cima aceitou as tres publicacoes com esta mesma lista, e aceitar la implica
-        // aceitar aqui. Uma recusa agora e invariante quebrado: falha alto, em vez de seguir com uma
-        // tabela antiga.
-        const bool TabelasPublicadas =
-            MaterialTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex()) &&
-            MeshTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex()) &&
-            InstanceTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
-        if (!TabelasPublicadas)
-            throw std::logic_error("Tabelas canonicas: a porta aceitou a publicacao do frame, e a "
-                                   "gravacao de uma tabela recusou");
+        // FASE 2: so grava as copias preparadas e avanca os shadows — sem alocacao e sem excecao, com a
+        // lista aberta. As tres preparacoes sao conferidas antes da primeira copia. Invalidas, e porque
+        // alguem mutou uma tabela entre as duas fases: invariante quebrado, que falha alto ANTES de
+        // qualquer shadow andar, em vez de seguir com uma tabela antiga.
+        if (!GpuSceneRecordPublication(MaterialTable, MeshTable, InstanceTable,
+                                       Backend->DirectQueue.List(),
+                                       Backend->DirectQueue.FrameIndex()))
+            throw std::logic_error("Tabelas canonicas: a publicacao preparada antes do BeginFrame nao "
+                                   "vale mais para a lista do frame");
 
         ObjectPicker.Tick();
 

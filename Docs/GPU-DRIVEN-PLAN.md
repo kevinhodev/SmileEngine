@@ -1578,13 +1578,18 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > canônica é transacional sozinha: uma cópia recusada não avança shadow, versão nem `Dirty`. Isso não
 > basta para o frame. Seguir com uma tabela recusada mistura duas imagens: o `TransformsFor` devolve o
 > transform publicado antigo, enquanto frustum, caixa, material e associação saem do `FRenderable`
-> novo. E um objeto nunca publicado vai pelo `ObjectCB` sem linha válida no caminho bindless. Por isso
-> o `RenderFrame` roda o produtor e a `GpuScenePublicationGate` antes de abrir a command list. As portas
-> pendentes são sem efeito e conservadoras: aceitar lá garante a gravação aceitar. Com qualquer recusa,
-> não há frame, com uma linha de log por episódio, como na falta do `ObjectCB`. Descartar o frame
-> depois de gravar não serviria: as tabelas que aceitaram já teriam avançado o shadow sobre uma cópia
-> que a GPU nunca executa. Uma gravação que recuse depois de a porta aceitar é invariante quebrado, e
-> lança. O contrato está em `Engine/Include/Smile/Graphics/Scene/GpuSceneTables.h`.
+> novo. E um objeto nunca publicado vai pelo `ObjectCB` sem linha válida no caminho bindless.
+>
+> Por isso a publicação tem duas fases. `GpuScenePreparePublication` roda com a command list ainda
+> fechada: produtor, diffs, reservas dos shadows e portas das três tabelas — tudo que aloca ou pode
+> lançar. Com qualquer recusa, não há frame, com uma linha de log por episódio, como na falta do
+> `ObjectCB`. `GpuSceneRecordPublication` roda depois do `BeginFrame` e só grava e avança, `noexcept`
+> e sem alocar (o teste conta as alocações). Ela confere as três preparações antes da primeira cópia.
+> Descartar o frame depois de gravar não serviria: as tabelas que aceitaram já teriam avançado o
+> shadow sobre uma cópia que a GPU nunca executa. Uma exceção depois do `BeginFrame` deixaria a lista
+> aberta com shadows parciais. Qualquer mutação da tabela entre as duas fases invalida a preparação,
+> e a gravação lança antes de qualquer cópia. O contrato está em
+> `Engine/Include/Smile/Graphics/Scene/GpuSceneTables.h`.
 >
 > A porta é **fail-closed**. A recusa de produção vem de um Setup que lança por falta de memória com o
 > render thread seguindo, e ela deixava tabelas pela metade que a porta lia como "nada pendente". Por

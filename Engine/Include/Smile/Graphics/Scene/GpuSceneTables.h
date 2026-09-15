@@ -590,20 +590,14 @@ namespace Smile {
         // no buffer. Nada a copiar e aceito. Sem efeito nenhum: e a porta que as tabelas consultam
         // ANTES de gravar e de avancar o shadow, e a mesma que o `RecordUpload` aplica.
         bool AcceptsUpload(ID3D12GraphicsCommandList* CommandList, const void* Rows,
-                           std::span<const u32> Changed) const;
-
-        // A mesma porta para QUALQUER subconjunto das linhas [0, RowCount), sem saber qual: lista,
-        // recurso e staging existem, e RowCount cabe no buffer. Nenhuma linha e aceito. Sem efeito.
-        // Aceitar aqui implica o `AcceptsUpload` aceitar toda copia de linhas abaixo de RowCount — e
-        // o que deixa o frame decidir as tres tabelas antes de gravar qualquer uma.
-        bool AcceptsRows(ID3D12GraphicsCommandList* CommandList, u32 RowCount) const;
+                           std::span<const u32> Changed) const noexcept;
 
         // Copia as linhas indicadas. Rows aponta para um array contiguo de pelo menos
         // max(Changed)+1 linhas. Devolve quantas regioes de copia foram emitidas (linhas
         // contiguas viram uma so); zero quando nao ha o que copiar ou quando a porta recusa, e a
-        // recusa vem antes de qualquer escrita.
+        // recusa vem antes de qualquer escrita. Nao aloca: memcpy no staging e comandos na lista.
         u32 RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot, const void* Rows,
-                         std::span<const u32> Changed);
+                         std::span<const u32> Changed) noexcept;
 
         // O recurso DEFAULT. Para leitura de conferencia; os leitores de frame usam o SRV.
         ID3D12Resource* Resource() const { return Buffer_.Get(); }
@@ -650,26 +644,33 @@ namespace Smile {
         void Release(FTextureSRVHeap& SRVHeap);
 
         // "Algum material mudou." Nao diz qual, porque quem chama tambem nao sabe (ver a nota 2 do
-        // topo). O conjunto real sai da comparacao feita no RecordUpload.
-        void MarkDirty() { Dirty_ = true; }
+        // topo). O conjunto real sai da comparacao feita no PrepareUpload. Invalida uma publicacao
+        // ja preparada: ela descreve as linhas de antes.
+        void MarkDirty() {
+            Dirty_    = true;
+            Prepared_ = false;
+        }
 
-        // Sobe as linhas que mudaram, na command list do FRAME. Sem dreno, sem Map do recurso
-        // final, sem barreira global.
+        // A publicacao das linhas que mudaram, na command list do FRAME, em DUAS fases. Sem dreno,
+        // sem Map do recurso final, sem barreira global.
         //
-        // Tem de ser gravado ANTES do primeiro leitor do frame — o que inclui a fila de COMPUTE,
+        // Tem de ser gravada ANTES do primeiro leitor do frame — o que inclui a fila de COMPUTE,
         // porque o update do DDGI le a tabela pela mesma indirecao. Isso e satisfeito gravando no
         // topo da command list da direta: o trabalho async e submetido com SubmitAfter sobre um
         // segmento posterior desta mesma lista.
         //
-        // Transacional: devolve false quando a copia e RECUSADA, e entao nada foi gravado nem
-        // avancou. Nada a publicar devolve true. O frame nao chega a chamar isto com uma publicacao
-        // que a porta recusaria — ver GpuScenePublicationGate.
-        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
-
-        // A publicacao pendente seria aceita? Sem efeito, e conservadora: confere a porta para TODAS
-        // as linhas da tabela, entao aceitar aqui garante o `RecordUpload` aceitar. Nada pendente e
-        // aceito.
-        bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
+        // FASE 1, antes do BeginFrame: tudo o que aloca ou pode lancar — as linhas novas, o diff e a
+        // reserva do shadow —, sem gravar nem avancar nada. Devolve se a copia sera aceita.
+        // Fail-closed: tabela incompleta recusa. Nada pendente e aceito. Transacional: recusada, nada
+        // anda, e o frame seguinte tenta de novo.
+        bool PrepareUpload(ID3D12GraphicsCommandList* CommandList);
+        // FASE 2, depois do BeginFrame: grava a copia preparada e avanca shadow e versao. NAO aloca
+        // nem lanca. Sem uma preparacao valida para ESTA lista — nenhuma, ou invalidada por mutacao
+        // da tabela —, nao grava nada e devolve false.
+        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot) noexcept;
+        bool IsPreparedFor(ID3D12GraphicsCommandList* CommandList) const noexcept {
+            return Prepared_ && PreparedList_ == CommandList;
+        }
 
         u32  Srv()      const { return Storage_.Srv(); }
         u32  RowCount() const { return static_cast<u32>(RowMaterials_.size()); }
@@ -719,6 +720,11 @@ namespace Smile {
 
         bool Built_             = false;
         bool Dirty_             = false;
+        // A publicacao preparada: valida so para a lista em que foi preparada, e ate a proxima
+        // mutacao da tabela.
+        bool                       Prepared_             = false;
+        bool                       PreparedAltersLayout_ = false;
+        ID3D12GraphicsCommandList* PreparedList_         = nullptr;
         u32  LastDirtyRows_     = 0;
         u32  LastCopyRegions_   = 0;
         u64  TotalRowsUploaded_ = 0;
@@ -746,10 +752,13 @@ namespace Smile {
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
         void Release(FTextureSRVHeap& SRVHeap);
 
-        // Mesmo contrato do FGpuMaterialTable: false quando a copia e recusada, sem nada gravado nem
-        // avancado; a porta pendente e conservadora e sem efeito.
-        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
-        bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
+        // Mesma publicacao em duas fases do FGpuMaterialTable: preparar antes do BeginFrame (aloca,
+        // pode lancar, fail-closed), gravar depois (sem alocar nem lancar, so com preparacao valida).
+        bool PrepareUpload(ID3D12GraphicsCommandList* CommandList);
+        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot) noexcept;
+        bool IsPreparedFor(ID3D12GraphicsCommandList* CommandList) const noexcept {
+            return Prepared_ && PreparedList_ == CommandList;
+        }
 
         u32  Srv()      const { return Storage_.Srv(); }
         u32  RowCount() const { return static_cast<u32>(RowMeshes_.size()); }
@@ -822,6 +831,9 @@ namespace Smile {
         u32 DescriptorCount_ = 0;
         bool Built_          = false;
         bool Dirty_          = false;
+        bool                       Prepared_          = false;
+        bool                       PreparedPublishes_ = false;
+        ID3D12GraphicsCommandList* PreparedList_      = nullptr;
         u32  LastDirtyRows_  = 0;
         u64  LayoutInputsVersion_ = 0;
     };
@@ -857,11 +869,14 @@ namespace Smile {
         // outro campo da cena e tocado.
         void PrepareFrame(FScene& Scene, const FGpuMeshTable& Meshes,
                           const FGpuMaterialTable& Materials);
-        // Mesmo contrato do FGpuMaterialTable: false quando a copia e recusada, sem nada gravado nem
-        // avancado. A porta pendente confere as quatro colunas ate o maior slot tocado pelo ultimo
-        // PrepareFrame — os tocados sao ordenados, e toda linha que muda e uma delas.
-        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
-        bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
+        // Mesma publicacao em duas fases do FGpuMaterialTable. A preparacao faz o diff das quatro
+        // colunas sobre os tocados do ultimo PrepareFrame, e o produtor a invalida: um ciclo novo muda
+        // linhas e tocados.
+        bool PrepareUpload(ID3D12GraphicsCommandList* CommandList);
+        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot) noexcept;
+        bool IsPreparedFor(ID3D12GraphicsCommandList* CommandList) const noexcept {
+            return Prepared_ && PreparedList_ == CommandList;
+        }
 
         // Setup COMPLETO e nao liberado: as QUATRO colunas e os vetores de CPU. Conferir so a meta
         // aprovava uma tabela cujo Setup lancou depois de cria-la.
@@ -982,6 +997,9 @@ namespace Smile {
         bool Dirty_                    = false;
         bool Built_                    = false;
         bool FitsScene_                = true;
+        bool Prepared_                 = false;
+        bool PreparedAltersLayout_     = false;
+        ID3D12GraphicsCommandList* PreparedList_ = nullptr;
 
         u32 LastDirtyRows_       = 0;
         u64 LastDirtyBytes_      = 0;
@@ -999,9 +1017,11 @@ namespace Smile {
     // de gravar tambem nao serve: as tabelas que aceitaram ja teriam avancado o shadow sobre uma
     // copia que a GPU nunca executa.
     //
-    // Por isso a decisao vem ANTES de gravar qualquer tabela, pelas portas pendentes, que sao sem
-    // efeito e conservadoras. O Renderer consulta com a command list ainda fechada e, recusada, nao
-    // abre o frame.
+    // Por isso a publicacao tem DUAS fases. `GpuScenePreparePublication` roda com a command list
+    // ainda fechada e faz tudo o que aloca ou pode lancar nas tres tabelas — diffs, reservas, portas.
+    // Recusada, o Renderer nao abre o frame, e nada foi gravado nem avancou. `GpuSceneRecordPublication`
+    // roda depois do BeginFrame e so grava e avanca: sem alocacao e sem excecao, porque uma excecao ali
+    // deixaria a lista aberta com parte dos shadows ja avancados.
     //
     // FAIL-CLOSED: uma tabela incompleta — Setup que lancou, ou liberada — recusa o frame antes de
     // qualquer pergunta sobre copia, e a de instancias tambem recusa quando a cena nao cabe nela.
@@ -1017,18 +1037,34 @@ namespace Smile {
         GpuScenePublicationSceneExceedsTable  = 7,
     };
 
-    inline u32 GpuScenePublicationGate(const FGpuMaterialTable& Materials,
-                                       const FGpuMeshTable& Meshes,
-                                       const FGpuSceneInstanceTable& Instances,
-                                       ID3D12GraphicsCommandList* CommandList) {
+    // FASE 1: antes do BeginFrame, depois do PrepareFrame das instancias.
+    inline u32 GpuScenePreparePublication(FGpuMaterialTable& Materials, FGpuMeshTable& Meshes,
+                                          FGpuSceneInstanceTable& Instances,
+                                          ID3D12GraphicsCommandList* CommandList) {
         if (!Materials.IsBuilt()) return GpuScenePublicationMaterialsNotBuilt;
         if (!Meshes.IsBuilt()) return GpuScenePublicationMeshesNotBuilt;
         if (!Instances.IsBuilt()) return GpuScenePublicationInstancesNotBuilt;
         if (!Instances.FitsScene()) return GpuScenePublicationSceneExceedsTable;
-        if (!Materials.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedMaterials;
-        if (!Meshes.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedMeshes;
-        if (!Instances.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedInstances;
+        if (!Materials.PrepareUpload(CommandList)) return GpuScenePublicationRefusedMaterials;
+        if (!Meshes.PrepareUpload(CommandList)) return GpuScenePublicationRefusedMeshes;
+        if (!Instances.PrepareUpload(CommandList)) return GpuScenePublicationRefusedInstances;
         return GpuScenePublicationOk;
+    }
+
+    // FASE 2: depois do BeginFrame, com a MESMA lista. Confere as tres preparacoes antes de gravar
+    // qualquer uma — uma invalida descoberta no meio deixaria as anteriores publicadas — e so entao
+    // grava as tres. Devolve false, sem gravar nada, se alguma nao vale para esta lista.
+    inline bool GpuSceneRecordPublication(FGpuMaterialTable& Materials, FGpuMeshTable& Meshes,
+                                          FGpuSceneInstanceTable& Instances,
+                                          ID3D12GraphicsCommandList* CommandList,
+                                          u32 FrameSlot) noexcept {
+        if (!Materials.IsPreparedFor(CommandList) || !Meshes.IsPreparedFor(CommandList) ||
+            !Instances.IsPreparedFor(CommandList))
+            return false;
+        Materials.RecordUpload(CommandList, FrameSlot);
+        Meshes.RecordUpload(CommandList, FrameSlot);
+        Instances.RecordUpload(CommandList, FrameSlot);
+        return true;
     }
 
     // O motivo, para o log de quem aborta o frame.

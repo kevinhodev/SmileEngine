@@ -11,14 +11,17 @@
 //     que a tabela publicou alguma linha: sem isso, "nao recontou" passaria por nada ter acontecido.
 //
 //  2. "Publicado" e o que a GPU tem, e o frame publica as tres tabelas ou nao existe. Cada frame
-//     segue a ordem do RendererFrame: produtor e `GpuScenePublicationGate` ANTES de abrir a lista, e,
-//     recusada a publicacao, nao ha frame — nenhuma tabela grava e nenhum leitor roda. Aceita, o frame
-//     e gravado, EXECUTADO e esperado pela fence, e as tres tabelas — as quatro colunas das instancias
-//     — sao lidas de volta no fim da propria lista, onde um leitor do frame estaria, e comparadas byte
-//     a byte com as linhas publicadas no momento da gravacao. A gravacao de cada tabela continua
-//     transacional sozinha, e isso e conferido isolado: recusada (lista nula), devolve false e nao
-//     avanca nem as linhas publicadas nem a versao, e a nova tentativa publica tudo. Dois frames
-//     gravados antes de qualquer um executar provam que cada upload le o staging do SEU frame slot.
+//     segue a ordem do RendererFrame: produtor e `GpuScenePreparePublication` ANTES de abrir a lista,
+//     e, recusada a publicacao, nao ha frame — nenhuma tabela grava e nenhum leitor roda. Aceita, a
+//     lista abre e `GpuSceneRecordPublication` grava as tres SEM ALOCAR — o teste conta as alocacoes
+//     da thread durante a gravacao, com o operator new global substituido. O frame e EXECUTADO e
+//     esperado pela fence, e as tres tabelas — as quatro colunas das instancias — sao lidas de volta
+//     no fim da propria lista, onde um leitor do frame estaria, e comparadas byte a byte com as linhas
+//     publicadas no momento da gravacao. A preparacao de cada tabela continua transacional sozinha, e
+//     isso e conferido isolado: recusada (lista nula), nao avanca nem as linhas publicadas nem a
+//     versao, e a nova tentativa publica tudo. Uma preparacao invalidada — mutacao da tabela, outra
+//     lista — nao grava nada. Dois frames gravados antes de qualquer um executar provam que cada
+//     upload le o staging do SEU frame slot.
 //     E um Setup INTERROMPIDO — o failpoint de upload recusando o staging, em cada tabela e entre as
 //     tres — deixa as tabelas liberadas, sem mapa nem descritor preso, e a porta recusa o frame ate
 //     um Setup completo.
@@ -33,10 +36,13 @@
 // A camada de debug participa: ERROR e CORRUPTION reprovam.
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <malloc.h>
 #include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -58,6 +64,79 @@
 
 using namespace Smile;
 namespace wrl = Microsoft::WRL;
+
+// === Contagem de alocacoes =========================================================================
+//
+// A fase 2 da publicacao roda com a lista do frame aberta, e uma excecao ali deixaria shadows
+// avancados pela metade. "Nao aloca" dito so em comentario nao se sustenta, entao o executavel troca o
+// operator new global e conta as alocacoes da thread enquanto a contagem esta ligada. O D3D12 aloca
+// pelos proprios heaps, fora deste operator: o que se conta e o codigo da engine.
+namespace {
+    thread_local bool GContarAlocacoes = false;
+    thread_local u64  GAlocacoes       = 0;
+
+    void* Alocar(std::size_t _Bytes) {
+        if (GContarAlocacoes) ++GAlocacoes;
+        if (void* P = std::malloc(_Bytes != 0 ? _Bytes : 1)) return P;
+        throw std::bad_alloc();
+    }
+
+    void* AlocarAlinhado(std::size_t _Bytes, std::align_val_t _Alinhamento) {
+        if (GContarAlocacoes) ++GAlocacoes;
+        if (void* P = _aligned_malloc(_Bytes != 0 ? _Bytes : 1,
+                                      static_cast<std::size_t>(_Alinhamento)))
+            return P;
+        throw std::bad_alloc();
+    }
+
+    // Conta as alocacoes desta thread entre a construcao e o `Total`.
+    struct FContagemDeAlocacoes {
+        FContagemDeAlocacoes() {
+            GAlocacoes       = 0;
+            GContarAlocacoes = true;
+        }
+        ~FContagemDeAlocacoes() { GContarAlocacoes = false; }
+        u64 Total() {
+            GContarAlocacoes = false;
+            return GAlocacoes;
+        }
+    };
+}
+
+void* operator new(std::size_t _Bytes) { return Alocar(_Bytes); }
+void* operator new[](std::size_t _Bytes) { return Alocar(_Bytes); }
+void* operator new(std::size_t _Bytes, const std::nothrow_t&) noexcept {
+    try { return Alocar(_Bytes); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t _Bytes, const std::nothrow_t&) noexcept {
+    try { return Alocar(_Bytes); } catch (...) { return nullptr; }
+}
+void operator delete(void* _P) noexcept { std::free(_P); }
+void operator delete[](void* _P) noexcept { std::free(_P); }
+void operator delete(void* _P, std::size_t) noexcept { std::free(_P); }
+void operator delete[](void* _P, std::size_t) noexcept { std::free(_P); }
+void operator delete(void* _P, const std::nothrow_t&) noexcept { std::free(_P); }
+void operator delete[](void* _P, const std::nothrow_t&) noexcept { std::free(_P); }
+void* operator new(std::size_t _Bytes, std::align_val_t _A) { return AlocarAlinhado(_Bytes, _A); }
+void* operator new[](std::size_t _Bytes, std::align_val_t _A) { return AlocarAlinhado(_Bytes, _A); }
+void operator delete(void* _P, std::align_val_t) noexcept { _aligned_free(_P); }
+void operator delete[](void* _P, std::align_val_t) noexcept { _aligned_free(_P); }
+void operator delete(void* _P, std::size_t, std::align_val_t) noexcept { _aligned_free(_P); }
+void operator delete[](void* _P, std::size_t, std::align_val_t) noexcept { _aligned_free(_P); }
+
+// E a fase 2 nao LANCA, pela assinatura: sem noexcept, uma alocacao que voltasse para ali seria uma
+// excecao possivel com a lista aberta, e nao um terminate.
+static_assert(noexcept(std::declval<FGpuMaterialTable&>().RecordUpload(nullptr, 0u)),
+              "a gravacao da tabela de materiais e noexcept");
+static_assert(noexcept(std::declval<FGpuMeshTable&>().RecordUpload(nullptr, 0u)),
+              "a gravacao da tabela de malhas e noexcept");
+static_assert(noexcept(std::declval<FGpuSceneInstanceTable&>().RecordUpload(nullptr, 0u)),
+              "a gravacao da tabela de instancias e noexcept");
+static_assert(noexcept(GpuSceneRecordPublication(std::declval<FGpuMaterialTable&>(),
+                                                 std::declval<FGpuMeshTable&>(),
+                                                 std::declval<FGpuSceneInstanceTable&>(),
+                                                 nullptr, 0u)),
+              "a gravacao da publicacao do frame e noexcept");
 
 namespace {
     int Failures = 0;
@@ -229,14 +308,15 @@ namespace {
             Motivo = Layout.Refresh(In);
         }
 
-        // Grava um frame no slot, na ordem do RendererFrame. O produtor e a porta da publicacao vem
-        // ANTES de abrir a lista; recusada, nao ha frame, e devolve false sem gravar nada. Aceita, os
-        // tres uploads, o layout, e a leitura das tres tabelas — as quatro colunas das instancias — no
-        // FIM da lista, com a imagem esperada tirada das linhas publicadas neste instante.
+        // Grava um frame no slot, na ordem do RendererFrame. O produtor e a preparacao da publicacao
+        // vem ANTES de abrir a lista; recusada, nao ha frame, e devolve false sem gravar nada. Aceita, a
+        // gravacao das tres — contada, porque nao pode alocar —, o layout, e a leitura das tres tabelas
+        // — as quatro colunas das instancias — no FIM da lista, com a imagem esperada tirada das linhas
+        // publicadas neste instante.
         bool Gravar(u32 _Slot, bool _ListaRecusada = false) {
             ID3D12GraphicsCommandList* L = _ListaRecusada ? nullptr : List[_Slot].Get();
             Instances.PrepareFrame(Scene, Meshes, Materials);
-            Publicacao = GpuScenePublicationGate(Materials, Meshes, Instances, L);
+            Publicacao = GpuScenePreparePublication(Materials, Meshes, Instances, L);
             if (Publicacao != GpuScenePublicationOk) return false;
             if (!L) {
                 Check(false, "a porta aceitou um frame sem lista");
@@ -245,9 +325,15 @@ namespace {
 
             Hr(Allocator[_Slot]->Reset(), "Reset do allocator");
             Hr(L->Reset(Allocator[_Slot].Get(), nullptr), "Reset da lista");
-            const bool Gravou = Materials.RecordUpload(L, _Slot) && Meshes.RecordUpload(L, _Slot) &&
-                                Instances.RecordUpload(L, _Slot);
-            Check(Gravou, "a porta aceitou a publicacao, e as tres gravacoes tambem");
+            bool Gravou    = false;
+            u64  Alocacoes = 0;
+            {
+                FContagemDeAlocacoes Contagem;
+                Gravou    = GpuSceneRecordPublication(Materials, Meshes, Instances, L, _Slot);
+                Alocacoes = Contagem.Total();
+            }
+            Check(Gravou, "a publicacao preparada e gravada");
+            CheckEq64(Alocacoes, 0ull, "gravar a publicacao nao aloca");
             Consultar();
 
             auto Ler = [&](FLeitura& _Leitura, const char* _Nome, ID3D12Resource* _Tabela,
@@ -427,14 +513,6 @@ int main() try {
         CheckEq(S.RecordUpload(nullptr, 0u, Linhas, Dentro), 0u, "gravacao: lista nula nao grava");
         CheckEq(S.RecordUpload(L.Get(), 0u, Linhas, Fora), 0u,
                 "gravacao: linha fora do buffer nao grava");
-
-        // A porta por NUMERO de linhas, a que as portas pendentes das tabelas usam. Nos limites: o
-        // buffer cheio cabe, uma linha a mais nao.
-        Check(S.AcceptsRows(nullptr, 0u), "porta das linhas: nenhuma linha e aceito, ate sem lista");
-        Check(S.AcceptsRows(L.Get(), S.Capacity()), "porta das linhas: o buffer cheio cabe");
-        Check(!S.AcceptsRows(L.Get(), S.Capacity() + 1u),
-              "porta das linhas: uma linha alem do buffer recusa");
-        Check(!S.AcceptsRows(nullptr, 1u), "porta das linhas: lista nula recusa");
         L->Close();
         S.Release(G.Heap);
         G.Drenar("porta");
@@ -497,7 +575,10 @@ int main() try {
         CheckEq(S.Capacity(), 4u, "crescer recusado: a capacidade continua a antiga");
         CheckEq(S.Srv(), Slot, "crescer recusado: o descritor continua no mesmo slot");
         CheckEq(G.Heap.UsedSlots(), Usados + 1u, "crescer recusado: nenhum descritor a mais");
-        Check(!S.AcceptsRows(L.Get(), 5u), "crescer recusado: a porta continua medindo o buffer antigo");
+        const u32 Linhas[64]{};
+        const u32 Quinta[1]{ 4u };
+        Check(!S.AcceptsUpload(L.Get(), Linhas, Quinta),
+              "crescer recusado: a porta continua medindo o buffer antigo");
 
         S.Create(G.Device.Get(), G.Heap, sizeof(u32), 64u, "atomico");
         CheckEq(S.Capacity(), 64u, "crescer de novo: a capacidade nova");
@@ -516,6 +597,25 @@ int main() try {
         G.Drenar("atomico");
     }
 
+    // --- a contagem de alocacoes enxerga a engine ----------------------------------------------
+    //
+    // Sem isto, "gravar a publicacao nao aloca" passaria tambem com um operator new que nao entrou no
+    // link. A primeira preparacao depois do Setup TEM de alocar — linhas, diffs, reservas dos shadows —,
+    // e alocacoes da biblioteca da engine precisam aparecer na contagem.
+    {
+        G.Instances.PrepareFrame(G.Scene, G.Meshes, G.Materials);
+        u32 Preparada = GpuScenePublicationOk;
+        u64 Alocacoes = 0;
+        {
+            FContagemDeAlocacoes Contagem;
+            Preparada = GpuScenePreparePublication(G.Materials, G.Meshes, G.Instances,
+                                                   G.List[G.ProximoSlot].Get());
+            Alocacoes = Contagem.Total();
+        }
+        CheckEq(Preparada, GpuScenePublicationOk, "a primeira preparacao e aceita");
+        Check(Alocacoes > 0u, "a contagem enxerga as alocacoes da engine: a primeira preparacao aloca");
+    }
+
     // --- a primeira publicacao monta o layout ---------------------------------------------------
     G.Frame();
     CheckEq(G.Motivo, GpuLayoutRefreshOk, "a primeira publicacao monta o layout");
@@ -531,14 +631,82 @@ int main() try {
     for (u32 I = 0; I < 4; ++I) G.Frame();
     CheckEq64(G.Layout.RebuildAttempts(), 1ull, "cena assentada nao reconta");
 
-    // Sem publicacao pendente, as portas aceitam ate sem lista: o frame so e recusado por uma copia que
-    // de fato precisaria acontecer.
-    Check(G.Materials.AcceptsPendingUpload(nullptr),
-          "sem publicacao pendente: a porta do material aceita ate sem lista");
-    Check(G.Meshes.AcceptsPendingUpload(nullptr),
-          "sem publicacao pendente: a porta da malha aceita ate sem lista");
-    Check(G.Instances.AcceptsPendingUpload(nullptr),
-          "sem publicacao pendente: a porta das instancias aceita ate sem lista");
+    // Sem publicacao pendente, as preparacoes aceitam ate sem lista: o frame so e recusado por uma
+    // copia que de fato precisaria acontecer.
+    Check(G.Materials.PrepareUpload(nullptr),
+          "sem publicacao pendente: o material se prepara ate sem lista");
+    Check(G.Meshes.PrepareUpload(nullptr),
+          "sem publicacao pendente: a malha se prepara ate sem lista");
+    Check(G.Instances.PrepareUpload(nullptr),
+          "sem publicacao pendente: as instancias se preparam ate sem lista");
+
+    // --- a preparacao vale para UMA lista, e ate a proxima mutacao da tabela --------------------
+    //
+    // A fase 2 grava o que a fase 1 preparou. Uma mutacao entre as duas deixa a preparacao obsoleta, e
+    // grava-la publicaria linhas que nao sao as da tabela. Conferido sobre listas que nunca executam:
+    // nenhuma destas gravacoes pode acontecer, e as linhas publicadas nao andam.
+    const FGpuMaterialRecord MaterialAntes = G.Materials.PublishedRows()[1];
+    {
+        wrl::ComPtr<ID3D12CommandAllocator>    AllocL, AllocOutra;
+        wrl::ComPtr<ID3D12GraphicsCommandList> L, Outra;
+        Hr(G.Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&AllocL)),
+           "CreateCommandAllocator (preparacao)");
+        Hr(G.Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                            IID_PPV_ARGS(&AllocOutra)),
+           "CreateCommandAllocator (outra)");
+        Hr(G.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, AllocL.Get(), nullptr,
+                                       IID_PPV_ARGS(&L)),
+           "CreateCommandList (preparacao)");
+        Hr(G.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, AllocOutra.Get(), nullptr,
+                                       IID_PPV_ARGS(&Outra)),
+           "CreateCommandList (outra)");
+
+        Check(!G.Materials.RecordUpload(L.Get(), 0u), "material: sem preparacao, nada e gravado");
+
+        G.Opaco.Constants.BaseColorFactor = { 0.3f, 0.3f, 0.9f, 1.0f };
+        G.Materials.MarkDirty();
+        Check(G.Materials.PrepareUpload(L.Get()), "material: a preparacao com lista e aceita");
+        G.Materials.MarkDirty();
+        Check(!G.Materials.RecordUpload(L.Get(), 0u),
+              "material: MarkDirty depois de preparar invalida a preparacao");
+
+        Check(G.Materials.PrepareUpload(L.Get()), "material: preparado de novo");
+        Check(!G.Materials.RecordUpload(Outra.Get(), 0u),
+              "material: a preparacao vale so para a lista em que foi feita");
+
+        const FGpuSceneHandle          H           = G.R(G.IdOpacoB).GpuHandle;
+        const FGpuSceneInstanceTransform AtualAntes = G.Instances.PublishedTransforms()[H.Slot];
+        auto Mover = [&]() {
+            FRenderable& Obj = G.R(G.IdOpacoB);
+            Obj.Transform.Position.Y += 1.0f;
+            Obj.RefreshWorldBounds();
+            G.Scene.BumpTransformsVersion(G.Indice(G.IdOpacoB));
+            G.Instances.PrepareFrame(G.Scene, G.Meshes, G.Materials);
+        };
+        Mover();
+        Check(G.Instances.PrepareUpload(L.Get()), "instancias: a preparacao com lista e aceita");
+        Mover();
+        Check(!G.Instances.RecordUpload(L.Get(), 0u),
+              "instancias: um ciclo novo do produtor invalida a preparacao");
+        Check(G.Instances.PublishedTransforms()[H.Slot] == AtualAntes,
+              "instancias: com a preparacao invalidada, o transform publicado nao anda");
+
+        // As tres sao conferidas antes da primeira copia: com material e malha preparados e as
+        // instancias nao, a publicacao do frame nao grava nem o material.
+        Check(G.Materials.PrepareUpload(L.Get()) && G.Meshes.PrepareUpload(L.Get()),
+              "material e malha preparados");
+        Check(!GpuSceneRecordPublication(G.Materials, G.Meshes, G.Instances, L.Get(), 0u),
+              "a publicacao do frame recusa uma tabela sem preparacao valida");
+        Check(G.Materials.PublishedRows()[1] == MaterialAntes,
+              "a publicacao do frame confere as tres preparacoes antes de gravar qualquer uma");
+
+        L->Close();
+        Outra->Close();
+        G.Drenar("preparacao");
+    }
+    G.Frame();
+    Check(G.Materials.PublishedRows()[1] != MaterialAntes,
+          "depois das preparacoes invalidadas, o frame seguinte publica a cor");
 
     {
         FRenderable& R = G.R(G.IdOpaco[0]);
@@ -583,8 +751,8 @@ int main() try {
         const u32 LinhaTroca = 3u; // linha 0 e o default; Opaco, Mascarado, Troca
         G.Troca.TwoSided = true;
         G.Materials.MarkDirty();
-        Check(!G.Materials.AcceptsPendingUpload(nullptr), "classe: a porta pendente recusa sem lista");
-        Check(!G.Materials.RecordUpload(nullptr, 0u), "classe: a gravacao recusada devolve false");
+        Check(!G.Materials.PrepareUpload(nullptr), "classe: a preparacao recusa sem lista");
+        Check(!G.Materials.RecordUpload(nullptr, 0u), "classe: preparacao recusada nao grava");
         CheckEq(G.Materials.LastDirtyRows(), 0u, "classe recusada: nenhuma linha publicada");
         CheckEq(G.Materials.PublishedRows()[LinhaTroca].PipelineClass,
                 static_cast<u32>(GpuPipelineClassOpaqueOneSided),
@@ -620,7 +788,8 @@ int main() try {
         G.R(G.IdTroca[0]).RaytracingOnly = true;
         G.Scene.BumpStaticCastersVersion(G.Indice(G.IdTroca[0]));
         G.Instances.PrepareFrame(G.Scene, G.Meshes, G.Materials);
-        Check(!G.Instances.RecordUpload(nullptr, 0u), "instancias: a gravacao recusada devolve false");
+        Check(!G.Instances.PrepareUpload(nullptr), "instancias: a preparacao recusa sem lista");
+        Check(!G.Instances.RecordUpload(nullptr, 0u), "instancias: preparacao recusada nao grava");
         CheckEq(G.Instances.LastDirtyRows(), 0u, "instancias recusadas: nenhuma linha publicada");
         Check((G.Instances.PublishedMeta()[Slot].Flags & GpuSceneInstanceRaytracingOnly) == 0u,
               "instancias recusadas: a linha publicada continua a antiga");
@@ -733,7 +902,8 @@ int main() try {
     {
         G.MalhaB.InitFromPool(G.PoolA, 3200, 40 * 1024, 56 * 1024, 3, 3, 1);
         G.Meshes.SetupForScene(G.Device.Get(), G.Heap, G.Scene);
-        Check(!G.Meshes.RecordUpload(nullptr, 0u), "malha: a gravacao recusada devolve false");
+        Check(!G.Meshes.PrepareUpload(nullptr), "malha: a preparacao recusa sem lista");
+        Check(!G.Meshes.RecordUpload(nullptr, 0u), "malha: preparacao recusada nao grava");
         CheckEq(G.Meshes.LastDirtyRows(), 0u, "malha recusada: nenhuma linha publicada");
         Check(G.Meshes.PublishedRows().empty(), "malha recusada: as linhas publicadas seguem vazias");
         G.Consultar();
@@ -854,6 +1024,34 @@ int main() try {
         const u32 ComTres = G.Heap.UsedSlots();
         G.Frame();
         CheckEq(G.Publicacao, GpuScenePublicationOk, "montadas: o frame publica");
+
+        // Setup e Release tambem invalidam uma preparacao: depois deles, as linhas preparadas sao de
+        // uma tabela que nao existe mais.
+        {
+            wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
+            wrl::ComPtr<ID3D12GraphicsCommandList> L;
+            Hr(G.Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&Alloc)),
+               "CreateCommandAllocator (Setup invalida)");
+            Hr(G.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Alloc.Get(), nullptr,
+                                           IID_PPV_ARGS(&L)),
+               "CreateCommandList (Setup invalida)");
+            G.Opaco.Constants.BaseColorFactor = { 0.5f, 0.2f, 0.7f, 1.0f };
+            G.Materials.MarkDirty();
+            Check(G.Materials.PrepareUpload(L.Get()), "Setup: o material se prepara antes");
+            G.Materials.SetupForMaterials(G.Device.Get(), G.Heap, Lista);
+            Check(!G.Materials.RecordUpload(L.Get(), 0u),
+                  "material: Setup depois de preparar invalida a preparacao");
+            Check(G.Meshes.PrepareUpload(L.Get()), "Release: a malha se prepara antes");
+            G.Meshes.Release(G.Heap);
+            Check(!G.Meshes.RecordUpload(L.Get(), 0u),
+                  "malha: Release depois de preparar invalida a preparacao");
+            G.Meshes.SetupForScene(G.Device.Get(), G.Heap, G.Scene);
+            L->Close();
+            G.Drenar("Setup invalida");
+        }
+        CheckEq(G.Heap.UsedSlots(), ComTres, "Setup e Release no meio: a conta de descritores volta");
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "Setup e Release no meio: o frame publica");
 
         // Material CRESCENDO: o armazenamento antigo existe e sobrevive ao Create recusado, e e ai
         // que o mapa novo ficaria sobre o buffer antigo, sem nada pendente.
