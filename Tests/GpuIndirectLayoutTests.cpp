@@ -56,6 +56,7 @@
 
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
+#include "Smile/Graphics/Debug/VramTracker.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Scene/GpuIndirectLayoutState.h"
@@ -557,10 +558,12 @@ int main() try {
         Check(static_cast<bool>(C), "failpoint: esgotada a injecao, as criacoes voltam a passar");
     }
 
-    // --- o Create do armazenamento e atomico ----------------------------------------------------
+    // --- o Create do armazenamento: o antigo sai ANTES do novo, e a falha sai liberada -----------
     //
     // O staging e criado DEPOIS do buffer, entao recusa-lo e a falha em que ja existe um recurso novo
-    // para desfazer. Novo, o armazenamento continua vazio; crescendo, continua exatamente o antigo.
+    // para desfazer. Novo ou crescendo, o armazenamento sai liberado. E o pico do crescimento e so o
+    // novo: o failpoint registra a VRAM rastreada no instante em que o staging novo e pedido, e o
+    // buffer antigo ja nao pode estar nela.
     {
         wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
         wrl::ComPtr<ID3D12GraphicsCommandList> L;
@@ -581,6 +584,24 @@ int main() try {
             return Lancou;
         };
 
+        // O tamanho que o VramTracker cobra por um buffer — o mesmo GetResourceAllocationInfo dele.
+        auto BytesDoBuffer = [&](u64 _Largura) {
+            D3D12_RESOURCE_DESC D{};
+            D.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+            D.Width            = _Largura;
+            D.Height           = 1;
+            D.DepthOrArraySize = 1;
+            D.MipLevels        = 1;
+            D.SampleDesc.Count = 1;
+            D.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            return G.Device->GetResourceAllocationInfo(0, 1, &D).SizeInBytes;
+        };
+        // A largura do recurso vivo, e nao o ponteiro: com o antigo solto antes da criacao, o novo
+        // pode nascer no mesmo endereco.
+        auto Largura = [&](const FGpuTableStorage& _S) {
+            return _S.Resource() ? _S.Resource()->GetDesc().Width : 0ull;
+        };
+
         const u32 Usados = G.Heap.UsedSlots();
         FGpuTableStorage S;
         Check(Recusado(S, 4u), "Create novo: o staging recusado lanca");
@@ -589,29 +610,37 @@ int main() try {
         CheckEq(S.Srv(), FTextureSRVHeap::kInvalidSlot, "Create novo recusado: e sem descritor");
         CheckEq(G.Heap.UsedSlots(), Usados, "Create novo recusado: nenhum descritor vazou");
 
-        S.Create(G.Device.Get(), G.Heap, sizeof(u32), 4u, "atomico");
-        const ID3D12Resource* Antigo = S.Resource();
-        const u32             Slot   = S.Srv();
-        Check(Recusado(S, 64u), "crescer: o staging recusado lanca");
-        Check(S.IsBuilt() && S.Resource() == Antigo, "crescer recusado: o buffer continua o antigo");
-        CheckEq(S.Capacity(), 4u, "crescer recusado: a capacidade continua a antiga");
-        CheckEq(S.Srv(), Slot, "crescer recusado: o descritor continua no mesmo slot");
-        CheckEq(G.Heap.UsedSlots(), Usados + 1u, "crescer recusado: nenhum descritor a mais");
-        const u32 Linhas[64]{};
-        const u32 Quinta[1]{ 4u };
-        Check(!S.AcceptsUpload(L.Get(), Linhas, Quinta),
-              "crescer recusado: a porta continua medindo o buffer antigo");
-
+        // Crescer com sucesso: recurso novo, capacidade nova, o MESMO slot de descritor.
         S.Create(G.Device.Get(), G.Heap, sizeof(u32), 64u, "atomico");
-        CheckEq(S.Capacity(), 64u, "crescer de novo: a capacidade nova");
-        Check(S.Resource() != Antigo, "crescer de novo: o buffer e outro");
-        CheckEq(S.Srv(), Slot, "crescer de novo: o slot do descritor e preservado");
+        const u32 Slot = S.Srv();
+        S.Create(G.Device.Get(), G.Heap, sizeof(u32), 32768u, "atomico");
+        CheckEq(S.Capacity(), 32768u, "crescer: a capacidade nova");
+        CheckEq64(Largura(S), 32768ull * sizeof(u32), "crescer: o buffer vivo tem o tamanho novo");
+        CheckEq(S.Srv(), Slot, "crescer: o slot do descritor e preservado");
+
+        // Crescer RECUSADO, medindo o pico. Os dois tamanhos sao maiores que o alinhamento de 64 KB, e
+        // diferentes, para a conta separar o buffer antigo do novo.
+        const u64 BufferAtual = BytesDoBuffer(32768ull * sizeof(u32));
+        const u64 BufferNovo  = BytesDoBuffer(65536ull * sizeof(u32));
+        Check(BufferNovo > BufferAtual, "o buffer novo e maior que o atual");
+        const u64 VramAntes = VramTracker::Snapshot().TotalTracked;
+        Check(Recusado(S, 65536u), "crescer: o staging recusado lanca");
+        CheckEq64(GpuResources::TrackedVramAtLastInjectedFailure(),
+                  VramAntes - BufferAtual + BufferNovo,
+                  "crescer: quando o staging novo e pedido, o buffer antigo ja saiu — o pico e so o "
+                  "novo");
+        Check(!S.IsBuilt(), "crescer recusado: o armazenamento sai liberado");
+        CheckEq(S.Capacity(), 0u, "crescer recusado: sem capacidade");
+        CheckEq(S.Srv(), FTextureSRVHeap::kInvalidSlot, "crescer recusado: sem descritor");
+        CheckEq(G.Heap.UsedSlots(), Usados, "crescer recusado: o descritor voltou ao heap");
+        CheckEq64(VramTracker::Snapshot().TotalTracked, VramAntes - BufferAtual,
+                  "crescer recusado: nem o buffer antigo nem o novo ficaram vivos");
 
         // Stride diferente com a MESMA capacidade tambem recria: o buffer foi dimensionado pelo stride
         // antigo, e manter os dois descreveria linhas que nao cabem nele.
-        const ID3D12Resource* DeQuatro = S.Resource();
+        S.Create(G.Device.Get(), G.Heap, sizeof(u32), 64u, "atomico");
         S.Create(G.Device.Get(), G.Heap, 2u * sizeof(u32), 64u, "atomico");
-        Check(S.Resource() != DeQuatro, "stride diferente: o buffer e recriado");
+        CheckEq64(Largura(S), 64ull * 2u * sizeof(u32), "stride diferente: o buffer e recriado");
         CheckEq(S.RowBytes(), 2u * sizeof(u32), "stride diferente: o stride novo vale");
         L->Close();
         S.Release(G.Heap);

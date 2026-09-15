@@ -37,33 +37,45 @@ namespace Smile {
     void FGpuTableStorage::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap, u32 _RowBytes,
                                   u32 _Capacity, const char* _Label) {
         if (!Buffer_ || _Capacity > Capacity_ || _RowBytes != RowBytes_) {
-            // ATOMICO. Tudo que pode lancar — os dois recursos e o descritor — vai para locais, e o
-            // armazenamento so muda depois de os tres existirem. Atribuir a capacidade antes, ou o
-            // buffer antes do staging, deixava uma falha no meio com a capacidade nova sobre o
-            // buffer antigo: a porta aceitaria linhas alem dele, e a copia e o memcpy do staging
-            // passariam do fim.
+            // O antigo sai ANTES de o novo ser criado. Manter buffer e staging antigos vivos ate os
+            // novos existirem — a garantia forte de antes — punha no pico do crescimento o buffer
+            // DEFAULT antigo junto do novo e dos dois stagings, e nao comprava nada: todo Setup que
+            // lanca libera a tabela inteira de qualquer jeito. Soltando primeiro, o pico e so o novo
+            // — menor ate que o do codigo original, que segurava o staging antigo enquanto criava o
+            // novo. Em 1M instancias, o antigo da coluna de transform e ~72 MB de VRAM (1,125M linhas
+            // de 64 B) e ~144 MB de host (dois slices de staging).
             //
-            // O pico de memoria e o de antes: o recurso antigo ja convivia com o novo durante a
-            // criacao, porque so era solto na atribuicao.
-            //
-            // Misc, e nao GI/Geometry: as tabelas sao da CENA, e os consumidores de hoje (RT, GI,
-            // mesh lights) vao ser tres entre varios quando o raster passar a le-las na Fase 3.
-            // O numero que importa para o gate da fase sai do PersistentBytes(), com rotulo
-            // proprio no breakdown por recurso.
-            const u64 Bytes = static_cast<u64>(_Capacity) * _RowBytes;
-            Microsoft::WRL::ComPtr<ID3D12Resource> Buffer = GpuResources::CreateBuffer(
-                _Device, Bytes, D3D12_RESOURCE_FLAG_NONE, kShaderReadState, EVramCategory::Misc,
-                _Label);
-            GpuResources::FUploadBuffer Staging = GpuResources::CreateUploadBuffer(
-                _Device, Bytes, kFrameSlots, /*ForConstantBuffer=*/false);
-            const u32 Slot = SrvSlot_ != kInvalidSlot ? SrvSlot_ : _SRVHeap.Allocate(1);
+            // Nenhum membro fica meio atualizado: a capacidade vai a zero junto com os recursos, e so
+            // volta com os novos. O slot do descritor e preservado — o indice viaja no InstanceGeo, e
+            // o SRV e reescrito no mesmo slot la embaixo.
+            Buffer_.Reset();
+            Staging_  = {};
+            Capacity_ = 0;
+            RowBytes_ = 0;
+            try {
+                // Misc, e nao GI/Geometry: as tabelas sao da CENA, e os consumidores de hoje (RT, GI,
+                // mesh lights) vao ser tres entre varios quando o raster passar a le-las na Fase 3.
+                // O numero que importa para o gate da fase sai do PersistentBytes(), com rotulo
+                // proprio no breakdown por recurso.
+                const u64 Bytes = static_cast<u64>(_Capacity) * _RowBytes;
+                Microsoft::WRL::ComPtr<ID3D12Resource> Buffer = GpuResources::CreateBuffer(
+                    _Device, Bytes, D3D12_RESOURCE_FLAG_NONE, kShaderReadState, EVramCategory::Misc,
+                    _Label);
+                GpuResources::FUploadBuffer Staging = GpuResources::CreateUploadBuffer(
+                    _Device, Bytes, kFrameSlots, /*ForConstantBuffer=*/false);
+                if (SrvSlot_ == kInvalidSlot) SrvSlot_ = _SRVHeap.Allocate(1);
 
-            // Daqui em diante nada lanca.
-            Buffer_   = std::move(Buffer);
-            Staging_  = std::move(Staging);
-            Capacity_ = _Capacity;
-            RowBytes_ = _RowBytes;
-            SrvSlot_  = Slot;
+                // Daqui em diante nada lanca.
+                Buffer_   = std::move(Buffer);
+                Staging_  = std::move(Staging);
+                Capacity_ = _Capacity;
+                RowBytes_ = _RowBytes;
+            } catch (...) {
+                // Falhou: sai LIBERADO, como depois de um Release — sem recurso, sem capacidade e sem
+                // descritor. O Release nao aloca, entao a limpeza nao falha por cima da falha.
+                Release(_SRVHeap);
+                throw;
+            }
         }
 
         // O SRV e reescrito no MESMO slot mesmo quando o recurso nao mudou: e barato e evita um

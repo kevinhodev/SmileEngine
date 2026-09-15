@@ -1,6 +1,7 @@
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
+#include "Smile/Graphics/Debug/VramTracker.h"
 #include <D3D12MA/D3D12MemAlloc.h>
 #include <atomic>
 #include <chrono>
@@ -450,6 +451,8 @@ namespace Smile::GpuResources {
         std::atomic<u32> GUploadFailuresRemaining{ 0 };
         // Criacoes que ainda passam antes de a injecao comecar a falhar.
         std::atomic<u32> GUploadFailureSkips{ 0 };
+        // A VRAM rastreada no instante da ultima falha injetada. So e escrita quando a injecao falha.
+        std::atomic<u64> GTrackedVramAtInjectedFailure{ 0 };
 
         // O corpo unico das duas versoes. Devolve o HRESULT dos DOIS passos que podem falhar
         // (criacao e Map) e nunca entrega um `Out` meio pronto: ou vem com recurso E mapeamento,
@@ -472,8 +475,11 @@ namespace Smile::GpuResources {
                     continue;
                 }
                 if (GUploadFailuresRemaining.compare_exchange_weak(Pendentes, Pendentes - 1,
-                                                                   std::memory_order_relaxed))
+                                                                   std::memory_order_relaxed)) {
+                    GTrackedVramAtInjectedFailure.store(VramTracker::Snapshot().TotalTracked,
+                                                        std::memory_order_relaxed);
                     return E_OUTOFMEMORY;
+                }
             }
 
             const u64 Aligned = ForConstantBuffer
@@ -536,6 +542,10 @@ namespace Smile::GpuResources {
 
     u32 PendingUploadFailures() {
         return GUploadFailuresRemaining.load(std::memory_order_relaxed);
+    }
+
+    u64 TrackedVramAtLastInjectedFailure() {
+        return GTrackedVramAtInjectedFailure.load(std::memory_order_relaxed);
     }
 
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* _Device, u64 _Bytes) {

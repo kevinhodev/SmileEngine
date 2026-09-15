@@ -166,6 +166,10 @@ namespace Smile::GpuResources {
         u32 PreviousSkips_ = 0;
     };
     u32 PendingUploadFailures();
+    // A VRAM rastreada pelo VramTracker no INSTANTE da ultima falha injetada: o que estava vivo
+    // enquanto a criacao recusada acontecia. E como um teste mede o pico de uma troca de recurso — se
+    // o codigo ainda segurava o recurso antigo quando pediu o novo. Upload heaps nao entram na conta.
+    u64 TrackedVramAtLastInjectedFailure();
 
     // Readback (GPU -> CPU). Nao entra no VramTracker (system memory).
     ComPtr<ID3D12Resource> CreateReadbackBuffer(ID3D12Device* Device, u64 Bytes);

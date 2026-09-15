@@ -577,8 +577,9 @@ namespace Smile {
         // entao trocar o recurso por baixo com o indice estavel e o que faz os leitores
         // acompanharem sem republicar tabela nenhuma.
         //
-        // Atomico: quando lanca (recurso ou descritor recusado), o armazenamento fica exatamente como
-        // estava — vazio, se era novo; com buffer, staging, capacidade e slot antigos, se crescia.
+        // Quando recria, solta o recurso antigo ANTES de criar o novo: o pico e so o novo. Quando lanca
+        // (recurso ou descritor recusado), sai LIBERADO, como depois de um Release — nunca meio
+        // atualizado. Quem chama ja trata assim: todo Setup que lanca libera a tabela inteira.
         //
         // ⚠️ CONTRATO: substitui um recurso que as duas filas podem estar lendo. O chamador drena
         // antes — e ja drena hoje, porque isto so acontece em carga/troca de cena.

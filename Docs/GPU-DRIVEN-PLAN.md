@@ -1595,7 +1595,11 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > render thread seguindo, e ela deixava tabelas pela metade que a porta lia como "nada pendente". Por
 > isso:
 >
-> - `FGpuTableStorage::Create` é atômico;
+> - `FGpuTableStorage::Create` nunca fica meio atualizado: solta o recurso antigo ANTES de criar o
+>   novo, e se lança sai liberado. Manter o antigo vivo até o novo existir somaria ao pico do
+>   crescimento o buffer DEFAULT e o staging antigos (~72 MB de VRAM e ~144 MB de host na coluna de
+>   transform em 1M) sem comprar nada, porque o Setup que lança libera a tabela inteira. O teste mede
+>   a VRAM rastreada no instante em que o staging novo é pedido;
 > - cada Setup só marca a tabela pronta no fim e, se lança, a libera. A liberação não aloca nem
 >   lança: a free list do heap de descritores reserva no `Initialize` o máximo de ranges disjuntos e
 >   funde no lugar, então o rollback de uma falta de memória não pode falhar por cima dela;
