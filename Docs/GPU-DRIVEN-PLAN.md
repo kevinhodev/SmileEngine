@@ -1608,6 +1608,31 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > - a porta recusa tabela incompleta, e também a cena que cresceu além da tabela de instâncias;
 > - a porta vem antes da reconciliação do `ObjectCB`, porque a necessidade dele depende de as tabelas
 >   estarem prontas.
+>
+> **Decisão registrada em 2026-09-15 — a cadeia do main view tem dono, e também duas fases.** O
+> `FGpuIndirectMainView` é dono de UM conjunto de buffers DEFAULT — a fila direta executa as listas na
+> ordem gravada, então a cadeia de um frame só escreve depois de os draws do anterior lerem. Por frame
+> slot ficam o staging dos quatro buffers que sobem (candidatos, ranges, prefixos, regiões), os
+> cbuffers, as tabelas de descritores e o readback dos contadores, que é telemetria e nunca decide draw.
+> A capacidade vem da tabela de instâncias: 40 B de VRAM por slot (candidato, saída da expansão e
+> comando) e 16 B de staging; os buffers por lote vêm do número de pools. O contrato está em
+> `Engine/Include/Smile/Graphics/Scene/GpuIndirectMainView.h`.
+>
+> - `Prepare` roda antes do `BeginFrame`, depois de a publicação das tabelas ser aceita: lista de
+>   candidatos, diffs dos uploads, views dos pools e a reserva do layout — tudo o que aloca.
+> - `Record` roda depois de `GpuSceneRecordPublication`, com a lista aberta, sem alocar nem lançar (o
+>   teste conta as alocações). Reconta o layout sobre as linhas que acabaram de ser publicadas — por
+>   isso a recontagem não aloca e, sem reserva, recusa —, confere TODAS as portas e só então grava:
+>   capacidade dos buffers por lote, `GpuRegionPreflight` com a capacidade ALOCADA de `IndirectArgs`
+>   (é aqui que `TotalCommands <= capacidade` é garantido), `GpuClassifyPreflightFor` e a porta da
+>   gravação dos draws de cada passe consumidor.
+> - Recusa não é falha de frame: tira o frame inteiro do caminho indireto antes de qualquer comando da
+>   cadeia, e os uploads recusados ficam pendentes.
+> - Cada recurso tem um estado de REPOUSO, e toda cadeia parte dele e termina nele; os recursos nascem
+>   nele. A reutilização entre frames não depende de um rastreador acertar o que a lista anterior
+>   deixou. `IndirectArgs` e `DrawCounts` repousam em `INDIRECT_ARGUMENT`, que é o que os passes leem.
+> - Um reset só zera os cinco acumuladores, incluindo os contadores do expand, e a finalização roda
+>   sempre: o frame vazio depois de um cheio publica zeros.
 
 ### Trabalho
 

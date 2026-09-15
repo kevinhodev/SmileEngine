@@ -35,6 +35,12 @@ namespace Smile {
     static_assert(offsetof(FInstanceRange, FirstCandidate) == 0);
     static_assert(offsetof(FInstanceRange, CandidateCount) == 4);
 
+    // A comparacao que o diff do upload usa: um range so sobe quando mudou.
+    inline bool operator==(const FInstanceRange& A, const FInstanceRange& B) {
+        return A.FirstCandidate == B.FirstCandidate && A.CandidateCount == B.CandidateCount;
+    }
+    inline bool operator!=(const FInstanceRange& A, const FInstanceRange& B) { return !(A == B); }
+
     // Um candidato: slot MAIS a generation esperada.
     //
     // A generation viaja junto porque sem ela nao existe validacao de generation nenhuma — o

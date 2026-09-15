@@ -284,6 +284,33 @@ set_tests_properties(Smile.GpuIndirectLayout PROPERTIES
     TIMEOUT 180
 )
 
+# A cadeia do main view indireto gravada pela engine (Fase 5): expand, classify, scatter e finalizacao
+# sobre tabelas, cena e fila de verdade, com os shaders de producao. Linka a engine; o device e WARP.
+add_executable(SmileGpuIndirectMainViewTests
+    GpuIndirectMainViewTests.cpp
+)
+
+target_compile_features(SmileGpuIndirectMainViewTests PRIVATE cxx_std_20)
+target_compile_definitions(SmileGpuIndirectMainViewTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(SmileGpuIndirectMainViewTests PRIVATE SmileEngine d3d12 dxgi)
+add_dependencies(SmileGpuIndirectMainViewTests Shaders)
+set_target_properties(SmileGpuIndirectMainViewTests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+    FOLDER "Tests"
+)
+
+add_test(
+    NAME Smile.GpuIndirectMainView
+    COMMAND SmileGpuIndirectMainViewTests
+)
+
+set_tests_properties(Smile.GpuIndirectMainView PROPERTIES
+    LABELS "scene;gpu-driven;warp"
+    TIMEOUT 240
+)
+
 # Lista de candidatos e ranges (Fase 4). A logica e CPU pura; o device WARP existe so porque um
 # FGpuMesh valido precisa apontar para um pool D3D12 de verdade.
 add_executable(SmileGpuSceneCandidateTests

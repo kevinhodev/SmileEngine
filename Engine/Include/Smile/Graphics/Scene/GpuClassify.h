@@ -270,20 +270,34 @@ namespace Smile {
     //
     // Pura e sobre a MESMA struct que o dispatch recebe, de proposito: uma pre-condicao verificada
     // sobre outra copia dos numeros e uma pre-condicao sobre outra coisa.
-    inline u32 GpuClassifyPreflight(const FGpuClassifyInput& _In) {
+    //
+    // `GpuClassifyPreflightFor` e a mesma porta sobre a CONTAGEM de candidatos, para quem nao tem a
+    // lista na CPU: a cadeia do main view expande os ranges na GPU, e a CPU so sabe quantas saidas
+    // pediu — o mesmo numero que ela escreve no cbuffer. A versao da struct delega para ela: e uma porta
+    // so, e nao duas copias.
+    inline u32 GpuClassifyPreflightFor(u64 _CandidateCount,
+                                       std::span<const FGpuSceneInstanceMeta> _Meta,
+                                       std::span<const FGpuMaterialRecord> _Materials,
+                                       std::span<const FGpuMeshRecord> _Meshes, u32 _PoolCount,
+                                       u32 _BatchCapacity) {
         // Sem candidato nao ha o que reprovar: um dispatch de zero threads e valido e nao produz
         // desfecho nenhum. Reprovar aqui obrigaria o chamador a tratar "cena vazia" como falha.
-        if (_In.Slots.empty()) return GpuClassifyPreflightOk;
-        if (_In.Meta.empty() || _In.Materials.empty() || _In.Meshes.empty())
+        if (_CandidateCount == 0u) return GpuClassifyPreflightOk;
+        if (_Meta.empty() || _Materials.empty() || _Meshes.empty())
             return GpuClassifyPreflightEmptyTable;
         // A mesma porta do dimensionamento, e nao uma segunda copia da aritmetica: se as duas
         // divergissem, o buffer seria alocado por um criterio e aprovado por outro.
         u32 Necessario = 0;
-        const u32 Motivo = GpuClassifyBatchBufferSlots(_In.PoolCount, Necessario);
+        const u32 Motivo = GpuClassifyBatchBufferSlots(_PoolCount, Necessario);
         if (Motivo != GpuClassifyPreflightOk) return Motivo;
         // Aqui `Necessario` ja passou pela porta, entao a comparacao e u32 contra u32 sem risco.
-        if (_In.BatchCapacity < Necessario) return GpuClassifyPreflightSmallBatchBuffer;
+        if (_BatchCapacity < Necessario) return GpuClassifyPreflightSmallBatchBuffer;
         return GpuClassifyPreflightOk;
+    }
+
+    inline u32 GpuClassifyPreflight(const FGpuClassifyInput& _In) {
+        return GpuClassifyPreflightFor(_In.Slots.size(), _In.Meta, _In.Materials, _In.Meshes,
+                                       _In.PoolCount, _In.BatchCapacity);
     }
 
 
