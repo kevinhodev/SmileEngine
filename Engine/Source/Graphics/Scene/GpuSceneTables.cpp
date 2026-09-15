@@ -78,7 +78,11 @@ namespace Smile {
     }
 
     void FGpuTableStorage::Release(FTextureSRVHeap& _SRVHeap) {
-        if (SrvSlot_ != kInvalidSlot) { _SRVHeap.Free(SrvSlot_, 1); SrvSlot_ = kInvalidSlot; }
+        // O slot sai do membro ANTES do Free: se o Free lancar, o slot vaza, mas uma segunda
+        // liberacao nao o devolve duas vezes ao heap.
+        const u32 Slot = SrvSlot_;
+        SrvSlot_ = kInvalidSlot;
+        if (Slot != kInvalidSlot) _SRVHeap.Free(Slot, 1);
         Buffer_.Reset();
         Staging_  = {};
         Capacity_ = 0;
@@ -162,23 +166,32 @@ namespace Smile {
 
     void FGpuMaterialTable::SetupForMaterials(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                               std::span<FMaterial* const> _Materials) {
-        // Linha 0 reservada para o material default; os materiais da cena vem a partir de 1.
-        RowMaterials_.clear();
-        RowByMaterial_.clear();
-        RowMaterials_.reserve(_Materials.size() + 1);
-        RowMaterials_.push_back(nullptr);
-        for (FMaterial* M : _Materials) {
-            // O primeiro a chegar vence, e nao o ultimo: um ponteiro repetido na lista seria duas
-            // linhas para o mesmo material, e as duas subiriam o mesmo conteudo. Nao acontece hoje
-            // (ImportedMaterials guarda unique_ptr), mas o mapa nao deve inventar uma politica se
-            // acontecer.
-            if (M && RowByMaterial_.emplace(M, static_cast<u32>(RowMaterials_.size())).second)
-                RowMaterials_.push_back(M);
-        }
+        // FAIL-CLOSED: a tabela so volta a ficar pronta na ultima linha. O mapa muda antes do
+        // armazenamento, e uma excecao entre os dois deixaria linhas da cena nova sobre o buffer da
+        // antiga, com `Dirty_` desligado — a porta aprovaria "nada pendente". Quem lanca sai LIBERADA.
+        Built_ = false;
+        try {
+            // Linha 0 reservada para o material default; os materiais da cena vem a partir de 1.
+            RowMaterials_.clear();
+            RowByMaterial_.clear();
+            RowMaterials_.reserve(_Materials.size() + 1);
+            RowMaterials_.push_back(nullptr);
+            for (FMaterial* M : _Materials) {
+                // O primeiro a chegar vence, e nao o ultimo: um ponteiro repetido na lista seria
+                // duas linhas para o mesmo material, e as duas subiriam o mesmo conteudo. Nao
+                // acontece hoje (ImportedMaterials guarda unique_ptr), mas o mapa nao deve inventar
+                // uma politica se acontecer.
+                if (M && RowByMaterial_.emplace(M, static_cast<u32>(RowMaterials_.size())).second)
+                    RowMaterials_.push_back(M);
+            }
 
-        Storage_.Create(_Device, _SRVHeap, kRowBytes,
-                        TableCapacityFor(static_cast<u32>(RowMaterials_.size())),
-                        "GpuMaterialTable");
+            Storage_.Create(_Device, _SRVHeap, kRowBytes,
+                            TableCapacityFor(static_cast<u32>(RowMaterials_.size())),
+                            "GpuMaterialTable");
+        } catch (...) {
+            Release(_SRVHeap);
+            throw;
+        }
 
         // O conteudo do buffer novo e indefinido; o shadow tem de refletir isso, e nao o que a
         // tabela anterior continha — senao a comparacao do primeiro RecordUpload concluiria que
@@ -190,9 +203,13 @@ namespace Smile {
         LastDirtyRows_     = 0;
         LastCopyRegions_   = 0;
         TotalRowsUploaded_ = 0;
+        Built_             = true;
     }
 
     void FGpuMaterialTable::Release(FTextureSRVHeap& _SRVHeap) {
+        // A marca PRIMEIRO: o Free do heap pode alocar, e uma excecao no meio da liberacao nao pode
+        // deixar a tabela dizendo que esta pronta.
+        Built_ = false;
         Storage_.Release(_SRVHeap);
         RowMaterials_.clear();
         RowByMaterial_.clear();
@@ -207,8 +224,9 @@ namespace Smile {
     }
 
     bool FGpuMaterialTable::AcceptsPendingUpload(ID3D12GraphicsCommandList* _CommandList) const {
-        // As mesmas saidas antecipadas do RecordUpload: nada a publicar.
-        if (!Dirty_ || !Storage_.IsBuilt() || RowMaterials_.empty()) return true;
+        // Fail-closed: tabela sem Setup completo nao passa por "nada pendente".
+        if (!Built_) return false;
+        if (!Dirty_ || RowMaterials_.empty()) return true;
         // Toda linha que pode mudar esta abaixo do numero de linhas.
         return Storage_.AcceptsRows(_CommandList, static_cast<u32>(RowMaterials_.size()));
     }
@@ -216,7 +234,8 @@ namespace Smile {
     bool FGpuMaterialTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
         LastDirtyRows_   = 0;
         LastCopyRegions_ = 0;
-        if (!Dirty_ || !Storage_.IsBuilt() || RowMaterials_.empty()) return true;
+        if (!Built_) return false;
+        if (!Dirty_ || RowMaterials_.empty()) return true;
 
         const u32 Rows = static_cast<u32>(RowMaterials_.size());
         Fresh_.resize(Rows);
@@ -261,6 +280,24 @@ namespace Smile {
     }
 
     void FGpuMeshTable::SetupForScene(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
+                                      const FScene& _Scene) {
+        // FAIL-CLOSED, como no material: pronta so no fim, e quem lanca sai LIBERADA — inclusive o
+        // range de descritores de geometria que ja tinha sido alocado e escrito.
+        Built_ = false;
+        try {
+            BuildForScene(_Device, _SRVHeap, _Scene);
+        } catch (...) {
+            Release(_SRVHeap);
+            throw;
+        }
+        Shadow_.clear();
+        ++LayoutInputsVersion_;
+        Dirty_         = true;
+        LastDirtyRows_ = 0;
+        Built_         = true;
+    }
+
+    void FGpuMeshTable::BuildForScene(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap,
                                       const FScene& _Scene) {
         // UMA enumeracao das malhas unicas, na ordem da cena. Antes ela vivia no
         // FRaytracingScene::Build e o FDDGI reconstruia a mesma lista com um criterio "identico,
@@ -370,19 +407,17 @@ namespace Smile {
                          "); a malha fica no fallback CPU");
             }
         }
-
-        Shadow_.clear();
-        ++LayoutInputsVersion_;
-        Dirty_         = true;
-        LastDirtyRows_ = 0;
     }
 
     void FGpuMeshTable::Release(FTextureSRVHeap& _SRVHeap) {
-        if (DescriptorBase_ != kInvalidSlot) {
-            _SRVHeap.Free(DescriptorBase_, DescriptorCount_);
-            DescriptorBase_  = kInvalidSlot;
-            DescriptorCount_ = 0;
-        }
+        // A marca primeiro, como no material. E o range sai dos membros ANTES do Free: se o Free
+        // lancar, o range vaza, mas uma segunda liberacao nao o devolve duas vezes ao heap.
+        Built_ = false;
+        const u32 Base  = DescriptorBase_;
+        const u32 Count = DescriptorCount_;
+        DescriptorBase_  = kInvalidSlot;
+        DescriptorCount_ = 0;
+        if (Base != kInvalidSlot) _SRVHeap.Free(Base, Count);
         Storage_.Release(_SRVHeap);
         UniqueMeshes_.clear();
         GeometryPools_.clear();
@@ -400,13 +435,15 @@ namespace Smile {
     }
 
     bool FGpuMeshTable::AcceptsPendingUpload(ID3D12GraphicsCommandList* _CommandList) const {
-        if (!Dirty_ || !Storage_.IsBuilt() || Fresh_.empty()) return true;
+        if (!Built_) return false;
+        if (!Dirty_ || Fresh_.empty()) return true;
         return Storage_.AcceptsRows(_CommandList, static_cast<u32>(Fresh_.size()));
     }
 
     bool FGpuMeshTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
         LastDirtyRows_ = 0;
-        if (!Dirty_ || !Storage_.IsBuilt() || Fresh_.empty()) return true;
+        if (!Built_) return false;
+        if (!Dirty_ || Fresh_.empty()) return true;
         // Sem recalculo: ao contrario do material, nada de malha muda sem passar por um Setup —
         // geometria nao e editavel em runtime. As linhas ja estao prontas desde o SetupForScene.
         //
@@ -430,25 +467,38 @@ namespace Smile {
     void FGpuSceneInstanceTable::SetupForScene(ID3D12Device* _Device,
                                                FTextureSRVHeap& _SRVHeap,
                                                const FScene& _Scene) {
-        const u32 Required = std::max(1u, _Scene.GpuSlots().Capacity());
-        const u32 Capacity = TableCapacityFor(Required);
-        MetaStorage_.Create(_Device, _SRVHeap, kMetaBytes, Capacity, "GpuSceneInstanceMeta");
-        BoundsStorage_.Create(_Device, _SRVHeap, kBoundsBytes, Capacity,
-                              "GpuSceneInstanceBounds");
-        TransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
-                                 "GpuSceneInstanceTransform");
-        PrevTransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
-                                     "GpuSceneInstancePrevTransform");
+        // FAIL-CLOSED, com uma razao a mais que nas outras tabelas: sao QUATRO armazenamentos e os
+        // vetores de CPU dimensionados por eles. Uma falha na terceira coluna deixava meta e bounds
+        // novos sobre transform antigo, e vetores do tamanho velho sob a capacidade nova — o
+        // PrepareFrame indexaria alem deles. Pronta so no fim; quem lanca sai LIBERADA.
+        Built_ = false;
+        try {
+            const u32 Required = std::max(1u, _Scene.GpuSlots().Capacity());
+            const u32 Capacity = TableCapacityFor(Required);
+            MetaStorage_.Create(_Device, _SRVHeap, kMetaBytes, Capacity, "GpuSceneInstanceMeta");
+            BoundsStorage_.Create(_Device, _SRVHeap, kBoundsBytes, Capacity,
+                                  "GpuSceneInstanceBounds");
+            TransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
+                                     "GpuSceneInstanceTransform");
+            PrevTransformStorage_.Create(_Device, _SRVHeap, kTransformBytes, Capacity,
+                                         "GpuSceneInstancePrevTransform");
 
-        // Dimensionados pela capacidade DO BUFFER, e nao pela recem-calculada: o Create preserva
-        // um buffer maior quando a cena nova e menor, e o Capacity() publico — o mesmo que
-        // PrepareFrame usa como limite de slot — passa a ser o do buffer. Com a local, um slot
-        // entre os dois valores passaria pela guarda e indexaria fora do vetor.
-        const u32 RowCapacity = MetaStorage_.Capacity();
-        MetaRows_.assign(RowCapacity, {});
-        BoundsRows_.assign(RowCapacity, {});
-        TransformRows_.assign(RowCapacity, {});
-        PrevTransformRows_.assign(RowCapacity, {});
+            // Dimensionados pela capacidade DO BUFFER, e nao pela recem-calculada: o Create
+            // preserva um buffer maior quando a cena nova e menor, e o Capacity() publico — o mesmo
+            // que PrepareFrame usa como limite de slot — passa a ser o do buffer. Com a local, um
+            // slot entre os dois valores passaria pela guarda e indexaria fora do vetor.
+            const u32 RowCapacity = MetaStorage_.Capacity();
+            MetaRows_.assign(RowCapacity, {});
+            BoundsRows_.assign(RowCapacity, {});
+            TransformRows_.assign(RowCapacity, {});
+            PrevTransformRows_.assign(RowCapacity, {});
+            SeenEpoch_.assign(RowCapacity, 0u);
+            DirtyMarks_.assign(RowCapacity, 0u);
+        } catch (...) {
+            Release(_SRVHeap);
+            throw;
+        }
+
         MetaShadow_.clear();
         ++LayoutInputsVersion_;
         BoundsShadow_.clear();
@@ -459,8 +509,6 @@ namespace Smile {
         TouchedSlots_.clear();
         SettleSlots_.clear();
         NextSettleSlots_.clear();
-        SeenEpoch_.assign(RowCapacity, 0u);
-        DirtyMarks_.assign(RowCapacity, 0u);
         PrepareEpoch_ = 0;
         PreparedStructureVersion_ = ~0ull;
         PreparedTransformVersion_ = ~0ull;
@@ -473,9 +521,13 @@ namespace Smile {
         LastCopyRegions_ = 0;
         LastRowsScanned_ = 0;
         TotalBytesUploaded_ = 0;
+        FitsScene_ = true;
+        Built_ = true;
     }
 
     void FGpuSceneInstanceTable::Release(FTextureSRVHeap& _SRVHeap) {
+        // A marca primeiro, como no material.
+        Built_ = false;
         MetaStorage_.Release(_SRVHeap);
         BoundsStorage_.Release(_SRVHeap);
         TransformStorage_.Release(_SRVHeap);
@@ -517,7 +569,12 @@ namespace Smile {
     void FGpuSceneInstanceTable::PrepareFrame(FScene& _Scene,
                                               const FGpuMeshTable& _Meshes,
                                               const FGpuMaterialTable& _Materials) {
-        if (!IsBuilt() || _Scene.GpuSlots().Capacity() > Capacity()) return;
+        if (!Built_) return;
+        // Uma cena que cresceu alem da tabela, sem o Setup que acompanha o crescimento, tem slots que
+        // nao cabem nela. Sair em silencio deixava o frame seguir com a imagem de antes; a marca faz
+        // a porta recusar ate o Setup chegar.
+        FitsScene_ = _Scene.GpuSlots().Capacity() <= Capacity();
+        if (!FitsScene_) return;
 
         const u64 StructureVersion = _Scene.StructureVersion();
         const u64 TransformVersion = _Scene.TransformsVersion();
@@ -689,7 +746,8 @@ namespace Smile {
     }
 
     bool FGpuSceneInstanceTable::AcceptsPendingUpload(ID3D12GraphicsCommandList* _CommandList) const {
-        if (!Dirty_ || !IsBuilt() || TouchedSlots_.empty()) return true;
+        if (!Built_ || !FitsScene_) return false;
+        if (!Dirty_ || TouchedSlots_.empty()) return true;
         // Toda linha que muda e tocada, e os tocados saem ordenados do PrepareFrame: o ultimo e o maior.
         const u32 Rows = TouchedSlots_.back() + 1u;
         return MetaStorage_.AcceptsRows(_CommandList, Rows) &&
@@ -704,7 +762,8 @@ namespace Smile {
         LastDirtyBytes_ = 0;
         LastCopyRegions_ = 0;
         LastRowsScanned_ = 0;
-        if (!Dirty_ || !IsBuilt()) return true;
+        if (!Built_ || !FitsScene_) return false;
+        if (!Dirty_) return true;
 
         // O conjunto tocado e o mesmo para as quatro colunas — quem escreve uma linha escreve as
         // quatro —, entao o custo do diff e |tocados| x 4, e nao a capacidade da tabela x 4.
@@ -804,5 +863,31 @@ namespace Smile {
     u64 FGpuSceneInstanceTable::StagingBytes() const {
         return MetaStorage_.StagingBytes() + BoundsStorage_.StagingBytes() +
                TransformStorage_.StagingBytes() + PrevTransformStorage_.StagingBytes();
+    }
+
+    // ================================================================================================
+    // As tres tabelas da cena
+    // ================================================================================================
+    void GpuSceneSetupTables(FGpuMaterialTable& _Materials, FGpuMeshTable& _Meshes,
+                             FGpuSceneInstanceTable& _Instances, ID3D12Device* _Device,
+                             FTextureSRVHeap& _SRVHeap, std::span<FMaterial* const> _MaterialList,
+                             const FScene& _Scene) {
+        try {
+            _Materials.SetupForMaterials(_Device, _SRVHeap, _MaterialList);
+            _Meshes.SetupForScene(_Device, _SRVHeap, _Scene);
+            _Instances.SetupForScene(_Device, _SRVHeap, _Scene);
+        } catch (...) {
+            // A que lancou ja saiu liberada. As outras tambem saem: a que completou descreve a cena
+            // nova, e a que ainda nao rodou descreve a antiga — nenhuma das duas combina com a falha.
+            GpuSceneReleaseTables(_Materials, _Meshes, _Instances, _SRVHeap);
+            throw;
+        }
+    }
+
+    void GpuSceneReleaseTables(FGpuMaterialTable& _Materials, FGpuMeshTable& _Meshes,
+                               FGpuSceneInstanceTable& _Instances, FTextureSRVHeap& _SRVHeap) {
+        _Materials.Release(_SRVHeap);
+        _Meshes.Release(_SRVHeap);
+        _Instances.Release(_SRVHeap);
     }
 }

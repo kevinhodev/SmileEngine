@@ -19,6 +19,9 @@
 //     transacional sozinha, e isso e conferido isolado: recusada (lista nula), devolve false e nao
 //     avanca nem as linhas publicadas nem a versao, e a nova tentativa publica tudo. Dois frames
 //     gravados antes de qualquer um executar provam que cada upload le o staging do SEU frame slot.
+//     E um Setup INTERROMPIDO — o failpoint de upload recusando o staging, em cada tabela e entre as
+//     tres — deixa as tabelas liberadas, sem mapa nem descritor preso, e a porta recusa o frame ate
+//     um Setup completo.
 //
 //  3. O par temporal publicado segue a GPU, e nao as linhas escritas. A leitura de volta so prova que
 //     a GPU tem o que as linhas publicadas dizem; o par CERTO e conferido contra matrizes calculadas
@@ -818,6 +821,184 @@ int main() try {
     G.Instances.Release(G.Heap);
     G.Consultar();
     CheckEq64(G.Layout.RebuildAttempts(), 18ull, "o Release das instancias reconta");
+
+    // --- Setup INTERROMPIDO: a tabela sai liberada, e o frame nao existe --------------------------
+    //
+    // A falha de producao que a fronteira existe para cobrir: um upload buffer recusado (falta de
+    // memoria) no meio de um Setup, com o render thread capturando a excecao e pedindo o frame
+    // seguinte. O staging e criado depois do buffer, entao cada recusa pega um armazenamento com
+    // recurso novo ja criado. Depois de cada falha: armazenamento, mapas, descritores e porta.
+    {
+        FMaterial* Lista[3]{ &G.Opaco, &G.Mascarado, &G.Troca };
+        auto Lanca = [](auto&& _Chamada) {
+            try {
+                _Chamada();
+            } catch (const std::exception&) {
+                return true;
+            }
+            return false;
+        };
+        auto Montar = [&]() {
+            GpuSceneSetupTables(G.Materials, G.Meshes, G.Instances, G.Device.Get(), G.Heap, Lista,
+                                G.Scene);
+        };
+
+        // Liberadas, as tabelas nao passam por "nada pendente".
+        GpuSceneReleaseTables(G.Materials, G.Meshes, G.Instances, G.Heap);
+        const u32 SemTabelas = G.Heap.UsedSlots();
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationMaterialsNotBuilt,
+                "liberadas: a porta recusa o frame");
+
+        Montar();
+        const u32 ComTres = G.Heap.UsedSlots();
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "montadas: o frame publica");
+
+        // Material CRESCENDO: o armazenamento antigo existe e sobrevive ao Create recusado, e e ai
+        // que o mapa novo ficaria sobre o buffer antigo, sem nada pendente.
+        {
+            std::vector<std::unique_ptr<FMaterial>> Extras;
+            std::vector<FMaterial*>                 Grande(Lista, Lista + 3);
+            for (u32 I = 0; I < 40u; ++I) {
+                Extras.push_back(std::make_unique<FMaterial>());
+                Grande.push_back(Extras.back().get());
+            }
+            {
+                GpuResources::FUploadFailureInjection Falha(1u);
+                Check(Lanca([&] { G.Materials.SetupForMaterials(G.Device.Get(), G.Heap, Grande); }),
+                      "material crescendo: o Setup com o staging recusado lanca");
+                CheckEq(GpuResources::PendingUploadFailures(), 0u,
+                        "material crescendo: a falha foi consumida pelo Setup");
+            }
+            Check(!G.Materials.IsBuilt(), "material interrompido: a tabela nao esta pronta");
+            CheckEq(G.Materials.RowCount(), 0u, "material interrompido: o mapa de linhas foi liberado");
+            CheckEq(G.Materials.RowOf(Extras[0].get()), FGpuMaterialTable::kDefaultRow,
+                    "material interrompido: o material novo nao resolve linha");
+            CheckEq(G.Materials.Srv(), FTextureSRVHeap::kInvalidSlot,
+                    "material interrompido: sem descritor");
+            CheckEq(G.Heap.UsedSlots(), ComTres - 1u,
+                    "material interrompido: o descritor do armazenamento antigo voltou ao heap");
+            G.Frame();
+            CheckEq(G.Publicacao, GpuScenePublicationMaterialsNotBuilt,
+                    "material interrompido: a porta recusa o frame");
+        }
+        G.Materials.SetupForMaterials(G.Device.Get(), G.Heap, Lista);
+        CheckEq(G.Heap.UsedSlots(), ComTres, "material refeito: a conta de descritores volta");
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "material refeito: o frame publica");
+
+        // Malha nova: o range de descritores de geometria ja foi alocado e escrito quando o staging
+        // e recusado.
+        {
+            G.Meshes.Release(G.Heap);
+            const u32 SemMalha = G.Heap.UsedSlots();
+            {
+                GpuResources::FUploadFailureInjection Falha(1u);
+                Check(Lanca([&] { G.Meshes.SetupForScene(G.Device.Get(), G.Heap, G.Scene); }),
+                      "malha: o Setup com o staging recusado lanca");
+                CheckEq(GpuResources::PendingUploadFailures(), 0u,
+                        "malha: a falha foi consumida pelo Setup");
+            }
+            Check(!G.Meshes.IsBuilt(), "malha interrompida: a tabela nao esta pronta");
+            CheckEq(G.Meshes.RowCount(), 0u, "malha interrompida: o mapa de linhas foi liberado");
+            CheckEq(G.Meshes.RowOf(&G.MalhaA), FGpuMeshTable::kMissingRow,
+                    "malha interrompida: a malha nao resolve linha");
+            CheckEq(G.Meshes.GeometrySlotOf(&G.MalhaA), 0u,
+                    "malha interrompida: nem descritor de geometria");
+            Check(G.Meshes.GeometryPools().empty(), "malha interrompida: sem pools");
+            CheckEq(G.Meshes.DescriptorCount(), 0u, "malha interrompida: o range foi devolvido");
+            CheckEq(G.Heap.UsedSlots(), SemMalha,
+                    "malha interrompida: nenhum descritor de geometria preso");
+            G.Frame();
+            CheckEq(G.Publicacao, GpuScenePublicationMeshesNotBuilt,
+                    "malha interrompida: a porta recusa o frame");
+        }
+        G.Meshes.SetupForScene(G.Device.Get(), G.Heap, G.Scene);
+        CheckEq(G.Heap.UsedSlots(), ComTres, "malha refeita: a conta de descritores volta");
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "malha refeita: o frame publica");
+
+        // Instancias interrompidas na TERCEIRA coluna: meta e bounds ja existem quando o staging do
+        // transform e recusado. E o caso que conferir so a meta aprovava.
+        {
+            G.Instances.Release(G.Heap);
+            const u32 SemInstancias = G.Heap.UsedSlots();
+            {
+                GpuResources::FUploadFailureInjection Falha(1u, 2u);
+                Check(Lanca([&] { G.Instances.SetupForScene(G.Device.Get(), G.Heap, G.Scene); }),
+                      "instancias: o Setup com o terceiro staging recusado lanca");
+                CheckEq(GpuResources::PendingUploadFailures(), 0u,
+                        "instancias: a falha foi consumida pelo terceiro staging");
+            }
+            Check(!G.Instances.IsBuilt(), "instancias interrompidas: a tabela nao esta pronta");
+            CheckEq(G.Instances.Capacity(), 0u, "instancias interrompidas: sem capacidade");
+            Check(G.Instances.MetaResource() == nullptr && G.Instances.BoundsResource() == nullptr,
+                  "instancias interrompidas: meta e bounds, ja criadas, foram soltas");
+            CheckEq(G.Instances.MetaSrv(), FTextureSRVHeap::kInvalidSlot,
+                    "instancias interrompidas: sem descritor de meta");
+            CheckEq(G.Heap.UsedSlots(), SemInstancias,
+                    "instancias interrompidas: nenhum descritor preso");
+            G.Frame();
+            CheckEq(G.Publicacao, GpuScenePublicationInstancesNotBuilt,
+                    "instancias interrompidas: a porta recusa o frame");
+        }
+        G.Instances.SetupForScene(G.Device.Get(), G.Heap, G.Scene);
+        CheckEq(G.Heap.UsedSlots(), ComTres, "instancias refeitas: a conta de descritores volta");
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "instancias refeitas: o frame publica");
+
+        // Falha ENTRE os setups: o material completa — com a mesma lista ele nem recria recurso —, e
+        // a malha, sem armazenamento, falha. A transacao libera as tres, inclusive a que completou.
+        {
+            G.Meshes.Release(G.Heap);
+            {
+                GpuResources::FUploadFailureInjection Falha(1u);
+                Check(Lanca(Montar), "transacao: a malha recusada lanca");
+                CheckEq(GpuResources::PendingUploadFailures(), 0u,
+                        "transacao: a falha foi consumida pela malha");
+            }
+            Check(!G.Materials.IsBuilt(), "transacao: o material que completou tambem sai liberado");
+            Check(!G.Meshes.IsBuilt(), "transacao: a malha que falhou sai liberada");
+            Check(!G.Instances.IsBuilt(), "transacao: as instancias, que nao rodaram, saem liberadas");
+            CheckEq(G.Heap.UsedSlots(), SemTabelas, "transacao: nenhum descritor preso");
+            G.Frame();
+            CheckEq(G.Publicacao, GpuScenePublicationMaterialsNotBuilt,
+                    "transacao: a porta recusa o frame");
+        }
+        Montar();
+        CheckEq(G.Heap.UsedSlots(), ComTres, "transacao refeita: a conta de descritores volta");
+        G.Frame();
+        CheckEq(G.Publicacao, GpuScenePublicationOk, "transacao refeita: o frame publica as tres");
+        Check(!G.Materials.PublishedRows().empty() && !G.Meshes.PublishedRows().empty() &&
+                  !G.Instances.PublishedMeta().empty(),
+              "transacao refeita: as tres tem linhas publicadas");
+
+        // A cena CRESCE alem da tabela sem o Setup que acompanha: o produtor nao cabe, e o frame nao
+        // existe ate o Setup chegar.
+        {
+            u32 Acrescentados = 0;
+            while (G.Scene.GpuSlots().Capacity() <= G.Instances.Capacity() &&
+                   Acrescentados < 100000u) {
+                FRenderable Novo;
+                Novo.Mesh     = &G.MalhaA;
+                Novo.Material = &G.Opaco;
+                G.Scene.AddRenderable(Novo);
+                ++Acrescentados;
+            }
+            Check(G.Scene.GpuSlots().Capacity() > G.Instances.Capacity(),
+                  "cena maior: a cena passou da capacidade da tabela");
+            G.Frame();
+            Check(!G.Instances.FitsScene(), "cena maior: o produtor ve que ela nao cabe");
+            CheckEq(G.Publicacao, GpuScenePublicationSceneExceedsTable,
+                    "cena maior: a porta recusa o frame");
+
+            G.Instances.SetupForScene(G.Device.Get(), G.Heap, G.Scene);
+            G.Frame();
+            Check(G.Instances.FitsScene(), "cena maior, com Setup: a cena cabe");
+            CheckEq(G.Publicacao, GpuScenePublicationOk, "cena maior, com Setup: o frame publica");
+        }
+    }
 
     if (Failures == 0) std::cout << "  OK\n";
     return Failures == 0 ? 0 : 1;

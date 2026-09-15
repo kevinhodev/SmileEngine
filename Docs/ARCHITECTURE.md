@@ -366,8 +366,9 @@ Selecionar `DLSS_RR` **força** o upscaler para DLSS (o RR faz denoise + upscale
 ```
  [pré-frame, fora da gravação]
    coalescência de dirty flags (material RT / luz indireta) → invalidações
-   reconciliação do ObjectCB · produtor das instâncias + porta da publicação das tabelas canônicas
-      (falha em qualquer uma → NÃO há frame: a command list nem abre, e nada é gravado)
+   produtor das instâncias + porta da publicação das tabelas canônicas · reconciliação do ObjectCB
+      (falha em qualquer uma → NÃO há frame: a command list nem abre, e nada é gravado; tabela
+       incompleta — Setup que lançou, ou liberada — também recusa)
    BeginFrame (espera fence do slot) · upload das três tabelas canônicas · readbacks do slot anterior
    FrameConstants · jitter (upscaler/TAA) · Time-of-Day · clima · UpdatePerFrame dos subsistemas
       │

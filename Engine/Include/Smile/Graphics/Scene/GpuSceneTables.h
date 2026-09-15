@@ -643,6 +643,8 @@ namespace Smile {
         static constexpr u32 kDefaultRow = 0;
         static constexpr u32 kRowBytes   = static_cast<u32>(sizeof(FGpuMaterialRecord));
 
+        // Fail-closed: lancou, a tabela sai LIBERADA — sem mapa novo sobre armazenamento antigo e sem
+        // descritor preso —, e `IsBuilt` so volta a valer quando um Setup chega ao fim.
         void SetupForMaterials(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                                std::span<FMaterial* const> Materials);
         void Release(FTextureSRVHeap& SRVHeap);
@@ -671,7 +673,9 @@ namespace Smile {
 
         u32  Srv()      const { return Storage_.Srv(); }
         u32  RowCount() const { return static_cast<u32>(RowMaterials_.size()); }
-        bool IsBuilt()  const { return Storage_.IsBuilt(); }
+        // Setup COMPLETO e nao liberado. Nao e "o buffer existe": um Setup que lancou depois de criar
+        // o buffer nao conta.
+        bool IsBuilt()  const { return Built_; }
 
         // Linha de um material. Devolve kDefaultRow para nulo ou desconhecido — desconhecido
         // acontece de verdade: o proxy do terreno e materiais criados fora do import nao estao na
@@ -713,6 +717,7 @@ namespace Smile {
         std::vector<FGpuMaterialRecord>          Fresh_;   // buffer de trabalho
         std::vector<u32>                         Changed_; // idem
 
+        bool Built_             = false;
         bool Dirty_             = false;
         u32  LastDirtyRows_     = 0;
         u32  LastCopyRegions_   = 0;
@@ -736,7 +741,8 @@ namespace Smile {
         static constexpr u32 kDescriptorsPerMesh = 3;
 
         // Enumera as malhas unicas da cena, aloca e escreve os descritores de geometria e monta as
-        // linhas. Mesmo contrato de dreno do FGpuTableStorage::Create.
+        // linhas. Mesmo contrato de dreno do FGpuTableStorage::Create, e fail-closed como o do
+        // material: lancou, sai liberada, com o range de descritores de geometria devolvido.
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
         void Release(FTextureSRVHeap& SRVHeap);
 
@@ -747,7 +753,8 @@ namespace Smile {
 
         u32  Srv()      const { return Storage_.Srv(); }
         u32  RowCount() const { return static_cast<u32>(RowMeshes_.size()); }
-        bool IsBuilt()  const { return Storage_.IsBuilt(); }
+        // Setup COMPLETO e nao liberado, como no FGpuMaterialTable.
+        bool IsBuilt()  const { return Built_; }
 
         // Malhas unicas, na ordem em que aparecem na cena. NAO inclui a linha 0. E daqui que o
         // FRaytracingScene tira a lista para dimensionar os BLAS.
@@ -797,6 +804,9 @@ namespace Smile {
         u64 LayoutInputsVersion() const { return LayoutInputsVersion_; }
 
     private:
+        // O corpo do Setup, tudo o que pode lancar. Separado para o SetupForScene envolve-lo inteiro.
+        void BuildForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
+
         FGpuTableStorage Storage_;
         std::vector<const FGpuMesh*>              UniqueMeshes_;
         std::vector<FGpuGeometryPool>             GeometryPools_;
@@ -810,6 +820,7 @@ namespace Smile {
 
         u32 DescriptorBase_  = 0xFFFFFFFFu;
         u32 DescriptorCount_ = 0;
+        bool Built_          = false;
         bool Dirty_          = false;
         u32  LastDirtyRows_  = 0;
         u64  LayoutInputsVersion_ = 0;
@@ -830,6 +841,8 @@ namespace Smile {
         static constexpr u32 kResidentBytesPerSlot =
             kMetaBytes + kBoundsBytes + 2u * kTransformBytes; // 180 B
 
+        // Fail-closed como as outras: lancou em qualquer das quatro colunas, ou nos vetores de CPU, a
+        // tabela sai liberada e `IsBuilt` so volta a valer no fim de um Setup.
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
         void Release(FTextureSRVHeap& SRVHeap);
 
@@ -850,7 +863,12 @@ namespace Smile {
         bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
         bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
 
-        bool IsBuilt() const { return MetaStorage_.IsBuilt(); }
+        // Setup COMPLETO e nao liberado: as QUATRO colunas e os vetores de CPU. Conferir so a meta
+        // aprovava uma tabela cujo Setup lancou depois de cria-la.
+        bool IsBuilt() const { return Built_; }
+        // A cena do ultimo PrepareFrame cabe na tabela. Falso quando ela cresceu sem o Setup que
+        // acompanha o crescimento — ai o produtor nao publica, e a porta recusa o frame.
+        bool FitsScene() const { return FitsScene_; }
         bool NeedsCapacity(u32 RequiredSlots) const {
             return !IsBuilt() || RequiredSlots > Capacity();
         }
@@ -962,6 +980,8 @@ namespace Smile {
         u32 LiveRows_                  = 0;
         bool NeedsSettle_              = false;
         bool Dirty_                    = false;
+        bool Built_                    = false;
+        bool FitsScene_                = true;
 
         u32 LastDirtyRows_       = 0;
         u64 LastDirtyBytes_      = 0;
@@ -981,21 +1001,59 @@ namespace Smile {
     //
     // Por isso a decisao vem ANTES de gravar qualquer tabela, pelas portas pendentes, que sao sem
     // efeito e conservadoras. O Renderer consulta com a command list ainda fechada e, recusada, nao
-    // abre o frame. Devolve a primeira tabela que recusou.
+    // abre o frame.
+    //
+    // FAIL-CLOSED: uma tabela incompleta — Setup que lancou, ou liberada — recusa o frame antes de
+    // qualquer pergunta sobre copia, e a de instancias tambem recusa quando a cena nao cabe nela.
+    // Devolve o primeiro motivo encontrado.
     enum EGpuScenePublication : u32 {
-        GpuScenePublicationOk               = 0,
-        GpuScenePublicationRefusedMaterials = 1,
-        GpuScenePublicationRefusedMeshes    = 2,
-        GpuScenePublicationRefusedInstances = 3,
+        GpuScenePublicationOk                 = 0,
+        GpuScenePublicationRefusedMaterials   = 1,
+        GpuScenePublicationRefusedMeshes      = 2,
+        GpuScenePublicationRefusedInstances   = 3,
+        GpuScenePublicationMaterialsNotBuilt  = 4,
+        GpuScenePublicationMeshesNotBuilt     = 5,
+        GpuScenePublicationInstancesNotBuilt  = 6,
+        GpuScenePublicationSceneExceedsTable  = 7,
     };
 
     inline u32 GpuScenePublicationGate(const FGpuMaterialTable& Materials,
                                        const FGpuMeshTable& Meshes,
                                        const FGpuSceneInstanceTable& Instances,
                                        ID3D12GraphicsCommandList* CommandList) {
+        if (!Materials.IsBuilt()) return GpuScenePublicationMaterialsNotBuilt;
+        if (!Meshes.IsBuilt()) return GpuScenePublicationMeshesNotBuilt;
+        if (!Instances.IsBuilt()) return GpuScenePublicationInstancesNotBuilt;
+        if (!Instances.FitsScene()) return GpuScenePublicationSceneExceedsTable;
         if (!Materials.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedMaterials;
         if (!Meshes.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedMeshes;
         if (!Instances.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedInstances;
         return GpuScenePublicationOk;
     }
+
+    // O motivo, para o log de quem aborta o frame.
+    inline const char* GpuScenePublicationReason(u32 Publication) {
+        switch (Publication) {
+        case GpuScenePublicationOk:                return "publicada";
+        case GpuScenePublicationRefusedMaterials:  return "copia da tabela de materiais recusada";
+        case GpuScenePublicationRefusedMeshes:     return "copia da tabela de malhas recusada";
+        case GpuScenePublicationRefusedInstances:  return "copia da tabela de instancias recusada";
+        case GpuScenePublicationMaterialsNotBuilt: return "tabela de materiais incompleta";
+        case GpuScenePublicationMeshesNotBuilt:    return "tabela de malhas incompleta";
+        case GpuScenePublicationInstancesNotBuilt: return "tabela de instancias incompleta";
+        case GpuScenePublicationSceneExceedsTable: return "a cena nao cabe na tabela de instancias";
+        default:                                   return "motivo desconhecido";
+        }
+    }
+
+    // (Re)monta as tres tabelas da cena como UMA transacao: as tres ficam prontas para a MESMA cena,
+    // ou as tres saem liberadas e a excecao segue. Sem isso, o material podia completar e a malha
+    // falhar, e a porta de cada tabela, sozinha, nao ve que as duas descrevem cenas diferentes.
+    // Mesmo contrato de dreno dos Setup.
+    void GpuSceneSetupTables(FGpuMaterialTable& Materials, FGpuMeshTable& Meshes,
+                             FGpuSceneInstanceTable& Instances, ID3D12Device* Device,
+                             FTextureSRVHeap& SRVHeap, std::span<FMaterial* const> MaterialList,
+                             const FScene& Scene);
+    void GpuSceneReleaseTables(FGpuMaterialTable& Materials, FGpuMeshTable& Meshes,
+                               FGpuSceneInstanceTable& Instances, FTextureSRVHeap& SRVHeap);
 }

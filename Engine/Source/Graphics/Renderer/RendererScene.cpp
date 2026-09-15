@@ -451,24 +451,32 @@ namespace Smile {
     // contrato dos Setup, porque elas substituem recursos lidos pelas duas. Nao e o caminho de
     // EDICAO de material: aquele e MarkDirty + RecordUpload, sem dreno.
     void Renderer::RebuildSceneTables() {
-        std::vector<FMaterial*> Raw;
-        Raw.reserve(ImportedMaterials.size() + 1);
-        // O material DEFAULT entra na tabela, e nao e detalhe: o `BuildDrawLists` substitui
-        // material nulo ou nao finalizado por ele (`ActiveMaterial`), entao ele chega ao raster
-        // como material de verdade. Sem linha propria, `RowOf` o mandaria para a linha 0 — que e
-        // "renderavel SEM material", cinza 0,7 e sem tabela de textura — e o caminho bindless
-        // desenharia esses objetos diferente do classico, que amarra o CBV e as texturas dele.
-        //
-        // Ele NAO ocupa a linha 0: aquela e reservada e tem defaults proprios, que o ray tracing
-        // consome. Sao duas coisas distintas com o mesmo apelido.
-        Raw.push_back(&DefaultMaterial);
-        for (const auto& M : ImportedMaterials) Raw.push_back(M.get());
-        MaterialTable.SetupForMaterials(Backend->Device.Native(), Backend->SRVHeap, Raw);
-        MeshTable.SetupForScene(Backend->Device.Native(), Backend->SRVHeap, SceneState->Scene);
-        InstanceTable.SetupForScene(Backend->Device.Native(), Backend->SRVHeap,
-                                    SceneState->Scene);
-        HiZ.SetInstanceBounds(Backend->Device.Native(), Backend->SRVHeap,
-                              InstanceTable.BoundsSrv(), InstanceTable.Capacity());
+        // TRANSACAO. A cena ja mudou quando isto roda, entao tabela nenhuma pode sobrar descrevendo
+        // a anterior, nem meio montada: qualquer falha aqui — a lista, uma das tres tabelas, o bind
+        // dos bounds do HiZ — libera as tres antes de a excecao seguir. O render thread captura a
+        // excecao do job e continua pedindo frames; com as tabelas liberadas, a porta da publicacao
+        // recusa cada um deles ate um rebuild completar.
+        try {
+            std::vector<FMaterial*> Raw;
+            Raw.reserve(ImportedMaterials.size() + 1);
+            // O material DEFAULT entra na tabela, e nao e detalhe: o `BuildDrawLists` substitui
+            // material nulo ou nao finalizado por ele (`ActiveMaterial`), entao ele chega ao raster
+            // como material de verdade. Sem linha propria, `RowOf` o mandaria para a linha 0 — que
+            // e "renderavel SEM material", cinza 0,7 e sem tabela de textura — e o caminho bindless
+            // desenharia esses objetos diferente do classico, que amarra o CBV e as texturas dele.
+            //
+            // Ele NAO ocupa a linha 0: aquela e reservada e tem defaults proprios, que o ray
+            // tracing consome. Sao duas coisas distintas com o mesmo apelido.
+            Raw.push_back(&DefaultMaterial);
+            for (const auto& M : ImportedMaterials) Raw.push_back(M.get());
+            GpuSceneSetupTables(MaterialTable, MeshTable, InstanceTable, Backend->Device.Native(),
+                                Backend->SRVHeap, Raw, SceneState->Scene);
+            HiZ.SetInstanceBounds(Backend->Device.Native(), Backend->SRVHeap,
+                                  InstanceTable.BoundsSrv(), InstanceTable.Capacity());
+        } catch (...) {
+            GpuSceneReleaseTables(MaterialTable, MeshTable, InstanceTable, Backend->SRVHeap);
+            throw;
+        }
     }
 
     void Renderer::SetCameraPose(const Vec3& _Pos, f32 _PitchDeg, f32 _YawDeg,

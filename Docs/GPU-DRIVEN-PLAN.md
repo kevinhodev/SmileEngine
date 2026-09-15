@@ -1585,6 +1585,18 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > depois de gravar não serviria: as tabelas que aceitaram já teriam avançado o shadow sobre uma cópia
 > que a GPU nunca executa. Uma gravação que recuse depois de a porta aceitar é invariante quebrado, e
 > lança. O contrato está em `Engine/Include/Smile/Graphics/Scene/GpuSceneTables.h`.
+>
+> A porta é **fail-closed**. A recusa de produção vem de um Setup que lança por falta de memória com o
+> render thread seguindo, e ela deixava tabelas pela metade que a porta lia como "nada pendente". Por
+> isso:
+>
+> - `FGpuTableStorage::Create` é atômico;
+> - cada Setup só marca a tabela pronta no fim e, se lança, a libera;
+> - `RebuildSceneTables` monta as três tabelas como UMA transação (`GpuSceneSetupTables`), liberando
+>   as três quando qualquer uma falha;
+> - a porta recusa tabela incompleta, e também a cena que cresceu além da tabela de instâncias;
+> - a porta vem antes da reconciliação do `ObjectCB`, porque a necessidade dele depende de as tabelas
+>   estarem prontas.
 
 ### Trabalho
 

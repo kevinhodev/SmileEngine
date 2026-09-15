@@ -821,8 +821,38 @@ namespace Smile {
         // command list aberto.
         UpdateFrameCapture();
 
-        // RECONCILIACAO do ObjectCB, ANTES de abrir a command list (Fase 4). So a porta da publicacao
-        // das tabelas, logo abaixo, vem depois dela.
+        // A PUBLICACAO das tabelas canonicas decide se ha frame, antes de abrir a command list e
+        // antes do ObjectCB (Fase 5): as tres, ou nenhum frame.
+        //
+        // Um frame com uma tabela recusada ou incompleta nao seria "o frame com a imagem anterior".
+        // Os leitores misturariam duas: o TransformsFor devolve o transform publicado antigo,
+        // enquanto frustum, caixa, material e associacao saem do FRenderable novo — e um objeto
+        // nunca publicado vai pelo ObjectCB sem linha valida no caminho bindless. E a decisao tem de
+        // vir antes de gravar QUALQUER tabela: descartar depois deixaria as que aceitaram com o
+        // shadow a frente de uma copia que a GPU nunca executa.
+        //
+        // Antes do ObjectCB porque a necessidade dele depende de as tabelas estarem prontas: com
+        // elas incompletas, a reconciliacao realocaria centenas de MB para um frame que nao existe.
+        //
+        // O produtor vem para ca junto, porque a porta das instancias confere os slots que ele toca.
+        // Ele so escreve memoria de CPU; o staging do slot continua sendo escrito so depois do
+        // BeginFrame, que espera a fence que o libera.
+        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
+        if (const u32 Recusa = GpuScenePublicationGate(MaterialTable, MeshTable, InstanceTable,
+                                                        Backend->DirectQueue.List());
+            Recusa != GpuScenePublicationOk) {
+            // Uma vez por episodio, como a falta do ObjectCB.
+            if (!ScenePublicationFailureLogged) {
+                LogError(std::string("Tabelas canonicas: ") + GpuScenePublicationReason(Recusa) +
+                         "; os frames sao ABORTADOS ate as tres publicarem — um frame com uma delas "
+                         "antiga ou incompleta desenharia duas imagens misturadas");
+                ScenePublicationFailureLogged = true;
+            }
+            return; // command list ainda fechado: nenhuma tabela gravou nem avancou
+        }
+        ScenePublicationFailureLogged = false;
+
+        // RECONCILIACAO do ObjectCB, ANTES de abrir a command list (Fase 4).
         //
         // Aqui, e nao no MakePassContext, porque a unica saida honesta de uma falha e nao ter
         // frame: la dentro o command list ja esta aberto e a alternativa seria gravar draws com
@@ -853,37 +883,6 @@ namespace Smile {
             // slots de cena e os ranges de descritor. Drenar aqui violaria a regra 8 do plano.
             RetireObjectCB();
         }
-
-        // A PUBLICACAO das tabelas canonicas tambem decide se ha frame, e tambem antes de abrir a
-        // command list (Fase 5): as tres, ou nenhum frame.
-        //
-        // Um frame com uma tabela recusada nao seria "o frame com a imagem anterior". Os leitores
-        // misturariam as duas: o TransformsFor devolve o transform publicado antigo, enquanto
-        // frustum, caixa, material e associacao saem do FRenderable novo — e um objeto nunca
-        // publicado vai pelo ObjectCB sem linha valida no caminho bindless. E a decisao tem de vir
-        // antes de gravar QUALQUER tabela: descartar depois deixaria as que aceitaram com o shadow a
-        // frente de uma copia que a GPU nunca executa.
-        //
-        // O produtor vem para ca junto, porque a porta das instancias confere os slots que ele toca.
-        // Ele so escreve memoria de CPU; o staging do slot continua sendo escrito so depois do
-        // BeginFrame, que espera a fence que o libera.
-        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
-        if (const u32 Recusa = GpuScenePublicationGate(MaterialTable, MeshTable, InstanceTable,
-                                                        Backend->DirectQueue.List());
-            Recusa != GpuScenePublicationOk) {
-            // Uma vez por episodio, como a falta do ObjectCB.
-            if (!ScenePublicationFailureLogged) {
-                const char* Tabela = Recusa == GpuScenePublicationRefusedMaterials ? "de materiais"
-                                   : Recusa == GpuScenePublicationRefusedMeshes    ? "de malhas"
-                                                                                   : "de instancias";
-                LogError(std::string("Tabelas canonicas: a publicacao da tabela ") + Tabela +
-                         " seria recusada; os frames sao ABORTADOS ate as tres publicarem — um "
-                         "frame com uma delas antiga desenharia duas imagens misturadas");
-                ScenePublicationFailureLogged = true;
-            }
-            return; // command list ainda fechado: nenhuma tabela gravou nem avancou
-        }
-        ScenePublicationFailureLogged = false;
 
         Backend->DirectQueue.BeginFrame();
 

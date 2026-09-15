@@ -925,7 +925,8 @@ namespace Smile {
         // Uma linha de log por episodio de falta de memoria, e nao uma por frame.
         bool ObjectCBFailureLogged       = false;
         bool ObjectCBRetireFailureLogged = false;
-        // Idem para a publicacao recusada das tabelas canonicas, que tambem aborta o frame.
+        // Idem para a publicacao das tabelas canonicas recusada ou incompleta, que tambem aborta o
+        // frame.
         bool ScenePublicationFailureLogged = false;
         // A CONJUNCAO de tudo que cada passe avalia por conta propria antes de escolher entre o
         // CBV por draw e a tabela. Existe como funcao unica porque a decisao de LIBERAR o buffer
