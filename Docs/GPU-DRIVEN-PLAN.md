@@ -1573,6 +1573,18 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > (tabela atrasada, frame slot trocado, upload esquecido) é falha registrada sem tocar em argumento, e
 > a finalização zera o frame. Versão zero é inválida, e o contador é monotônico, persistente e esgota
 > em vez de dar a volta.
+>
+> **Decisão registrada em 2026-09-14 — a publicação das tabelas decide se há frame.** Cada tabela
+> canônica é transacional sozinha: uma cópia recusada não avança shadow, versão nem `Dirty`. Isso não
+> basta para o frame. Seguir com uma tabela recusada mistura duas imagens: o `TransformsFor` devolve o
+> transform publicado antigo, enquanto frustum, caixa, material e associação saem do `FRenderable`
+> novo. E um objeto nunca publicado vai pelo `ObjectCB` sem linha válida no caminho bindless. Por isso
+> o `RenderFrame` roda o produtor e a `GpuScenePublicationGate` antes de abrir a command list. As portas
+> pendentes são sem efeito e conservadoras: aceitar lá garante a gravação aceitar. Com qualquer recusa,
+> não há frame, com uma linha de log por episódio, como na falta do `ObjectCB`. Descartar o frame
+> depois de gravar não serviria: as tabelas que aceitaram já teriam avançado o shadow sobre uma cópia
+> que a GPU nunca executa. Uma gravação que recuse depois de a porta aceitar é invariante quebrado, e
+> lança. O contrato está em `Engine/Include/Smile/Graphics/Scene/GpuSceneTables.h`.
 
 ### Trabalho
 

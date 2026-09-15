@@ -589,6 +589,12 @@ namespace Smile {
         bool AcceptsUpload(ID3D12GraphicsCommandList* CommandList, const void* Rows,
                            std::span<const u32> Changed) const;
 
+        // A mesma porta para QUALQUER subconjunto das linhas [0, RowCount), sem saber qual: lista,
+        // recurso e staging existem, e RowCount cabe no buffer. Nenhuma linha e aceito. Sem efeito.
+        // Aceitar aqui implica o `AcceptsUpload` aceitar toda copia de linhas abaixo de RowCount — e
+        // o que deixa o frame decidir as tres tabelas antes de gravar qualquer uma.
+        bool AcceptsRows(ID3D12GraphicsCommandList* CommandList, u32 RowCount) const;
+
         // Copia as linhas indicadas. Rows aponta para um array contiguo de pelo menos
         // max(Changed)+1 linhas. Devolve quantas regioes de copia foram emitidas (linhas
         // contiguas viram uma so); zero quando nao ha o que copiar ou quando a porta recusa, e a
@@ -649,7 +655,16 @@ namespace Smile {
         // porque o update do DDGI le a tabela pela mesma indirecao. Isso e satisfeito gravando no
         // topo da command list da direta: o trabalho async e submetido com SubmitAfter sobre um
         // segmento posterior desta mesma lista.
-        void RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+        //
+        // Transacional: devolve false quando a copia e RECUSADA, e entao nada foi gravado nem
+        // avancou. Nada a publicar devolve true. O frame nao chega a chamar isto com uma publicacao
+        // que a porta recusaria — ver GpuScenePublicationGate.
+        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+
+        // A publicacao pendente seria aceita? Sem efeito, e conservadora: confere a porta para TODAS
+        // as linhas da tabela, entao aceitar aqui garante o `RecordUpload` aceitar. Nada pendente e
+        // aceito.
+        bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
 
         u32  Srv()      const { return Storage_.Srv(); }
         u32  RowCount() const { return static_cast<u32>(RowMaterials_.size()); }
@@ -722,7 +737,10 @@ namespace Smile {
         void SetupForScene(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, const FScene& Scene);
         void Release(FTextureSRVHeap& SRVHeap);
 
-        void RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+        // Mesmo contrato do FGpuMaterialTable: false quando a copia e recusada, sem nada gravado nem
+        // avancado; a porta pendente e conservadora e sem efeito.
+        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+        bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
 
         u32  Srv()      const { return Storage_.Srv(); }
         u32  RowCount() const { return static_cast<u32>(RowMeshes_.size()); }
@@ -823,7 +841,11 @@ namespace Smile {
         // outro campo da cena e tocado.
         void PrepareFrame(FScene& Scene, const FGpuMeshTable& Meshes,
                           const FGpuMaterialTable& Materials);
-        void RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+        // Mesmo contrato do FGpuMaterialTable: false quando a copia e recusada, sem nada gravado nem
+        // avancado. A porta pendente confere as quatro colunas ate o maior slot tocado pelo ultimo
+        // PrepareFrame — os tocados sao ordenados, e toda linha que muda e uma delas.
+        bool RecordUpload(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot);
+        bool AcceptsPendingUpload(ID3D12GraphicsCommandList* CommandList) const;
 
         bool IsBuilt() const { return MetaStorage_.IsBuilt(); }
         bool NeedsCapacity(u32 RequiredSlots) const {
@@ -944,4 +966,33 @@ namespace Smile {
         u32 LastRowsScanned_     = 0;
         u64 TotalBytesUploaded_  = 0;
     };
+
+    // === A publicacao do FRAME: as tres tabelas, ou nenhum frame (Fase 5) ========================
+    //
+    // Cada tabela e transacional sozinha, mas isso nao basta para o frame. Se uma recusar e o frame
+    // seguir, os leitores misturam duas imagens: o `TransformsFor` devolve o transform publicado
+    // antigo enquanto frustum, caixa, material e associacao saem do FRenderable novo — e um objeto
+    // nunca publicado vai pelo ObjectCB sem linha valida no caminho bindless. Descartar o frame DEPOIS
+    // de gravar tambem nao serve: as tabelas que aceitaram ja teriam avancado o shadow sobre uma
+    // copia que a GPU nunca executa.
+    //
+    // Por isso a decisao vem ANTES de gravar qualquer tabela, pelas portas pendentes, que sao sem
+    // efeito e conservadoras. O Renderer consulta com a command list ainda fechada e, recusada, nao
+    // abre o frame. Devolve a primeira tabela que recusou.
+    enum EGpuScenePublication : u32 {
+        GpuScenePublicationOk               = 0,
+        GpuScenePublicationRefusedMaterials = 1,
+        GpuScenePublicationRefusedMeshes    = 2,
+        GpuScenePublicationRefusedInstances = 3,
+    };
+
+    inline u32 GpuScenePublicationGate(const FGpuMaterialTable& Materials,
+                                       const FGpuMeshTable& Meshes,
+                                       const FGpuSceneInstanceTable& Instances,
+                                       ID3D12GraphicsCommandList* CommandList) {
+        if (!Materials.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedMaterials;
+        if (!Meshes.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedMeshes;
+        if (!Instances.AcceptsPendingUpload(CommandList)) return GpuScenePublicationRefusedInstances;
+        return GpuScenePublicationOk;
+    }
 }

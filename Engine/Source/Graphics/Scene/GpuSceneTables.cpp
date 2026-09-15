@@ -79,6 +79,11 @@ namespace Smile {
         return true;
     }
 
+    bool FGpuTableStorage::AcceptsRows(ID3D12GraphicsCommandList* _CommandList, u32 _RowCount) const {
+        if (_RowCount == 0) return true;
+        return Buffer_ && Staging_ && _CommandList && _RowCount <= Capacity_;
+    }
+
     u32 FGpuTableStorage::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot,
                                        const void* _Rows, std::span<const u32> _Changed) {
         // A porta INTEIRA antes de qualquer escrita, inclusive no staging.
@@ -186,10 +191,17 @@ namespace Smile {
         TotalRowsUploaded_ = 0;
     }
 
-    void FGpuMaterialTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
+    bool FGpuMaterialTable::AcceptsPendingUpload(ID3D12GraphicsCommandList* _CommandList) const {
+        // As mesmas saidas antecipadas do RecordUpload: nada a publicar.
+        if (!Dirty_ || !Storage_.IsBuilt() || RowMaterials_.empty()) return true;
+        // Toda linha que pode mudar esta abaixo do numero de linhas.
+        return Storage_.AcceptsRows(_CommandList, static_cast<u32>(RowMaterials_.size()));
+    }
+
+    bool FGpuMaterialTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
         LastDirtyRows_   = 0;
         LastCopyRegions_ = 0;
-        if (!Dirty_ || !Storage_.IsBuilt() || RowMaterials_.empty()) return;
+        if (!Dirty_ || !Storage_.IsBuilt() || RowMaterials_.empty()) return true;
 
         const u32 Rows = static_cast<u32>(RowMaterials_.size());
         Fresh_.resize(Rows);
@@ -200,7 +212,7 @@ namespace Smile {
         // Recusada, nada muda — o shadow continua dizendo o que a GPU tem, e `Dirty_` fica ligado para
         // o proximo frame tentar de novo.
         FindChangedRows<FGpuMaterialRecord>(Fresh_, Shadow_, Changed_);
-        if (!Storage_.AcceptsUpload(_CommandList, Fresh_.data(), Changed_)) return;
+        if (!Storage_.AcceptsUpload(_CommandList, Fresh_.data(), Changed_)) return false;
 
         bool AlteraLayout = Shadow_.size() != Rows;
         for (u32 I : Changed_) {
@@ -214,6 +226,7 @@ namespace Smile {
         Dirty_ = false;
         LastDirtyRows_ = static_cast<u32>(Changed_.size());
         TotalRowsUploaded_ += LastDirtyRows_;
+        return true;
     }
 
     // ================================================================================================
@@ -371,15 +384,20 @@ namespace Smile {
         LastDirtyRows_ = 0;
     }
 
-    void FGpuMeshTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
+    bool FGpuMeshTable::AcceptsPendingUpload(ID3D12GraphicsCommandList* _CommandList) const {
+        if (!Dirty_ || !Storage_.IsBuilt() || Fresh_.empty()) return true;
+        return Storage_.AcceptsRows(_CommandList, static_cast<u32>(Fresh_.size()));
+    }
+
+    bool FGpuMeshTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList, u32 _FrameSlot) {
         LastDirtyRows_ = 0;
-        if (!Dirty_ || !Storage_.IsBuilt() || Fresh_.empty()) return;
+        if (!Dirty_ || !Storage_.IsBuilt() || Fresh_.empty()) return true;
         // Sem recalculo: ao contrario do material, nada de malha muda sem passar por um Setup —
         // geometria nao e editavel em runtime. As linhas ja estao prontas desde o SetupForScene.
         //
         // Transacional, como no material: recusada, shadow, versao e `Dirty_` ficam como estavam.
         FindChangedRows<FGpuMeshRecord>(Fresh_, Shadow_, Changed_);
-        if (!Storage_.AcceptsUpload(_CommandList, Fresh_.data(), Changed_)) return;
+        if (!Storage_.AcceptsUpload(_CommandList, Fresh_.data(), Changed_)) return false;
 
         const bool Publica = !Changed_.empty() || Shadow_.size() != Fresh_.size();
         Storage_.RecordUpload(_CommandList, _FrameSlot, Fresh_.data(), Changed_);
@@ -388,6 +406,7 @@ namespace Smile {
         if (Publica) ++LayoutInputsVersion_;
         Dirty_ = false;
         LastDirtyRows_ = static_cast<u32>(Changed_.size());
+        return true;
     }
 
     // ================================================================================================
@@ -654,13 +673,23 @@ namespace Smile {
         Dirty_ = true;
     }
 
-    void FGpuSceneInstanceTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList,
+    bool FGpuSceneInstanceTable::AcceptsPendingUpload(ID3D12GraphicsCommandList* _CommandList) const {
+        if (!Dirty_ || !IsBuilt() || TouchedSlots_.empty()) return true;
+        // Toda linha que muda e tocada, e os tocados saem ordenados do PrepareFrame: o ultimo e o maior.
+        const u32 Rows = TouchedSlots_.back() + 1u;
+        return MetaStorage_.AcceptsRows(_CommandList, Rows) &&
+               BoundsStorage_.AcceptsRows(_CommandList, Rows) &&
+               TransformStorage_.AcceptsRows(_CommandList, Rows) &&
+               PrevTransformStorage_.AcceptsRows(_CommandList, Rows);
+    }
+
+    bool FGpuSceneInstanceTable::RecordUpload(ID3D12GraphicsCommandList* _CommandList,
                                               u32 _FrameSlot) {
         LastDirtyRows_ = 0;
         LastDirtyBytes_ = 0;
         LastCopyRegions_ = 0;
         LastRowsScanned_ = 0;
-        if (!Dirty_ || !IsBuilt()) return;
+        if (!Dirty_ || !IsBuilt()) return true;
 
         // O conjunto tocado e o mesmo para as quatro colunas — quem escreve uma linha escreve as
         // quatro —, entao o custo do diff e |tocados| x 4, e nao a capacidade da tabela x 4.
@@ -684,7 +713,7 @@ namespace Smile {
             !TransformStorage_.AcceptsUpload(_CommandList, TransformRows_.data(), TransformChanged_) ||
             !PrevTransformStorage_.AcceptsUpload(_CommandList, PrevTransformRows_.data(),
                                                  PrevTransformChanged_))
-            return;
+            return false;
 
         // O layout, com o shadow ainda ANTIGO: e o que a GPU tinha. So sobre as linhas de meta que
         // mudaram, entao nao ha varredura nova — e fora do `LastRowsScanned`, que mede o diff.
@@ -727,6 +756,7 @@ namespace Smile {
         for (u32 Slot : BoundsChanged_)        DirtyMarks_[Slot] = 0;
         for (u32 Slot : TransformChanged_)     DirtyMarks_[Slot] = 0;
         for (u32 Slot : PrevTransformChanged_) DirtyMarks_[Slot] = 0;
+        return true;
     }
 
     // As duas consultas leem os SHADOWS: a imagem publicada, a mesma que os leitores da GPU tem neste

@@ -1,7 +1,7 @@
 // QUANDO o layout de regioes e refeito, e o que as tabelas PUBLICAM, sobre tabelas, cena e fila de
 // verdade (Fase 5 do GPU-DRIVEN-PLAN).
 //
-// Dois contratos:
+// Tres contratos:
 //
 //  1. O layout so e recontado quando as linhas publicadas mudam o que a capacidade conta — ocupacao,
 //     associacao, classe, pool, `RaytracingOnly` e mascara de malha inutilizavel. Transform,
@@ -10,12 +10,15 @@
 //     PRODUCAO a consultam, pelos caminhos que o editor usa. Todo evento que NAO deve recontar confere
 //     que a tabela publicou alguma linha: sem isso, "nao recontou" passaria por nada ter acontecido.
 //
-//  2. "Publicado" e o que a GPU tem. Cada frame e gravado, EXECUTADO e esperado pela fence, e as tres
-//     tabelas — as quatro colunas das instancias — sao lidas de volta no fim da propria lista, onde um
-//     leitor do frame estaria, e comparadas byte a byte com as linhas publicadas no momento da
-//     gravacao. As copias recusadas (lista nula) nao podem avancar nem as linhas publicadas nem a
-//     versao, e a nova tentativa tem de publicar tudo. Dois frames gravados antes de qualquer um
-//     executar provam que cada upload le o staging do SEU frame slot.
+//  2. "Publicado" e o que a GPU tem, e o frame publica as tres tabelas ou nao existe. Cada frame
+//     segue a ordem do RendererFrame: produtor e `GpuScenePublicationGate` ANTES de abrir a lista, e,
+//     recusada a publicacao, nao ha frame — nenhuma tabela grava e nenhum leitor roda. Aceita, o frame
+//     e gravado, EXECUTADO e esperado pela fence, e as tres tabelas — as quatro colunas das instancias
+//     — sao lidas de volta no fim da propria lista, onde um leitor do frame estaria, e comparadas byte
+//     a byte com as linhas publicadas no momento da gravacao. A gravacao de cada tabela continua
+//     transacional sozinha, e isso e conferido isolado: recusada (lista nula), devolve false e nao
+//     avanca nem as linhas publicadas nem a versao, e a nova tentativa publica tudo. Dois frames
+//     gravados antes de qualquer um executar provam que cada upload le o staging do SEU frame slot.
 //
 //  3. O par temporal publicado segue a GPU, e nao as linhas escritas. A leitura de volta so prova que
 //     a GPU tem o que as linhas publicadas dizem; o par CERTO e conferido contra matrizes calculadas
@@ -86,12 +89,9 @@ namespace {
         }
     }
 
-    // Quais uploads o frame RECUSA. A lista nula e a recusa que a porta do armazenamento aplica.
-    struct FRecusa {
-        bool Material   = false;
-        bool Malha      = false;
-        bool Instancias = false;
-    };
+    // Um frame cuja lista e NULA: a recusa que a porta do armazenamento aplica, vista pela fronteira do
+    // frame antes de qualquer tabela gravar.
+    constexpr bool kListaRecusada = true;
 
     // O que um frame tem de ler de volta: os bytes das linhas publicadas no momento da gravacao.
     struct FLeitura {
@@ -130,6 +130,7 @@ namespace {
         FGpuSceneInstanceTable  Instances;
         FGpuIndirectLayoutState Layout;
         u32 Motivo = 0;
+        u32 Publicacao = GpuScenePublicationOk; // a decisao da fronteira no ultimo frame
 
         // Ids dos renderaveis, porque remover desloca os indices da cauda.
         u64 IdOpaco[3]{}, IdTroca[2]{}, IdMascarado = 0, IdOpacoB = 0;
@@ -224,18 +225,25 @@ namespace {
             Motivo = Layout.Refresh(In);
         }
 
-        // Grava um frame no slot: produtor, os tres uploads, o layout, e a leitura das tres tabelas —
-        // as quatro colunas das instancias — no FIM da lista, com a imagem esperada tirada das linhas
-        // publicadas neste instante.
-        void Gravar(u32 _Slot, FRecusa _Recusa = {}) {
-            Hr(Allocator[_Slot]->Reset(), "Reset do allocator");
-            ID3D12GraphicsCommandList* L = List[_Slot].Get();
-            Hr(L->Reset(Allocator[_Slot].Get(), nullptr), "Reset da lista");
-
+        // Grava um frame no slot, na ordem do RendererFrame. O produtor e a porta da publicacao vem
+        // ANTES de abrir a lista; recusada, nao ha frame, e devolve false sem gravar nada. Aceita, os
+        // tres uploads, o layout, e a leitura das tres tabelas — as quatro colunas das instancias — no
+        // FIM da lista, com a imagem esperada tirada das linhas publicadas neste instante.
+        bool Gravar(u32 _Slot, bool _ListaRecusada = false) {
+            ID3D12GraphicsCommandList* L = _ListaRecusada ? nullptr : List[_Slot].Get();
             Instances.PrepareFrame(Scene, Meshes, Materials);
-            Materials.RecordUpload(_Recusa.Material ? nullptr : L, _Slot);
-            Meshes.RecordUpload(_Recusa.Malha ? nullptr : L, _Slot);
-            Instances.RecordUpload(_Recusa.Instancias ? nullptr : L, _Slot);
+            Publicacao = GpuScenePublicationGate(Materials, Meshes, Instances, L);
+            if (Publicacao != GpuScenePublicationOk) return false;
+            if (!L) {
+                Check(false, "a porta aceitou um frame sem lista");
+                return false;
+            }
+
+            Hr(Allocator[_Slot]->Reset(), "Reset do allocator");
+            Hr(L->Reset(Allocator[_Slot].Get(), nullptr), "Reset da lista");
+            const bool Gravou = Materials.RecordUpload(L, _Slot) && Meshes.RecordUpload(L, _Slot) &&
+                                Instances.RecordUpload(L, _Slot);
+            Check(Gravou, "a porta aceitou a publicacao, e as tres gravacoes tambem");
             Consultar();
 
             auto Ler = [&](FLeitura& _Leitura, const char* _Nome, ID3D12Resource* _Tabela,
@@ -286,6 +294,7 @@ namespace {
             const HRESULT Fechou = L->Close();
             if (FAILED(Fechou)) Drenar("gravacao");
             Hr(Fechou, "Close");
+            return true;
         }
 
         // Executa a lista do slot, espera a fence e confere a imagem.
@@ -315,11 +324,12 @@ namespace {
             }
         }
 
-        // Um frame, gravado e executado antes do seguinte.
-        void Frame(FRecusa _Recusa = {}) {
+        // Um frame, gravado e executado antes do seguinte. Sem frame, o slot nao anda — o renderer
+        // aborta antes do BeginFrame, que e quem o avanca.
+        void Frame(bool _ListaRecusada = false) {
             const u32 Slot = ProximoSlot;
-            ProximoSlot    = (ProximoSlot + 1u) % FGpuTableStorage::kFrameSlots;
-            Gravar(Slot, _Recusa);
+            if (!Gravar(Slot, _ListaRecusada)) return;
+            ProximoSlot = (ProximoSlot + 1u) % FGpuTableStorage::kFrameSlots;
             Executar(Slot);
         }
 
@@ -413,6 +423,14 @@ int main() try {
         CheckEq(S.RecordUpload(nullptr, 0u, Linhas, Dentro), 0u, "gravacao: lista nula nao grava");
         CheckEq(S.RecordUpload(L.Get(), 0u, Linhas, Fora), 0u,
                 "gravacao: linha fora do buffer nao grava");
+
+        // A porta por NUMERO de linhas, a que as portas pendentes das tabelas usam. Nos limites: o
+        // buffer cheio cabe, uma linha a mais nao.
+        Check(S.AcceptsRows(nullptr, 0u), "porta das linhas: nenhuma linha e aceito, ate sem lista");
+        Check(S.AcceptsRows(L.Get(), S.Capacity()), "porta das linhas: o buffer cheio cabe");
+        Check(!S.AcceptsRows(L.Get(), S.Capacity() + 1u),
+              "porta das linhas: uma linha alem do buffer recusa");
+        Check(!S.AcceptsRows(nullptr, 1u), "porta das linhas: lista nula recusa");
         L->Close();
         S.Release(G.Heap);
         G.Drenar("porta");
@@ -432,6 +450,15 @@ int main() try {
     // --- os eventos que NAO recontam ------------------------------------------------------------
     for (u32 I = 0; I < 4; ++I) G.Frame();
     CheckEq64(G.Layout.RebuildAttempts(), 1ull, "cena assentada nao reconta");
+
+    // Sem publicacao pendente, as portas aceitam ate sem lista: o frame so e recusado por uma copia que
+    // de fato precisaria acontecer.
+    Check(G.Materials.AcceptsPendingUpload(nullptr),
+          "sem publicacao pendente: a porta do material aceita ate sem lista");
+    Check(G.Meshes.AcceptsPendingUpload(nullptr),
+          "sem publicacao pendente: a porta da malha aceita ate sem lista");
+    Check(G.Instances.AcceptsPendingUpload(nullptr),
+          "sem publicacao pendente: a porta das instancias aceita ate sem lista");
 
     {
         FRenderable& R = G.R(G.IdOpaco[0]);
@@ -468,18 +495,30 @@ int main() try {
         CheckEq64(G.Layout.RebuildAttempts(), 1ull, "editar a cor nao reconta");
     }
 
-    // --- classe, com a copia RECUSADA primeiro --------------------------------------------------
+    // --- classe, com a publicacao RECUSADA primeiro ---------------------------------------------
+    //
+    // Duas camadas. A gravacao da tabela, sozinha, e transacional: recusada, devolve false e nada anda.
+    // E a fronteira do frame nem chega a grava-la: com a lista recusada, nao ha frame.
     {
         const u32 LinhaTroca = 3u; // linha 0 e o default; Opaco, Mascarado, Troca
         G.Troca.TwoSided = true;
         G.Materials.MarkDirty();
-        G.Frame({ .Material = true });
+        Check(!G.Materials.AcceptsPendingUpload(nullptr), "classe: a porta pendente recusa sem lista");
+        Check(!G.Materials.RecordUpload(nullptr, 0u), "classe: a gravacao recusada devolve false");
         CheckEq(G.Materials.LastDirtyRows(), 0u, "classe recusada: nenhuma linha publicada");
         CheckEq(G.Materials.PublishedRows()[LinhaTroca].PipelineClass,
                 static_cast<u32>(GpuPipelineClassOpaqueOneSided),
                 "classe recusada: a linha publicada continua a antiga");
+        G.Consultar();
         CheckEq64(G.Layout.RebuildAttempts(), 1ull, "classe recusada: a versao nao sobe e nada reconta");
         CheckEq(G.Cap(1), 3u, "classe recusada: a capacidade continua a da GPU");
+
+        G.Frame(kListaRecusada);
+        CheckEq(G.Publicacao, GpuScenePublicationRefusedMaterials,
+                "classe: a fronteira recusa o frame pelo material");
+        CheckEq(G.Materials.PublishedRows()[LinhaTroca].PipelineClass,
+                static_cast<u32>(GpuPipelineClassOpaqueOneSided),
+                "classe, sem frame: a linha publicada continua a antiga");
 
         G.Frame();
         CheckEq(G.Materials.LastDirtyRows(), 1u, "classe: a nova tentativa publica");
@@ -495,23 +534,28 @@ int main() try {
         CheckEq(G.Cap(1), 3u, "e a troca volta");
     }
 
-    // --- RaytracingOnly, com a copia das instancias RECUSADA e um ciclo novo do produtor no meio -
+    // --- RaytracingOnly, com a publicacao das instancias RECUSADA e ciclos novos do produtor ------
     {
         const u32 Slot = G.R(G.IdTroca[0]).GpuHandle.Slot;
         G.R(G.IdTroca[0]).RaytracingOnly = true;
         G.Scene.BumpStaticCastersVersion(G.Indice(G.IdTroca[0]));
-        G.Frame({ .Instancias = true });
+        G.Instances.PrepareFrame(G.Scene, G.Meshes, G.Materials);
+        Check(!G.Instances.RecordUpload(nullptr, 0u), "instancias: a gravacao recusada devolve false");
         CheckEq(G.Instances.LastDirtyRows(), 0u, "instancias recusadas: nenhuma linha publicada");
         Check((G.Instances.PublishedMeta()[Slot].Flags & GpuSceneInstanceRaytracingOnly) == 0u,
               "instancias recusadas: a linha publicada continua a antiga");
+        G.Consultar();
         CheckEq64(G.Layout.RebuildAttempts(), 3ull, "instancias recusadas: nada reconta");
 
-        // Outro objeto se move ANTES da nova tentativa: o produtor abre um ciclo novo, e o slot que
-        // ficou pendente nao pode ser esquecido.
+        // Outro objeto se move ANTES da nova tentativa, e o frame dele tambem e recusado, agora pela
+        // fronteira: dois ciclos novos do produtor, e o slot pendente nao pode ser esquecido em nenhum.
         FRenderable& Outro = G.R(G.IdOpaco[2]);
         Outro.Transform.Position.Z += 1.0f;
         Outro.RefreshWorldBounds();
         G.Scene.BumpTransformsVersion(G.Indice(G.IdOpaco[2]));
+        G.Frame(kListaRecusada);
+        CheckEq(G.Publicacao, GpuScenePublicationRefusedInstances,
+                "RaytracingOnly: a fronteira recusa o frame pelas instancias");
         G.Frame();
         Check((G.Instances.PublishedMeta()[Slot].Flags & GpuSceneInstanceRaytracingOnly) != 0u,
               "RaytracingOnly: a nova tentativa publica a linha pendente");
@@ -519,9 +563,9 @@ int main() try {
         CheckEq(G.Cap(1), 2u, "e a linha sai da contagem");
     }
 
-    // --- o par temporal, com a copia das instancias RECUSADA ------------------------------------
+    // --- o par temporal, com o frame RECUSADO ---------------------------------------------------
     //
-    // O previous publicado e o current que a GPU tinha. Uma copia recusada deixa a GPU no par antigo:
+    // O previous publicado e o current que a GPU tinha. Um frame recusado deixa a GPU no par antigo:
     // a nova tentativa publica o movimento inteiro a partir do que a GPU tem — e nao do que o produtor
     // escreveu e nunca subiu —, e so o frame SEGUINTE a publicacao assenta.
     {
@@ -535,8 +579,9 @@ int main() try {
             const Mat44 B       = G.Mover(Id, 2.0f);
             const f32   CentroB = (G.R(Id).AABBMin.X + G.R(Id).AABBMax.X) * 0.5f;
             Check(CentroB != CentroA, "A→B: a caixa anda com o objeto");
-            G.Frame({ .Instancias = true });
-            CheckEq(G.Instances.LastDirtyRows(), 0u, "A→B recusado: nenhuma linha publicada");
+            G.Frame(kListaRecusada);
+            CheckEq(G.Publicacao, GpuScenePublicationRefusedInstances,
+                    "A→B recusado: a fronteira recusa o frame pelas instancias");
             G.ConferirPar(Id, A, A, "A→B recusado: a GPU continua em A/A");
             Check(G.CentroPublicado(Id) == CentroA, "A→B recusado: a caixa publicada continua a antiga");
 
@@ -549,7 +594,9 @@ int main() try {
         {
             const Mat44 A = G.R(Id).Transform.Matrix();
             G.Mover(Id, 2.0f);
-            G.Frame({ .Instancias = true });
+            G.Frame(kListaRecusada);
+            CheckEq(G.Publicacao, GpuScenePublicationRefusedInstances,
+                    "A→B recusado e depois C: a fronteira recusa o frame pelas instancias");
             G.ConferirPar(Id, A, A, "A→B recusado e depois C: a recusa deixa A/A");
             const Mat44 C = G.Mover(Id, 2.0f);
             G.Frame();
@@ -577,15 +624,17 @@ int main() try {
         CheckEq(G.Cap(0), 4u, "e a capacidade nao muda");
     }
     {
-        // Acrescentado com a copia das instancias RECUSADA, e movido antes da nova tentativa. Ele nunca
-        // esteve na GPU, entao nao tem passado la: a nova tentativa publica previous = current — nem o
-        // transform com que nasceu, nem o que o shadow guarda naquele slot, que nao e dele.
+        // Acrescentado num frame RECUSADO, e movido antes da nova tentativa. Ele nunca esteve na GPU,
+        // entao nao tem passado la: a nova tentativa publica previous = current — nem o transform com
+        // que nasceu, nem o que o shadow guarda naquele slot, que nao e dele.
         FRenderable Novo;
         Novo.Mesh     = &G.MalhaA;
         Novo.Material = &G.Opaco;
         const u64             IdNovo = G.Scene.AddRenderable(Novo).Id;
         const FGpuSceneHandle H      = G.R(IdNovo).GpuHandle;
-        G.Frame({ .Instancias = true });
+        G.Frame(kListaRecusada);
+        CheckEq(G.Publicacao, GpuScenePublicationRefusedInstances,
+                "acrescentar: a fronteira recusa o frame pelas instancias");
         CheckEq64(G.Layout.RebuildAttempts(), 6ull, "acrescentar recusado: nada reconta");
         Mat44                 Cur{}, Prev{};
         FGpuSceneInstanceMeta Meta{};
@@ -600,15 +649,21 @@ int main() try {
         G.ConferirPar(IdNovo, Movido, Movido, "nascido numa recusa e movido: sem passado na GPU");
     }
 
-    // --- pool, com a copia da malha RECUSADA ----------------------------------------------------
+    // --- pool, com a publicacao da malha RECUSADA -----------------------------------------------
     {
         G.MalhaB.InitFromPool(G.PoolA, 3200, 40 * 1024, 56 * 1024, 3, 3, 1);
         G.Meshes.SetupForScene(G.Device.Get(), G.Heap, G.Scene);
-        G.Frame({ .Malha = true });
+        Check(!G.Meshes.RecordUpload(nullptr, 0u), "malha: a gravacao recusada devolve false");
         CheckEq(G.Meshes.LastDirtyRows(), 0u, "malha recusada: nenhuma linha publicada");
         Check(G.Meshes.PublishedRows().empty(), "malha recusada: as linhas publicadas seguem vazias");
+        G.Consultar();
         CheckEq64(G.Layout.RebuildAttempts(), 8ull, "o Setup reconta, e a recusa nao acrescenta nada");
         CheckEq(G.Cap(0), 0u, "sobre as linhas de malha vazias, nenhuma instancia conta");
+
+        G.Frame(kListaRecusada);
+        CheckEq(G.Publicacao, GpuScenePublicationRefusedMeshes,
+                "pool: a fronteira recusa o frame pela malha");
+        Check(G.Meshes.PublishedRows().empty(), "pool, sem frame: as linhas publicadas seguem vazias");
 
         G.Frame();
         Check(!G.Meshes.PublishedRows().empty(), "malha: a nova tentativa publica");
@@ -664,11 +719,11 @@ int main() try {
         const u32 B = (A + 1u) % FGpuTableStorage::kFrameSlots;
         G.Opaco.Constants.BaseColorFactor = { 0.9f, 0.1f, 0.1f, 1.0f };
         G.Materials.MarkDirty();
-        G.Gravar(A);
+        Check(G.Gravar(A), "em voo: o primeiro frame existe");
         CheckEq(G.Materials.LastDirtyRows(), 1u, "em voo: o primeiro frame publica a cor");
         G.Opaco.Constants.BaseColorFactor = { 0.1f, 0.9f, 0.1f, 1.0f };
         G.Materials.MarkDirty();
-        G.Gravar(B);
+        Check(G.Gravar(B), "em voo: o segundo frame existe");
         CheckEq(G.Materials.LastDirtyRows(), 1u, "em voo: o segundo frame publica outra cor na mesma linha");
         G.Executar(A);
         G.Executar(B);

@@ -21,6 +21,8 @@
 #include <cmath>
 #include <chrono>
 #include <cstdlib>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 
 namespace Smile {
@@ -819,7 +821,8 @@ namespace Smile {
         // command list aberto.
         UpdateFrameCapture();
 
-        // RECONCILIACAO do ObjectCB, e o ultimo ponto ANTES de abrir a command list (Fase 4).
+        // RECONCILIACAO do ObjectCB, ANTES de abrir a command list (Fase 4). So a porta da publicacao
+        // das tabelas, logo abaixo, vem depois dela.
         //
         // Aqui, e nao no MakePassContext, porque a unica saida honesta de uma falha e nao ter
         // frame: la dentro o command list ja esta aberto e a alternativa seria gravar draws com
@@ -851,6 +854,37 @@ namespace Smile {
             RetireObjectCB();
         }
 
+        // A PUBLICACAO das tabelas canonicas tambem decide se ha frame, e tambem antes de abrir a
+        // command list (Fase 5): as tres, ou nenhum frame.
+        //
+        // Um frame com uma tabela recusada nao seria "o frame com a imagem anterior". Os leitores
+        // misturariam as duas: o TransformsFor devolve o transform publicado antigo, enquanto
+        // frustum, caixa, material e associacao saem do FRenderable novo — e um objeto nunca
+        // publicado vai pelo ObjectCB sem linha valida no caminho bindless. E a decisao tem de vir
+        // antes de gravar QUALQUER tabela: descartar depois deixaria as que aceitaram com o shadow a
+        // frente de uma copia que a GPU nunca executa.
+        //
+        // O produtor vem para ca junto, porque a porta das instancias confere os slots que ele toca.
+        // Ele so escreve memoria de CPU; o staging do slot continua sendo escrito so depois do
+        // BeginFrame, que espera a fence que o libera.
+        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
+        if (const u32 Recusa = GpuScenePublicationGate(MaterialTable, MeshTable, InstanceTable,
+                                                        Backend->DirectQueue.List());
+            Recusa != GpuScenePublicationOk) {
+            // Uma vez por episodio, como a falta do ObjectCB.
+            if (!ScenePublicationFailureLogged) {
+                const char* Tabela = Recusa == GpuScenePublicationRefusedMaterials ? "de materiais"
+                                   : Recusa == GpuScenePublicationRefusedMeshes    ? "de malhas"
+                                                                                   : "de instancias";
+                LogError(std::string("Tabelas canonicas: a publicacao da tabela ") + Tabela +
+                         " seria recusada; os frames sao ABORTADOS ate as tres publicarem — um "
+                         "frame com uma delas antiga desenharia duas imagens misturadas");
+                ScenePublicationFailureLogged = true;
+            }
+            return; // command list ainda fechado: nenhuma tabela gravou nem avancou
+        }
+        ScenePublicationFailureLogged = false;
+
         Backend->DirectQueue.BeginFrame();
 
         Backend->DirectProfiler.BeginFrame(Backend->DirectQueue.FrameIndex(),
@@ -866,10 +900,17 @@ namespace Smile {
         // portanto o fence do frame so conclui depois de TODOS os leitores, e o BeginFrame pode
         // reutilizar com seguranca os slices do slot. No caso comum nao emite nada — nenhuma linha
         // suja, nenhuma barreira.
-        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
-        MaterialTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
-        MeshTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
-        InstanceTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
+        //
+        // A porta la de cima aceitou as tres publicacoes com esta mesma lista, e aceitar la implica
+        // aceitar aqui. Uma recusa agora e invariante quebrado: falha alto, em vez de seguir com uma
+        // tabela antiga.
+        const bool TabelasPublicadas =
+            MaterialTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex()) &&
+            MeshTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex()) &&
+            InstanceTable.RecordUpload(Backend->DirectQueue.List(), Backend->DirectQueue.FrameIndex());
+        if (!TabelasPublicadas)
+            throw std::logic_error("Tabelas canonicas: a porta aceitou a publicacao do frame, e a "
+                                   "gravacao de uma tabela recusou");
 
         ObjectPicker.Tick();
 
