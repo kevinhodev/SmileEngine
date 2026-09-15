@@ -448,6 +448,8 @@ namespace Smile::GpuResources {
         // Failpoint de teste; ver FUploadFailureInjection no header. Zero em producao, e o custo
         // no caminho normal e UMA leitura relaxada por criacao — ao lado de uma chamada de device.
         std::atomic<u32> GUploadFailuresRemaining{ 0 };
+        // Criacoes que ainda passam antes de a injecao comecar a falhar.
+        std::atomic<u32> GUploadFailureSkips{ 0 };
 
         // O corpo unico das duas versoes. Devolve o HRESULT dos DOIS passos que podem falhar
         // (criacao e Map) e nunca entrega um `Out` meio pronto: ou vem com recurso E mapeamento,
@@ -461,6 +463,14 @@ namespace Smile::GpuResources {
             // uma recusa real, e nao um ramo proprio.
             for (u32 Pendentes = GUploadFailuresRemaining.load(std::memory_order_relaxed);
                  Pendentes != 0;) {
+                // Primeiro as criacoes que a injecao deixa passar.
+                u32 Pular = GUploadFailureSkips.load(std::memory_order_relaxed);
+                if (Pular != 0) {
+                    if (GUploadFailureSkips.compare_exchange_weak(Pular, Pular - 1,
+                                                                  std::memory_order_relaxed))
+                        break;
+                    continue;
+                }
                 if (GUploadFailuresRemaining.compare_exchange_weak(Pendentes, Pendentes - 1,
                                                                    std::memory_order_relaxed))
                     return E_OUTOFMEMORY;
@@ -510,13 +520,18 @@ namespace Smile::GpuResources {
         return Out;
     }
 
-    FUploadFailureInjection::FUploadFailureInjection(u32 _Count)
-        : Previous_(GUploadFailuresRemaining.exchange(_Count, std::memory_order_relaxed)) {}
+    // Os pulos entram ANTES das falhas, e saem depois delas: uma criacao concorrente nunca ve falha
+    // pendente com os pulos ainda por escrever.
+    FUploadFailureInjection::FUploadFailureInjection(u32 _Count, u32 _SkipFirst)
+        : PreviousSkips_(GUploadFailureSkips.exchange(_SkipFirst, std::memory_order_relaxed)) {
+        Previous_ = GUploadFailuresRemaining.exchange(_Count, std::memory_order_relaxed);
+    }
 
     FUploadFailureInjection::~FUploadFailureInjection() {
         // RESTAURA o anterior em vez de zerar: aninhar dois escopos nao pode deixar o de fora sem
         // a injecao que ele pediu.
         GUploadFailuresRemaining.store(Previous_, std::memory_order_relaxed);
+        GUploadFailureSkips.store(PreviousSkips_, std::memory_order_relaxed);
     }
 
     u32 PendingUploadFailures() {

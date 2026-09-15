@@ -151,14 +151,19 @@ namespace Smile::GpuResources {
     // O escopo restaura o valor anterior no destrutor. `PendingUploadFailures` existe para o teste
     // confirmar que a injecao foi CONSUMIDA pela chamada sob teste, e nao por alguma outra
     // alocacao no meio do caminho — sem isso, uma injecao gasta no lugar errado daria verde.
+    //
+    // `SkipFirst` deixa passar as primeiras criacoes antes de falhar. Sem ele, uma operacao que cria
+    // varios upload buffers so podia falhar no PRIMEIRO — e a falha que mais interessa costuma ser a
+    // de depois, quando parte do trabalho ja existe e precisa ser desfeita.
     class FUploadFailureInjection {
     public:
-        explicit FUploadFailureInjection(u32 Count);
+        explicit FUploadFailureInjection(u32 Count, u32 SkipFirst = 0);
         ~FUploadFailureInjection();
         FUploadFailureInjection(const FUploadFailureInjection&)            = delete;
         FUploadFailureInjection& operator=(const FUploadFailureInjection&) = delete;
     private:
-        u32 Previous_ = 0;
+        u32 Previous_      = 0;
+        u32 PreviousSkips_ = 0;
     };
     u32 PendingUploadFailures();
 

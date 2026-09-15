@@ -577,6 +577,9 @@ namespace Smile {
         // entao trocar o recurso por baixo com o indice estavel e o que faz os leitores
         // acompanharem sem republicar tabela nenhuma.
         //
+        // Atomico: quando lanca (recurso ou descritor recusado), o armazenamento fica exatamente como
+        // estava — vazio, se era novo; com buffer, staging, capacidade e slot antigos, se crescia.
+        //
         // ⚠️ CONTRATO: substitui um recurso que as duas filas podem estar lendo. O chamador drena
         // antes — e ja drena hoje, porque isto so acontece em carga/troca de cena.
         void Create(ID3D12Device* Device, FTextureSRVHeap& SRVHeap, u32 RowBytes, u32 Capacity,

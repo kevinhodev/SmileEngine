@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <utility>
 
 namespace Smile {
     static_assert(FGpuTableStorage::kFrameSlots == FCommandQueue::kFramesInFlight,
@@ -35,20 +36,34 @@ namespace Smile {
     // ================================================================================================
     void FGpuTableStorage::Create(ID3D12Device* _Device, FTextureSRVHeap& _SRVHeap, u32 _RowBytes,
                                   u32 _Capacity, const char* _Label) {
-        RowBytes_ = _RowBytes;
-        if (!Buffer_ || _Capacity > Capacity_) {
-            Capacity_ = _Capacity;
+        if (!Buffer_ || _Capacity > Capacity_ || _RowBytes != RowBytes_) {
+            // ATOMICO. Tudo que pode lancar — os dois recursos e o descritor — vai para locais, e o
+            // armazenamento so muda depois de os tres existirem. Atribuir a capacidade antes, ou o
+            // buffer antes do staging, deixava uma falha no meio com a capacidade nova sobre o
+            // buffer antigo: a porta aceitaria linhas alem dele, e a copia e o memcpy do staging
+            // passariam do fim.
+            //
+            // O pico de memoria e o de antes: o recurso antigo ja convivia com o novo durante a
+            // criacao, porque so era solto na atribuicao.
+            //
             // Misc, e nao GI/Geometry: as tabelas sao da CENA, e os consumidores de hoje (RT, GI,
             // mesh lights) vao ser tres entre varios quando o raster passar a le-las na Fase 3.
             // O numero que importa para o gate da fase sai do PersistentBytes(), com rotulo
             // proprio no breakdown por recurso.
-            Buffer_ = GpuResources::CreateBuffer(
-                _Device, static_cast<u64>(Capacity_) * RowBytes_, D3D12_RESOURCE_FLAG_NONE,
-                kShaderReadState, EVramCategory::Misc, _Label);
-            Staging_ = GpuResources::CreateUploadBuffer(
-                _Device, static_cast<u64>(Capacity_) * RowBytes_, kFrameSlots,
-                /*ForConstantBuffer=*/false);
-            if (SrvSlot_ == kInvalidSlot) SrvSlot_ = _SRVHeap.Allocate(1);
+            const u64 Bytes = static_cast<u64>(_Capacity) * _RowBytes;
+            Microsoft::WRL::ComPtr<ID3D12Resource> Buffer = GpuResources::CreateBuffer(
+                _Device, Bytes, D3D12_RESOURCE_FLAG_NONE, kShaderReadState, EVramCategory::Misc,
+                _Label);
+            GpuResources::FUploadBuffer Staging = GpuResources::CreateUploadBuffer(
+                _Device, Bytes, kFrameSlots, /*ForConstantBuffer=*/false);
+            const u32 Slot = SrvSlot_ != kInvalidSlot ? SrvSlot_ : _SRVHeap.Allocate(1);
+
+            // Daqui em diante nada lanca.
+            Buffer_   = std::move(Buffer);
+            Staging_  = std::move(Staging);
+            Capacity_ = _Capacity;
+            RowBytes_ = _RowBytes;
+            SrvSlot_  = Slot;
         }
 
         // O SRV e reescrito no MESMO slot mesmo quando o recurso nao mudou: e barato e evita um

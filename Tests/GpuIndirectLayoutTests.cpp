@@ -45,6 +45,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
 #include "Smile/Graphics/Resources/Material.h"
@@ -434,6 +435,82 @@ int main() try {
         L->Close();
         S.Release(G.Heap);
         G.Drenar("porta");
+    }
+
+    // --- o failpoint de upload: deixa passar N criacoes e falha as seguintes --------------------
+    //
+    // Os testes de Setup abaixo dependem dele para falhar uma coluna que NAO e a primeira.
+    {
+        auto Criar = [&]() {
+            return GpuResources::TryCreateUploadBuffer(G.Device.Get(), 64u, 1u, false);
+        };
+        GpuResources::FUploadFailureInjection Falha(1u, 1u);
+        const GpuResources::FUploadBuffer A = Criar();
+        const GpuResources::FUploadBuffer B = Criar();
+        CheckEq(GpuResources::PendingUploadFailures(), 0u, "failpoint: a falha foi consumida");
+        const GpuResources::FUploadBuffer C = Criar();
+        Check(static_cast<bool>(A), "failpoint: a criacao pulada passa");
+        Check(!B, "failpoint: a criacao seguinte falha");
+        Check(static_cast<bool>(C), "failpoint: esgotada a injecao, as criacoes voltam a passar");
+    }
+
+    // --- o Create do armazenamento e atomico ----------------------------------------------------
+    //
+    // O staging e criado DEPOIS do buffer, entao recusa-lo e a falha em que ja existe um recurso novo
+    // para desfazer. Novo, o armazenamento continua vazio; crescendo, continua exatamente o antigo.
+    {
+        wrl::ComPtr<ID3D12CommandAllocator>    Alloc;
+        wrl::ComPtr<ID3D12GraphicsCommandList> L;
+        Hr(G.Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&Alloc)),
+           "CreateCommandAllocator (atomico)");
+        Hr(G.Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, Alloc.Get(), nullptr,
+                                       IID_PPV_ARGS(&L)),
+           "CreateCommandList (atomico)");
+        auto Recusado = [&](FGpuTableStorage& _S, u32 _Capacidade) {
+            GpuResources::FUploadFailureInjection Falha(1u);
+            bool Lancou = false;
+            try {
+                _S.Create(G.Device.Get(), G.Heap, sizeof(u32), _Capacidade, "atomico");
+            } catch (const std::exception&) {
+                Lancou = true;
+            }
+            CheckEq(GpuResources::PendingUploadFailures(), 0u, "Create: a falha foi consumida pelo staging");
+            return Lancou;
+        };
+
+        const u32 Usados = G.Heap.UsedSlots();
+        FGpuTableStorage S;
+        Check(Recusado(S, 4u), "Create novo: o staging recusado lanca");
+        Check(!S.IsBuilt(), "Create novo recusado: o armazenamento continua sem recurso");
+        CheckEq(S.Capacity(), 0u, "Create novo recusado: e sem capacidade");
+        CheckEq(S.Srv(), FTextureSRVHeap::kInvalidSlot, "Create novo recusado: e sem descritor");
+        CheckEq(G.Heap.UsedSlots(), Usados, "Create novo recusado: nenhum descritor vazou");
+
+        S.Create(G.Device.Get(), G.Heap, sizeof(u32), 4u, "atomico");
+        const ID3D12Resource* Antigo = S.Resource();
+        const u32             Slot   = S.Srv();
+        Check(Recusado(S, 64u), "crescer: o staging recusado lanca");
+        Check(S.IsBuilt() && S.Resource() == Antigo, "crescer recusado: o buffer continua o antigo");
+        CheckEq(S.Capacity(), 4u, "crescer recusado: a capacidade continua a antiga");
+        CheckEq(S.Srv(), Slot, "crescer recusado: o descritor continua no mesmo slot");
+        CheckEq(G.Heap.UsedSlots(), Usados + 1u, "crescer recusado: nenhum descritor a mais");
+        Check(!S.AcceptsRows(L.Get(), 5u), "crescer recusado: a porta continua medindo o buffer antigo");
+
+        S.Create(G.Device.Get(), G.Heap, sizeof(u32), 64u, "atomico");
+        CheckEq(S.Capacity(), 64u, "crescer de novo: a capacidade nova");
+        Check(S.Resource() != Antigo, "crescer de novo: o buffer e outro");
+        CheckEq(S.Srv(), Slot, "crescer de novo: o slot do descritor e preservado");
+
+        // Stride diferente com a MESMA capacidade tambem recria: o buffer foi dimensionado pelo stride
+        // antigo, e manter os dois descreveria linhas que nao cabem nele.
+        const ID3D12Resource* DeQuatro = S.Resource();
+        S.Create(G.Device.Get(), G.Heap, 2u * sizeof(u32), 64u, "atomico");
+        Check(S.Resource() != DeQuatro, "stride diferente: o buffer e recriado");
+        CheckEq(S.RowBytes(), 2u * sizeof(u32), "stride diferente: o stride novo vale");
+        L->Close();
+        S.Release(G.Heap);
+        CheckEq(G.Heap.UsedSlots(), Usados, "o Release devolve o descritor");
+        G.Drenar("atomico");
     }
 
     // --- a primeira publicacao monta o layout ---------------------------------------------------
