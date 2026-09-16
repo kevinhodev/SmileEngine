@@ -148,6 +148,11 @@ namespace Smile {
                            std::span<const u32> _ClassifyCounters,
                            std::span<const u32> _ExpandCounters, u32 _CandidateCount,
                            std::vector<u32>& _OutDrawCounts, u32& _OutReason) {
+        auto SomaAte = [](u32& _Soma, u32 _Valor, u32 _Limite) {
+            if (_Valor > _Limite || _Soma > _Limite - _Valor) return false;
+            _Soma += _Valor;
+            return true;
+        };
         u32 Motivo = 0;
         if (_ScatterCounters[GpuScatterCounterFaultCursor] != 0u)   Motivo |= GpuFinalizeFaultCursor;
         if (_ScatterCounters[GpuScatterCounterFaultLayoutVersion] != 0u)
@@ -157,35 +162,45 @@ namespace Smile {
 
         // As ancoras: candidatos desta execucao, que nao acumulam. Ver o shader.
         u32 SomaExpand = 0;
-        for (u32 E = 0; E < GpuExpandCounterCount; ++E) SomaExpand += _ExpandCounters[E];
-        if (SomaExpand != _CandidateCount) Motivo |= GpuFinalizeExpandAnchor;
+        bool SomaExpandValida = true;
+        for (u32 E = 0; E < GpuExpandCounterCount; ++E)
+            SomaExpandValida = SomaAte(SomaExpand, _ExpandCounters[E], _CandidateCount) &&
+                               SomaExpandValida;
+        if (!SomaExpandValida || SomaExpand != _CandidateCount) Motivo |= GpuFinalizeExpandAnchor;
 
         u32 SomaClassify = 0;
-        for (u32 K = 0; K < GpuClassifyOutcomeCount; ++K) SomaClassify += _ClassifyCounters[K];
-        if (SomaClassify != _CandidateCount) Motivo |= GpuFinalizeClassifyAnchor;
+        bool SomaClassifyValida = true;
+        for (u32 K = 0; K < GpuClassifyOutcomeCount; ++K)
+            SomaClassifyValida = SomaAte(SomaClassify, _ClassifyCounters[K], _CandidateCount) &&
+                                 SomaClassifyValida;
+        if (!SomaClassifyValida || SomaClassify != _CandidateCount)
+            Motivo |= GpuFinalizeClassifyAnchor;
 
         // Os canarios. Pela funcao da lista fechada, e nao por uma soma de indices escrita aqui: o shader
         // subtrai a politica da soma, e os dois so concordam se a lista for a mesma.
         for (u32 K = 0; K < GpuClassifyOutcomeCount; ++K)
             if (GpuClassifyOutcomeIsCanary(K) && _ClassifyCounters[K] != 0u)
                 Motivo |= GpuFinalizeClassifyCanary;
-        if (SomaExpand != _ExpandCounters[GpuExpandCounterExpanded]) Motivo |= GpuFinalizeExpandCanary;
+        if (_ExpandCounters[GpuExpandCounterInvalidSlot] != 0u ||
+            _ExpandCounters[GpuExpandCounterRtOnly] != 0u ||
+            _ExpandCounters[GpuExpandCounterOverflow] != 0u)
+            Motivo |= GpuFinalizeExpandCanary;
 
         const u32 Indiretos = _ClassifyCounters[GpuClassifyIndirect];
         u32 SomaLotes = 0;
+        bool SomaLotesValida = true;
         for (size_t I = 0; I < _BatchCounts.size(); ++I) {
-            SomaLotes += _BatchCounts[I];
+            SomaLotesValida = SomaAte(SomaLotes, _BatchCounts[I], Indiretos) && SomaLotesValida;
             if (_BatchCursors[I] != _BatchCounts[I])    Motivo |= GpuFinalizeCursorMismatch;
             if (_BatchCounts[I] > _Regions[I].Capacity) Motivo |= GpuFinalizeRegionOverflow;
         }
-        if (SomaLotes != Indiretos) Motivo |= GpuFinalizeBatchSum;
+        if (!SomaLotesValida || SomaLotes != Indiretos) Motivo |= GpuFinalizeBatchSum;
 
-        const u32 Tratados = _ScatterCounters[GpuScatterCounterEmitted] +
-                             _ScatterCounters[GpuScatterCounterFaultCursor] +
-                             _ScatterCounters[GpuScatterCounterFaultLayoutVersion] +
-                             _ScatterCounters[GpuScatterCounterFaultRegion] +
-                             _ScatterCounters[GpuScatterCounterFaultCapacity];
-        if (Tratados != Indiretos) Motivo |= GpuFinalizeScatterSum;
+        u32 Tratados = 0;
+        bool TratadosValidos = true;
+        for (u32 S = 0; S < GpuScatterCounterCount; ++S)
+            TratadosValidos = SomaAte(Tratados, _ScatterCounters[S], Indiretos) && TratadosValidos;
+        if (!TratadosValidos || Tratados != Indiretos) Motivo |= GpuFinalizeScatterSum;
 
         _OutReason = Motivo;
         _OutDrawCounts.assign(_BatchCounts.size(), 0u);

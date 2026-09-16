@@ -2838,6 +2838,11 @@ int main() try {
                 { "expand sem reset", { 2u * Lim, 0u, 0u, 0u }, GpuFinalizeExpandAnchor },
                 { "expand sem reset e com overflow", { 2u * Lim - 1u, 0u, 0u, 1u },
                   GpuFinalizeExpandAnchor | GpuFinalizeExpandCanary },
+                // UINT_MAX + 1 da a volta para zero. A versao anterior comparava so a SOMA com
+                // Expanded e deixava este canario passar junto da ancora.
+                { "expand com canarios que dao a volta",
+                  { Lim, UINT32_MAX, 1u, 0u },
+                  GpuFinalizeExpandAnchor | GpuFinalizeExpandCanary },
             };
             for (const FExpand& Ex : Expands) {
                 C.Candidatos(SlotsLimpos);
@@ -2856,6 +2861,29 @@ int main() try {
                 CheckEq(MCpu, R.Reason, N + ": finalizacao CPU == GPU no motivo");
             }
             C.Candidatos(SlotsLimpos);
+
+            // O mesmo limite na referencia CPU do classify. A GPU recebe os seus contadores do
+            // proprio dispatch; aqui injetamos o estado corrompido que a finalizacao existe para
+            // rejeitar: dois canarios somam 2^32 e, sob aritmetica modular, desaparecem da soma.
+            {
+                const FCadeia::FSaida Limpa = C.Rodar(FCadeia::kResetTudo);
+                std::vector<u32> Classify = Limpa.ClassCont;
+                Classify[GpuClassifyNoSlot]     = UINT32_MAX;
+                Classify[GpuClassifyInvalidSlot] = 1u;
+                std::vector<u32> DrawOverflowCpu;
+                u32 MotivoOverflowCpu = 0u;
+                const u32 StatusOverflowCpu =
+                    FinalizeDrawCounts(Limpa.Counts, Regioes, Limpa.ScatCont, Limpa.Cursors,
+                                       Classify, Limpa.ExpCont, Limpa.Candidatos,
+                                       DrawOverflowCpu, MotivoOverflowCpu);
+                CheckEq(StatusOverflowCpu, 0u,
+                        "classify com canarios que dao a volta: frame invalidado");
+                CheckEq(MotivoOverflowCpu,
+                        static_cast<u32>(GpuFinalizeClassifyAnchor | GpuFinalizeClassifyCanary),
+                        "classify com canarios que dao a volta: ancora e canario");
+                for (u32 D : DrawOverflowCpu)
+                    CheckEq(D, 0u, "classify com canarios que dao a volta: count buffer zerado");
+            }
         }
 
         // ---- TABELAS que a CPU nao aprovaria, entregues a cadeia inteira ----

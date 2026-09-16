@@ -31,6 +31,15 @@ RWStructuredBuffer<uint> DrawCounts : register(u0);
 // Telemetria: nenhum draw depende deles, e le-los na CPU para decidir algo seria readback.
 RWStructuredBuffer<uint> Status     : register(u1);
 
+// Soma um contador sem deixar a aritmetica modular transformar acumulador corrompido em valor
+// plausivel. `Limite` e uma ancora desta execucao (candidatos ou indiretos), portanto qualquer termo
+// ou parcial acima dele ja e falha; a subtracao so acontece depois de `Valor <= Limite`.
+bool SomaAte(inout uint Soma, uint Valor, uint Limite) {
+    if (Valor > Limite || Soma > Limite - Valor) return false;
+    Soma += Valor;
+    return true;
+}
+
 [numthreads(1, 1, 1)]
 void main() {
     const uint Slots      = FinalizeParams.x;
@@ -57,12 +66,17 @@ void main() {
     // 1. Os contadores do expand e os do classify somam, cada um, exatamente os candidatos desta
     //    execucao: os dois passos dao um desfecho por posicao de saida.
     uint SomaExpand = 0u;
-    for (uint E = 0u; E < SMILE_EXPAND_COUNTER_COUNT; ++E) SomaExpand += ExpandCounters[E];
-    if (SomaExpand != Candidatos) Motivo |= SMILE_FINALIZE_EXPAND_ANCHOR;
+    bool SomaExpandValida = true;
+    for (uint E = 0u; E < SMILE_EXPAND_COUNTER_COUNT; ++E)
+        SomaExpandValida = SomaAte(SomaExpand, ExpandCounters[E], Candidatos) && SomaExpandValida;
+    if (!SomaExpandValida || SomaExpand != Candidatos) Motivo |= SMILE_FINALIZE_EXPAND_ANCHOR;
 
     uint SomaClassify = 0u;
-    for (uint K = 0u; K < SMILE_CLASSIFY_OUTCOME_COUNT; ++K) SomaClassify += ClassifyCounters[K];
-    if (SomaClassify != Candidatos) Motivo |= SMILE_FINALIZE_CLASSIFY_ANCHOR;
+    bool SomaClassifyValida = true;
+    for (uint K = 0u; K < SMILE_CLASSIFY_OUTCOME_COUNT; ++K)
+        SomaClassifyValida = SomaAte(SomaClassify, ClassifyCounters[K], Candidatos) &&
+                             SomaClassifyValida;
+    if (!SomaClassifyValida || SomaClassify != Candidatos) Motivo |= SMILE_FINALIZE_CLASSIFY_ANCHOR;
 
     // ---- CANARIOS: um candidato que ninguem desenha ----
     //
@@ -75,15 +89,19 @@ void main() {
     // A POLITICA e uma lista FECHADA — comando, `NotEligible` e `MeshUnusable` — e todo o resto e
     // canario. Um desfecho novo nasce canario ate alguem declara-lo politica: o erro por omissao zera o
     // frame, e nao some com geometria.
-    const uint Politica = ClassifyCounters[SMILE_CLASSIFY_INDIRECT] +
-                          ClassifyCounters[SMILE_CLASSIFY_NOT_ELIGIBLE] +
-                          ClassifyCounters[SMILE_CLASSIFY_MESH_UNUSABLE];
-    // Sem dar a volta: `Politica` e parte da soma.
-    if (SomaClassify != Politica) Motivo |= SMILE_FINALIZE_CLASSIFY_CANARY;
+    for (uint K = 0u; K < SMILE_CLASSIFY_OUTCOME_COUNT; ++K) {
+        const bool MantemFrame = K == SMILE_CLASSIFY_INDIRECT ||
+                                 K == SMILE_CLASSIFY_NOT_ELIGIBLE ||
+                                 K == SMILE_CLASSIFY_MESH_UNUSABLE;
+        if (!MantemFrame && ClassifyCounters[K] != 0u)
+            Motivo |= SMILE_FINALIZE_CLASSIFY_CANARY;
+    }
 
     // No expand, so `Expanded` e desfecho normal. O `Overflow` e o pior dos tres: a posicao alem da saida
     // nao recebe nem a sentinela, e o classify poderia ler ali um slot plausivel e errado.
-    if (SomaExpand != ExpandCounters[SMILE_EXPAND_COUNTER_EXPANDED])
+    if (ExpandCounters[SMILE_EXPAND_COUNTER_INVALID_SLOT] != 0u ||
+        ExpandCounters[SMILE_EXPAND_COUNTER_RT_ONLY] != 0u ||
+        ExpandCounters[SMILE_EXPAND_COUNTER_OVERFLOW] != 0u)
         Motivo |= SMILE_FINALIZE_EXPAND_CANARY;
 
     // 2. Os lotes somam exatamente os indiretos. 3. Cada lote recebeu exatamente a sua contagem de
@@ -91,20 +109,20 @@ void main() {
     //    das regioes: contagem alem da capacidade invalida o frame inteiro, e nao so o lote.
     const uint Indiretos = ClassifyCounters[SMILE_CLASSIFY_INDIRECT];
     uint SomaLotes = 0u;
+    bool SomaLotesValida = true;
     for (uint I = 0u; I < Slots; ++I) {
-        SomaLotes += BatchCounts[I];
+        SomaLotesValida = SomaAte(SomaLotes, BatchCounts[I], Indiretos) && SomaLotesValida;
         if (BatchCursors[I] != BatchCounts[I])    Motivo |= SMILE_FINALIZE_CURSOR_MISMATCH;
         if (BatchCounts[I] > Regions[I].Capacity) Motivo |= SMILE_FINALIZE_REGION_OVERFLOW;
     }
-    if (SomaLotes != Indiretos) Motivo |= SMILE_FINALIZE_BATCH_SUM;
+    if (!SomaLotesValida || SomaLotes != Indiretos) Motivo |= SMILE_FINALIZE_BATCH_SUM;
 
     // 4. Todo indireto que o scatter viu terminou em exatamente um desfecho dele.
-    const uint Tratados = ScatterCounters[SMILE_SCATTER_EMITTED] +
-                          ScatterCounters[SMILE_SCATTER_FAULT_CURSOR] +
-                          ScatterCounters[SMILE_SCATTER_FAULT_LAYOUT_VERSION] +
-                          ScatterCounters[SMILE_SCATTER_FAULT_REGION] +
-                          ScatterCounters[SMILE_SCATTER_FAULT_CAPACITY];
-    if (Tratados != Indiretos) Motivo |= SMILE_FINALIZE_SCATTER_SUM;
+    uint Tratados = 0u;
+    bool TratadosValidos = true;
+    for (uint S = 0u; S < SMILE_SCATTER_COUNT; ++S)
+        TratadosValidos = SomaAte(Tratados, ScatterCounters[S], Indiretos) && TratadosValidos;
+    if (!TratadosValidos || Tratados != Indiretos) Motivo |= SMILE_FINALIZE_SCATTER_SUM;
 
     const bool Falhou = Motivo != 0u;
     // TODOS os slots, sempre. Uma entrada nao escrita guardaria a contagem do frame anterior.
