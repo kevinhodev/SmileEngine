@@ -71,6 +71,8 @@ namespace SmileEditor {
         Out.BindlessMaterialsAvailable = Settings.BindlessMaterialsAvailable();
         Out.BindlessTransforms          = Settings.GetBindlessTransforms();
         Out.BindlessTransformsAvailable = Settings.BindlessTransformsAvailable();
+        Out.GpuIndirectMainView          = Settings.GetGpuIndirectMainView();
+        Out.GpuIndirectMainViewAvailable = Settings.GpuIndirectMainViewAvailable();
         Out.DerivedTemporalTransforms = Settings.GetDerivedTemporalTransforms();
         Out.DerivedTemporalTransformsAvailable =
             Settings.DerivedTemporalTransformsAvailable();
@@ -273,6 +275,10 @@ namespace SmileEditor {
             // ordem. Inverter passaria no teste com os dois ja ligados e falharia do frio.
             if (_Overrides.BindlessTransforms)
                 Settings.SetBindlessTransforms(*_Overrides.BindlessTransforms);
+            // Depois dos dois eixos de shader: a submissao indireta recusa quando qualquer um
+            // deles nao ficou efetivamente ligado.
+            if (_Overrides.GpuIndirectMainView)
+                Settings.SetGpuIndirectMainView(*_Overrides.GpuIndirectMainView);
             if (_Overrides.DerivedTemporalTransforms)
                 Settings.SetDerivedTemporalTransforms(*_Overrides.DerivedTemporalTransforms);
             if (_Overrides.SunShadows)
@@ -357,6 +363,20 @@ namespace SmileEditor {
         Out.InstanceCopyRegions        = S.InstanceCopyRegions;
         Out.InstanceRowsScanned        = S.InstanceRowsScanned;
         Out.InstanceBytesUploadedTotal = S.InstanceBytesUploadedTotal;
+        Out.GpuIndirectMainViewActive = S.GpuIndirectMainViewActive;
+        Out.GpuIndirectChainsRecorded = S.GpuIndirectChainsRecorded;
+        Out.GpuIndirectLastReason     = S.GpuIndirectLastReason;
+        Out.GpuIndirectLastDetail     = S.GpuIndirectLastDetail;
+        Out.GpuIndirectOutputs        = S.GpuIndirectOutputs;
+        Out.GpuIndirectCommands       = S.GpuIndirectCommands;
+        Out.GpuIndirectCountersValid  = S.GpuIndirectCountersValid;
+        Out.GpuIndirectStatus         = S.GpuIndirectStatus;
+        Out.GpuIndirectGpuReason      = S.GpuIndirectGpuReason;
+        Out.GpuIndirectGpuCommands    = S.GpuIndirectGpuCommands;
+        Out.GpuIndirectResidentBytes  = S.GpuIndirectResidentBytes;
+        Out.GpuIndirectStagingBytes   = S.GpuIndirectStagingBytes;
+        Out.GpuIndirectUploadBytes    = S.GpuIndirectUploadBytes;
+        Out.GpuIndirectReadbackBytes  = S.GpuIndirectReadbackBytes;
         // TODOS os passes, inclusive os zerados: uma serie temporal com conjunto de chaves
         // variavel obrigaria o agente a tratar ausencia como zero, e ausencia tambem poderia
         // significar "passe removido". Zero explicito nao tem essa ambiguidade.
@@ -377,6 +397,7 @@ namespace SmileEditor {
             Row.MaterialRowMisses = B.MaterialRowMisses;
             Row.TransformBinds    = B.TransformBinds;
             Row.TransformSlotSets = B.TransformSlotSets;
+            Row.IndirectCalls     = B.IndirectCalls;
             Out.Passes.push_back(Row);
         }
         return Out;

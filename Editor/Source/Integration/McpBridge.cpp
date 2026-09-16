@@ -36,7 +36,10 @@ namespace SmileEditor {
         // quando o cliente passa a EXIGIR o campo, nao quando o editor passa a publica-lo.
         // 6: cpu.instanceTable. A tabela canônica de instâncias entrou no resumo que a régua
         // consome; sem bump, um editor v5 pareceria compatível e só falharia na agregação.
-        constexpr int kProtocolVersion = 13;
+        // 14: A/B do main view indireto, chamadas ExecuteIndirect por passe e o bloco de
+        // telemetria da cadeia. Um cliente 13 nao consegue distinguir fallback CPU de cadeia
+        // ativa e portanto nao pode validar o gate da Fase 5.
+        constexpr int kProtocolVersion = 14;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -209,12 +212,15 @@ namespace SmileEditor {
                 { QStringLiteral("timeOfDayRunning"), _Settings.TimeOfDayRunning },
                 { QStringLiteral("bindlessMaterials"), _Settings.BindlessMaterials },
                 { QStringLiteral("bindlessTransforms"), _Settings.BindlessTransforms },
+                { QStringLiteral("gpuIndirectMainView"), _Settings.GpuIndirectMainView },
                 { QStringLiteral("derivedTemporalTransforms"),
                   _Settings.DerivedTemporalTransforms },
                 { QStringLiteral("sunShadows"), _Settings.SunShadows },
                 { QStringLiteral("shadowCascadeCache"), _Settings.ShadowCascadeCache },
                 { QStringLiteral("bindlessTransformsAvailable"),
                   _Settings.BindlessTransformsAvailable },
+                { QStringLiteral("gpuIndirectMainViewAvailable"),
+                  _Settings.GpuIndirectMainViewAvailable },
                 { QStringLiteral("derivedTemporalTransformsAvailable"),
                   _Settings.DerivedTemporalTransformsAvailable },
                 { QStringLiteral("bindlessMaterialsAvailable"),
@@ -261,6 +267,7 @@ namespace SmileEditor {
                     { QStringLiteral("transformBinds"), static_cast<double>(P.TransformBinds) },
                     { QStringLiteral("transformSlotSets"),
                       static_cast<double>(P.TransformSlotSets) },
+                    { QStringLiteral("indirectCalls"), static_cast<double>(P.IndirectCalls) },
                 });
             }
             return QJsonObject{
@@ -345,6 +352,34 @@ namespace SmileEditor {
                     { QStringLiteral("rowsScanned"),      static_cast<double>(_Cpu.InstanceRowsScanned) },
                     { QStringLiteral("bytesUploadedTotal"),
                       static_cast<double>(_Cpu.InstanceBytesUploadedTotal) },
+                } },
+                { QStringLiteral("indirectMainView"), QJsonObject{
+                    { QStringLiteral("active"), _Cpu.GpuIndirectMainViewActive },
+                    { QStringLiteral("chainsRecorded"),
+                      static_cast<double>(_Cpu.GpuIndirectChainsRecorded) },
+                    { QStringLiteral("lastReason"),
+                      static_cast<double>(_Cpu.GpuIndirectLastReason) },
+                    { QStringLiteral("lastDetail"),
+                      static_cast<double>(_Cpu.GpuIndirectLastDetail) },
+                    { QStringLiteral("outputs"),
+                      static_cast<double>(_Cpu.GpuIndirectOutputs) },
+                    { QStringLiteral("commands"),
+                      static_cast<double>(_Cpu.GpuIndirectCommands) },
+                    { QStringLiteral("countersValid"), _Cpu.GpuIndirectCountersValid },
+                    { QStringLiteral("gpuStatus"),
+                      static_cast<double>(_Cpu.GpuIndirectStatus) },
+                    { QStringLiteral("gpuReason"),
+                      static_cast<double>(_Cpu.GpuIndirectGpuReason) },
+                    { QStringLiteral("gpuCommands"),
+                      static_cast<double>(_Cpu.GpuIndirectGpuCommands) },
+                    { QStringLiteral("residentBytes"),
+                      static_cast<double>(_Cpu.GpuIndirectResidentBytes) },
+                    { QStringLiteral("stagingBytes"),
+                      static_cast<double>(_Cpu.GpuIndirectStagingBytes) },
+                    { QStringLiteral("uploadBytes"),
+                      static_cast<double>(_Cpu.GpuIndirectUploadBytes) },
+                    { QStringLiteral("readbackBytes"),
+                      static_cast<double>(_Cpu.GpuIndirectReadbackBytes) },
                 } },
                 { QStringLiteral("passes"), Passes },
             };
@@ -810,6 +845,8 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
             ReadOptionalBool(_Arguments, "bindlessMaterials", Overrides.BindlessMaterials) &&
             ReadOptionalBool(_Arguments, "bindlessTransforms", Overrides.BindlessTransforms) &&
+            ReadOptionalBool(_Arguments, "gpuIndirectMainView",
+                             Overrides.GpuIndirectMainView) &&
             ReadOptionalBool(_Arguments, "derivedTemporalTransforms",
                              Overrides.DerivedTemporalTransforms) &&
             ReadOptionalBool(_Arguments, "sunShadows", Overrides.SunShadows) &&

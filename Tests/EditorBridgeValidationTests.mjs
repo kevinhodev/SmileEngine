@@ -79,7 +79,7 @@ function check(condition, what, detail = "") {
   failures += 1;
 }
 
-// Snapshot minimo VALIDO, no formato do protocolo 13.
+// Snapshot minimo VALIDO, no formato do protocolo 14.
 function snapshotValido() {
   return {
     direct: [],
@@ -96,7 +96,7 @@ function snapshotValido() {
                  skippedInvalid: 1, bindlessDraws: 3, materialFallbackDraws: 0,
                  materialRowSets: 2, materialRowMisses: 0,
                  // Protocolo 10: os dois entram no resumo, entao valem a mesma exigencia.
-                 transformBinds: 0, transformSlotSets: 3 }],
+                 transformBinds: 0, transformSlotSets: 3, indirectCalls: 2 }],
       scene: { renderables: 1, drawItems: 1, visibleItems: 1, occludedItems: 0 },
       objectConstantBytes: 0,
       objectConstantBytesReserved: 0,
@@ -108,6 +108,12 @@ function snapshotValido() {
       instanceTable: { rows: 8, residentBytes: 23040, stagingBytes: 46080,
                        rowsDirty: 0, bytesDirty: 0, copyRegions: 0, rowsScanned: 0,
                        bytesUploadedTotal: 1440 },
+      indirectMainView: {
+        active: true, chainsRecorded: 9, lastReason: 0, lastDetail: 0,
+        outputs: 8, commands: 4, countersValid: true, gpuStatus: 1, gpuReason: 0,
+        gpuCommands: 3, residentBytes: 4096, stagingBytes: 1024,
+        uploadBytes: 512, readbackBytes: 256,
+      },
     },
   };
 }
@@ -143,7 +149,7 @@ async function comEditorFalso(payload, body) {
               // que ele queria provar.
               payload.replace("__ID__", JSON.stringify(pedido.id))
             : JSON.stringify({
-                version: 13,
+                version: 14,
                 id: pedido.id,
                 ok: true,
                 result: typeof payload === "function" ? payload(pedido) : payload,
@@ -247,7 +253,7 @@ for (const campo of ["capacity", "live", "retired", "exhausted"]) {
 //     para ele aqui -- o que chega no lugar e null, ja coberto acima.
 {
   const cru =
-    '{"version":13,"id":__ID__,"ok":true,"result":' +
+    '{"version":14,"id":__ID__,"ok":true,"result":' +
     JSON.stringify(snapshotValido()).replace('"capacity":8', '"capacity":1e400') +
     "}";
   await esperaErro(cru, "capacity", "capacity = 1e400 (Infinity na borda JSON)");
@@ -337,13 +343,39 @@ for (const [bloco, campos] of [
 //    anterior a fase produziria agregado de `undefined` num relatorio que parece completo.
 for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
                      "bindlessDraws", "materialFallbackDraws", "materialRowSets",
-                     "materialRowMisses", "transformBinds", "transformSlotSets"]) {
+                     "materialRowMisses", "transformBinds", "transformSlotSets",
+                     "indirectCalls"]) {
   for (const valor of [undefined, "3", null, true, -1, 1.5, 4294967296]) {
     const p = snapshotValido();
     if (valor === undefined) delete p.cpu.passes[0][campo];
     else p.cpu.passes[0][campo] = valor;
     await esperaErro(p, campo, `passes[0].${campo} = ${String(valor)}`);
   }
+}
+
+// 14. A cadeia tem booleanos de estado, contagens u32 e bytes/acumulados u64. Cada classe de
+// campo recebe ao menos um negativo; sem isto o bump seria apenas decorativo.
+{
+  const p = snapshotValido();
+  delete p.cpu.indirectMainView;
+  await esperaErro(p, "indirectMainView", "bloco indirectMainView ausente");
+}
+for (const campo of ["active", "countersValid"]) {
+  const p = snapshotValido();
+  p.cpu.indirectMainView[campo] = 1;
+  await esperaErro(p, campo, `indirectMainView.${campo} nao booleano`);
+}
+for (const campo of ["lastReason", "lastDetail", "outputs", "commands", "gpuStatus",
+                     "gpuReason", "gpuCommands"]) {
+  const p = snapshotValido();
+  p.cpu.indirectMainView[campo] = -1;
+  await esperaErro(p, campo, `indirectMainView.${campo} negativo`);
+}
+for (const campo of ["chainsRecorded", "residentBytes", "stagingBytes", "uploadBytes",
+                     "readbackBytes"]) {
+  const p = snapshotValido();
+  p.cpu.indirectMainView[campo] = Number.MAX_SAFE_INTEGER + 1;
+  await esperaErro(p, campo, `indirectMainView.${campo} inexato`);
 }
 {
   const p = snapshotValido();

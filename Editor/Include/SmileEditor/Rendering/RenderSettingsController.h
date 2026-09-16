@@ -66,6 +66,8 @@ namespace SmileEditor {
         // acoplamento e deliberado, ver FPipelineState::BindlessTransformsReady.
         bool   BindlessTransforms          = false;
         bool   BindlessTransformsAvailable = false;
+        bool   GpuIndirectMainView          = false;
+        bool   GpuIndirectMainViewAvailable = false;
         bool   DerivedTemporalTransforms          = false;
         bool   DerivedTemporalTransformsAvailable = false;
         // PRE-REQUISITOS da leitura dos contadores de sombra. Com o cache das cascatas ligado,
@@ -106,6 +108,7 @@ namespace SmileEditor {
         std::optional<bool> DIMeshCompactSupport;
         std::optional<bool> BindlessMaterials;
         std::optional<bool> BindlessTransforms;
+        std::optional<bool> GpuIndirectMainView;
         std::optional<bool> DerivedTemporalTransforms;
         std::optional<bool> SunShadows;
         std::optional<bool> ShadowCascadeCache;
@@ -139,6 +142,7 @@ namespace SmileEditor {
         // todos migrarem. Uma nao substitui a outra.
         quint32 TransformBinds    = 0;
         quint32 TransformSlotSets = 0;
+        quint32 IndirectCalls     = 0;
     };
 
     struct FCpuProfileSnapshot {
@@ -195,6 +199,21 @@ namespace SmileEditor {
         quint32 InstanceCopyRegions        = 0;
         quint32 InstanceRowsScanned        = 0;
         quint64 InstanceBytesUploadedTotal = 0;
+
+        bool    GpuIndirectMainViewActive = false;
+        quint64 GpuIndirectChainsRecorded = 0;
+        quint32 GpuIndirectLastReason     = 0;
+        quint32 GpuIndirectLastDetail     = 0;
+        quint32 GpuIndirectOutputs        = 0;
+        quint32 GpuIndirectCommands       = 0;
+        bool    GpuIndirectCountersValid  = false;
+        quint32 GpuIndirectStatus         = 0;
+        quint32 GpuIndirectGpuReason      = 0;
+        quint32 GpuIndirectGpuCommands    = 0;
+        quint64 GpuIndirectResidentBytes  = 0;
+        quint64 GpuIndirectStagingBytes   = 0;
+        quint64 GpuIndirectUploadBytes    = 0;
+        quint64 GpuIndirectReadbackBytes  = 0;
 
         QVector<FCpuSubmitPassSnapshot> Passes;
     };

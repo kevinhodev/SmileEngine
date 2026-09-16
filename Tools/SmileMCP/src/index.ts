@@ -199,6 +199,22 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           rowsScanned: summarize(cpuStats.map((c) => c.instanceTable.rowsScanned)),
           bytesUploadedTotal: cpuStats.at(-1)?.instanceTable.bytesUploadedTotal ?? null,
         },
+        indirectMainView: {
+          active: cpuStats.at(-1)?.indirectMainView.active ?? null,
+          chainsRecorded: cpuStats.at(-1)?.indirectMainView.chainsRecorded ?? null,
+          lastReason: cpuStats.at(-1)?.indirectMainView.lastReason ?? null,
+          lastDetail: cpuStats.at(-1)?.indirectMainView.lastDetail ?? null,
+          outputs: summarize(cpuStats.map((c) => c.indirectMainView.outputs)),
+          commands: summarize(cpuStats.map((c) => c.indirectMainView.commands)),
+          countersValid: cpuStats.at(-1)?.indirectMainView.countersValid ?? null,
+          gpuStatus: cpuStats.at(-1)?.indirectMainView.gpuStatus ?? null,
+          gpuReason: cpuStats.at(-1)?.indirectMainView.gpuReason ?? null,
+          gpuCommands: summarize(cpuStats.map((c) => c.indirectMainView.gpuCommands)),
+          residentBytes: cpuStats.at(-1)?.indirectMainView.residentBytes ?? null,
+          stagingBytes: cpuStats.at(-1)?.indirectMainView.stagingBytes ?? null,
+          uploadBytes: cpuStats.at(-1)?.indirectMainView.uploadBytes ?? null,
+          readbackBytes: cpuStats.at(-1)?.indirectMainView.readbackBytes ?? null,
+        },
         passes: [...passKeys].map((key) => {
           const rows = cpuStats
             .map((cpu) => cpu.passes.find((pass) => pass.key === key))
@@ -218,6 +234,7 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
             // ela nao substitui `objectConstantBytes`, que prova que o buffer parou de ser escrito.
             transformBinds: summarize(rows.map((row) => row.transformBinds)),
             transformSlotSets: summarize(rows.map((row) => row.transformSlotSets)),
+            indirectCalls: summarize(rows.map((row) => row.indirectCalls)),
           };
         }),
       }
@@ -924,6 +941,12 @@ server.registerTool(
         .nullish()
         .describe(
           "A/B da Fase 4: transform lido da tabela canonica pelo vertex shader (true) ou CBV de 256 B por draw (false). EXIGE bindlessMaterials ligado — as PSOs sao construidas sobre as dele —, e ligar os dois na mesma chamada funciona porque a aplicacao respeita essa ordem. O readback em settings confirma o estado efetivo; quem prova qual caminho executou e passes[].transformBinds.",
+        ),
+      gpuIndirectMainView: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B da Fase 5: opacos suportados por ExecuteIndirect (true) ou submissao CPU (false). Exige bindlessMaterials e bindlessTransforms ligados; settings confirma o estado efetivo e passes[].indirectCalls prova as chamadas.",
         ),
       derivedTemporalTransforms: z
         .boolean()

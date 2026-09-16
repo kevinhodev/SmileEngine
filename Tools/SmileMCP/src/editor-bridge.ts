@@ -41,7 +41,8 @@ import path from "node:path";
 // (que cobre VRAM/DEFAULT), e por isso o numero vem do renderer e nao de la.
 // 13: derivedTemporalTransforms introduced the three-consumer A/B. After promotion, true is the
 // only executable arm; false is refused because the classic TransformBuffer no longer exists.
-const PROTOCOL_VERSION = 13;
+// 14: main-view indirect A/B, per-pass ExecuteIndirect calls and delayed chain telemetry.
+const PROTOCOL_VERSION = 14;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -142,6 +143,8 @@ export interface CpuSubmitPass {
    */
   transformBinds: number;
   transformSlotSets: number;
+  /** Numero de chamadas ExecuteIndirect gravadas para o passe; comandos chegam no bloco abaixo. */
+  indirectCalls: number;
 }
 
 export interface CpuProfileStats {
@@ -206,6 +209,22 @@ export interface CpuProfileStats {
     // Slots que o diff comparou para achar as sujas acima (Fase 4).
     rowsScanned: number;
     bytesUploadedTotal: number;
+  };
+  indirectMainView: {
+    active: boolean;
+    chainsRecorded: number;
+    lastReason: number;
+    lastDetail: number;
+    outputs: number;
+    commands: number;
+    countersValid: boolean;
+    gpuStatus: number;
+    gpuReason: number;
+    gpuCommands: number;
+    residentBytes: number;
+    stagingBytes: number;
+    uploadBytes: number;
+    readbackBytes: number;
   };
   passes: CpuSubmitPass[];
 }
@@ -373,6 +392,7 @@ export interface ProfileOverrides {
   meshCompactSupport?: boolean;
   bindlessMaterials?: boolean;
   bindlessTransforms?: boolean;
+  gpuIndirectMainView?: boolean;
   derivedTemporalTransforms?: boolean;
   sunShadows?: boolean;
   shadowCascadeCache?: boolean;
@@ -700,6 +720,31 @@ export class SmileEditorBridge {
         }
       }
     }
+    const indirect = cpu.indirectMainView as
+      | Partial<CpuProfileStats["indirectMainView"]>
+      | undefined;
+    if (!indirect || typeof indirect !== "object") {
+      throw new Error("Snapshot de perfil sem o bloco cpu.indirectMainView (protocolo 14).");
+    }
+    for (const campo of ["active", "countersValid"] as const) {
+      if (typeof indirect[campo] !== "boolean") {
+        throw new Error(`Snapshot de perfil com cpu.indirectMainView.${campo} invalido.`);
+      }
+    }
+    for (const campo of ["lastReason", "lastDetail", "outputs", "commands", "gpuStatus",
+                         "gpuReason", "gpuCommands"] as const) {
+      const valor = indirect[campo];
+      if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > kU32Max) {
+        throw new Error(`Snapshot de perfil com cpu.indirectMainView.${campo} invalido.`);
+      }
+    }
+    for (const campo of ["chainsRecorded", "residentBytes", "stagingBytes", "uploadBytes",
+                         "readbackBytes"] as const) {
+      const valor = indirect[campo];
+      if (!Number.isSafeInteger(valor) || (valor as number) < 0) {
+        throw new Error(`Snapshot de perfil com cpu.indirectMainView.${campo} invalido.`);
+      }
+    }
     // Os DOIS numeros do gate do ObjectCB (protocolo 12). Entraram no tipo e no resumo sem
     // entrar aqui: apagar `objectConstantBytesReserved` do payload atravessava o cast, e o
     // resumo publicava `undefined` no campo que decide a fase. Mesma falha que fez o gpuSlots
@@ -765,7 +810,8 @@ export class SmileEditorBridge {
       }
       for (const campo of ["considered", "draws", "materialBinds", "meshBinds", "skippedInvalid",
                            "bindlessDraws", "materialFallbackDraws", "materialRowSets",
-                           "materialRowMisses", "transformBinds", "transformSlotSets"] as const) {
+                           "materialRowMisses", "transformBinds", "transformSlotSets",
+                           "indirectCalls"] as const) {
         const valor = passe[campo];
         if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > 0xffffffff) {
           throw new Error(
