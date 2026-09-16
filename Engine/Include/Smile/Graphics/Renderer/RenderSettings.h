@@ -92,6 +92,11 @@ namespace Smile {
         void SetBindlessTransforms(bool Use);
         bool GetBindlessTransforms() const;
         bool BindlessTransformsAvailable() const;
+        // Fase 5: troca apenas a submissao dos opacos suportados; masked/two-sided/Blend continuam
+        // no fallback. Exige material+transform bindless ligados.
+        void SetGpuIndirectMainView(bool Use);
+        bool GetGpuIndirectMainView() const;
+        bool GpuIndirectMainViewAvailable() const;
         // Experimental A/B for Phase 4 temporal reprojection. The three consumers move
         // together so a mixed frame cannot be mistaken for a valid comparison.
         void SetDerivedTemporalTransforms(bool Use);

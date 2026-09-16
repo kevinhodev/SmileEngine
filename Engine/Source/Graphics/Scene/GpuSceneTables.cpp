@@ -604,7 +604,8 @@ namespace Smile {
 
     void FGpuSceneInstanceTable::PrepareFrame(FScene& _Scene,
                                               const FGpuMeshTable& _Meshes,
-                                              const FGpuMaterialTable& _Materials) {
+                                              const FGpuMaterialTable& _Materials,
+                                              const FMaterial* _FallbackMaterial) {
         // O produtor muda linhas e tocados: uma publicacao preparada antes dele nao as descreve mais.
         Prepared_ = false;
         if (!Built_) return;
@@ -690,8 +691,12 @@ namespace Smile {
             if (R.RaytracingOnly) Flags |= GpuSceneInstanceRaytracingOnly;
             if (R.Mobility == EMobility::Dynamic) Flags |= GpuSceneInstanceDynamic;
             if (TransformChanged) Flags |= GpuSceneInstanceTransformChanged;
+            const FMaterial* PublishedMaterial =
+                _FallbackMaterial && (!R.Material || !R.Material->IsFinalized())
+                    ? _FallbackMaterial : R.Material;
             MetaRows_[Slot] = {
-                _Meshes.RowOf(R.Mesh), _Materials.RowOf(R.Material), 0u, Flags, Handle.Generation
+                _Meshes.RowOf(R.Mesh), _Materials.RowOf(PublishedMaterial), 0u, Flags,
+                Handle.Generation
             };
 
             FGpuSceneInstanceBounds Bounds{};

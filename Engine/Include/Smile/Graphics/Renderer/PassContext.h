@@ -110,6 +110,9 @@ namespace Smile {
         D3D12_CPU_DESCRIPTOR_HANDLE DSV{};
         D3D12_VIEWPORT              Viewport{};       // res de render CHEIA — os passes que
         D3D12_RECT                  Scissor{};        // mudam (meia-res) restauram daqui
+        // A cadeia expand/classify/scatter/finalize foi gravada e os passes deste frame devem
+        // consumir os opacos elegiveis por ExecuteIndirect. Falso = caminho CPU inteiro.
+        bool                        GpuIndirectMainView = false;
 
         // Fence da fila de COMPUTE assincrona. 0 = o DDGI rodou na fila direta neste frame (async
         // desligado, ou relocacao de sondas pedindo ordem estrita). Diferente do resto do
@@ -120,8 +123,12 @@ namespace Smile {
         u64 AsyncGIFence = 0;
 
         // --- Listas de draw (2a etapa: BuildDrawLists) ------------------------------------
-        std::vector<FDrawItem>    All;     // sem cull de camera
-        std::vector<FVisibleItem> Visible; // frustum + HZB, front-to-back
+        std::vector<FDrawItem>    All;         // sem cull de camera
+        std::vector<FVisibleItem> Visible;     // frustum + HZB, front-to-back
+        // Quando o main view indireto esta ativo, contem somente o complemento que a GPU nao
+        // emite. E montada junto do culling: os passes CPU ficam proporcionais as excecoes, sem
+        // uma segunda varredura sobre todos os visiveis apenas para descobrir o que devem pular.
+        std::vector<FVisibleItem> CpuFallback;
         FSelectionDraw            Selection;
 
         // Endereco do ObjectConstants de um item. O `* 256` do ObjectConstants e o stride real;

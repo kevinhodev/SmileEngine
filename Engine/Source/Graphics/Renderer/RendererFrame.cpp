@@ -838,7 +838,7 @@ namespace Smile {
         // aloca ou pode lancar — diffs, reservas dos shadows, portas. Uma excecao aqui sai com a lista
         // fechada e nenhum shadow avancado. Nada disto escreve o staging do slot: ele so e escrito na
         // fase 2, depois do BeginFrame, que espera a fence que o libera.
-        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable);
+        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable, &DefaultMaterial);
         if (const u32 Recusa = GpuScenePreparePublication(MaterialTable, MeshTable, InstanceTable,
                                                            Backend->DirectQueue.List());
             Recusa != GpuScenePublicationOk) {
@@ -852,6 +852,14 @@ namespace Smile {
             return; // command list ainda fechado: nenhuma tabela gravou nem avancou
         }
         ScenePublicationFailureLogged = false;
+
+        // A cadeia indireta tem a mesma divisao em duas fases das tabelas: toda preparacao que
+        // pode alocar ou recusar acontece com a lista fechada. Recusa e A/B desligado significam
+        // apenas caminho CPU neste frame; nenhuma saida da GPU decide isso.
+        const bool IndirectPrepared =
+            UseGpuIndirectMainView && GpuIndirectMainViewReady() &&
+            IndirectMainView.Prepare(SceneState->Scene, MeshTable,
+                                     Backend->DirectQueue.List()) == GpuMainViewOk;
 
         // RECONCILIACAO do ObjectCB, ANTES de abrir a command list (Fase 4).
         //
@@ -911,6 +919,19 @@ namespace Smile {
             throw std::logic_error("Tabelas canonicas: a publicacao preparada antes do BeginFrame nao "
                                    "vale mais para a lista do frame");
 
+        bool IndirectActive = false;
+        if (IndirectPrepared) {
+            const FGpuIndirectPassSignature MainViewPass{
+                PipelineState.IndirectDrawSignature(), GpuPipelineClassOpaqueOneSided
+            };
+            const std::span<const FGpuIndirectPassSignature> IndirectPasses(&MainViewPass, 1u);
+            IndirectActive =
+                IndirectMainView.Record(Backend->DirectQueue.List(),
+                                        Backend->DirectQueue.FrameIndex(), Backend->SRVHeap,
+                                        MaterialTable, MeshTable, InstanceTable, IndirectPasses) ==
+                GpuMainViewOk;
+        }
+
         ObjectPicker.Tick();
 
         IUpscaler* ActiveUp = ActiveUpscaler();
@@ -953,6 +974,7 @@ namespace Smile {
         UpdateWaterAndOcean(Modes, Vw, Lt, Amb, FrameSlot);
 
         FPassContext Ctx = MakePassContext(Modes, Policy, Vw, Lt, Amb, FrameSlot);
+        Ctx.GpuIndirectMainView = IndirectActive;
         // Aliases sobre o contexto — NAO copias. Sobrevivem a migracao porque os poucos blocos que
         // continuam inline aqui embaixo sao estrutura de FRAME, nao passe: a espera do fence da
         // fila assincrona, o clear dos alvos de instrumentacao e os dois ganchos de debug. Nenhum
@@ -1127,6 +1149,23 @@ namespace Smile {
         CpuStatsBuilding.InstanceRowsScanned        = InstanceTable.LastRowsScanned();
         CpuStatsBuilding.ObjectConstantBytesReserved = ObjectCBReservedBytes();
         CpuStatsBuilding.InstanceBytesUploadedTotal = InstanceTable.TotalBytesUploaded();
+        const FGpuMainViewStats& IndirectStats = IndirectMainView.Stats();
+        const FGpuMainViewGpuCounters& IndirectGpu = IndirectMainView.LastGpuCounters();
+        CpuStatsBuilding.GpuIndirectMainViewActive = IndirectActive;
+        CpuStatsBuilding.GpuIndirectChainsRecorded = IndirectStats.ChainsRecorded;
+        CpuStatsBuilding.GpuIndirectLastReason     = IndirectStats.LastReason;
+        CpuStatsBuilding.GpuIndirectLastDetail     = IndirectStats.LastDetail;
+        CpuStatsBuilding.GpuIndirectOutputs        = IndirectStats.Outputs;
+        CpuStatsBuilding.GpuIndirectCommands       = IndirectStats.Commands;
+        CpuStatsBuilding.GpuIndirectCountersValid  = IndirectGpu.Valid;
+        CpuStatsBuilding.GpuIndirectStatus         = IndirectGpu.Status;
+        CpuStatsBuilding.GpuIndirectGpuReason      = IndirectGpu.Reason;
+        CpuStatsBuilding.GpuIndirectGpuCommands =
+            IndirectGpu.Classify[GpuClassifyIndirect];
+        CpuStatsBuilding.GpuIndirectResidentBytes = IndirectMainView.ResidentBytes();
+        CpuStatsBuilding.GpuIndirectStagingBytes  = IndirectMainView.StagingBytes();
+        CpuStatsBuilding.GpuIndirectUploadBytes   = IndirectMainView.UploadBytes();
+        CpuStatsBuilding.GpuIndirectReadbackBytes = IndirectMainView.ReadbackBytes();
         // Antes do ++ do FrameIndex la embaixo: aqui ele ainda e o indice do frame que acabou
         // de ser submetido, que e exatamente o frame que estes numeros descrevem.
         CpuStatsBuilding.SourceFrameIndex = FrameState->FrameIndex;

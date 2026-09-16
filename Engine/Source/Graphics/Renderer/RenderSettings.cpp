@@ -127,6 +127,7 @@ namespace Smile {
         // classico de material implica o classico de transform. O getter de transform passa a
         // devolver false, que e a verdade.
         if (!Want && R.UseBindlessTransforms) {
+            SetGpuIndirectMainView(false);
             SetBindlessTransforms(false);
             if (R.UseBindlessTransforms) {
                 // A unica falha possivel e nao conseguir recriar o ObjectCB. Voltar so o eixo de
@@ -157,6 +158,8 @@ namespace Smile {
         const bool Want = _Use && R.CanRetireObjectCB();
         if (Want == R.UseBindlessTransforms) return;
 
+        if (!Want) SetGpuIndirectMainView(false);
+
         // A troca mexe num buffer que frames em voo podem estar lendo. E acao de EDITOR, nao de
         // frame, entao drenar aqui nao viola a regra 8 do plano — que proibe dreno no caminho
         // estavel, e nao numa mudanca de modo.
@@ -182,6 +185,21 @@ namespace Smile {
     bool FRenderSettings::GetBindlessTransforms() const { return R.UseBindlessTransforms; }
     bool FRenderSettings::BindlessTransformsAvailable() const {
         return R.BindlessTransformsReady();
+    }
+
+    void FRenderSettings::SetGpuIndirectMainView(bool _Use) {
+        const bool Want = _Use && R.GpuIndirectMainViewReady();
+        if (_Use && !Want) {
+            LogError("SetGpuIndirectMainView(true) RECUSADO: material+transform bindless, command "
+                     "signature ou buffers da cena nao estao prontos");
+        }
+        R.UseGpuIndirectMainView = Want;
+    }
+    bool FRenderSettings::GetGpuIndirectMainView() const {
+        return R.UseGpuIndirectMainView && R.GpuIndirectMainViewReady();
+    }
+    bool FRenderSettings::GpuIndirectMainViewAvailable() const {
+        return R.GpuIndirectMainViewReady();
     }
 
     void FRenderSettings::SetDerivedTemporalTransforms(bool _Use) {

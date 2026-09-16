@@ -1501,11 +1501,29 @@ namespace Smile {
             CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "Z - opacos");
+                bool IndirectRecorded = false;
+                if (_Ctx.GpuIndirectMainView && PrepassVsBindless) {
+                    const FGpuIndirectDrawTargets IndirectTargets{
+                        PipelineState.IndirectDrawSignature(), IndirectMainView.IndirectArgs(),
+                        IndirectMainView.DrawCounts()
+                    };
+                    u32 Calls = 0;
+                    const u32 Result = GpuRecordIndirectDraws(
+                        CommandList, IndirectMainView.Layout(),
+                        GpuPipelineClassOpaqueOneSided, IndirectMainView.PoolViews(), IndirectTargets,
+                        Calls);
+                    if (Result == GpuIndirectRecordOk) {
+                        CpuStatsBuilding.Pass(ESubmitPass::ZPrepassOpaque).IndirectCalls += Calls;
+                        IndirectRecorded = true;
+                    }
+                }
                 FDrawSubmitCache Submit;
                 Submit.Stats = &CpuStatsBuilding.Pass(ESubmitPass::ZPrepassOpaque);
                 SetupTransformBinding(Submit, PrepassVsBindless, ObjectCBBase);
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
-                for (const FVisibleItem& V : VisibleScratch) {
+                const auto& CpuVisible =
+                    IndirectRecorded ? _Ctx.CpuFallback : VisibleScratch;
+                for (const FVisibleItem& V : CpuVisible) {
                     ++Submit.Stats->Considered;
                     if (V.Mat->TwoSided || V.Mat->Constants.AlphaTest || V.Mat->Blend) continue;
                     Submit.BindTransform(CommandList, V.Slot, V.R->GpuHandle.Slot);
@@ -1537,7 +1555,9 @@ namespace Smile {
                 Submit.MaterialRootIndex = FPipelineState::kMaterialRootIndex;
                 SetupTransformBinding(Submit, MaskedVsBindless, ObjectCBBase);
                 FCpuScopeTimer SubmitTimer(CpuStatsBuilding.SubmitMs);
-                for (const FVisibleItem& V : VisibleScratch) {
+                const auto& CpuVisible =
+                    _Ctx.GpuIndirectMainView ? _Ctx.CpuFallback : VisibleScratch;
+                for (const FVisibleItem& V : CpuVisible) {
                     ++Submit.Stats->Considered;
                     if (V.Mat->Blend) continue;
                     if (!V.Mat->TwoSided && !V.Mat->Constants.AlphaTest) continue;
@@ -1670,6 +1690,29 @@ namespace Smile {
 
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "G-buffer - meshes");
+                CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                const bool GBufferBindless = BeginBindlessMaterials(CommandList);
+                const bool GBufferVsBindless =
+                    GBufferBindless && BeginBindlessTransforms(CommandList, FrameSlot);
+
+                bool IndirectRecorded = false;
+                if (_Ctx.GpuIndirectMainView && GBufferVsBindless) {
+                    CommandList->SetPipelineState(PipelineState.PSOGBufferVsBindless());
+                    const FGpuIndirectDrawTargets IndirectTargets{
+                        PipelineState.IndirectDrawSignature(), IndirectMainView.IndirectArgs(),
+                        IndirectMainView.DrawCounts()
+                    };
+                    u32 Calls = 0;
+                    const u32 Result = GpuRecordIndirectDraws(
+                        CommandList, IndirectMainView.Layout(),
+                        GpuPipelineClassOpaqueOneSided, IndirectMainView.PoolViews(), IndirectTargets,
+                        Calls);
+                    if (Result == GpuIndirectRecordOk) {
+                        CpuStatsBuilding.Pass(ESubmitPass::GBuffer).IndirectCalls += Calls;
+                        IndirectRecorded = true;
+                    }
+                }
+
                 // Front-to-back serve o Z-prepass (Hi-Z). Depois do EQUAL, ordem de
                 // profundidade nao reduz overdraw — so espalha PSO/material/IA. Agrupar
                 // como o CSM ja faz: PSO (two-sided) -> material -> mesh.
@@ -1678,9 +1721,12 @@ namespace Smile {
                 // Escopo FECHA antes da submissao: e o O(N log N) que a Fase 5 remove, e
                 // diluido em SubmitMs o ganho ficaria invisivel na metrica que deveria prova-lo.
                 FCpuScopeTimer BatchSort(CpuStatsBuilding.BatchSortMs);
-                GBufferOrder.reserve(VisibleScratch.size());
-                for (const FVisibleItem& V : VisibleScratch) {
-                    if (!V.Mat->Blend) GBufferOrder.push_back(&V);
+                const auto& CpuVisible =
+                    IndirectRecorded ? _Ctx.CpuFallback : VisibleScratch;
+                GBufferOrder.reserve(CpuVisible.size());
+                for (const FVisibleItem& V : CpuVisible) {
+                    if (!V.Mat->Blend)
+                        GBufferOrder.push_back(&V);
                 }
                 std::sort(GBufferOrder.begin(), GBufferOrder.end(),
                           [](const FVisibleItem* a, const FVisibleItem* b) {
@@ -1692,10 +1738,6 @@ namespace Smile {
                           });
                 } // fim do escopo do sort de lote
 
-                CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                const bool GBufferBindless = BeginBindlessMaterials(CommandList);
-                const bool GBufferVsBindless =
-                    GBufferBindless && BeginBindlessTransforms(CommandList, FrameSlot);
                 ID3D12PipelineState* CurGeomPSO = nullptr;
                 FDrawSubmitCache Submit;
                 Submit.Stats             = &CpuStatsBuilding.Pass(ESubmitPass::GBuffer);
@@ -2159,7 +2201,9 @@ namespace Smile {
         u32 OccludedCount = 0;
 
         auto& VisibleScratch = _Ctx.Visible;
+        auto& CpuFallback    = _Ctx.CpuFallback;
         VisibleScratch.reserve(AllItems.size());
+        if (_Ctx.GpuIndirectMainView) CpuFallback.reserve(AllItems.size());
         for (const FDrawItem& A : AllItems) {
             if (UseFrustumCulling && Vw.AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
             // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
@@ -2173,9 +2217,18 @@ namespace Smile {
             const f32 cx = (A.R->AABBMin.X + A.R->AABBMax.X) * 0.5f - CamPos.X;
             const f32 cy = (A.R->AABBMin.Y + A.R->AABBMax.Y) * 0.5f - CamPos.Y;
             const f32 cz = (A.R->AABBMin.Z + A.R->AABBMax.Z) * 0.5f - CamPos.Z;
-            VisibleScratch.push_back({ A.R, A.Mat, cx*cx + cy*cy + cz*cz, A.Slot, A.SceneIndex });
+            const FVisibleItem Visible{
+                A.R, A.Mat, cx*cx + cy*cy + cz*cz, A.Slot, A.SceneIndex
+            };
+            VisibleScratch.push_back(Visible);
+            if (_Ctx.GpuIndirectMainView && !GpuIndirectDraws(A.R->Mesh, A.R->Material))
+                CpuFallback.push_back(Visible);
         }
         std::sort(VisibleScratch.begin(), VisibleScratch.end(),
+                  [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
+        // O fallback preserva a mesma ordem front-to-back do caminho inteiro. Nao afeta o
+        // G-buffer (que reordena por lote), mas mantem o contrato do z-prepass para as excecoes.
+        std::sort(CpuFallback.begin(), CpuFallback.end(),
                   [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
         LastVisibleCount  = static_cast<u32>(VisibleScratch.size());
         LastOccludedCount = OccludedCount;

@@ -541,6 +541,8 @@ namespace Smile {
                      << Bool(_State.BindlessMaterials) << ",\n";
                 File << "  \"bindlessTransforms\": "
                      << Bool(_State.BindlessTransforms) << ",\n";
+                File << "  \"gpuIndirectMainView\": "
+                     << Bool(_State.GpuIndirectMainView) << ",\n";
                 File << "  \"derivedTemporalTransforms\": "
                      << Bool(_State.DerivedTemporalTransforms) << ",\n";
                 File << "  \"useSunShadows\": "

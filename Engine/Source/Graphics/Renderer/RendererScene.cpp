@@ -120,6 +120,23 @@ namespace Smile {
         return true;
     }
 
+    bool Renderer::GpuIndirectDraws(const FGpuMesh* _Mesh, const FMaterial* _Material) const {
+        if (!UseGpuIndirectMainView || !GpuIndirectMainViewReady() || !_Mesh) return false;
+
+        // A mesma imagem publicada que o classify le. O material e a associacao ORIGINAL do
+        // renderavel, nao o fallback ja resolvido por BuildDrawLists: a meta da instancia tambem
+        // guarda RowOf(Renderable.Material). Consultar outra associacao aqui abriria a particao —
+        // a GPU contaria um objeto e a CPU poderia desenha-lo de novo por outra classe.
+        const FMaterial* PublishedMaterial =
+            _Material && _Material->IsFinalized() ? _Material : &DefaultMaterial;
+        const u32 MaterialRow = MaterialTable.RowOf(PublishedMaterial);
+        const u32 MeshRow     = MeshTable.RowOf(_Mesh);
+        const auto Materials  = MaterialTable.PublishedRows();
+        const auto Meshes     = MeshTable.PublishedRows();
+        if (MaterialRow >= Materials.size() || MeshRow >= Meshes.size()) return false;
+        return GpuIndirectEligible(Materials[MaterialRow].PipelineClass, Meshes[MeshRow].Flags);
+    }
+
     bool Renderer::RepublishMaterialTextures(FMaterial& _Material) {
         if (!Initialized || !_Material.IsFinalized()) return false;
 
@@ -476,6 +493,20 @@ namespace Smile {
         } catch (...) {
             GpuSceneReleaseTables(MaterialTable, MeshTable, InstanceTable, Backend->SRVHeap);
             throw;
+        }
+
+        // Opcional e fail-closed: as tabelas canonicas continuam servindo ao caminho CPU se a
+        // cadeia indireta nao couber. O Setup substitui recursos lidos pela fila e este metodo so
+        // roda sob o dreno que protege os tres Setups acima.
+        try {
+            IndirectMainView.Setup(Backend->Device.Native(), Backend->SRVHeap,
+                                   InstanceTable.Capacity(),
+                                   static_cast<u32>(MeshTable.GeometryPools().size()));
+        } catch (const std::exception& Error) {
+            IndirectMainView.Release(Backend->SRVHeap);
+            UseGpuIndirectMainView = false;
+            LogError(std::string("GPU main view indisponivel; mantendo submissao CPU: ") +
+                     Error.what());
         }
     }
 

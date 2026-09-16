@@ -50,6 +50,9 @@ namespace Smile {
         // o CBV sem que a imagem mudasse.
         u32 TransformBinds        = 0;
         u32 TransformSlotSets     = 0;
+        // Chamadas ExecuteIndirect gravadas para este passe. Draws continua sendo apenas draws
+        // diretos do fallback CPU; a contagem de comandos vem atrasada dos contadores da cadeia.
+        u32 IndirectCalls         = 0;
         // Material que chegou ao draw sem linha na tabela canonica. TEM de ser zero: `RowOf`
         // devolve a linha 0 para desconhecido, e a linha 0 e "renderavel sem material" — cinza
         // 0,7, sem textura. Sem este contador, um material fora da tabela nao daria erro nenhum:
@@ -230,6 +233,25 @@ namespace Smile {
         // acompanhar `InstanceTableRows` em vez de `InstanceRowsDirty`.
         u32 InstanceRowsScanned       = 0;
 
+        // Fase 5. `Active` e a decisao CPU tomada antes da cadeia; os contadores `Gpu*` chegam
+        // atrasados do readback e nunca decidem draw. `Commands` e a capacidade estavel do layout,
+        // enquanto `GpuIndirectCommands` e quantos candidatos o classify aceitou na ultima cadeia
+        // concluida — separar os dois impede chamar capacidade de trabalho executado.
+        bool GpuIndirectMainViewActive = false;
+        u64  GpuIndirectChainsRecorded = 0;
+        u32  GpuIndirectLastReason     = 0;
+        u32  GpuIndirectLastDetail     = 0;
+        u32  GpuIndirectOutputs        = 0;
+        u32  GpuIndirectCommands       = 0;
+        bool GpuIndirectCountersValid  = false;
+        u32  GpuIndirectStatus         = 0;
+        u32  GpuIndirectGpuReason      = 0;
+        u32  GpuIndirectGpuCommands    = 0;
+        u64  GpuIndirectResidentBytes  = 0;
+        u64  GpuIndirectStagingBytes   = 0;
+        u64  GpuIndirectUploadBytes    = 0;
+        u64  GpuIndirectReadbackBytes  = 0;
+
         // Frame de onde esta amostra saiu. O FrameIndex geral ja avancou quando o MCP le o
         // ultimo frame FECHADO, entao sem identidade propria uma automacao correlacionaria CPU
         // e GPU de frames diferentes sem perceber.
@@ -241,6 +263,7 @@ namespace Smile {
             BuildDrawListsMs = CullSortMs = BatchSortMs = ShadowListsMs = SubmitMs = 0.0;
             DrawItems = VisibleItems = OccludedItems = 0;
             ObjectConstantBytes = 0;
+            GpuIndirectMainViewActive = false;
             for (u32 i = 0; i < kPassCount; ++i) Passes[i].Reset();
         }
 

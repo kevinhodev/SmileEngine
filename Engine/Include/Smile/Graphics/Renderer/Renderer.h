@@ -52,6 +52,7 @@
 #include "Smile/Graphics/GI/Reflections.h"
 #include "Smile/Graphics/GI/AmbientOcclusion.h"
 #include "Smile/Graphics/Scene/GpuSceneTables.h"
+#include "Smile/Graphics/Scene/GpuIndirectMainView.h"
 #include "Smile/Graphics/Scene/HiZOcclusion.h"
 #include "Smile/Graphics/PostProcess/PostProcess.h"
 #include "Smile/Graphics/Editor/MaterialPreview.h"
@@ -582,6 +583,14 @@ namespace Smile {
                    RainWetness.OcclusionTransformBindlessReady() &&
                    ObjectPicker.TransformBindlessReady();
         }
+        // Fase 5: a cadeia indireta so pode substituir draws quando os shaders de material e
+        // transform ja estao no caminho bindless, a command signature existe e os buffers da cena
+        // foram montados. O toggle e A/B; uma recusa deixa o frame inteiro no CPU.
+        bool GpuIndirectMainViewReady() const {
+            return UseBindlessMaterials && UseBindlessTransforms && BindlessTransformsReady() &&
+                   IndirectMainView.IsBuilt() && PipelineState.IndirectDrawSignature() != nullptr;
+        }
+        bool GpuIndirectDraws(const FGpuMesh* Mesh, const FMaterial* Material) const;
 
         const FGpuProfiler& GetGpuProfiler() const;
 
@@ -1057,6 +1066,7 @@ namespace Smile {
         // Tabela canonica por slot: meta, bounds e current/previous transform. O ObjectCB ainda e
         // a visao raster CPU-driven; HiZ e os historicos CPU ja derivam desta fonte na Fase 2.
         FGpuSceneInstanceTable InstanceTable;
+        FGpuIndirectMainView   IndirectMainView;
 
         FRaytracingScene RaytracingScene;
         // Recursos neutros quando nao existe volume DDGI.
@@ -1140,6 +1150,8 @@ namespace Smile {
         // e o `BeginBindlessTransforms` conferem, entao a combinacao invalida nao existe em
         // runtime; a escada do A/B fica classico -> material -> material + transform.
         bool              UseBindlessTransforms = false;
+        // Submissao indireta do main view (Fase 5), desligada por default para preservar o A/B.
+        bool              UseGpuIndirectMainView = false;
 
         FHiZOcclusion     HiZ; // occlusion culling HZB (build + teste + readback ring)
         bool              UseOcclusionCulling = true;

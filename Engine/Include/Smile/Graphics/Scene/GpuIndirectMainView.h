@@ -9,8 +9,9 @@
 // ganham um dono de producao: UM conjunto de buffers DEFAULT, staging, cbuffers, tabelas de descritores e
 // readbacks por frame slot, e a gravacao da cadeia inteira na lista da fila direta.
 //
-// Ninguem consome a saida ainda: dividir os renderaveis entre indireto e fallback e gravar os
-// `ExecuteIndirect` no prepass e no G-buffer e a proxima fatia.
+// O z-prepass opaco e o G-buffer consomem a saida. Masked, two-sided, blend e linhas de malha
+// bloqueadas continuam no fallback CPU; os dois bracos usam `GpuIndirectEligible` sobre a mesma
+// imagem publicada das tabelas.
 //
 // ==============================================================================================
 // DUAS FASES, como a publicacao das tabelas

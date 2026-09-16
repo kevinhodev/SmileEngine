@@ -147,6 +147,7 @@ namespace Smile {
         ReportInitProgress("Compilando pipelines de raster", {}, 0.22f);
         PipelineState.Initialize(Backend->Device.Native(),
                                  Backend->Device.SupportsDirectHeapIndexing());
+        IndirectMainView.Initialize(Backend->Device.Native());
         Targets.SceneColorMipPSO.Initialize(Backend->Device.Native(), "WaterSceneColorMip.cs_6_0.cso", false);
 
         ReportInitProgress("Alocando G-Buffer e alvos de cena", {}, 0.40f);
@@ -648,6 +649,10 @@ namespace Smile {
         if (!Initialized) return;
         Backend->FlushDirect();
         CaptureState->Session.Release();
+        // Os descritores e recursos da cadeia pertencem ao mesmo device/heap do backend. Solte-os
+        // enquanto ambos ainda existem; depois de Backend->Shutdown seria tarde para devolver o
+        // range ao heap.
+        IndirectMainView.Release(Backend->SRVHeap);
         Backend->Shutdown();
         Nrd.Shutdown();
         NrdDirect.Shutdown();
