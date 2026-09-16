@@ -870,9 +870,10 @@ namespace Smile {
         // caixa esta completa, o trabalho e proporcional a quem mudou; quando nao esta — bump sem
         // dica, mudanca de estrutura, primeira publicacao —, cai na varredura completa. Nenhum
         // outro campo da cena e tocado.
-        // `FallbackMaterial` e o mesmo que o raster usa para ponteiro nulo ou material ainda nao
-        // finalizado. Sem ele, a instancia publicaria a linha zero enquanto o draw CPU usaria a
-        // linha do DefaultMaterial, abrindo a particao CPU/GPU da Fase 5.
+        // `FallbackMaterial` e o material ATIVO que o raster usa para ponteiro nulo ou material
+        // ainda nao finalizado. Sem ele, a instancia publicaria a linha zero enquanto o draw CPU
+        // usaria outra linha, abrindo a particao CPU/GPU da Fase 5. O chamador deve invalidar a
+        // cena quando trocar o fallback (Renderer::SetMaterial faz isso).
         void PrepareFrame(FScene& Scene, const FGpuMeshTable& Meshes,
                           const FGpuMaterialTable& Materials,
                           const FMaterial* FallbackMaterial = nullptr);

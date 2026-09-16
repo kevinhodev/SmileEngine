@@ -123,12 +123,10 @@ namespace Smile {
     bool Renderer::GpuIndirectDraws(const FGpuMesh* _Mesh, const FMaterial* _Material) const {
         if (!UseGpuIndirectMainView || !GpuIndirectMainViewReady() || !_Mesh) return false;
 
-        // A mesma imagem publicada que o classify le. O material e a associacao ORIGINAL do
-        // renderavel, nao o fallback ja resolvido por BuildDrawLists: a meta da instancia tambem
-        // guarda RowOf(Renderable.Material). Consultar outra associacao aqui abriria a particao —
-        // a GPU contaria um objeto e a CPU poderia desenha-lo de novo por outra classe.
+        // A mesma imagem publicada que o classify le: material autoral finalizado ou o material
+        // ativo para nulo/nao finalizado. BuildDrawLists usa exatamente esta resolucao.
         const FMaterial* PublishedMaterial =
-            _Material && _Material->IsFinalized() ? _Material : &DefaultMaterial;
+            _Material && _Material->IsFinalized() ? _Material : ActiveMaterial;
         const u32 MaterialRow = MaterialTable.RowOf(PublishedMaterial);
         const u32 MeshRow     = MeshTable.RowOf(_Mesh);
         const auto Materials  = MaterialTable.PublishedRows();
@@ -782,7 +780,13 @@ namespace Smile {
     }
 
     void Renderer::SetMaterial(FMaterial* _Material) {
-        ActiveMaterial = (_Material && _Material->IsFinalized()) ? _Material : &DefaultMaterial;
+        FMaterial* Next = (_Material && _Material->IsFinalized()) ? _Material : &DefaultMaterial;
+        if (Next == ActiveMaterial) return;
+        ActiveMaterial = Next;
+        // Instancias com material autoral nulo/nao finalizado herdam esta associacao. Sem o
+        // bump, o produtor incremental manteria o MaterialId antigo mesmo com o raster usando
+        // o novo, e a particao indireto/fallback passaria a consultar duas imagens distintas.
+        if (SceneState) SceneState->Scene.BumpTransformsVersion();
     }
 
     void Renderer::SetUseWater(bool _Use) {

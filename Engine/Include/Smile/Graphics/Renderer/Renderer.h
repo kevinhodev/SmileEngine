@@ -588,6 +588,10 @@ namespace Smile {
         // foram montados. O toggle e A/B; uma recusa deixa o frame inteiro no CPU.
         bool GpuIndirectMainViewReady() const {
             return UseBindlessMaterials && UseBindlessTransforms && BindlessTransformsReady() &&
+                   // SetMaterial e API publica. Um material ativo fora da tabela nao tem linha
+                   // canonica; nesse estado a particao GPU/CPU nao pode ser considerada pronta.
+                   ActiveMaterial && MaterialTable.RowOf(ActiveMaterial) !=
+                       FGpuMaterialTable::kDefaultRow &&
                    IndirectMainView.IsBuilt() && PipelineState.IndirectDrawSignature() != nullptr;
         }
         bool GpuIndirectDraws(const FGpuMesh* Mesh, const FMaterial* Material) const;

@@ -838,7 +838,7 @@ namespace Smile {
         // aloca ou pode lancar — diffs, reservas dos shadows, portas. Uma excecao aqui sai com a lista
         // fechada e nenhum shadow avancado. Nada disto escreve o staging do slot: ele so e escrito na
         // fase 2, depois do BeginFrame, que espera a fence que o libera.
-        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable, &DefaultMaterial);
+        InstanceTable.PrepareFrame(SceneState->Scene, MeshTable, MaterialTable, ActiveMaterial);
         if (const u32 Recusa = GpuScenePreparePublication(MaterialTable, MeshTable, InstanceTable,
                                                            Backend->DirectQueue.List());
             Recusa != GpuScenePublicationOk) {

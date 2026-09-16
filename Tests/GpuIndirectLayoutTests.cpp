@@ -357,9 +357,10 @@ namespace {
         // gravacao das tres — contada, porque nao pode alocar —, o layout, e a leitura das tres tabelas
         // — as quatro colunas das instancias — no FIM da lista, com a imagem esperada tirada das linhas
         // publicadas neste instante.
-        bool Gravar(u32 _Slot, bool _ListaRecusada = false) {
+        bool Gravar(u32 _Slot, bool _ListaRecusada = false,
+                    const FMaterial* _FallbackMaterial = nullptr) {
             ID3D12GraphicsCommandList* L = _ListaRecusada ? nullptr : List[_Slot].Get();
-            Instances.PrepareFrame(Scene, Meshes, Materials);
+            Instances.PrepareFrame(Scene, Meshes, Materials, _FallbackMaterial);
             Publicacao = GpuScenePreparePublication(Materials, Meshes, Instances, L);
             if (Publicacao != GpuScenePublicationOk) return false;
             if (!L) {
@@ -460,9 +461,9 @@ namespace {
 
         // Um frame, gravado e executado antes do seguinte. Sem frame, o slot nao anda — o renderer
         // aborta antes do BeginFrame, que e quem o avanca.
-        void Frame(bool _ListaRecusada = false) {
+        void Frame(bool _ListaRecusada = false, const FMaterial* _FallbackMaterial = nullptr) {
             const u32 Slot = ProximoSlot;
-            if (!Gravar(Slot, _ListaRecusada)) return;
+            if (!Gravar(Slot, _ListaRecusada, _FallbackMaterial)) return;
             ProximoSlot = (ProximoSlot + 1u) % FGpuTableStorage::kFrameSlots;
             Executar(Slot);
         }
@@ -734,6 +735,23 @@ int main() try {
             "a meta publicada cobre a tabela inteira");
     CheckEq(static_cast<u32>(G.Materials.PublishedRows().size()), 4u,
             "o material publicado tem a linha default e os tres");
+
+    // A mesma resolucao que o renderer usa: ponteiro autoral nulo nao significa linha zero quando
+    // existe material ativo. Se a tabela publicasse zero, o classify poderia emitir com uma classe
+    // e o fallback CPU desenhar com outra. Usar o mesmo material de antes mantem o layout identico e
+    // isola a propriedade sob teste.
+    {
+        FRenderable& R = G.R(G.IdOpaco[0]);
+        R.Material = nullptr;
+        G.Scene.BumpTransformsVersion(G.Indice(G.IdOpaco[0]));
+        G.Frame(false, &G.Opaco);
+        const u32 Slot = R.GpuHandle.Slot;
+        CheckEq(G.Instances.PublishedMeta()[Slot].MaterialId, G.Materials.RowOf(&G.Opaco),
+                "material nulo publica a linha do fallback raster");
+        R.Material = &G.Opaco;
+        G.Scene.BumpTransformsVersion(G.Indice(G.IdOpaco[0]));
+        G.Frame();
+    }
 
     // --- os eventos que NAO recontam ------------------------------------------------------------
     for (u32 I = 0; I < 4; ++I) G.Frame();
