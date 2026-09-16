@@ -1645,17 +1645,33 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > (`ClassifyCanary`, `ExpandCanary`, `ExpandAnchor`). O frame zerado é um defeito visível; a perda
 > parcial não era.
 
+> **Estado em 2026-09-15 — FASE 5 FECHADA.** O main view indireto está integrado no z-prepass
+> opaco e no G-buffer, com A/B no mesmo binário e desligado por default. A cadeia é gravada antes dos
+> passes, e a CPU materializa durante o culling apenas o complemento que ela ainda precisa submeter;
+> masked, two-sided, blend, terreno, água e helpers continuam no fallback. Material nulo ou ainda não
+> finalizado publica a mesma linha do material ativo que o raster usa; `SetMaterial` invalida os
+> metadados, e o indireto só fica disponível quando esse material possui linha canônica. Assim os dois
+> braços consultam a mesma partição.
+>
+> O protocolo 14 publica toggle efetivo, chamadas indiretas por passe, comandos, status/canários
+> atrasados e footprint. O A/B OFF→ON→OFF versionado passou na Emerald e na sintética de 1M sem
+> reload. Na 1M, os draws CPU do G-buffer caíram de 763.408 para 177.578 (as exceções), a GPU
+> confirmou 750.000 comandos, `SubmitMs` caiu de 243,0 para 40,2 ms e `BatchSortMs` de 54,8 para
+> 4,98 ms. `gpuStatus=1`, `gpuReason=0`; a imagem ON ficou dentro do próprio piso OFF→OFF nas duas
+> cenas. Evidência, limitações e reprodução estão em
+> [GPU-DRIVEN-PHASE5-PROGRESS.md](GPU-DRIVEN-PHASE5-PROGRESS.md).
+
 ### Trabalho
 
-- definir command signature e layout de args/count;
-- pré-calcular batch IDs por pass/PSO/geometry class;
-- implementar count → scatter → args reutilizando o padrão da água, com o offset de cada lote vindo
+- [x] definir command signature e layout de args/count;
+- [x] pré-calcular batch IDs por pass/PSO/geometry class;
+- [x] implementar count → scatter → args reutilizando o padrão da água, com o offset de cada lote vindo
   de regiões que a CPU dimensiona (ver a decisão acima);
-- compactar `InstanceInfo`/visible slots;
-- executar depth e GBuffer por grupos de geometry page/PSO;
-- adicionar modo A/B CPU versus GPU-driven no mesmo build;
-- incluir canário/guard regions e contadores de out-of-bounds;
-- manter transparentes, terrain, water, editor helpers e unsupported no fallback.
+- [x] compactar `InstanceInfo`/visible slots;
+- [x] executar depth e GBuffer por grupos de geometry page/PSO;
+- [x] adicionar modo A/B CPU versus GPU-driven no mesmo build;
+- [x] incluir canário/guard regions e contadores de out-of-bounds;
+- [x] manter transparentes, terrain, water, editor helpers e unsupported no fallback.
 
 ### Arquivos prováveis
 
@@ -1667,11 +1683,11 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 
 ### Gate de saída
 
-- imagem e contagens coincidem com o caminho CPU para opaque suportado;
-- argumentos, count buffer e instance ranges não ultrapassam capacidade;
-- CPU submission cai de proporcional a objetos para proporcional a classes/pages;
-- nenhuma readback decide a draw;
-- alternar A/B no mesmo bookmark não exige reload da cena.
+- [x] imagem e contagens coincidem com o caminho CPU para opaque suportado;
+- [x] argumentos, count buffer e instance ranges não ultrapassam capacidade;
+- [x] CPU submission cai de proporcional a objetos para proporcional a classes/pages + exceções;
+- [x] nenhuma readback decide a draw;
+- [x] alternar A/B no mesmo bookmark não exige reload da cena.
 
 ## Fase 6 — Culling GPU e HiZ residente
 
