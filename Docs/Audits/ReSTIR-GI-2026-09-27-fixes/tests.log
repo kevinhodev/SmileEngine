@@ -1,0 +1,34 @@
+Test project D:/Engines/SmileEngine/build
+    Start  4: Smile.RadianceCacheMath
+1/7 Test  #4: Smile.RadianceCacheMath ..........   Passed    0.03 sec
+    Start 18: Smile.TemporalTransformWarp
+2/7 Test #18: Smile.TemporalTransformWarp ......   Passed    0.11 sec
+    Start 21: Smile.DescriptorLifetime
+3/7 Test #21: Smile.DescriptorLifetime .........   Passed    0.07 sec
+    Start 68: Smile.SlotKeyedHistory
+4/7 Test #68: Smile.SlotKeyedHistory ...........   Passed    0.03 sec
+    Start 69: Smile.TemporalIdentityTable
+5/7 Test #69: Smile.TemporalIdentityTable ......   Passed    0.04 sec
+    Start 70: Smile.TemporalResolveWarp
+6/7 Test #70: Smile.TemporalResolveWarp ........   Passed    0.08 sec
+    Start 71: Smile.ReSTIRGIRegressionWarp
+7/7 Test #71: Smile.ReSTIRGIRegressionWarp .....   Passed    0.77 sec
+
+100% tests passed, 0 tests failed out of 7
+
+Label Time Summary:
+abi               =   0.11 sec*proc (1 test)
+gi                =   0.80 sec*proc (2 tests)
+gpu-driven        =   0.33 sec*proc (5 tests)
+graphics          =   0.10 sec*proc (2 tests)
+identity          =   0.15 sec*proc (3 tests)
+lifetime          =   0.07 sec*proc (1 test)
+materials         =   0.07 sec*proc (1 test)
+math              =   0.03 sec*proc (1 test)
+radiance-cache    =   0.03 sec*proc (1 test)
+restir            =   0.77 sec*proc (1 test)
+scene             =   0.26 sec*proc (4 tests)
+temporal          =   0.11 sec*proc (1 test)
+warp              =   1.02 sec*proc (4 tests)
+
+Total Test time (real) =   1.35 sec

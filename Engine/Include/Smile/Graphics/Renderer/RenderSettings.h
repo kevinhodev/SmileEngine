@@ -274,6 +274,7 @@ namespace Smile {
         // e nao no setter, porque entre o pedido e a tabela nova passam varios frames — e com a
         // compactacao o dominio muda de tamanho, entao o indice do reservoir muda de significado.
         void NotifyMeshDomainChanged();
+        void NotifyGIMeshCoverageChanged();
 
 
         // Perfil unico de epsilons de raio. Invalidacao PESADA: os reservoirs guardam Lo/x2

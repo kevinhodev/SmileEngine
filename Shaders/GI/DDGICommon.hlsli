@@ -124,11 +124,8 @@ float3 DDGI_RayDirection(int rayIdx, int numRays, uint frame, uint probeIdx) {
     return normalize(mul(rot, DDGI_SphericalFibonacci((float)rayIdx, (float)numRays)));
 }
 
-float2 DDGI_OctEncode(float3 n) {
-    n /= (abs(n.x) + abs(n.y) + abs(n.z));
-    float2 o = (n.z >= 0.0f) ? n.xy : ((1.0f - abs(n.yx)) * sign(n.xy));
-    return o; 
-}
+#include "../Octahedral.hlsli"
+float2 DDGI_OctEncode(float3 n) { return Smile_OctEncode(n); }
 
 float3 DDGI_OctDecode(float2 f) {
     float3 n = float3(f.x, f.y, 1.0f - abs(f.x) - abs(f.y));

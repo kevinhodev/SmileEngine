@@ -319,6 +319,8 @@ smile_compile_shader(Gizmo/LightIcon.vs.hlsl              vs_6_0 main SHADER_OUT
 smile_compile_shader(Gizmo/LightIcon.ps.hlsl              ps_6_0 main SHADER_OUTPUTS)
 
 
+smile_compile_shader(GI/ReSTIRGIRegressionProbe.cs.hlsl cs_6_6 main SHADER_OUTPUTS)
+
 # Lista do IDE derivada, nao mantida a mao: todos os .hlsl registrados acima + todos os .hlsli
 # da arvore. A lista manual anterior tinha ~150 linhas e ja divergira em 14 shaders e 9 headers.
 smile_shader_target_sources(SHADER_IDE_SOURCES)

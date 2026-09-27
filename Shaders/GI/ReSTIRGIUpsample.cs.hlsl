@@ -2,6 +2,7 @@
 // Profundidade e normal rejeitam histórico; o bilateral cobre pixels inválidos.
 
 #include "DDGICommon.hlsli"
+#include "ReSTIRGIReconstruction.hlsli"
 
 cbuffer ReSTIRCB : register(b0) {
     row_major float4x4 InvViewProj;
@@ -189,7 +190,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                 const bool normalValid = previousNormalValid &&
                                          abs(dot(currentNormal, previousNormal)) >= 0.80f;
                 if (depthValid && normalValid) {
-                    GIResolved[px] = GIPrevious.Load(int3(previousPx, 0));
+                    GIResolved[px] = ReSTIRGI_UpdateReconstruction(
+                        GIPrevious.Load(int3(previousPx, 0)), SpatialFallback(px, z, gb));
                     return;
                 }
             }

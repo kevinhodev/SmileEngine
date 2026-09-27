@@ -15,7 +15,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 SunDirIntensity;
     float4 SunColor;
     float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
-    float4 ShadeParams;             // x=livre, y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
+    float4 ShadeParams;             // x=MIS visibility, y=albedoLOD, z=fireflyMaxLuma, w=validateInterval
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=spatialRadius, y=spatialCount, z=spatial(0/1), w=normalReject
     float4 JitterParams;            // xy=jitter delta, z=nº luzes, w=maxAge (0 desliga)
@@ -45,6 +45,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 ResolutionParams;         // x=escala (1/2), yz=fase 2x2, w=half-res
     float4 EnvironmentSky;
     float4 EnvironmentGround;
+    float4 MeshLightCoverage;
 };
 
 #include "../RayOffset.hlsli"
@@ -75,6 +76,18 @@ SamplerState LinearWrap  : register(s1);
 
 #include "HitShading.hlsli"
 #include "ReSTIRReservoir.hlsli"
+#include "ReSTIRGIVisibility.hlsli"
+
+#include "../Lighting/MeshLightCoverage.hlsli"
+
+bool DirectLightingCoversHit(uint instanceId, uint triangleIndex) {
+    if (MeshLightCoverage.z <= 0.0f) return false;
+    StructuredBuffer<FMeshLightTask> tasks =
+        ResourceDescriptorHeap[NonUniformResourceIndex((uint)MeshLightCoverage.x)];
+    StructuredBuffer<FTriangleLightGPU> lights =
+        ResourceDescriptorHeap[NonUniformResourceIndex((uint)MeshLightCoverage.y)];
+    return MeshLight_CoversHit(tasks, lights, (uint)MeshLightCoverage.z, instanceId, triangleIndex);
+}
 
 // Fonte do candidato novo. DebugParams.y < 0 desliga.
 void WriteSourceViz(uint2 px, uint kind) {
@@ -212,7 +225,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                           q.CommittedTriangleBarycentrics(),
                                           q.CommittedWorldToObject3x4(),
                                           RT_TlasToWorld(ray.Origin, P.TlasOrigin),
-                                          ray.Direction, hitDist, P, sd, srcKind);
+                                          ray.Direction, hitDist, P, sd, srcKind,
+                                          DirectLightingCoversHit(q.CommittedInstanceID(),
+                                                                 q.CommittedPrimitiveIndex()));
         WriteSourceViz(px, srcKind);
     } else {
         hitDist = TraceParams.y;
@@ -365,7 +380,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                                       vq.CommittedTriangleBarycentrics(),
                                                       vq.CommittedWorldToObject3x4(),
                                                       RT_TlasToWorld(vray.Origin, P.TlasOrigin),
-                                                      vray.Direction, t, P, vsd);
+                                                      vray.Direction, t, P, vsd,
+                                                      DirectLightingCoversHit(vq.CommittedInstanceID(),
+                                                                             vq.CommittedPrimitiveIndex()));
                                 // Atualiza a geometria aceita pela tolerância.
                                 prev.x2 = RT_TlasToWorld(vray.Origin, P.TlasOrigin) +
                                           vray.Direction * t;
@@ -439,6 +456,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     }
 
     float3 gi = ResResolve(r, x1, N, ShadeParams.z);
+    // Initial candidates were already traced. Spatial performs the final test when active.
+    if (ReuseParams.z > 0.5f && SpatialParams.z < 0.5f && tempPicked && r.W > 0.0f &&
+        !ReSTIRGI_Visible(x1, N, r.x2)) gi = 0.0f;
 
     // O NRD recebe a distância da amostra vencedora.
     float selDist = (r.wSum > 0.0f) ? length(r.x2 - x1) : hitDist;

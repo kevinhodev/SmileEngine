@@ -722,6 +722,12 @@ namespace Smile {
         return R.MeshLights.GetCompactSupport();
     }
 
+    void FRenderSettings::NotifyGIMeshCoverageChanged() {
+        // First-hit emission changed ownership between DI and GI. Keep the shared
+        // world cache intact: it always stores full radiance for higher bounces.
+        Invalidate(Dom::IndirectSurfaceRoute);
+    }
+
     void FRenderSettings::NotifyMeshDomainChanged() {
         // Mesma mascara dos knobs de amostragem: o reservoir guarda indice, o NRD direto acumula
         // sobre ele e o resolve sobre o resultado.
@@ -884,13 +890,8 @@ namespace Smile {
     void FRenderSettings::SetGIVisibility(bool _V) {
         if (_V == R.ReSTIRGI.GetVisibility()) return;
         R.ReSTIRGI.SetVisibility(_V);
-        // O ReSTIRGI.h esta certo ao dizer que isto NAO toca o reservoir: o Visibility so atua
-        // no Pass B e no resolve final, e o espacial nao realimenta o temporal. Por isso o
-        // ReSTIRGI fica de fora — limpar reservoir aqui seria custo puro.
-        //
-        // Mas e modo PERSISTENTE que muda a radiancia resolvida, e o NRD acumula sobre ela (e o
-        // RR/TAA sobre o resultado). Pelo mesmo criterio do SetGIBackfacePolicy — "o clear dos
-        // reservoirs sozinho nao basta" — o que acumula DEPOIS do resolve precisa cair.
+        // Final visibility changes resolved lighting, not stored reservoir weights.
+        // The setter also invalidates the half-res reconstruction history.
         Invalidate(Dom::ScreenResolve);
     }
 

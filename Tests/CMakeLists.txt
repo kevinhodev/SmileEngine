@@ -1147,3 +1147,15 @@ set_tests_properties(Smile.TemporalResolveWarp PROPERTIES
     LABELS "scene;identity;gpu-driven;warp"
     TIMEOUT 180
 )
+add_executable(SmileReSTIRGIRegressionWarpTests ReSTIRGIRegressionWarpTests.cpp)
+target_compile_features(SmileReSTIRGIRegressionWarpTests PRIVATE cxx_std_20)
+target_include_directories(SmileReSTIRGIRegressionWarpTests PRIVATE ${PROJECT_SOURCE_DIR}/Engine/Include)
+target_compile_definitions(SmileReSTIRGIRegressionWarpTests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN
+    SMILE_RESTIR_GI_PROBE_CSO="${SMILE_SHADER_OUTPUT_DIR}/ReSTIRGIRegressionProbe.cs_6_6.cso")
+target_link_libraries(SmileReSTIRGIRegressionWarpTests PRIVATE d3d12 dxgi)
+add_dependencies(SmileReSTIRGIRegressionWarpTests Shaders)
+set_target_properties(SmileReSTIRGIRegressionWarpTests PROPERTIES
+    AUTOMOC OFF AUTOUIC OFF AUTORCC OFF FOLDER "Tests")
+add_test(NAME Smile.ReSTIRGIRegressionWarp COMMAND SmileReSTIRGIRegressionWarpTests)
+set_tests_properties(Smile.ReSTIRGIRegressionWarp PROPERTIES LABELS "gi;restir;warp" TIMEOUT 180)

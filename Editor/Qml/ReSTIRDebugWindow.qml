@@ -798,8 +798,8 @@ Rectangle {
                                 onToggled: root.restirModel.ToggleGI()
                             }
                             C.SwitchRow {
-                                label: "Reuso de visibilidade"
-                                hint: "1 shadow ray"
+                                label: "Visibilidade final"
+                                hint: "desligado permite vazamentos"
                                 checked: root.gi.visibility || false
                                 interactive: root.gi.enabled || false
                                 onToggled: root.restirModel.ToggleGIVisibility()
@@ -963,8 +963,8 @@ Rectangle {
                 }
                 C.SectionHeader { label: "REUSO E VALIDAÇÃO" }
                 C.SwitchRow {
-                    label: "Reuso de visibilidade"
-                    hint: "shadow ray de conexão"
+                    label: "Visibilidade final"
+                    hint: "conexão temporal e espacial"
                     checked: root.gi.visibility || false
                     interactive: root.gi.enabled || false
                     onToggled: root.restirModel.ToggleGIVisibility()

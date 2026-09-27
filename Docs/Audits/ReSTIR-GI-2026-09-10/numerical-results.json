@@ -1,0 +1,233 @@
+{
+  "kind": "analytic CPU fixtures; not GPU execution or image quality metrics",
+  "results": [
+    {
+      "name": "initial cosine estimator = E/pi",
+      "samples": 99999,
+      "maxAbsoluteError": 8.881784197001252e-16
+    },
+    {
+      "name": "Jacobian agrees with solid angle area conversion",
+      "jacobian": 0.25,
+      "areaOracle": 0.25
+    },
+    {
+      "name": "MIS same-domain identity",
+      "mis": 0.19819819819819817,
+      "classic": 0.19819819819819817,
+      "absoluteError": 0
+    },
+    {
+      "name": "finite RIS expectation includes zero-valued proposals",
+      "actual": 11,
+      "expected": 11
+    },
+    {
+      "name": "half-res moving surface can miss every fresh phase",
+      "frames": 256,
+      "freshUpdates": 0,
+      "track": [
+        {
+          "frame": 0,
+          "x": 101,
+          "phaseX": 0,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 1,
+          "x": 102,
+          "phaseX": 1,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 2,
+          "x": 103,
+          "phaseX": 0,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 3,
+          "x": 104,
+          "phaseX": 1,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 4,
+          "x": 105,
+          "phaseX": 0,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 5,
+          "x": 106,
+          "phaseX": 1,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 6,
+          "x": 107,
+          "phaseX": 0,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 7,
+          "x": 108,
+          "phaseX": 1,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 8,
+          "x": 109,
+          "phaseX": 0,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 9,
+          "x": 110,
+          "phaseX": 1,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 10,
+          "x": 111,
+          "phaseX": 0,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 11,
+          "x": 112,
+          "phaseX": 1,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 12,
+          "x": 113,
+          "phaseX": 0,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 13,
+          "x": 114,
+          "phaseX": 1,
+          "phaseY": 0,
+          "updated": false
+        },
+        {
+          "frame": 14,
+          "x": 115,
+          "phaseX": 0,
+          "phaseY": 1,
+          "updated": false
+        },
+        {
+          "frame": 15,
+          "x": 116,
+          "phaseX": 1,
+          "phaseY": 1,
+          "updated": false
+        }
+      ]
+    },
+    {
+      "name": "unoccluded resolve differs from visible transport",
+      "noVisibility": 0.954929658551372,
+      "physical": 0
+    },
+    {
+      "name": "deferred can add atmosphere and ReSTIR together",
+      "useGI": false,
+      "useReSTIR": true,
+      "useAtmo": true,
+      "addedAtmosphere": true,
+      "addedReSTIR": true
+    },
+    {
+      "name": "default input clamp prevents high-radiance reference convergence",
+      "incidentRadiance": 16,
+      "rawCap": 4,
+      "nrdCap": 8,
+      "rawRelativeLoss": 0.75,
+      "nrdRelativeLoss": 0.5
+    },
+    {
+      "name": "RGB9E5 representable 0",
+      "value": 0,
+      "decoded": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "RGB9E5 representable 5.960464477539063e-8",
+      "value": 5.960464477539063e-8,
+      "decoded": [
+        5.960464477539063e-8,
+        5.960464477539063e-8,
+        5.960464477539063e-8
+      ]
+    },
+    {
+      "name": "RGB9E5 representable 1",
+      "value": 1,
+      "decoded": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "RGB9E5 representable 4",
+      "value": 4,
+      "decoded": [
+        4,
+        4,
+        4
+      ]
+    },
+    {
+      "name": "RGB9E5 representable 8",
+      "value": 8,
+      "decoded": [
+        8,
+        8,
+        8
+      ]
+    },
+    {
+      "name": "RGB9E5 representable 65408",
+      "value": 65408,
+      "decoded": [
+        65408,
+        65408,
+        65408
+      ]
+    },
+    {
+      "name": "RGB9E5 small channels may vanish",
+      "color": [
+        8,
+        0.001,
+        0.001
+      ],
+      "decoded": [
+        8,
+        0,
+        0
+      ]
+    }
+  ]
+}

@@ -30,7 +30,7 @@ namespace Smile {
         Vec4  SunColor;        // rgb = cor do sol, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                                // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
-        Vec4  ShadeParams;     // x = livre, y = albedoLOD, z = fireflyMax, w = validateInterval
+        Vec4  ShadeParams;     // x = MIS visibility, y = albedoLOD, z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
@@ -65,6 +65,7 @@ namespace Smile {
         Vec4 ResolutionParams;  // x=escala (1/2), yz=fase 2x2, w=half-res efetivo
         Vec4 EnvironmentSky;
         Vec4 EnvironmentGround;
+        Vec4 MeshLightCoverage; // x=task SRV, y=original light SRV, z=published task count
     };
     static_assert(offsetof(ReSTIRGIConstants, GICascades) == 560,
                   "bloco de cascatas anexado ao fim do cbuffer (ver Renderer.h)");
@@ -77,6 +78,9 @@ namespace Smile {
     static_assert(offsetof(ReSTIRGIConstants, EnvironmentSky) == 736,
                   "o ambiente deve permanecer anexado ao fim do ReSTIRCB");
 
+
+    static_assert(offsetof(ReSTIRGIConstants, MeshLightCoverage) == 768,
+                  "mesh coverage must follow the environment constants");
 
     // Final gather difuso: trace/temporal, reuso espacial e resolve.
     // Reservoir {x2,n2,Lo,M,W} em duas texturas ping-pong.
@@ -113,6 +117,9 @@ namespace Smile {
                             const Mat44& View, const Vec2& JitterDeltaUv,
                             u32 PrevSurfaceSlot,
                             u32 PunctualLightCount = 0);
+
+        // Returns true when path ownership changes, so downstream histories can reset too.
+        bool SetMeshLightCoverage(u32 TaskSlot, u32 LightSlot, u32 TaskCount);
 
         // Atualiza t13 na tabela versionada da paridade corrente.
         void SetPunctualLightsSRV(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
@@ -182,7 +189,8 @@ namespace Smile {
         // O passe espacial não realimenta o histórico temporal.
         void SetSpatial(bool V)    { Spatial = V; }
         bool GetSpatial() const    { return Spatial; }
-        void SetVisibility(bool V) { Visibility = V; }
+        void SetVisibility(bool V) { Visibility = V; ReconstructionHistoryValid = false; }
+        void SetMISVisibility(bool V) { MISVisibility = V; ReconstructionHistoryValid = false; }
         bool GetVisibility() const { return Visibility; }
         void SetBoilingStrength(f32 V) { BoilingStrength = V; }
         f32  GetBoilingStrength() const { return BoilingStrength; }
@@ -281,6 +289,7 @@ namespace Smile {
         bool NeedsClear  = false;
         bool ReconstructionHistoryValid = false;
         bool Initialized = false;
+        Vec4 MeshLightCoverageParams{};
         bool Ready       = false;
         bool HalfRes     = false; // experimental; default OFF
 
@@ -290,8 +299,8 @@ namespace Smile {
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
         bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
-        bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
-                                      // visibilidade nos pesos MIS (até K raios)
+        bool MISVisibility  = false;  // optional visibility in the spatial MIS denominator
+        bool Visibility     = true;   // final shading visibility, with or without spatial reuse
         f32  MCap           = 20.0f;
         f32  BoilingStrength = 0.0f; // 0 desliga
         bool TemporalBiasCorr = false;

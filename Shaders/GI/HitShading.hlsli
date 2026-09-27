@@ -109,7 +109,8 @@ float3 ShadeSky(float3 dir, float3 sunDir, float skyIntensity, FHitShadeParams P
 // sites que nao querem a fonte nao mudam uma linha, e o DXC elimina o `out` nao usado.
 float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObject,
                          float3 rayOrigin, float3 rayDir, float hitDist,
-                         FHitShadeParams P, out float outSignedDist, out uint outSource) {
+                         FHitShadeParams P, out float outSignedDist, out uint outSource,
+                         bool excludeDirectEmission = false) {
     InstanceGeo geo = Instances[instId];
 
     const FHitSurface S = PT_LoadHitSurface(geo, tri, bary, worldToObject,
@@ -133,7 +134,10 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
     // com o `ddgiFallback`, poriam nele um piso permanente e a curva do gate de saida da Fase 5
     // pareceria travada.
     bool srcIneligible = false;
-    {
+    // The shared cache stores scattered + emitted radiance. For a first-hit emitter
+    // owned by DI, shade scattering explicitly; an aggregate cache estimate cannot
+    // be split by subtracting the material emission. Higher bounces keep full radiance.
+    if (!excludeDirectEmission) {
         const FRCQueryResult Q = RC_QueryEx(P.Cache, S.Pos, S.CacheN, -Path.Dir,
                                             Path.SegmentLength, Path.RayRoughness);
         if (RC_QueryHit(Q)) {
@@ -204,17 +208,17 @@ float3 ShadeSurfaceHitEx(uint instId, uint tri, float2 bary, float3x4 worldToObj
                                 ? materialDirection * shadedY / totalY : 0.0f;
     RC_Update(P.Cache, S.Pos, S.CacheN, outRadiance, -Path.Dir, directionWeight);
 
-    return outRadiance;
+    return excludeDirectEmission ? directLighting + indirectLighting : outRadiance;
 }
 
 // Encaminhador: a assinatura historica, intacta para os cinco call sites que nao querem a fonte.
 // O `out` descartado nao custa nada — sem consumidor, o DXC elimina as escritas.
 float3 ShadeSurfaceHit(uint instId, uint tri, float2 bary, float3x4 worldToObject,
                        float3 rayOrigin, float3 rayDir, float hitDist,
-                       FHitShadeParams P, out float outSignedDist) {
+                       FHitShadeParams P, out float outSignedDist, bool excludeDirectEmission = false) {
     uint ignoredSource;
     return ShadeSurfaceHitEx(instId, tri, bary, worldToObject, rayOrigin, rayDir, hitDist, P,
-                             outSignedDist, ignoredSource);
+                             outSignedDist, ignoredSource, excludeDirectEmission);
 }
 
 #endif

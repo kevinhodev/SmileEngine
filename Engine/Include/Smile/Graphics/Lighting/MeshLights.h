@@ -165,6 +165,10 @@ namespace Smile {
         // consumidor nao precisa saber qual dos dois regimes esta valendo — o que muda e a
         // CONTAGEM publicada pelo LightCount, nao o descritor.
         u32  LightSRVSlot()     const { return CompactLightsSRV; }
+        // Hit coverage uses the original triangle domain, independent of compaction.
+        u32 CoverageTaskSRV() const { return TaskSRV; }
+        u32 CoverageLightSRV() const { return LightsSRV; }
+        u32 CoverageTaskCount() const { return LightCount() > 0u ? NumTasks : 0u; }
         // O descritor que o Pass A AMOSTRA — a copia em VRAM, nao o staging em upload. Ver o bloco
         // de RESIDENCIA abaixo.
         u32  AliasSRVSlot()     const { return AliasDefaultSRV; }

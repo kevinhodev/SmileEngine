@@ -484,7 +484,7 @@ float4 main(VSOutput input) : SV_Target {
     bool UseReSTIR     = ReflectionParams.w > 0.5f; // ReSTIR GI ativo -> substitui o difuso do DDGI
     bool UseAtmoAmbient = SkyAmbientColor.w > 0.5f;
 
-    if (UseAtmoAmbient && !UseGI) {
+    if (UseAtmoAmbient && !(UseGI || UseReSTIR)) {
         float3 ambientCol = SkyAmbientForNormal(N);
         // Sem (1 - Metallic) aqui: ele ja esta no DiffuseColor (convencao em BRDF.hlsli).
         Ambient += DiffuseColor * ambientCol * AODiffuse * GroundAmbientColor.w;
@@ -507,7 +507,7 @@ float4 main(VSOutput input) : SV_Target {
         float3 SpecularIBL = Prefiltered * (F * BRDF.x + BRDF.y) * SpecAmbientScale;
 
         float3 IBLContrib = SpecularIBL * AOSpec;
-        if (!(UseGI || UseAtmoAmbient)) IBLContrib += DiffuseIBL * AODiffuse;
+        if (!(UseGI || UseReSTIR || UseAtmoAmbient)) IBLContrib += DiffuseIBL * AODiffuse;
         Ambient += IBLContrib * IBLParams.x;
     }
 

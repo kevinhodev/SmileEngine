@@ -12,11 +12,8 @@
 // arredondamento fica por conta do hardware). O ID 3 e reservado ao guide da agua.
 #define SMILE_SHADINGMODEL_COUNT      4u
 
-float2 GBuffer_OctEncode(float3 n) {
-    n /= (abs(n.x) + abs(n.y) + abs(n.z));
-    float2 o = (n.z >= 0.0f) ? n.xy : ((1.0f - abs(n.yx)) * sign(n.xy));
-    return o * 0.5f + 0.5f;
-}
+#include "Octahedral.hlsli"
+float2 GBuffer_OctEncode(float3 n) { return Smile_OctEncode(n) * 0.5f + 0.5f; }
 
 float3 GBuffer_OctDecode(float2 f) {
     f = f * 2.0f - 1.0f;

@@ -306,6 +306,12 @@ namespace Smile {
         }
 
         if (Modes.ReSTIRGIActive) {
+            const bool DIMeshActive = Modes.ReSTIRDIActiveFrame &&
+                ReSTIRDI.GetMeshLightsInPool() && ReSTIRDI.GetMeshCandidates() > 0u;
+            if (ReSTIRGI.SetMeshLightCoverage(MeshLights.CoverageTaskSRV(),
+                    MeshLights.CoverageLightSRV(),
+                    DIMeshActive ? MeshLights.CoverageTaskCount() : 0u))
+                Settings().NotifyGIMeshCoverageChanged();
             ReSTIRGI.SetPunctualLightsSRV(Backend->Device.Native(), Backend->SRVHeap, GILightSRVSlot[FrameSlot]);
             // O x1 do reuso temporal vem do historico de superficie do frame ANTERIOR (o reservoir
             // deixou de guardar o ponto visivel). Mesma convencao do ReSTIR DI e das reflexoes:

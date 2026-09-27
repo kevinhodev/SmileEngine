@@ -50,12 +50,6 @@ cbuffer ReSTIRCB : register(b0) {
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB
 
-// Garante TMax > TMin nos raios de visibilidade.
-float VisRayMinLength() {
-    const float kGuard = 0.01f;
-    return RayEpsB.y + RayEpsB.z + kGuard;
-}
-
 RaytracingAccelerationStructure Scene  : register(t0);
 // t3/t4 são fillers do layout de descriptors.
 Texture2D<float4>               Res0   : register(t1); // x2.xyz, W
@@ -71,6 +65,7 @@ SamplerState LinearWrap  : register(s1);
 
 #include "RTAlphaTest.hlsli"
 #include "ReSTIRReservoir.hlsli"
+#include "ReSTIRGIVisibility.hlsli"
 
 // Reconstrói x1 do depth em vez de armazená-lo no reservoir.
 float3 WorldFromDepth(int2 p, float deviceZ) {
@@ -181,59 +176,22 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         for (int cd = 0; cd < candCount; ++cd) {
             float ps = TargetPHat(candX1[cd], candN1[cd], rs.x2, rs.Lo);
             // O domínio próprio é testado pela shading visibility abaixo.
-            if (ps > 0.0f && cd > 0 && ReuseParams.z > 0.5f) {
-                float3 mDir = SafeRayDir(rs.x2 - candX1[cd], candN1[cd]); // p/ o termo angular
-                float3 morg = OffsetRayGBuffer(candX1[cd], candN1[cd], mDir,
-                                               length(CameraPos.xyz - candX1[cd]));
-                float3 mToS = rs.x2 - morg;
-                float  mLen = length(mToS);
-                if (mLen > VisRayMinLength()) { // mesmas folgas do shading visibility
-                    RayDesc mray;
-                    mray.Origin    = RT_WorldToTlas(morg, CameraPos.xyz);
-                    mray.Direction = mToS / mLen;
-                    mray.TMin      = RayEpsB.y;
-                    mray.TMax      = mLen - RayEpsB.z;
-                    // Teste de oclusão sem culling.
-                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                             RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> mq;
-                    mq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                                      SMILE_RT_MASK_GATHER, mray);
-                    SMILE_RT_PROCEED(mq)
-                    if (mq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ps = 0.0f;
-                }
-            }
+            if (ps > 0.0f && cd > 0 && ShadeParams.x > 0.5f &&
+                !ReSTIRGI_Visible(candX1[cd], candN1[cd], rs.x2)) ps = 0.0f;
             piSum += ps * candM[cd];
             if (cd == selCand) pi = ps;
         }
         ResFinalizeMIS(rs, pHatSel, pi, piSum);
     }
 
-    // Visibilidade opcional da conexão selecionada.
-    if (ReuseParams.z > 0.5f && rs.W > 0.0f) {
-        float3 sDir = SafeRayDir(rs.x2 - x1, n1); // aprox. p/ o termo angular do offset
-        float3 org  = OffsetRayGBuffer(x1, n1, sDir, camDist);
-        float3 toS  = rs.x2 - org;
-        float  len  = length(toS);
-        if (len > VisRayMinLength()) {
-            RayDesc vray;
-            vray.Origin    = RT_WorldToTlas(org, CameraPos.xyz);
-            vray.Direction = toS / len;
-            vray.TMin      = RayEpsB.y;
-            vray.TMax      = len - RayEpsB.z; // > TMin garantido; para antes do x2
-            const uint VisFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
-            RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                     RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> vq;
-            vq.TraceRayInline(Scene, VisFlags, SMILE_RT_MASK_GATHER, vray);
-            SMILE_RT_PROCEED(vq)
-            if (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+    // Final shading visibility is independent of the optional MIS rays.
+    if (ReuseParams.z > 0.5f && rs.W > 0.0f && !ReSTIRGI_Visible(x1, n1, rs.x2)) {
 #if RESTIR_DEBUG_VIS_KILLS
-                GIOut[px] = float4(10.0f, 0.0f, 0.0f, hitDist); // kill -> vermelho puro
-                return;
+        GIOut[px] = float4(10.0f, 0.0f, 0.0f, hitDist);
+        return;
 #else
-                rs.W = 0.0f;
+        rs.W = 0.0f;
 #endif
-            }
-        }
     }
 
     float3 gi = ResResolve(rs, x1, n1, ShadeParams.z);

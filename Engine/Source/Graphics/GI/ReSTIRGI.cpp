@@ -251,6 +251,17 @@ namespace Smile {
                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
+    bool FReSTIRGI::SetMeshLightCoverage(u32 TaskSlot, u32 LightSlot, u32 TaskCount) {
+        const Vec4 Next = TaskCount > 0u && TaskSlot != kInvalidSlot && LightSlot != kInvalidSlot
+            ? Vec4{ static_cast<f32>(TaskSlot), static_cast<f32>(LightSlot),
+                    static_cast<f32>(TaskCount), 0.0f } : Vec4{};
+        if (Next.X == MeshLightCoverageParams.X && Next.Y == MeshLightCoverageParams.Y &&
+            Next.Z == MeshLightCoverageParams.Z) return false;
+        MeshLightCoverageParams = Next;
+        InvalidateHistory();
+        return true;
+    }
+
     void FReSTIRGI::UpdatePerFrame(u32 _FrameSlot, const Mat44& _InvViewProj, const Vec3& _CameraPos,
                                    u32 _Width, u32 _Height, const Vec3& _SunDir, f32 _SunIntensity,
                                    const Vec3& _SunColor, u32 _FrameIndex, f32 _SkyIntensity,
@@ -282,7 +293,7 @@ namespace Smile {
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
                                 RayEps.HitShadowRayBias };
         // GI cru usa teto de firefly mais restritivo.
-        CPU.ShadeParams     = { 0.0f, AlbedoLOD, // .x livre
+        CPU.ShadeParams     = { MISVisibility ? 1.0f : 0.0f, AlbedoLOD, // .x = MIS visibility
                                 UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
         // Sem superfície anterior, este frame usa apenas o candidato novo.
         const bool HasSurfaceHistory = _PrevSurfaceSlot != kInvalidSlot;
@@ -312,6 +323,7 @@ namespace Smile {
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
+        CPU.MeshLightCoverage     = MeshLightCoverageParams;
         CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
                                       GIHit.EnvironmentSky.Z, 0.0f };
         CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
