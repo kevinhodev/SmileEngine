@@ -1617,13 +1617,9 @@ namespace Smile {
             if (Modes.AOWillRun) {
                 CommandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
 
-                const f32 TanHalf = std::tan(0.5f * Vw.FovY);
-                const f32 M11 = 1.0f / TanHalf;
-                const f32 M00 = M11 / Vw.Aspect;
-                const f32 M22 = Vw.Projection.M[2][2];
-                const f32 M32 = Vw.Projection.M[3][2];
-                AO.UpdatePerFrame(FrameSlot, M00, M11, M22, M32, Vw.View,
-                                  RenderWidth(), RenderHeight(), FrameState->TemporalSampleIndex);
+                AO.UpdatePerFrame(FrameSlot, Vw.Projection, Vw.View,
+                                  RenderWidth(), RenderHeight(), FrameState->TemporalSampleIndex,
+                                  Modes.TAAActive || Modes.UpscaleActive);
 
                 FBarrierBatch Batch;
                 Batch.Transition(Targets.DepthBuffer.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,

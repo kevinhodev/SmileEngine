@@ -14,9 +14,9 @@ RWTexture2D<float> AOOut     : register(u0);
 static const float kTemporalRot[6] = { 1.0f/6.0f, 5.0f/6.0f, 3.0f/6.0f, 4.0f/6.0f, 2.0f/6.0f, 0.0f };
 static const float kTemporalOff[4] = { 0.1f, 0.6f, 0.35f, 0.85f };
 
-// Thickness heuristic (UE r.GTAO.ThicknessBlend=0.5 => 1-0.5^2): horizonte decai atras de
-// oclusores finos em vez de persistir como parede infinita.
-static const float kThickness = 0.75f;
+// Increase the falloff distance for depth discontinuities to limit thin-occluder halos.
+// Unlike horizon decay, this does not erase contact AO when later taps see the receiver.
+static const float kThinOccluderCompensation = 0.5f;
 
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -46,6 +46,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     const float3 P = GTAO_ViewPos(px, rawD);
     const float3 V = normalize(-P); 
+    if (Params.x <= 0.0f || Params.y <= 0.0f || P.z >= Params3.y) {
+        AOOut[tid.xy] = 1.0f;
+        return;
+    }
     
 #if GTAO_USE_NORMALBUFFER
     const float3 wN = NormalTex.Load(int3(ipx, 0)).xyz * 2.0f - 1.0f;
@@ -86,73 +90,86 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const float dirNoise = frac(ign + kTemporalRot[frame % 6u]);
     float       stepNoise = frac(ign + kTemporalOff[frame % 4u]);
     const float r2          = falloffEnd * falloffEnd;
-    const float attenFactor = 2.0f / r2;
+    const float attenFactor = 1.0f / r2;
 
     float occlusion = 0.0f;
+    float openVisibility = 0.0f;
 
     [loop] for (int d = 0; d < numDir; ++d) {
         const float  phi = (float(d) + dirNoise) * (GTAO_PI / float(numDir));
         const float2 dir = float2(cos(phi), sin(phi));            
-        const float3 sliceDirVS = normalize(float3(dir.x, -dir.y, 0.0f)); 
-
-        float cosP = -1.0f;
-        float cosN = -1.0f;
+        const float3 sliceDirVS = normalize(float3(dir.x * ScreenParams.z / ProjA.x,
+                                                    -dir.y * ScreenParams.w / ProjA.y, 0.0f));
+        float3 planeN = normalize(cross(V, sliceDirVS));
+        float3 tangent = normalize(sliceDirVS - V * dot(sliceDirVS, V));
+        float3 projN = N - planeN * dot(N, planeN);
+        float projLen = length(projN);
+        if (projLen < 1e-4f) continue;
+        projN /= projLen;
+        // The sign must use the direction orthogonal to V, especially off axis.
+        float gamma = atan2(dot(projN, tangent), max(dot(projN, V), 0.0f));
+        const float lowP = cos(gamma + GTAO_HALFPI);
+        const float lowN = cos(gamma - GTAO_HALFPI);
+        float cosP = lowP;
+        float cosN = lowN;
         [loop] for (int s = 1; s <= numStep; ++s) {
             // Offset min de s px (UE: max(SearchRadius*(fi+off), fi+1)) + round em vez de
             // truncar: passo nunca cai no proprio pixel (auto-oclusao instavel ao longe;
             // amostras alem do raio em mundo sao anuladas pelo falloff, nao pelo clamp aqui).
             const float  t    = (float(s) - stepNoise) / float(numStep);
-            const float2 off  = dir * max(t * radiusPix, float(s));
+            const float2 off  = dir * max(t * t * radiusPix, float(s));
             const int2   iOff = int2(round(off));
 
-            int2 spP = clamp(ipx + iOff, int2(0, 0), int2((int)W - 1, (int)H - 1));
+            int2 spP = ipx + iOff;
+            if (all(spP >= 0) && all(spP < int2(W, H)))
             {
                 float sd = DepthTex.Load(int3(spP, 0));
                 if (!SmileIsSky(sd)) {
                     float3 D = GTAO_ViewPos(float2(spP), sd) - P;
-                    float  dist2 = dot(D, D);
-                    float  cosA  = dot(D * rsqrt(max(dist2, 1e-8f)), V);
-                    cosA = lerp(cosA, cosP, saturate(dist2 * attenFactor));
-                    cosP = (cosA > cosP) ? cosA : lerp(cosA, cosP, kThickness);
+                    float dist2 = dot(D, D);
+                    float3 falloffD = float3(D.xy, D.z * (1.0f + kThinOccluderCompensation));
+                    float falloffDist2 = dot(falloffD, falloffD);
+                    if (dist2 > 1e-8f && falloffDist2 < r2) {
+                        float cosA = dot(D * rsqrt(dist2), V);
+                        cosA = lerp(cosA, lowP, saturate(falloffDist2 * attenFactor));
+                        cosP = max(cosP, cosA);
+                    }
                 }
             }
-            int2 spN = clamp(ipx - iOff, int2(0, 0), int2((int)W - 1, (int)H - 1));
+            int2 spN = ipx - iOff;
+            if (all(spN >= 0) && all(spN < int2(W, H)))
             {
                 float sd = DepthTex.Load(int3(spN, 0));
                 if (!SmileIsSky(sd)) {
                     float3 D = GTAO_ViewPos(float2(spN), sd) - P;
-                    float  dist2 = dot(D, D);
-                    float  cosA  = dot(D * rsqrt(max(dist2, 1e-8f)), V);
-                    cosA = lerp(cosA, cosN, saturate(dist2 * attenFactor));
-                    cosN = (cosA > cosN) ? cosA : lerp(cosA, cosN, kThickness);
+                    float dist2 = dot(D, D);
+                    float3 falloffD = float3(D.xy, D.z * (1.0f + kThinOccluderCompensation));
+                    float falloffDist2 = dot(falloffD, falloffD);
+                    if (dist2 > 1e-8f && falloffDist2 < r2) {
+                        float cosA = dot(D * rsqrt(dist2), V);
+                        cosA = lerp(cosA, lowN, saturate(falloffDist2 * attenFactor));
+                        cosN = max(cosN, cosA);
+                    }
                 }
             }
         }
         stepNoise = frac(stepNoise + 0.617f);
 
-        float3 planeN = cross(V, sliceDirVS);
-        float  planeLen = length(planeN);
-        if (planeLen < 1e-5f) continue;
-        planeN /= planeLen;
-        float3 projN = N - planeN * dot(N, planeN);
-        float  projLen = length(projN);
-        if (projLen < 1e-4f) continue;
-        projN /= projLen;
-
-        float gamma = acos(clamp(dot(projN, V), -1.0f, 1.0f));
-        gamma *= sign(dot(projN, sliceDirVS));
-
         float thetaPos =  acos(clamp(cosP, -1.0f, 1.0f));
         float thetaNeg = -acos(clamp(cosN, -1.0f, 1.0f));
-        float h2 = gamma + min(thetaPos - gamma,  GTAO_HALFPI);
-        float h1 = gamma + max(thetaNeg - gamma, -GTAO_HALFPI);
+        float h2 = gamma + clamp(thetaPos - gamma, -GTAO_HALFPI, GTAO_HALFPI);
+        float h1 = gamma + clamp(thetaNeg - gamma, -GTAO_HALFPI, GTAO_HALFPI);
 
         float integ = 0.25f * (-cos(2.0f * h1 - gamma) + cos(gamma) + 2.0f * h1 * sin(gamma))
                     + 0.25f * (-cos(2.0f * h2 - gamma) + cos(gamma) + 2.0f * h2 * sin(gamma));
         occlusion += projLen * integ;
+        // Normalize the same finite set of slices against an open hemisphere. Uniform
+        // screen angles are not uniform around V off axis; without this a plane darkens
+        // toward the screen borders even when no occluder was found.
+        openVisibility += projLen * (cos(gamma) + gamma * sin(gamma));
     }
 
-    float vis = saturate(occlusion / float(numDir));
+    float vis = saturate(occlusion / max(openVisibility, 1e-4f));
     vis = pow(vis, max(Params.z, 0.01f));           
     float ao = lerp(1.0f, vis, saturate(Params.y));  
 

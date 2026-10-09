@@ -1,0 +1,180 @@
+{
+  "bistro": {
+    "comparison": "bistro-comparison.png",
+    "original": {
+      "full": {
+        "samples": 32,
+        "meanMs": 0.680512,
+        "medianMs": 0.6553599999999999,
+        "minMs": 0.49664,
+        "maxMs": 1.05472
+      },
+      "half": {
+        "samples": 32,
+        "meanMs": 0.295551875,
+        "medianMs": 0.260096,
+        "minMs": 0.15872,
+        "maxMs": 1.07622
+      }
+    },
+    "revised": {
+      "full": {
+        "samples": 32,
+        "meanMs": 0.8465278125,
+        "medianMs": 0.8207359999999999,
+        "minMs": 0.570368,
+        "maxMs": 1.90566
+      },
+      "half": {
+        "samples": 32,
+        "meanMs": 0.385472,
+        "medianMs": 0.3712,
+        "minMs": 0.226304,
+        "maxMs": 1.14688
+      }
+    },
+    "aoOffControl": {
+      "rmse8Bit": 0.37463330837065295,
+      "maxAbsolute8Bit": 16.0
+    },
+    "capturesPerArm": 8,
+    "matchedCaptureLabels": [
+      "ao-off",
+      "dlss-half",
+      "full-ao",
+      "full",
+      "half-ao",
+      "half",
+      "taa-full",
+      "taa-half-odd-resize"
+    ],
+    "matchedManifestFields": [
+      "outputWidth",
+      "outputHeight",
+      "renderWidth",
+      "renderHeight",
+      "renderScale",
+      "taa",
+      "upscaler",
+      "upscalerQuality",
+      "denoiser",
+      "warmupFrames",
+      "temporalSampleIndex",
+      "historyReset",
+      "cameraX",
+      "cameraY",
+      "cameraZ",
+      "pitchDeg",
+      "yawDeg",
+      "fovYDeg",
+      "sunX",
+      "sunY",
+      "sunZ",
+      "timeOfDayHours",
+      "timeOfDayEnabled",
+      "pinnedTimeOfDayRequested",
+      "pinnedTimeOfDayApplied",
+      "useGI",
+      "restirGI",
+      "reflections",
+      "indirectPrimaryEffective",
+      "indirectFallbackEffective"
+    ],
+    "note": "Shader A/B on revised C++ orchestration. Timings are one sequential 32-frame block per mode."
+  },
+  "emerald": {
+    "comparison": "emerald-comparison.png",
+    "original": {
+      "full": {
+        "samples": 32,
+        "meanMs": 0.609024,
+        "medianMs": 0.64,
+        "minMs": 0.412672,
+        "maxMs": 1.13664
+      },
+      "half": {
+        "samples": 32,
+        "meanMs": 0.18144,
+        "medianMs": 0.168448,
+        "minMs": 0.151552,
+        "maxMs": 0.319488
+      }
+    },
+    "revised": {
+      "full": {
+        "samples": 32,
+        "meanMs": 0.8510078125,
+        "medianMs": 0.828416,
+        "minMs": 0.57856,
+        "maxMs": 1.44077
+      },
+      "half": {
+        "samples": 32,
+        "meanMs": 0.366816,
+        "medianMs": 0.270848,
+        "minMs": 0.217088,
+        "maxMs": 0.90112
+      }
+    },
+    "aoOffControl": {
+      "rmse8Bit": 0.5389022004011695,
+      "maxAbsolute8Bit": 39.0
+    },
+    "capturesPerArm": 8,
+    "matchedCaptureLabels": [
+      "ao-off",
+      "dlss-half",
+      "full-ao",
+      "full",
+      "half-ao",
+      "half",
+      "taa-full",
+      "taa-half-odd-resize"
+    ],
+    "matchedManifestFields": [
+      "outputWidth",
+      "outputHeight",
+      "renderWidth",
+      "renderHeight",
+      "renderScale",
+      "taa",
+      "upscaler",
+      "upscalerQuality",
+      "denoiser",
+      "warmupFrames",
+      "temporalSampleIndex",
+      "historyReset",
+      "cameraX",
+      "cameraY",
+      "cameraZ",
+      "pitchDeg",
+      "yawDeg",
+      "fovYDeg",
+      "sunX",
+      "sunY",
+      "sunZ",
+      "timeOfDayHours",
+      "timeOfDayEnabled",
+      "pinnedTimeOfDayRequested",
+      "pinnedTimeOfDayApplied",
+      "useGI",
+      "restirGI",
+      "reflections",
+      "indirectPrimaryEffective",
+      "indirectFallbackEffective"
+    ],
+    "note": "Shader A/B on revised C++ orchestration. Timings are one sequential 32-frame block per mode."
+  },
+  "shaderHashes": {
+    "original": {
+      "GTAO.cs_6_0.cso": "117ed8329e6a32fb04d57a11ebdfe4541b8e71cd977b2e5f009f03bb069fcb39",
+      "GTAOBlur.cs_6_0.cso": "c3ef50ae34f540a7a9b037cf35d32298fa71f3edc690ee54e7648e103373b0a4",
+      "GTAOUpsample.cs_6_0.cso": "12b79dbeb1740ea91ea3c5a5f5a5b371cbf1e1f3c51315dde057a278333725fd"
+    },
+    "revised": {
+      "GTAO.cs_6_0.cso": "c75f56d8bda7b8646810dc1a085b215d13ee44b9e44a351e93fcc1906c4a275b",
+      "GTAOBlur.cs_6_0.cso": "4e3a340af5b30c6fa3f36b2ad0d21ef952b727f77cf7ee60e71ce34cf2fb9c76",
+      "GTAOUpsample.cs_6_0.cso": "58bc40611b551a489253d9fc64a0b30b732a96604e28c0fbc66b6f431405882b"
+    }
+  }
+}

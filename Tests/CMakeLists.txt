@@ -1,5 +1,21 @@
 option(SMILE_ENABLE_RENDERER_IDENTITY_TESTS "Run Phase 1 integration on a DXR-capable GPU" OFF)
+add_executable(SmileAmbientOcclusionPipelineTests AmbientOcclusionPipelineTests.cpp)
+target_compile_features(SmileAmbientOcclusionPipelineTests PRIVATE cxx_std_20)
+target_compile_definitions(SmileAmbientOcclusionPipelineTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(SmileAmbientOcclusionPipelineTests PRIVATE SmileEngine d3d12 dxgi)
+add_dependencies(SmileAmbientOcclusionPipelineTests Shaders)
+set_target_properties(SmileAmbientOcclusionPipelineTests PROPERTIES
+    AUTOMOC OFF AUTOUIC OFF AUTORCC OFF FOLDER "Tests")
+add_test(NAME Smile.AmbientOcclusionPipeline COMMAND SmileAmbientOcclusionPipelineTests)
+set_tests_properties(Smile.AmbientOcclusionPipeline PROPERTIES LABELS "ao;warp;pipeline" TIMEOUT 180)
+
 if(SMILE_ENABLE_RENDERER_IDENTITY_TESTS)
+    add_executable(SmileAmbientOcclusionRendererTests AmbientOcclusionRendererTests.cpp)
+    target_link_libraries(SmileAmbientOcclusionRendererTests PRIVATE SmileEngine)
+    target_compile_features(SmileAmbientOcclusionRendererTests PRIVATE cxx_std_20)
+    set_target_properties(SmileAmbientOcclusionRendererTests PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF FOLDER "Tests")
+    add_dependencies(SmileAmbientOcclusionRendererTests SmileEditor Shaders)
     add_executable(SmileRendererIdentityTests RendererIdentityTests.cpp)
     target_link_libraries(SmileRendererIdentityTests PRIVATE SmileEngine)
     target_compile_features(SmileRendererIdentityTests PRIVATE cxx_std_20)

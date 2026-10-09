@@ -1,0 +1,20 @@
+WARP production AO pipeline
+Open plane half=0 minimum visibility=0.34902
+FAIL: open plane self-occludes (including screen borders)
+Tilted jittered plane half=0 mean visibility=0.949706
+Contact half=0 minimum visibility=0.658824
+FAIL: zero radius must disable occlusion
+Open plane half=1 minimum visibility=0.360784
+FAIL: open plane self-occludes (including screen borders)
+Tilted jittered plane half=1 mean visibility=0.948688
+Contact half=1 minimum visibility=0.682353
+FAIL: zero radius must disable occlusion
+FAIL: blur leaks across equal-depth normal discontinuity
+FAIL: wide blur taps jump across a one-pixel foreground strip
+FAIL: blur dirties sky
+FAIL: blur leaks across equal-depth normal discontinuity
+FAIL: wide blur taps jump across a one-pixel foreground strip
+FAIL: blur dirties sky
+FAIL: half-res upsample shifted the even-pixel sample grid
+FAIL: upsample applies unrelated dark AO to an unsampled surface
+AO failures: 12

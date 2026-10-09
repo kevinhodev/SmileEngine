@@ -30,8 +30,8 @@ namespace Smile {
 
     void FAmbientOcclusion::CreatePipelines(ID3D12Device* _Device) {
         MainPSO.Initialize(_Device, "GTAO.cs_6_0.cso", 2, 1);
-        BlurPSO.Initialize(_Device, "GTAOBlur.cs_6_0.cso", 2, 1);
-        UpsamplePSO.Initialize(_Device, "GTAOUpsample.cs_6_0.cso", 2, 1);
+        BlurPSO.Initialize(_Device, "GTAOBlur.cs_6_0.cso", 3, 1);
+        UpsamplePSO.Initialize(_Device, "GTAOUpsample.cs_6_0.cso", 3, 1);
     }
 
     // --- Contrato de passe -------------------------------------------------------------
@@ -77,10 +77,10 @@ namespace Smile {
         _SRVHeap.Release(AOH1SRVSlot);
         _SRVHeap.Release(AOH1UAVSlot);
         _SRVHeap.Release(MainTable, 2);
-        _SRVHeap.Release(BlurTable0, 2);
-        _SRVHeap.Release(BlurTable1, 2);
-        _SRVHeap.Release(BlurTableH0, 2);
-        _SRVHeap.Release(BlurTableH1, 2);
+        _SRVHeap.Release(BlurTable0, 3);
+        _SRVHeap.Release(BlurTable1, 3);
+        _SRVHeap.Release(BlurTableH0, 3);
+        _SRVHeap.Release(BlurTableH1, 3);
         AO0.Reset();
         AO1.Reset();
         AOH0.Reset();
@@ -137,31 +137,34 @@ namespace Smile {
         MainTable = _SRVHeap.Allocate(2);
         _SRVHeap.CopyTable(_Device, MainTable, { _DepthSRVSlot, _NormalSRVSlot });
 
-        BlurTable0 = _SRVHeap.Allocate(2);
-        BlurTable1 = _SRVHeap.Allocate(2);
-        _SRVHeap.CopyTable(_Device, BlurTable0, { _DepthSRVSlot, AO0SRVSlot });
-        _SRVHeap.CopyTable(_Device, BlurTable1, { _DepthSRVSlot, AO1SRVSlot });
+        BlurTable0 = _SRVHeap.Allocate(3);
+        BlurTable1 = _SRVHeap.Allocate(3);
+        _SRVHeap.CopyTable(_Device, BlurTable0, { _DepthSRVSlot, AO0SRVSlot, _NormalSRVSlot });
+        _SRVHeap.CopyTable(_Device, BlurTable1, { _DepthSRVSlot, AO1SRVSlot, _NormalSRVSlot });
 
-        // Cadeia meia-res: depth + AOH0 (blur H e input do upsample) / depth + AOH1 (blur V)
-        BlurTableH0 = _SRVHeap.Allocate(2);
-        BlurTableH1 = _SRVHeap.Allocate(2);
-        _SRVHeap.CopyTable(_Device, BlurTableH0, { _DepthSRVSlot, AOH0SRVSlot });
-        _SRVHeap.CopyTable(_Device, BlurTableH1, { _DepthSRVSlot, AOH1SRVSlot });
+        // Filtros compartilham depth + AO + normal geometrica, em full e meia-res.
+        BlurTableH0 = _SRVHeap.Allocate(3);
+        BlurTableH1 = _SRVHeap.Allocate(3);
+        _SRVHeap.CopyTable(_Device, BlurTableH0, { _DepthSRVSlot, AOH0SRVSlot, _NormalSRVSlot });
+        _SRVHeap.CopyTable(_Device, BlurTableH1, { _DepthSRVSlot, AOH1SRVSlot, _NormalSRVSlot });
 
         Ready = true;
     }
 
-    void FAmbientOcclusion::UpdatePerFrame(u32 _FrameSlot, f32 _M00, f32 _M11, f32 _M22,
-                                           f32 _M32, const Mat44& _View, u32 _Width, u32 _Height,
-                                           u32 _FrameIndex) {
+    void FAmbientOcclusion::UpdatePerFrame(u32 _FrameSlot, const Mat44& _Projection,
+                                           const Mat44& _View, u32 _Width, u32 _Height,
+                                           u32 _FrameIndex, bool _TemporalSampling) {
         if (!Ready) return;
         FrameSlot = _FrameSlot;
-        CPU.ProjA        = { _M00, _M11, _M22, _M32 };
+        CPU.ProjA        = { _Projection.M[0][0], _Projection.M[1][1],
+                             _Projection.M[2][2], _Projection.M[3][2] };
+        CPU.ProjOffset   = { _Projection.M[2][0], _Projection.M[2][1], 0.0f, 0.0f };
         CPU.ScreenParams = { (f32)_Width, (f32)_Height, 1.0f / (f32)_Width, 1.0f / (f32)_Height };
         CPU.Params       = { Radius, Intensity, Power, Radius };
         // % 12 = periodo do ciclo temporal do shader (rot 6 frames x offset 4 frames);
         // mantem o f32 exato independente do tempo de sessao.
-        CPU.Params2      = { (f32)NumDir, (f32)NumSteps, (f32)(_FrameIndex % 12u), 0.0f };
+        CPU.Params2      = { (f32)NumDir, (f32)NumSteps,
+                             (f32)(_TemporalSampling ? _FrameIndex % 12u : 0u), 0.0f };
         CPU.Params3      = { FadeStart, FadeEnd, HalfRes ? 2.0f : 1.0f, 0.0f };
         CPU.ViewMatrix   = _View;
 

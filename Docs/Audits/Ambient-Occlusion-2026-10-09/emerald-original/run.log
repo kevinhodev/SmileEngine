@@ -1,0 +1,268 @@
+2026-10-09T22:55:59.491Z [DBG ] [T25952] Streamline inicializado (automatic hooking, feature DLSS)
+2026-10-09T22:55:59.491Z [DBG ] [T25952] [D3D12] - Adapter: NVIDIA GeForce RTX 3060 Ti | vendor=0x10DE device=0x2489 | VRAM dedicada=8024 MiB | tearing=sim
+2026-10-09T22:55:59.697Z [DBG ] [T25952] [D3D12] - Device Criado
+2026-10-09T22:55:59.697Z [DBG ] [T25952] [D3D12] - Raytracing Tier: 12
+2026-10-09T22:55:59.697Z [DBG ] [T25952] [D3D12] - Shader Model: 105
+2026-10-09T22:55:59.697Z [DBG ] [T25952] [D3D12] - DXR Tier 1.2 + SM 6.9 disponiveis (OMM obrigatorio)
+2026-10-09T22:55:59.697Z [DBG ] [T25952] [D3D12] - Resource Heap Tier: 2
+2026-10-09T22:55:59.697Z [DBG ] [T25952] [D3D12] - Resource Binding Tier: 3 (ResourceDescriptorHeap disponivel)
+2026-10-09T22:55:59.698Z [INFO] [T25952] [D3D12MA] pool DEFAULT ativo (Heap Tier 2)
+2026-10-09T22:55:59.758Z [DBG ] [T25952] [GPU] Profiler de timestamps inicializado (96 escopos/frame)
+2026-10-09T22:55:59.758Z [DBG ] [T25952] [GPU] Profiler de timestamps inicializado (96 escopos/frame)
+2026-10-09T22:56:00.851Z [DBG ] [T25952] Visualizador de render targets (FDebugView) inicializado
+2026-10-09T22:56:00.851Z [DBG ] [T25952] Visualizador de render targets (FDebugView) inicializado
+2026-10-09T22:56:00.861Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (1 no total, 64 MB)
+2026-10-09T22:56:00.887Z [DBG ] [T25952] HDREnvironment inicializado (default env preto, BRDF LUT pronta)
+2026-10-09T22:56:00.896Z [DBG ] [T25952] Atmosfera (Hillaire) inicializada: Transmittance + MultiScatter + SkyView
+2026-10-09T22:56:00.922Z [DBG ] [T25952] Ruido de nuvens bakado: base 128^3 + detalhe 32^3 + weather 512^2
+2026-10-09T22:56:00.926Z [DBG ] [T25952] Nuvens volumetricas inicializadas (B2: raymarch single-scatter + composite)
+2026-10-09T22:56:00.941Z [DBG ] [T25952] Fog deferido (aerial perspective + height fog) inicializado
+2026-10-09T22:56:00.949Z [DBG ] [T25952] Volumetric fog (froxel 160x90x64) inicializado
+2026-10-09T22:56:00.952Z [DBG ] [T25952] Sun shafts (raymarch CSM + temporal) inicializado
+2026-10-09T22:56:00.956Z [DBG ] [T25952] Chuva deferred (wetness + occlusion map + cortina + particulas) inicializada
+2026-10-09T22:56:00.960Z [DBG ] [T25952] CSM (sombra do sol) inicializado: 4 cascatas 2048^2 D16, runtime + cache estatico (64 MB)
+2026-10-09T22:56:00.964Z [DBG ] [T25952] LocalShadows inicializado: atlas 9x1024^2 (spot)
+2026-10-09T22:56:00.972Z [DBG ] [T25952] PostProcessor (HDR + Bloom + ACES Filmic) inicializado com sucesso
+2026-10-09T22:56:00.975Z [DBG ] [T25952] FObjectPicker (GPU ID-buffer picking) inicializado
+2026-10-09T22:56:00.977Z [DBG ] [T25952] FSelectionOutline (mascara + edge-detect) inicializado
+2026-10-09T22:56:00.980Z [DBG ] [T25952] DebugDraw Inicializado
+2026-10-09T22:56:00.983Z [DBG ] [T25952] TemporalAA (reprojecao so-camera + Karis tonemap-weighted) inicializado
+2026-10-09T22:56:01.009Z [DBG ] [T25952] FSR (ffx-api / FSR 3.1) inicializado (render 1280x720 -> display 1280x720)
+2026-10-09T22:56:01.009Z [DBG ] [T25952] DLSS (Streamline) inicializado (render 1280x720 -> display 1280x720)
+2026-10-09T22:56:01.009Z [DBG ] [T25952] DLSS-RR (Streamline) inicializado (render 1280x720 -> display 1280x720)
+2026-10-09T22:56:01.016Z [DBG ] [T25952] FlickerHeatmap (debug: variancia temporal por pixel) inicializado
+2026-10-09T22:56:01.023Z [INFO] [T25952] NVAPI ligada: instrumentacao de timer nos shaders de RT disponivel.
+2026-10-09T22:56:02.590Z [DBG ] [T25952] NRD Indireta v4.17.4 | Normal Encoding = 2 Roughness Encoding = 1
+2026-10-09T22:56:02.590Z [DBG ] [T25952] NRD Indireta RELAX_DIFFUSE_SPECULAR: pipelines=15 perm=10 trans=7 samplers=2 cbMax=720
+2026-10-09T22:56:02.616Z [DBG ] [T25952] NRD Direta v4.17.4 | Normal Encoding = 2 Roughness Encoding = 1
+2026-10-09T22:56:02.616Z [DBG ] [T25952] NRD Direta RELAX_DIFFUSE_SPECULAR: pipelines=15 perm=10 trans=7 samplers=2 cbMax=720
+2026-10-09T22:56:03.409Z [DBG ] [T25952] [GI] - TLAS construida: 1 instancias / 1 BLAS / 0 OMM Arrays (pool 0.1198 MB, build 0.2790 MB, compaction ON)
+2026-10-09T22:56:03.409Z [INFO] [T25952] Renderer pronto em 5653 ms | 1280x720 | DXR 1.2 | OMM | FSR | DLSS | DLSS-RR
+2026-10-09T22:56:04.076Z [DBG ] [T25952] Prepare scene CPU (ms): leitura=231 decode=434 meshes=138 | total=666
+2026-10-09T22:56:04.105Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (2 no total, 128 MB)
+2026-10-09T22:56:04.120Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (3 no total, 192 MB)
+2026-10-09T22:56:04.135Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (4 no total, 256 MB)
+2026-10-09T22:56:04.152Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (5 no total, 320 MB)
+2026-10-09T22:56:04.173Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (6 no total, 384 MB)
+2026-10-09T22:56:04.193Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (7 no total, 448 MB)
+2026-10-09T22:56:04.320Z [DBG ] [T25952] [Upload] chunk novo no ring de staging (8 no total, 512 MB)
+2026-10-09T22:56:04.360Z [DBG ] [T25952] [Criacao] commit/texturas: 343 recursos em 157,6 ms  |  DEFAULT: 336 x 1139,3 MB em 125,5 ms  |  UPLOAD: 7 x 448,0 MB em 32,1 ms  |  DEFAULT/D3D12MA: 336 x 1139,3 MB em 125,5 ms
+2026-10-09T22:56:05.233Z [DBG ] [T25952] [OMM] - Bake 4-state: 1615992 triangulos, 48 micro-maps, 786432 bytes
+2026-10-09T22:56:05.540Z [DBG ] [T25952] [OMM] - Bake 4-state: 12236 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:05.851Z [DBG ] [T25952] [OMM] - Bake 4-state: 11764 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:06.127Z [DBG ] [T25952] [OMM] - Bake 4-state: 8504 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:06.374Z [DBG ] [T25952] [OMM] - Bake 4-state: 7772 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:06.617Z [DBG ] [T25952] [OMM] - Bake 4-state: 7432 triangulos, 4 micro-maps, 65536 bytes
+2026-10-09T22:56:06.858Z [DBG ] [T25952] [OMM] - Bake 4-state: 6432 triangulos, 12 micro-maps, 196608 bytes
+2026-10-09T22:56:07.102Z [DBG ] [T25952] [OMM] - Bake 4-state: 6432 triangulos, 12 micro-maps, 196608 bytes
+2026-10-09T22:56:07.329Z [DBG ] [T25952] [OMM] - Bake 4-state: 6150 triangulos, 12 micro-maps, 196608 bytes
+2026-10-09T22:56:07.560Z [DBG ] [T25952] [OMM] - Bake 4-state: 6150 triangulos, 12 micro-maps, 196608 bytes
+2026-10-09T22:56:07.963Z [DBG ] [T3480] [OMM] - Bake 4-state: 3768 triangulos, 4 micro-maps, 65536 bytes
+2026-10-09T22:56:08.087Z [DBG ] [T4388] [OMM] - Bake 4-state: 3580 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.087Z [DBG ] [T44556] [OMM] - Bake 4-state: 2924 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.105Z [DBG ] [T36752] [OMM] - Bake 4-state: 2924 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.105Z [DBG ] [T12480] [OMM] - Bake 4-state: 2924 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.107Z [DBG ] [T39644] [OMM] - Bake 4-state: 3420 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.115Z [DBG ] [T45808] [OMM] - Bake 4-state: 2924 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.125Z [DBG ] [T29044] [OMM] - Bake 4-state: 2924 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.459Z [DBG ] [T3480] [OMM] - Bake 4-state: 2260 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.552Z [DBG ] [T4388] [OMM] - Bake 4-state: 2260 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.555Z [DBG ] [T39644] [OMM] - Bake 4-state: 1668 triangulos, 24 micro-maps, 393216 bytes
+2026-10-09T22:56:08.563Z [DBG ] [T36752] [OMM] - Bake 4-state: 2260 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.583Z [DBG ] [T44556] [OMM] - Bake 4-state: 2260 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.626Z [DBG ] [T12480] [OMM] - Bake 4-state: 2260 triangulos, 8 micro-maps, 131072 bytes
+2026-10-09T22:56:08.653Z [DBG ] [T45808] [OMM] - Bake 4-state: 1668 triangulos, 24 micro-maps, 393216 bytes
+2026-10-09T22:56:08.808Z [DBG ] [T3480] [OMM] - Bake 4-state: 1536 triangulos, 758 micro-maps, 59264 bytes
+2026-10-09T22:56:08.838Z [WARN] [T4388] [OMM Baker] [Perf Warning] - The workload consists of 135311558 work items (number of texels to classify), which corresponds to roughly 129 1024x1024 textures. This is unusually large and may result in long bake times.
+2026-10-09T22:56:08.909Z [WARN] [T36752] [OMM Baker] [Perf Warning] - The workload consists of 806558980 work items (number of texels to classify), which corresponds to roughly 769 1024x1024 textures. This is unusually large and may result in long bake times.
+2026-10-09T22:56:08.926Z [WARN] [T39644] [OMM] - Workload excedeu 2^30; usando indices OMM UNKNOWN em 458 triangulos
+2026-10-09T22:56:08.952Z [WARN] [T12480] [OMM Baker] [Perf Warning] - The workload consists of 806558980 work items (number of texels to classify), which corresponds to roughly 769 1024x1024 textures. This is unusually large and may result in long bake times.
+2026-10-09T22:56:08.971Z [WARN] [T45808] [OMM] - Workload excedeu 2^30; usando indices OMM UNKNOWN em 2 triangulos
+2026-10-09T22:56:09.113Z [WARN] [T3480] [OMM] - Workload excedeu 2^30; usando indices OMM UNKNOWN em 2 triangulos
+2026-10-09T22:56:09.157Z [WARN] [T39644] [OMM] - Workload excedeu 2^30; usando indices OMM UNKNOWN em 2 triangulos
+2026-10-09T22:56:09.236Z [DBG ] [T44556] [OMM] - Bake 4-state: 360 triangulos, 112 micro-maps, 458752 bytes
+2026-10-09T22:56:09.937Z [DBG ] [T4388] [OMM] - Bake 4-state: 1440 triangulos, 0 micro-maps, 0 bytes
+2026-10-09T22:56:10.174Z [DBG ] [T29044] [OMM] - Bake 4-state: 1540 triangulos, 1320 micro-maps, 2270976 bytes
+2026-10-09T22:56:10.219Z [DBG ] [T36752] [OMM] - Bake 4-state: 360 triangulos, 0 micro-maps, 0 bytes
+2026-10-09T22:56:10.222Z [DBG ] [T12480] [OMM] - Bake 4-state: 360 triangulos, 0 micro-maps, 0 bytes
+2026-10-09T22:56:10.225Z [DBG ] [T25952] [OMM] Bake paralelo: 35 pares (10 grandes internos + 25 pequenos em 8 workers) em 5829 ms
+2026-10-09T22:56:10.287Z [DBG ] [T25952] [Criacao] commit/meshes: 2 recursos em 36,9 ms  |  DEFAULT: 1 x 204,8 MB em 18,6 ms  |  UPLOAD: 1 x 204,8 MB em 18,3 ms  |  DEFAULT/D3D12MA: 1 x 204,8 MB em 18,6 ms
+2026-10-09T22:56:10.369Z [DBG ] [T25952] [Upload] ring podado para 1 chunk(s), 448 MB devolvidos
+2026-10-09T22:56:10.372Z [DBG ] [T25952] Assets da cena preparados: 281 meshes, 220 materiais, 2479 renderaveis, 336 texturas DDS
+2026-10-09T22:56:10.661Z [DBG ] [T25952] [GI] - TLAS construida: 2479 instancias / 281 BLAS / 28 OMM Arrays (pool 107.78 MB, build 184.20 MB, compaction ON)
+2026-10-09T22:56:10.684Z [DBG ] [T25952] [Criacao] commit/blasTlas: 161 recursos em 46,1 ms  |  DEFAULT: 53 x 337,3 MB em 25,9 ms  |  UPLOAD: 106 x 19,1 MB em 19,2 ms  |  READBACK: 2 x 0,1 MB em 0,9 ms  |  DEFAULT/D3D12MA: 53 x 337,3 MB em 25,9 ms
+2026-10-09T22:56:10.689Z [DBG ] [T25952] [GI] - DDGI volume: 24x13x24 probes (22464), spacing 10.007310, atlas 1152x1248
+2026-10-09T22:56:10.690Z [DBG ] [T25952] [GI] - Radiance cache: 131072 celulas, 6 MB, celula base 0.500000 m
+2026-10-09T22:56:10.690Z [INFO] [T25952] MeshLights: 228374 triangulos emissivos em 101 malhas (2% dos 10046405 triangulos da cena).
+2026-10-09T22:56:10.690Z [INFO] [T25952] MeshLights: com mapa emissivo: 228374 triangulos em 101 malhas | maior malha isolada: 16094 triangulos.
+2026-10-09T22:56:10.690Z [INFO] [T25952] MeshLights: faixa ALTA — alias table por potencia MAIS ReGIR; nesta faixa o pool de 64 slots por celula do ReGIR colapsa e precisa do presample cooperativo antes de servir de proposta.
+2026-10-09T22:56:10.710Z [DBG ] [T25952] [Criacao] commit/setupGI: 87 recursos em 23,8 ms  |  DEFAULT: 77 x 430,4 MB em 20,6 ms  |  UPLOAD: 5 x 12,4 MB em 1,8 ms  |  READBACK: 5 x 9,0 MB em 1,4 ms  |  DEFAULT/D3D12MA: 77 x 430,4 MB em 20,6 ms
+2026-10-09T22:56:10.710Z [DBG ] [T25952] Commit scene GPU (ms): uploadTex=273 uploadMeshes=63 syncUpload=80 objects=2 terrain=0 blasTlas=312 setupGI=25 | total=6625
+2026-10-09T22:56:10.710Z [INFO] [T25952] Cena carregada em 7292 ms: EmeraldSquare_Day.sscene | 281 meshes, 220 materiais, 2479 renderaveis, 336 texturas
+2026-10-09T22:56:10.710Z [INFO] [T25952] [VRAM] rastreado 2333,3 MB em 582 recursos | DXGI 2560,6 MB | nao rastreado 227,3 MB
+         Texturas da cena: 1194,5 MB
+             LUT do BRDF: 0,1 MB
+             HDRI equirretangular: 0,0 MB
+             (sem rotulo): 1194,4 MB
+         GI e reflexos: 357,4 MB
+             NRD · Pools (Indireta): 75,0 MB
+             ReSTIR GI · reservoir: 60,0 MB
+             NRD · IO (indireta): 41,3 MB
+             Reflexoes · agua: 30,0 MB
+             Historico de superficie: 30,0 MB
+             DDGI · atlas distancia: 22,5 MB
+             Reflexoes · resolve: 15,0 MB
+             DDGI · raios por sonda: 12,0 MB
+             DDGI · atlas irradiancia: 11,3 MB
+             Mesh lights · triangulos compactos: 8,7 MB
+             Mesh lights · triangulos: 8,7 MB
+             Radiance cache · visualizador: 7,5 MB
+             ReSTIR GI · saida full-res: 7,5 MB
+             Reflexoes · meia-res: 5,6 MB
+             ReGIR · grade: 4,0 MB
+             Radiance cache · acumulacao: 4,0 MB
+             Motion confiavel: 3,8 MB
+             ReSTIR GI · fonte do candidato: 3,8 MB
+             Mesh lights · alias (default heap): 3,5 MB
+             Radiance cache · resolvido: 2,0 MB
+             DDGI · buffers: 0,5 MB
+             Radiance cache · chaves: 0,5 MB
+             DDGI · stats de probe: 0,3 MB
+             DDGI · diagnostico de ponto: 0,0 MB
+             GI fallback · irradiancia neutra: 0,0 MB
+             GI fallback · distancia neutra: 0,0 MB
+             Radiance cache · contadores: 0,0 MB
+             GI fallback · ProbeData neutro: 0,0 MB
+         Geometria: 204,8 MB
+             Pool de VB/IB: 204,8 MB
+         Render targets: 199,4 MB
+             ReSTIR DI: 71,3 MB
+             Guides do DLSS-RR: 24,4 MB
+             TAA · historico: 15,0 MB
+             G-buffer: 11,3 MB
+             Output do DLSS-RR: 7,5 MB
+             TAA · display: 7,5 MB
+             Output do DLSS: 7,5 MB
+             Output do FSR: 7,5 MB
+             Preview de debug: 6,3 MB
+             HZB de oclusao: 2,7 MB
+             Bloom: 1,6 MB
+             TemporalIdentityTable: 0,0 MB
+             TemporalSlotRemap: 0,0 MB
+             (sem rotulo): 37,0 MB
+         Sombras: 130,0 MB
+             Atlas de spot: 36,0 MB
+             CSM · cache estatico: 32,0 MB
+             CSM · runtime: 32,0 MB
+             Cube array de point: 30,0 MB
+         Raytracing (AS): 115,9 MB
+         Céu e nuvens: 68,0 MB
+             Sun shafts · historico: 3,8 MB
+             Nuvens · historico: 3,8 MB
+             Weather map: 2,0 MB
+             Sun shafts: 1,9 MB
+             Nuvens · alvo: 1,9 MB
+             Nuvens · shadow map: 0,5 MB
+             LUTs da atmosfera: 0,3 MB
+             Fog · depth conservador: 0,1 MB
+             Ambiente do ceu: 0,0 MB
+             (sem rotulo): 53,9 MB
+         Outros: 36,5 MB
+             Heatmap de flicker: 15,0 MB
+             Chuva · scratch: 7,5 MB
+             Timer de shader: 4,7 MB
+             Visualizador de BVH: 3,8 MB
+             Mascara de outline: 3,8 MB
+             Chuva · oclusao: 1,0 MB
+             GpuSceneInstanceTransform: 0,2 MB
+             GpuSceneInstancePrevTransform: 0,2 MB
+             GpuSceneInstanceBounds: 0,1 MB
+             GpuMainViewIndirectArgs: 0,1 MB
+             Depth do picking: 0,1 MB
+             Alvo de picking: 0,1 MB
+             GpuSceneInstanceMeta: 0,1 MB
+             GpuMaterialTable: 0,0 MB
+             GpuMainViewCandidates: 0,0 MB
+             GpuMeshTable: 0,0 MB
+             GpuMainViewExpandedSlots: 0,0 MB
+             Resultado do culling: 0,0 MB
+             GpuMainViewRanges: 0,0 MB
+             Slot da NVAPI: 0,0 MB
+             GpuMainViewRangeBases: 0,0 MB
+             GpuMainViewClassifyCounters: 0,0 MB
+             GpuMainViewRegions: 0,0 MB
+             GpuMainViewExpandCounters: 0,0 MB
+             GpuMainViewStatus: 0,0 MB
+             GpuMainViewScatterCounters: 0,0 MB
+             GpuMainViewBatchCursors: 0,0 MB
+             GpuMainViewBatchCounts: 0,0 MB
+             GpuMainViewDrawCounts: 0,0 MB
+         Água: 26,9 MB
+             FFT do oceano: 24,0 MB
+             Grade da superficie: 2,4 MB
+             Fonte de tiles: 0,3 MB
+             Instancias de tile: 0,2 MB
+             Args indiretos: 0,0 MB
+             Scratch dos buckets: 0,0 MB
+             Contadores de debug: 0,0 MB
+             Contador indireto: 0,0 MB
+2026-10-09T22:56:10.710Z [DBG ] [T25952] [Criacao] commit/nao-atribuido: 5 recursos em 1,6 ms  |  DEFAULT: 1 x 0,1 MB em 0,1 ms  |  UPLOAD: 3 x 1,4 MB em 1,1 ms  |  READBACK: 1 x 0,1 MB em 0,4 ms  |  DEFAULT/D3D12MA: 1 x 0,1 MB em 0,1 ms
+2026-10-09T22:56:10.710Z [INFO] [T25952] [Criacao] load da cena: 598 recursos em 265,9 ms
+         DEFAULT: 468 x 2111,8 MB em 190,6 ms
+         UPLOAD: 122 x 685,8 MB em 72,5 ms
+         READBACK: 8 x 9,2 MB em 2,7 ms
+         DEFAULT/D3D12MA: 468 x 2111,8 MB em 190,6 ms
+         allocator: 2200,7 MB em heaps, 2137,1 MB ocupados, 547 recursos ativos
+2026-10-09T22:56:10.833Z [INFO] [T25952] MeshLights: alias table pronta para 33330 triangulos (fluxo total 17.680158).
+2026-10-09T22:56:10.833Z [INFO] [T25952] MeshLights: dominio compactado de 228374 para 33330 triangulos (15% do original).
+2026-10-09T22:56:10.833Z [INFO] [T25952] MeshLights: 195044 triangulos sem contribuicao (0 degenerados, 195044 com radiancia zero, 0 com fluxo invalido).
+2026-10-09T22:56:13.044Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:14.737Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\ao-off_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195614.png (N=128, tsi=128)
+File 'C:\ProgramData\NVIDIA/NGX/models/sl_common_0\versions\134656\files\170_E658703.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ProgramData\NVIDIA/NGX/models/sl_dlss_0\versions\134656\files\170_E658703.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ProgramData\NVIDIA/NGX/models/sl_dlss_d_0\versions\134656\files\170_E658703.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ProgramData\NVIDIA/NGX/models/sl_pcl_0\versions\134656\files\170_E658703.dll' is signed by NVIDIA and the signature was verified.
+File 'D:\Engines\SmileEngine\build\bin\Release\/sl.common.dll' is signed by NVIDIA and the signature was verified.
+File 'D:\Engines\SmileEngine\build\bin\Release\/sl.dlss.dll' is signed by NVIDIA and the signature was verified.
+File 'D:\Engines\SmileEngine\build\bin\Release\/sl.dlss_d.dll' is signed by NVIDIA and the signature was verified.
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\ao-off_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195614.png
+2026-10-09T22:56:14.830Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:16.480Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\full_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195616.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\full_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195616.png
+2026-10-09T22:56:17.323Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:18.919Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\full-ao_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195618.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\full-ao_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195618.png
+2026-10-09T22:56:19.008Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:20.594Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\half_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195620.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\half_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195620.png
+2026-10-09T22:56:21.416Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:23.014Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\half-ao_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195622.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\half-ao_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195622.png
+2026-10-09T22:56:23.107Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:24.906Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\taa-full_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195624.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\taa-full_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195624.png
+2026-10-09T22:56:24.952Z [DBG ] [T25952] FSR (ffx-api / FSR 3.1) inicializado (render 961x541 -> display 961x541)
+2026-10-09T22:56:24.953Z [DBG ] [T25952] DLSS (Streamline) inicializado (render 961x541 -> display 961x541)
+2026-10-09T22:56:24.953Z [DBG ] [T25952] DLSS-RR (Streamline) inicializado (render 961x541 -> display 961x541)
+2026-10-09T22:56:24.956Z [DBG ] [T25952] [Resize] alvos internos recriados em 46 ms (961x541 render, 961x541 display)
+2026-10-09T22:56:24.956Z [INFO] [T25952] [Criacao] resize: 103 recursos em 9,3 ms
+         DEFAULT: 103 x 329,1 MB em 9,3 ms
+         DEFAULT/committed: 29 x 47,6 MB em 8,3 ms
+         DEFAULT/D3D12MA: 74 x 281,6 MB em 1,1 ms
+         allocator: 2008,7 MB em heaps, 1974,8 MB ocupados, 547 recursos ativos
+2026-10-09T22:56:25.022Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:26.203Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\taa-half-odd-resize_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195626.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\taa-half-odd-resize_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195626.png
+2026-10-09T22:56:26.247Z [DBG ] [T25952] FSR (ffx-api / FSR 3.1) inicializado (render 961x541 -> display 961x541)
+2026-10-09T22:56:26.248Z [DBG ] [T25952] DLSS (Streamline) inicializado (render 961x541 -> display 961x541)
+2026-10-09T22:56:26.248Z [DBG ] [T25952] DLSS-RR (Streamline) inicializado (render 961x541 -> display 961x541)
+2026-10-09T22:56:26.251Z [DBG ] [T25952] [Resize] alvos internos recriados em 47 ms (961x541 render, 961x541 display)
+2026-10-09T22:56:26.251Z [INFO] [T25952] [Criacao] resize: 98 recursos em 9,5 ms
+         DEFAULT: 98 x 317,4 MB em 9,5 ms
+         DEFAULT/committed: 26 x 40,3 MB em 8,6 ms
+         DEFAULT/D3D12MA: 72 x 277,2 MB em 0,9 ms
+         allocator: 2008,7 MB em heaps, 1974,8 MB ocupados, 547 recursos ativos
+2026-10-09T22:56:26.363Z [INFO] [T25952] Captura: aquecendo 128 frames renderizados
+2026-10-09T22:56:27.606Z [INFO] [T25952] Captura gravada: D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\dlss-half_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195627.png (N=128, tsi=128)
+CAPTURE D:\Engines\SmileEngine\Docs\Audits\Ambient-Occlusion-2026-10-09\emerald-original\dlss-half_game_N128_PrFd-gi-ddgi-rgi-refl-rcUQC4D1KV1R0T_20261009-195627.png
+2026-10-09T22:56:27.779Z [DBG ] [T25952] Renderer encerrado

@@ -5,6 +5,7 @@
 #include "Smile/Graphics/Backend/D3D12/ComputePipeline.h"
 #include "Smile/Graphics/Renderer/RenderPass.h"
 #include <d3d12.h>
+#include <cstddef>
 #include <wrl/client.h>
 
 namespace Smile {
@@ -15,9 +16,12 @@ namespace Smile {
         Vec4 ScreenParams; // x=W, y=H, z=1/W, w=1/H
         Vec4 Params;       // x=radius (mundo), y=intensity, z=power, w=falloffEnd (mundo)
         Vec4 Params2;      // x=numDir, y=numSteps, z=frameIndex, w=blurDir (0=H,1=V)
-        Vec4 Params3;      // x=fadeStart (Z de view), y=fadeEnd, zw=reservado
+        Vec4 Params3;      // x=fadeStart (Z de view), y=fadeEnd, z=escala AO (1/2), w=reservado
         Mat44 ViewMatrix;  // world->view: transforma a normal do G-buffer p/ view (GTAO main)
+        Vec4 ProjOffset;  // xy=M20/M21 da projecao jittered; zw=reservado
     };
+    static_assert(sizeof(GTAOConstants) == 256);
+    static_assert(offsetof(GTAOConstants, ProjOffset) == 144);
 
     class FAmbientOcclusion : public FRenderPass {
     public:
@@ -35,8 +39,8 @@ namespace Smile {
         void SetupForResize(ID3D12Device* Device, FTextureSRVHeap& SRVHeap,
                             u32 DepthSRVSlot, u32 NormalSRVSlot, u32 Width, u32 Height);
 
-        void UpdatePerFrame(u32 FrameSlot, f32 M00, f32 M11, f32 M22, f32 M32,
-                            const Mat44& View, u32 Width, u32 Height, u32 FrameIndex);
+        void UpdatePerFrame(u32 FrameSlot, const Mat44& Projection, const Mat44& View,
+                            u32 Width, u32 Height, u32 FrameIndex, bool TemporalSampling);
 
         void Execute(ID3D12GraphicsCommandList* CommandList, FTextureSRVHeap& SRVHeap);
 
@@ -61,6 +65,7 @@ namespace Smile {
         bool GetHalfRes() const  { return HalfRes; }
 
     private:
+        friend struct FAmbientOcclusionTestAccess;
         void CreatePipelines(ID3D12Device* Device); // Initialize e OnRecreatePipelines
         void CreateConstantBuffer(ID3D12Device* Device);
         void ReleaseSizedResources(FTextureSRVHeap& SRVHeap);
@@ -92,8 +97,8 @@ namespace Smile {
         u32 MainTable      = kInvalidSlot;
         u32 BlurTable0     = kInvalidSlot;
         u32 BlurTable1     = kInvalidSlot;
-        u32 BlurTableH0    = kInvalidSlot; // depth + AOH0 (blur H e input do upsample)
-        u32 BlurTableH1    = kInvalidSlot; // depth + AOH1 (blur V)
+        u32 BlurTableH0    = kInvalidSlot; // depth + AOH0 + normal (blur H e upsample)
+        u32 BlurTableH1    = kInvalidSlot; // depth + AOH1 + normal (blur V)
 
         D3D12_RESOURCE_STATES AO0State  = D3D12_RESOURCE_STATE_COMMON;
         D3D12_RESOURCE_STATES AO1State  = D3D12_RESOURCE_STATE_COMMON;

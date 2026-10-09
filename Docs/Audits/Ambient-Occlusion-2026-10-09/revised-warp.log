@@ -1,0 +1,8 @@
+WARP production AO pipeline
+Open plane half=0 minimum visibility=0.988235
+Tilted jittered plane half=0 mean visibility=0.987488
+Contact half=0 minimum visibility=0.85098
+Open plane half=1 minimum visibility=0.988235
+Tilted jittered plane half=1 mean visibility=0.987482
+Contact half=1 minimum visibility=0.882353
+AO failures: 0
