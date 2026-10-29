@@ -416,7 +416,8 @@ namespace Smile {
         // configuracao pedida (nenhuma proposta de triangulo), enquanto zero no analitico so
         // acontece por ausencia de luz e o shader ja trata com o proprio gate de lightCount.
         CPU.MeshSampling = { static_cast<f32>(MeshCandidates),
-                             BrdfRatioDemodulation ? 1.0f : 0.0f, 0.0f, 0.0f };
+                             BrdfRatioDemodulation ? 1.0f : 0.0f,
+                             CompatNeighborSelection ? 1.0f : 0.0f, 0.0f };
         CPU.RayEpsA = { RayEps.OriginFloorMin, RayEps.OriginFloorPerMeter,
                         RayEps.OriginAngularMax, RayEps.ShadowRayBiasMin };
         CPU.RayEpsB = { RayEps.ShadowRayTMin, RayEps.VisRayTMin,

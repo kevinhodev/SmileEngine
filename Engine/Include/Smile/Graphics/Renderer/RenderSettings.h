@@ -242,6 +242,10 @@ namespace Smile {
         // historico do denoiser, portanto serve como toggle A/B imediato.
         void SetDIBrdfRatioDemodulation(bool V);
         bool GetDIBrdfRatioDemodulation() const;
+        // Selecao de vizinhos guiada por compatibilidade no reuso espacial (Junkins et al.,
+        // HPG 2026). So o Pass B muda; o reservoir fica, o NRD direto e o resolve caem.
+        void SetDICompatNeighborSelection(bool V);
+        bool GetDICompatNeighborSelection() const;
 
         // Compactacao do pool para o SUPORTE POSITIVO (fluxo > 0). A/B da Fase 0.5, passo 3:
         // isola TAMANHO DO DOMINIO agora que a residencia ja esta fixa em VRAM.
@@ -318,6 +322,9 @@ namespace Smile {
         // por isso nao limpa reservoir — ver ReSTIRGI.h.
         bool GetGIVisibility() const;
         void SetGIVisibility(bool V);
+        // Mesma tecnica do DI, no reuso espacial do GI. Mesma invalidacao do SetGIVisibility.
+        bool GetGICompatNeighborSelection() const;
+        void SetGICompatNeighborSelection(bool V);
 
         // === Reflexoes ==================================================================
         void SetUseReflections(bool V);

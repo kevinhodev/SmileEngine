@@ -71,6 +71,8 @@ namespace SmileEditor {
         Out.DIInitialVisibility       = Settings.GetDIInitialVisibility();
         Out.DIBrdfRatio               = Settings.GetDIBrdfRatioDemodulation();
         Out.DIMeshCompactSupport      = Settings.GetDIMeshCompactSupport();
+        Out.DICompatNeighbors         = Settings.GetDICompatNeighborSelection();
+        Out.GICompatNeighbors         = Settings.GetGICompatNeighborSelection();
         return Out;
     }
 
@@ -243,6 +245,10 @@ namespace SmileEditor {
             // Muda o DOMINIO amostrado: o setter forca rebuild da tabela e limpa historico.
             if (_Overrides.DIMeshCompactSupport)
                 Settings.SetDIMeshCompactSupport(*_Overrides.DIMeshCompactSupport);
+            if (_Overrides.DICompatNeighbors)
+                Settings.SetDICompatNeighborSelection(*_Overrides.DICompatNeighbors);
+            if (_Overrides.GICompatNeighbors)
+                Settings.SetGICompatNeighborSelection(*_Overrides.GICompatNeighbors);
             if (_Overrides.RainAmount)
                 Settings.SetRainAmount(static_cast<float>(*_Overrides.RainAmount));
 

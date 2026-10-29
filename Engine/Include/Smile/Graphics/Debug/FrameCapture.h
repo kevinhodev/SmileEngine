@@ -131,6 +131,8 @@ namespace Smile {
         bool ReSTIRGIHalfResRequested = false;
         bool ReSTIRGIHalfResEffective = false;
         u32  ReSTIRGIRenderWidth = 0, ReSTIRGIRenderHeight = 0;
+        // Selecao de vizinhos por compatibilidade no espacial do GI. EFETIVO: pedido E o GI rodou.
+        bool ReSTIRGICompatNeighbors = false;
         bool ReSTIRDI           = false;
         bool ReGIR              = false; // EFETIVO: a grade foi construida neste frame
         // Os dois campos que explicam um ReGIR pedido e nao construido. Ele exige consumidor E
@@ -273,6 +275,8 @@ namespace Smile {
         // BRDF-ratio so participa do caminho ReSTIR DI + NRD direto. Pedido fica separado para o
         // manifesto nao confundir "ligado, mas RR/None" com o braco desligado do A/B.
         bool DIBrdfRatioRequested = false, DIBrdfRatioEffective = false;
+        // Selecao de vizinhos por compatibilidade no Pass B: efetivo = toggle E o DI rodou.
+        bool DICompatNeighborsRequested = false, DICompatNeighborsEffective = false;
         // Resolucao INTERNA do DI. Hoje sempre igual a de render; vira o par
         // requested/effective quando a meia resolucao da Fase 3 entrar.
         u32  DIRenderWidth = 0, DIRenderHeight = 0;

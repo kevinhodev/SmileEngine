@@ -23,7 +23,8 @@ cbuffer ReSTIRDICB : register(b0) {
     float4 RayEpsB;
     row_major float4x4 View; // layout comum; consumido pelo pack do NRD
     row_major float4x4 PrevViewProj;
-    float4 MeshSampling; // x=candidatas mesh; y=BRDF-ratio demodulation
+    float4 MeshSampling; // x=candidatas mesh; y=BRDF-ratio demodulation;
+                         // z=selecao de vizinhos por compatibilidade (0/1)
 };
 
 #include "../RayOffset.hlsli"
@@ -61,6 +62,18 @@ float3 WorldFromDepth(int2 p, float deviceZ) {
     const float4 wh  = mul(float4(ndc, deviceZ, 1.0f), InvViewProj);
     return wh.xyz / wh.w;
 }
+
+bool RNS_LoadSurface(int2 p, out float3 normal, out float3 position) {
+    normal = 0.0f;
+    position = 0.0f;
+    const float z = Depth.Load(int3(p, 0));
+    if (z <= 0.0f) return false;
+    normal = GBuffer_OctDecode(GBufferB.Load(int3(p, 0)).rg);
+    position = WorldFromDepth(p, z);
+    return true;
+}
+
+#include "../Common/ReSTIRNeighborSelection.hlsli"
 
 // O RELAX acumula melhor a radiancia sem detalhes de material, mas esse historico tambem tende a
 // apagar variacao subpixel da normal mapeada. O fator abaixo preserva somente esse residual local:
@@ -226,21 +239,38 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         candPx[candCount] = px; candM[candCount] = self.M; ++candCount;
     }
 
-    const int K = min((int)Sampling.z, 8);
+    // Com a selecao por compatibilidade, os vizinhos ja chegam escolhidos pela geometria e os
+    // testes binarios de normal/posicao abaixo saem: substitui-los pelo escore continuo e o ponto
+    // do metodo (ver Common/ReSTIRNeighborSelection.hlsli).
+    const bool compatSelect = MeshSampling.z > 0.5f;
+    int2 picks[RNS_MAX_NEIGHBORS];
+    int K = min((int)Sampling.z, 8);
+    if (compatSelect) {
+        K = (int)RNS_SelectNeighbors(px, int2(ScreenParams.xy), Sampling.w, (uint)K, n1, x1,
+                                     length(CameraPos.xyz - x1),
+                                     GGX_SeedE(upx, (uint)Params.y, SMILE_RNG_DI_NEIGHBOR_SEL),
+                                     picks);
+    }
     const float posReject = Reuse.y * max(length(CameraPos.xyz - x1), 1.0f);
     [loop]
     for (int i = 0; i < K; ++i) {
-        const float2 xi = GGX_Rand2E(upx, (uint)Params.y, SMILE_RNG_DI_SPATIAL_TAP + (uint)i);
-        const int2 qpx = px + int2(round(GGX_ConcentricDisk(xi) * Sampling.w));
-        if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)ScreenParams.x || qpx.y >= (int)ScreenParams.y ||
-            all(qpx == px)) continue;
+        int2 qpx;
+        if (compatSelect) {
+            qpx = picks[i];
+        } else {
+            const float2 xi = GGX_Rand2E(upx, (uint)Params.y,
+                                         SMILE_RNG_DI_SPATIAL_TAP + (uint)i);
+            qpx = px + int2(round(GGX_ConcentricDisk(xi) * Sampling.w));
+            if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)ScreenParams.x ||
+                qpx.y >= (int)ScreenParams.y || all(qpx == px)) continue;
+        }
 
         const float qz = Depth.Load(int3(qpx, 0));
         if (qz <= 0.0f) continue;
         const GBufferData qg = DecodeGBuffer(GBufferA.Load(int3(qpx, 0)),
                                              GBufferB.Load(int3(qpx, 0)),
                                              GBufferC.Load(int3(qpx, 0)));
-        if (dot(qg.WorldNormal, n1) < Reuse.z) continue;
+        if (!compatSelect && dot(qg.WorldNormal, n1) < Reuse.z) continue;
 
         ReSTIRDIReservoir nb = DI_LoadReservoir(ResW.Load(int3(qpx, 0)), ResB.Load(int3(qpx, 0)));
         // So M > 0 — mesma razao do bloco do self. Reservoir invalido (fundo/ceu) tem M = 0 e cai
@@ -248,8 +278,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // os testes geometricos continuam validos.
         if (nb.M <= 0.0f) continue;
         nb.X1 = WorldFromDepth(qpx, qz);
-        if (length(nb.X1 - x1) >= posReject ||
-            abs(dot(n1, nb.X1 - x1)) >= 0.2f * posReject) continue;
+        if (!compatSelect && (length(nb.X1 - x1) >= posReject ||
+                              abs(dot(n1, nb.X1 - x1)) >= 0.2f * posReject)) continue;
         nb.M = min(nb.M, Sampling.y);
 
         float target = 0.0f;

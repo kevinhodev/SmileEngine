@@ -590,6 +590,9 @@ primeiros, o ReSTIR DI usa o terceiro para decidir se emite o shadow ray.
 - `FReSTIRGI` — final-gather difuso por pixel sobre o DDGI (reservoir espaço-temporal).
 - `FReSTIRDI` + `FReGIR` + `FMeshLights` — direta local por reservoir; o ReGIR troca o loop de
   luzes **dentro** do hit secundário (não substitui o DI de tela).
+- Reuso espacial do DI e do GI: disco uniforme + rejeição binária por default, ou seleção de
+  vizinhos guiada por compatibilidade (HPG 2026, `Common/ReSTIRNeighborSelection.hlsli`) por
+  toggle. Triagem e protocolo de A/B em [`RENDERING-PAPERS-2026.md`](RENDERING-PAPERS-2026.md).
 - `FReflections` — specular GI estilo Lumen: trace (glossy + mirror) → resolve → temporal →
   composite, com caminho dedicado para a água.
 - `FNrdDenoiser` — RELAX difuso+especular; **duas instâncias independentes**, uma para o

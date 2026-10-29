@@ -116,6 +116,8 @@ namespace Smile {
                 // O sufixo positivo evita misturar capturas novas com a era anterior a tecnica.
                 // Em None/RR o toggle pode estar pedido, mas nao participa e portanto nao nomeia.
                 if (S.DIBrdfRatioEffective) Di += "-brdfRatio";
+                // Selecao de vizinhos por compatibilidade: o braco novo carrega o sufixo.
+                if (S.DICompatNeighborsEffective) Di += "-cns";
                 // Compactacao do suporte positivo. O EFETIVO, e so quando ligada: desligada e o
                 // braco de controle do A/B, e ele herda o nome historico — o que precisa se
                 // distinguir e o braco novo.
@@ -183,6 +185,7 @@ namespace Smile {
             // A politica de backface muda o que o raio ENXERGA — no gather e no produtor do cache
             // —, entao duas capturas que so diferem nela sao duas configuracoes, nao duas amostras.
             if (S.GIBackfacePolicy)       Add("bf");
+            if (S.ReSTIRGICompatNeighbors) Add("cns");
             if (S.GIMeasureTerminatorOff) Add("noTerm");
             return Tag.empty() ? std::string("off") : Tag;
         }
@@ -580,6 +583,8 @@ namespace Smile {
                      << _State.ReSTIRGIRenderWidth << ",\n";
                 File << "  \"restirGIRenderHeight\": "
                      << _State.ReSTIRGIRenderHeight << ",\n";
+                File << "  \"restirGICompatNeighbors\": "
+                     << Bool(_State.ReSTIRGICompatNeighbors) << ",\n";
                 File << "  \"restirDI\": "     << Bool(_State.ReSTIRDI)    << ",\n";
                 // `regir` continua sendo o EFETIVO — os manifestos ja capturados da serie usam
                 // esta chave com esse significado, e renomea-la quebraria a comparacao com eles.
@@ -624,6 +629,10 @@ namespace Smile {
                      << Bool(_State.DIBrdfRatioRequested) << ",\n";
                 File << "  \"diBrdfRatioEffective\": "
                      << Bool(_State.DIBrdfRatioEffective) << ",\n";
+                File << "  \"diCompatNeighborsRequested\": "
+                     << Bool(_State.DICompatNeighborsRequested) << ",\n";
+                File << "  \"diCompatNeighborsEffective\": "
+                     << Bool(_State.DICompatNeighborsEffective) << ",\n";
                 File << "  \"diRenderWidth\": "  << _State.DIRenderWidth  << ",\n";
                 File << "  \"diRenderHeight\": " << _State.DIRenderHeight << ",\n";
                 File << "  \"meshLightTrianglePayloadBytes\": "

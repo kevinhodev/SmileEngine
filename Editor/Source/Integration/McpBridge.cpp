@@ -199,6 +199,8 @@ namespace SmileEditor {
                 { QStringLiteral("diInitialVisibility"), _Settings.DIInitialVisibility },
                 { QStringLiteral("diBrdfRatio"), _Settings.DIBrdfRatio },
                 { QStringLiteral("meshCompactSupport"), _Settings.DIMeshCompactSupport },
+                { QStringLiteral("diCompatNeighbors"), _Settings.DICompatNeighbors },
+                { QStringLiteral("giCompatNeighbors"), _Settings.GICompatNeighbors },
             };
         }
 
@@ -624,6 +626,8 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "diInitialVisibility", Overrides.DIInitialVisibility) &&
             ReadOptionalBool(_Arguments, "diBrdfRatio", Overrides.DIBrdfRatio) &&
             ReadOptionalBool(_Arguments, "meshCompactSupport", Overrides.DIMeshCompactSupport) &&
+            ReadOptionalBool(_Arguments, "diCompatNeighbors", Overrides.DICompatNeighbors) &&
+            ReadOptionalBool(_Arguments, "giCompatNeighbors", Overrides.GICompatNeighbors) &&
             ReadOptionalBool(_Arguments, "backgroundThrottle",
                              Overrides.BackgroundThrottleEnabled);
         if (!KnobsOk) {

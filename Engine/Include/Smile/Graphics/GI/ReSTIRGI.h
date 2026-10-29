@@ -30,7 +30,8 @@ namespace Smile {
         Vec4  SunColor;        // rgb = cor do sol, w = ShadowRayMask (mask dos shadow rays no hit)
         Vec4  TraceParams;     // x = frameIndex, y = maxRayDist, z = skyIntensity, w = shadowRayBias
                                // (so sombras no hit; origem de raio do G-buffer usa offset robusto)
-        Vec4  ShadeParams;     // x = livre, y = albedoLOD, z = fireflyMax, w = validateInterval
+        Vec4  ShadeParams;     // x = selecao de vizinhos por compatibilidade (0/1), y = albedoLOD,
+                               // z = fireflyMax, w = validateInterval
         Vec4  ReuseParams;     // x = MCap, y = posRejectScale, z = visibility (0/1), w = temporal (0/1)
         Vec4  SpatialParams;   // x = radius(px), y = count, z = spatial (0/1), w = normalReject
         Vec4  JitterParams;    // xy = prevJitterUv - currJitterUv (reprojecao temporal no espaco jittered)
@@ -184,6 +185,9 @@ namespace Smile {
         bool GetSpatial() const    { return Spatial; }
         void SetVisibility(bool V) { Visibility = V; }
         bool GetVisibility() const { return Visibility; }
+        // Selecao de vizinhos do Pass B (HPG 2026). Como o Visibility, so atua no espacial.
+        void SetCompatNeighborSelection(bool V) { CompatNeighborSelection = V; }
+        bool GetCompatNeighborSelection() const { return CompatNeighborSelection; }
         void SetBoilingStrength(f32 V) { BoilingStrength = V; }
         f32  GetBoilingStrength() const { return BoilingStrength; }
         // Alteram pesos/aceitação já gravados e exigem histórico novo.
@@ -290,6 +294,7 @@ namespace Smile {
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
         bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
+        bool CompatNeighborSelection = false; // pool pontuado no lugar do disco + rejeicao
         bool Visibility     = false;  // visibility rays no espacial: shading visibility (1 raio) +
                                       // visibilidade nos pesos MIS (até K raios)
         f32  MCap           = 20.0f;

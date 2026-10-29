@@ -67,6 +67,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleDIMeshLights();
         Q_INVOKABLE void ToggleDIInitialVisibility();
         Q_INVOKABLE void ToggleDIBrdfRatio();
+        Q_INVOKABLE void ToggleDICompatNeighbors();
         Q_INVOKABLE void ToggleDIMeshCompactSupport();
 
         Q_INVOKABLE void SetIndirectPrimary(int value);
@@ -74,6 +75,7 @@ namespace SmileEditor {
         Q_INVOKABLE void ToggleGI();
         Q_INVOKABLE void ToggleGIHalfRes();
         Q_INVOKABLE void ToggleGIVisibility();
+        Q_INVOKABLE void ToggleGICompatNeighbors();
         Q_INVOKABLE void ToggleGIBackfacePolicy();
         Q_INVOKABLE void ToggleGISourceDebug();
         Q_INVOKABLE void ToggleGIMeasureTerminatorOff();

@@ -567,6 +567,8 @@ namespace Smile {
         S.ReSTIRGIHalfResEffective = _Modes.ReSTIRGIActive && ReSTIRGI.HalfResEffective();
         S.ReSTIRGIRenderWidth  = _Modes.ReSTIRGIActive ? ReSTIRGI.TraceWidth() : 0u;
         S.ReSTIRGIRenderHeight = _Modes.ReSTIRGIActive ? ReSTIRGI.TraceHeight() : 0u;
+        S.ReSTIRGICompatNeighbors = _Modes.ReSTIRGIActive &&
+                                    ReSTIRGI.GetCompatNeighborSelection();
         S.ReSTIRDI    = _Modes.ReSTIRDIActiveFrame;
         // Toggle + consumidor + luz na cena.
         S.ReGIR       = CaptureState->ReGIRRanThisFrame;
@@ -604,6 +606,7 @@ namespace Smile {
             S.DIMeshLightsInPoolRequested   = ReSTIRDI.GetMeshLightsInPool();
             S.DIInitialVisibilityRequested  = ReSTIRDI.GetInitialVisibility();
             S.DIBrdfRatioRequested          = ReSTIRDI.GetBrdfRatioDemodulation();
+            S.DICompatNeighborsRequested    = ReSTIRDI.GetCompatNeighborSelection();
             // Valores efetivos sao os publicados no cbuffer do frame concluido.
             const bool DIRan = _Modes.ReSTIRDIActiveFrame;
             S.DIAnalyticCandidatesEffective = DIRan ? ReSTIRDI.EffectiveAnalyticCandidates() : 0u;
@@ -612,6 +615,7 @@ namespace Smile {
             S.DIInitialVisibilityEffective  = DIRan && ReSTIRDI.GetInitialVisibility();
             S.DIBrdfRatioEffective          = _Modes.NrdDirectMode &&
                                               ReSTIRDI.GetBrdfRatioDemodulation();
+            S.DICompatNeighborsEffective    = DIRan && ReSTIRDI.GetCompatNeighborSelection();
             S.DIRenderWidth  = DIRan ? ReSTIRDI.DIRenderWidth()  : 0u;
             S.DIRenderHeight = DIRan ? ReSTIRDI.DIRenderHeight() : 0u;
             // RIS, dado compacto e meia resolucao continuam nao existindo. Ficam explicitamente

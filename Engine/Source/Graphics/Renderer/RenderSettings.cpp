@@ -590,6 +590,17 @@ namespace Smile {
         return R.ReSTIRDI.GetBrdfRatioDemodulation();
     }
 
+    // Diferente do BRDF ratio, muda a radiancia que o RELAX direto acumula. O reservoir nao entra
+    // porque o Pass B nao o realimenta — o mesmo argumento do SetGIVisibility.
+    void FRenderSettings::SetDICompatNeighborSelection(bool _V) {
+        if (_V == R.ReSTIRDI.GetCompatNeighborSelection()) return;
+        R.ReSTIRDI.SetCompatNeighborSelection(_V);
+        Invalidate(EHistoryTarget::NrdDirect | Dom::Resolve);
+    }
+    bool FRenderSettings::GetDICompatNeighborSelection() const {
+        return R.ReSTIRDI.GetCompatNeighborSelection();
+    }
+
     // Muda o DOMINIO amostrado, entao o indice guardado no reservoir passa a significar outro
     // triangulo: o clear nao e opcional aqui, e sim correcao. Sem ele, um reservoir do braco
     // anterior apontaria para o triangulo errado no dominio novo.
@@ -779,6 +790,15 @@ namespace Smile {
         // RR/TAA sobre o resultado). Pelo mesmo criterio do SetGIBackfacePolicy — "o clear dos
         // reservoirs sozinho nao basta" — o que acumula DEPOIS do resolve precisa cair.
         Invalidate(Dom::ScreenResolve);
+    }
+
+    bool FRenderSettings::GetGICompatNeighborSelection() const {
+        return R.ReSTIRGI.GetCompatNeighborSelection();
+    }
+    void FRenderSettings::SetGICompatNeighborSelection(bool _V) {
+        if (_V == R.ReSTIRGI.GetCompatNeighborSelection()) return;
+        R.ReSTIRGI.SetCompatNeighborSelection(_V);
+        Invalidate(Dom::ScreenResolve); // mesmo motivo do SetGIVisibility
     }
 
     // === Reflexoes ======================================================================

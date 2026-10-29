@@ -702,6 +702,18 @@ server.registerTool(
         .describe(
           "Compacta o pool para o suporte positivo (fluxo > 0). Nao muda a distribuicao — os descartados ja tinham probabilidade zero — e reconstroi a alias table.",
         ),
+      diCompatNeighbors: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B da selecao de vizinhos por compatibilidade (Junkins et al., HPG 2026) no reuso espacial do ReSTIR DI.",
+        ),
+      giCompatNeighbors: z
+        .boolean()
+        .nullish()
+        .describe(
+          "A/B da selecao de vizinhos por compatibilidade (Junkins et al., HPG 2026) no reuso espacial do ReSTIR GI.",
+        ),
     },
     annotations: {
       readOnlyHint: false,

@@ -118,6 +118,8 @@ uint GGX_XXHash32(uint4 p) {
 // manter o buraco preserva a decorrelacao dos streams vizinhos entre versoes.
 #define SMILE_RNG_CACHE_ORIGIN 13000u // direcao que sai do G-buffer no updater do radiance cache
 #define SMILE_RNG_CACHE_BOUNCE 14000u // + 2*depth (+1): lobo e direcao do BSDF no vertice `depth`
+#define SMILE_RNG_GI_NEIGHBOR_SEL 15000u // pool de candidatas da selecao de vizinhos do ReSTIR GI
+#define SMILE_RNG_DI_NEIGHBOR_SEL 16000u // idem, ReSTIR DI
 
 uint GGX_SeedE(uint2 px, uint frame, uint effect) {
     return GGX_XXHash32(uint4(frame, px.x, px.y, effect));

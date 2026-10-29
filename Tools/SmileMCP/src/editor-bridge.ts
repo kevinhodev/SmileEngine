@@ -195,6 +195,8 @@ export interface ProfileOverrides {
   diInitialVisibility?: boolean;
   diBrdfRatio?: boolean;
   meshCompactSupport?: boolean;
+  diCompatNeighbors?: boolean;
+  giCompatNeighbors?: boolean;
   backgroundThrottle?: boolean;
 }
 

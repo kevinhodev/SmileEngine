@@ -902,6 +902,13 @@ Rectangle {
                     onToggled: root.restirModel.ToggleDIBrdfRatio()
                 }
                 C.SwitchRow {
+                    label: "Vizinhos por compatibilidade"
+                    hint: "HPG 2026 · reuso espacial"
+                    checked: root.di.compatNeighbors || false
+                    interactive: root.di.enabled || false
+                    onToggled: root.restirModel.ToggleDICompatNeighbors()
+                }
+                C.SwitchRow {
                     label: "Suporte compacto de mesh lights"
                     hint: "A/B de estrutura"
                     checked: root.di.meshCompactSupport || false
@@ -968,6 +975,13 @@ Rectangle {
                     checked: root.gi.visibility || false
                     interactive: root.gi.enabled || false
                     onToggled: root.restirModel.ToggleGIVisibility()
+                }
+                C.SwitchRow {
+                    label: "Vizinhos por compatibilidade"
+                    hint: "HPG 2026 · reuso espacial"
+                    checked: root.gi.compatNeighbors || false
+                    interactive: root.gi.enabled || false
+                    onToggled: root.restirModel.ToggleGICompatNeighbors()
                 }
                 C.SwitchRow {
                     label: "Aceitar backface no gather"

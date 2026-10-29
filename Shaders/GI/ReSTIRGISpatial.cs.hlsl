@@ -17,7 +17,7 @@ cbuffer ReSTIRCB : register(b0) {
     float4 SunColor;
     float4 TraceParams;             // x=frameIndex, y=maxRayDist, z=skyIntensity, w=shadowRayBias
                                     // (nao usado aqui; visibility usa OffsetRayGBuffer)
-    float4 ShadeParams;
+    float4 ShadeParams;             // x=selecao de vizinhos por compatibilidade (0/1)
     float4 ReuseParams;             // x=MCap, y=posRejectScale, z=visibility(0/1), w=temporal(0/1)
     float4 SpatialParams;           // x=radius(px), y=count, z=spatial(0/1), w=normalReject
     float4 JitterParams;            // xy = prevJitterUv - currJitterUv (so o Pass A usa; layout comum)
@@ -85,6 +85,19 @@ uint2 FullPixelFromTrace(uint2 tracePx) {
     return min(tracePx * scale + uint2(ResolutionParams.yz), uint2(ScreenParams.xy) - 1u);
 }
 
+bool RNS_LoadSurface(int2 tracePx, out float3 normal, out float3 position) {
+    normal = 0.0f;
+    position = 0.0f;
+    const uint2 surfacePx = FullPixelFromTrace(uint2(tracePx));
+    const float z = Depth.Load(int3(surfacePx, 0)).r;
+    if (z <= 0.0f) return false;
+    normal = DDGI_OctDecode(GBuffer.Load(int3(surfacePx, 0)).rg * 2.0f - 1.0f);
+    position = WorldFromDepth(surfacePx, z);
+    return true;
+}
+
+#include "../Common/ReSTIRNeighborSelection.hlsli"
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
     uint2 px = dtid.xy;
@@ -135,28 +148,45 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     int   K         = min((int)SpatialParams.y, kMaxCand - 1);
     float normalRej = SpatialParams.w;
 
+    // Vizinhos escolhidos pela compatibilidade geometrica: os testes binarios de normal/posicao
+    // saem, o do Jacobiano fica (ele protege a reconexao, nao a semelhanca de superficie).
+    const bool compatSelect = ShadeParams.x > 0.5f;
+    int2 picks[RNS_MAX_NEIGHBORS];
+    if (compatSelect) {
+        K = (int)RNS_SelectNeighbors(int2(px), int2(TraceScreenParams.xy), radius, (uint)K,
+                                     n1, x1, camDist,
+                                     RngSeed(surfacePx, (uint)TraceParams.x,
+                                             SMILE_RNG_GI_NEIGHBOR_SEL),
+                                     picks);
+    }
+
     for (int i = 0; i < K; ++i) {
-        float2 E   = GGX_Rand2E(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_TAP + (uint)i);
-        float2 off = GGX_ConcentricDisk(E) * radius;
-        int2   qpx = int2(px) + int2(round(off));
-        if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)TraceScreenParams.x ||
-            qpx.y >= (int)TraceScreenParams.y)
-            continue;
-        if (all(qpx == int2(px))) continue;
+        int2 qpx;
+        if (compatSelect) {
+            qpx = picks[i];
+        } else {
+            float2 E   = GGX_Rand2E(px, (uint)TraceParams.x, SMILE_RNG_SPATIAL_TAP + (uint)i);
+            float2 off = GGX_ConcentricDisk(E) * radius;
+            qpx = int2(px) + int2(round(off));
+            if (qpx.x < 0 || qpx.y < 0 || qpx.x >= (int)TraceScreenParams.x ||
+                qpx.y >= (int)TraceScreenParams.y)
+                continue;
+            if (all(qpx == int2(px))) continue;
+        }
 
         const uint2 qSurfacePx = FullPixelFromTrace(uint2(qpx));
         float qz = Depth.Load(int3(qSurfacePx, 0)).r;
         if (qz <= 0.0f) continue;
         float4 qgb = GBuffer.Load(int3(qSurfacePx, 0));
         float3 qn1 = DDGI_OctDecode(qgb.rg * 2.0f - 1.0f);
-        if (dot(qn1, n1) < normalRej) continue; // rejeicao por normal
+        if (!compatSelect && dot(qn1, n1) < normalRej) continue; // rejeicao por normal
 
         uint4 q1 = Res1.Load(int3(qpx, 0));
         float qM, qAge;
         ResUnpackMAge(q1.z, qM, qAge);
         if (qM <= 0.0f) continue;
         float3 qx1 = WorldFromDepth(qSurfacePx, qz);
-        if (length(qx1 - x1) > posReject) continue; // rejeicao radial por posicao
+        if (!compatSelect && length(qx1 - x1) > posReject) continue; // rejeicao radial
 
         float4 q0 = Res0.Load(int3(qpx, 0));
 

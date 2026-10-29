@@ -225,6 +225,7 @@ namespace SmileEditor {
                    static_cast<int>(DI.EffectiveMeshLightCount()));
         Out.insert(QStringLiteral("initialVisibility"), RS.GetDIInitialVisibility());
         Out.insert(QStringLiteral("brdfRatio"), RS.GetDIBrdfRatioDemodulation());
+        Out.insert(QStringLiteral("compatNeighbors"), RS.GetDICompatNeighborSelection());
         Out.insert(QStringLiteral("meshCompactSupport"), RS.GetDIMeshCompactSupport());
         Out.insert(QStringLiteral("resolution"),
                    ResolutionText(DI.DIRenderWidth(), DI.DIRenderHeight()));
@@ -243,6 +244,7 @@ namespace SmileEditor {
         Out.insert(QStringLiteral("halfRes"), GI.GetHalfRes());
         Out.insert(QStringLiteral("halfResEffective"), GI.HalfResEffective());
         Out.insert(QStringLiteral("visibility"), RS.GetGIVisibility());
+        Out.insert(QStringLiteral("compatNeighbors"), RS.GetGICompatNeighborSelection());
         Out.insert(QStringLiteral("backfacePolicy"), RS.GetGIBackfacePolicy());
         Out.insert(QStringLiteral("sourceDebug"), RS.GetGISourceDebug());
         Out.insert(QStringLiteral("measureTerminatorOff"),
@@ -506,6 +508,12 @@ namespace SmileEditor {
           S.SetDIBrdfRatioDemodulation(!S.GetDIBrdfRatioDemodulation()); }
         emit Updated();
     }
+    void ReSTIRDebugBridge::ToggleDICompatNeighbors() {
+        if (!Renderer) return;
+        { auto A = Renderer.Lock(); auto& S = A->Settings();
+          S.SetDICompatNeighborSelection(!S.GetDICompatNeighborSelection()); }
+        emit Updated();
+    }
     void ReSTIRDebugBridge::ToggleDIMeshCompactSupport() {
         if (!Renderer) return;
         { auto A = Renderer.Lock(); auto& S = A->Settings();
@@ -527,6 +535,12 @@ namespace SmileEditor {
     }
     void ReSTIRDebugBridge::ToggleGIVisibility() {
         if (Settings) Settings->ToggleReSTIRGIVisibility();
+    }
+    void ReSTIRDebugBridge::ToggleGICompatNeighbors() {
+        if (!Renderer) return;
+        { auto A = Renderer.Lock(); auto& S = A->Settings();
+          S.SetGICompatNeighborSelection(!S.GetGICompatNeighborSelection()); }
+        emit Updated();
     }
     void ReSTIRDebugBridge::ToggleGIBackfacePolicy() {
         if (Settings) Settings->ToggleGIBackfacePolicy();

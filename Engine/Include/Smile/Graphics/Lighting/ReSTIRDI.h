@@ -34,7 +34,8 @@ namespace Smile {
         // Cabe sem quebrar o assert: o conteudo declarado soma 336 bytes e o alignas(256) ja
         // arredondava os 320 anteriores para 512. Ha folga para mais sete float4 antes de a fatia
         // do CBV precisar dobrar.
-        Vec4  MeshSampling;  // x = candidatas mesh; y = BRDF-ratio demodulation; zw livres
+        Vec4  MeshSampling;  // x = candidatas mesh; y = BRDF-ratio demodulation;
+                             // z = selecao de vizinhos por compatibilidade; w livre
     };
     static_assert(sizeof(ReSTIRDIConstants) == 512,
                   "ReSTIRDIConstants deve ocupar fatias CBV alinhadas a 256 bytes");
@@ -135,6 +136,10 @@ namespace Smile {
         // Pos-processo do caminho NRD: nao muda reservoir nem o sinal acumulado pelo RELAX, entao
         // o A/B e imediato e nao precisa limpar historico.
         void SetBrdfRatioDemodulation(bool V) { BrdfRatioDemodulation = V; }
+        // Selecao de vizinhos do Pass B (HPG 2026, ver Common/ReSTIRNeighborSelection.hlsli). O
+        // espacial nao realimenta o reservoir, entao o historico do DI fica; quem acumula sobre a
+        // saida e invalidado pelo FRenderSettings.
+        void SetCompatNeighborSelection(bool V) { CompatNeighborSelection = V; }
 
         // PEDIDO — o que o operador configurou.
         u32  GetInitialCandidates() const { return InitialCandidates; }
@@ -142,6 +147,7 @@ namespace Smile {
         bool GetMeshLightsInPool()  const { return MeshLightsInPool; }
         bool GetInitialVisibility() const { return InitialVisibility; }
         bool GetBrdfRatioDemodulation() const { return BrdfRatioDemodulation; }
+        bool GetCompatNeighborSelection() const { return CompatNeighborSelection; }
 
         // EFETIVO — o que foi para o cbuffer no ultimo UpdatePerFrame, com os mesmos gates que o
         // shader aplica. Divergem do pedido sozinhos: sem luz analitica na cena o orcamento
@@ -277,6 +283,9 @@ namespace Smile {
         // Tecnica da secao 7.11.3 do capitulo do Cyberpunk: restaura detalhe de normal-map que a
         // acumulacao temporal suaviza. So tem efeito quando a direta usa NRD/RELAX.
         bool BrdfRatioDemodulation = true;
+        // Pool de 32 candidatas pontuadas por compatibilidade geometrica no lugar do disco
+        // uniforme + rejeicao binaria. Default OFF ate o A/B de custo e erro nas cenas de teste.
+        bool CompatNeighborSelection = false;
 
         // Tira os triangulos emissivos do POOL de propostas (o buffer continua sendo extraido).
         // ON agora que existe orcamento por pool e alias table por potencia — sem os dois, o

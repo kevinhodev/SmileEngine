@@ -282,7 +282,7 @@ namespace Smile {
         CPU.TraceParams     = { (f32)_FrameIndex, GIMaxRayDist, _SkyIntensity,
                                 RayEps.HitShadowRayBias };
         // GI cru usa teto de firefly mais restritivo.
-        CPU.ShadeParams     = { 0.0f, AlbedoLOD, // .x livre
+        CPU.ShadeParams     = { CompatNeighborSelection ? 1.0f : 0.0f, AlbedoLOD,
                                 UseNrd ? FireflyMax : FireflyMaxRaw, ValidateInterval };
         // Sem superfície anterior, este frame usa apenas o candidato novo.
         const bool HasSurfaceHistory = _PrevSurfaceSlot != kInvalidSlot;

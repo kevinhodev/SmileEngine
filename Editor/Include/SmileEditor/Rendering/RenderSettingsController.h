@@ -67,6 +67,8 @@ namespace SmileEditor {
         bool   DIInitialVisibility   = false;
         bool   DIBrdfRatio           = false;
         bool   DIMeshCompactSupport  = false;
+        bool   DICompatNeighbors     = false;
+        bool   GICompatNeighbors     = false;
     };
 
     // Sobrescritas OPCIONAIS do profile_configure. Os knobs de amostragem ausentes preservam o
@@ -88,6 +90,9 @@ namespace SmileEditor {
         std::optional<bool> DIInitialVisibility;
         std::optional<bool> DIBrdfRatio;
         std::optional<bool> DIMeshCompactSupport;
+        // Selecao de vizinhos por compatibilidade (HPG 2026) no espacial do DI e do GI.
+        std::optional<bool> DICompatNeighbors;
+        std::optional<bool> GICompatNeighbors;
         // Ausente tambem desliga: um regime chamado "deterministico" nao pode depender de qual
         // janela recebeu o foco enquanto o agente coleta as amostras.
         std::optional<bool> BackgroundThrottleEnabled;
