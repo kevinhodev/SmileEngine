@@ -1,3 +1,4 @@
+#include "Smile/Graphics/RayTracing/OmmBakeCache.h"
 #include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
@@ -11,6 +12,8 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <memory>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -113,7 +116,8 @@ static int TestarChaveDeEntradas() {
 // Sintetico e sem cena: textura 1024^2 com a metade esquerda opaca, tres triangulos normais e um
 // gigante cuja AABB de UV cobre 40x40 repeticoes (1,68e9 texels — acima do teto de 2^30 e abaixo
 // do 2^31 em que a conta int do SDK daria wrap).
-static int TestarDivisaoDeWorkload() {
+static int TestarDivisaoDeWorkload(
+    std::vector<std::shared_ptr<Smile::FOpacityMicromapData>>& _Bakes) {
     using namespace Smile;
     int Falhas = 0;
     auto Check = [&](bool Cond, const char* Msg) {
@@ -216,13 +220,137 @@ static int TestarDivisaoDeWorkload() {
     }
 
     if (Falhas == 0) std::printf("[OMM TEST] divisao de workload + cobertura: 24 casos OK\n");
+    // Os tres bakes viram o material do teste do sidecar: um com array e indices especiais
+    // misturados, um dividido em 32 bits fixos e um all-unknown sem array.
+    _Bakes = { Dividido, Referencia, Nada };
+    return Falhas;
+}
+
+// O SIDECAR .somm. O que ele guarda vira micro-map na GPU sem passar pelo baker, entao a ida e
+// volta tem de ser exata, e todo arquivo que nao e exatamente o que foi gravado tem de ser
+// RECUSADO — nunca lido "do jeito que der".
+static int TestarSidecar(const std::vector<std::shared_ptr<Smile::FOpacityMicromapData>>& _Bakes) {
+    using namespace Smile;
+    int Falhas = 0;
+    auto Check = [&](bool Cond, const char* Msg) {
+        if (!Cond) { ++Falhas; std::fprintf(stderr, "  FAIL: %s\n", Msg); }
+    };
+    auto Igual = [](const FOpacityMicromapData& A, const FOpacityMicromapData& B) {
+        bool Descs = A.Descs.size() == B.Descs.size();
+        for (size_t I = 0; Descs && I < A.Descs.size(); ++I)
+            Descs = A.Descs[I].ByteOffset == B.Descs[I].ByteOffset &&
+                    A.Descs[I].SubdivisionLevel == B.Descs[I].SubdivisionLevel &&
+                    A.Descs[I].Format == B.Descs[I].Format;
+        bool Hist = A.Histogram.size() == B.Histogram.size();
+        for (size_t I = 0; Hist && I < A.Histogram.size(); ++I)
+            Hist = A.Histogram[I].Count == B.Histogram[I].Count &&
+                   A.Histogram[I].SubdivisionLevel == B.Histogram[I].SubdivisionLevel &&
+                   A.Histogram[I].Format == B.Histogram[I].Format;
+        return Descs && Hist && A.ArrayData == B.ArrayData && A.Indices == B.Indices &&
+               A.IndexFormat == B.IndexFormat && A.IndexStride == B.IndexStride &&
+               A.TriangleCount == B.TriangleCount &&
+               A.WorkloadExcludedTriangles == B.WorkloadExcludedTriangles &&
+               A.Coverage.FullyKnownTriangles == B.Coverage.FullyKnownTriangles &&
+               A.Coverage.MicromapTriangles == B.Coverage.MicromapTriangles &&
+               A.Coverage.FullyUnknownTriangles == B.Coverage.FullyUnknownTriangles &&
+               A.Coverage.KnownArea == B.Coverage.KnownArea &&
+               std::memcmp(&A.BakedBaseAlpha, &B.BakedBaseAlpha, sizeof(f32)) == 0 &&
+               std::memcmp(&A.BakedAlphaCutoff, &B.BakedAlphaCutoff, sizeof(f32)) == 0;
+    };
+    auto Chave = [](u32 Mesh) {
+        FOmmBakeKey K;
+        K.MeshIndex = Mesh; K.MaterialIndex = 100 + Mesh;
+        K.Geometry = 0x1111000000000000ull + Mesh; K.Texture = 0x2222000000000000ull + Mesh;
+        const f32 Alpha = 1.0f, Cutoff = 0.5f;
+        std::memcpy(&K.BaseAlphaBits, &Alpha, 4);
+        std::memcpy(&K.CutoffBits, &Cutoff, 4);
+        return K;
+    };
+    auto LerBytes = [](const std::filesystem::path& P) {
+        std::ifstream F(P, std::ios::binary);
+        return std::vector<char>((std::istreambuf_iterator<char>(F)), std::istreambuf_iterator<char>());
+    };
+    auto Gravar = [](const std::filesystem::path& P, const std::vector<char>& B) {
+        std::ofstream F(P, std::ios::binary | std::ios::trunc);
+        F.write(B.data(), static_cast<std::streamsize>(B.size()));
+    };
+
+    const std::filesystem::path Dir = std::filesystem::temp_directory_path() / "smile_omm_sidecar_test";
+    std::error_code Ec;
+    std::filesystem::create_directories(Dir, Ec);
+    const std::filesystem::path Arquivo = Dir / "cena.somm";
+    std::string Why;
+
+    FOmmBakeCache Gravado;
+    for (u32 I = 0; I < _Bakes.size(); ++I) Gravado.Put(Chave(I), _Bakes[I]);
+    Check(Gravado.Save(Arquivo, Why), "Save grava o sidecar");
+    Check(!std::filesystem::exists(Dir / "cena.somm.tmp"), "o .tmp nao sobra depois do Save");
+
+    FOmmBakeCache Lido;
+    Check(Lido.Load(Arquivo, Why) && Lido.Size() == _Bakes.size(), "Load le as tres entradas");
+    for (u32 I = 0; I < _Bakes.size(); ++I) {
+        std::shared_ptr<FOpacityMicromapData> D;
+        Check(Lido.Lookup(Chave(I), D) == FOmmBakeCache::ELookup::Hit && D && Igual(*D, *_Bakes[I]),
+              "ida e volta identica, campo a campo");
+    }
+
+    // A chave inteira tem de bater: um bit de cutoff ou um hash de textura diferente e outro bake.
+    {
+        std::shared_ptr<FOpacityMicromapData> D;
+        FOmmBakeKey K = Chave(0);
+        K.CutoffBits ^= 1u;
+        Check(Lido.Lookup(K, D) == FOmmBakeCache::ELookup::Stale && !D, "um ULP de cutoff e Stale");
+        K = Chave(0); K.Texture ^= 1ull;
+        Check(Lido.Lookup(K, D) == FOmmBakeCache::ELookup::Stale && !D, "outra textura e Stale");
+        Check(Lido.Lookup(Chave(7), D) == FOmmBakeCache::ELookup::Missing, "par inexistente e Missing");
+    }
+
+    // Deterministico: o mesmo cache grava os mesmos bytes (o mapa interno nao tem ordem).
+    const std::vector<char> Original = LerBytes(Arquivo);
+    {
+        const std::filesystem::path Outro = Dir / "outro.somm";
+        Check(Lido.Save(Outro, Why) && LerBytes(Outro) == Original,
+              "regravar o que foi lido da os mesmos bytes");
+    }
+
+    // RECUSAS. Cada uma com o arquivo original restaurado antes da proxima.
+    {
+        std::vector<char> B = Original;
+        B[B.size() / 2] ^= 0x40;
+        Gravar(Arquivo, B);
+        FOmmBakeCache C;
+        Check(!C.Load(Arquivo, Why) && C.Size() == 0, "byte trocado no payload e recusado");
+
+        B = Original;
+        B.resize(B.size() - 3);
+        Gravar(Arquivo, B);
+        Check(!C.Load(Arquivo, Why) && C.Size() == 0, "arquivo truncado e recusado");
+
+        B = Original;
+        u32 Settings;
+        std::memcpy(&Settings, B.data() + 8, 4);
+        Settings += 1;
+        std::memcpy(B.data() + 8, &Settings, 4);
+        Gravar(Arquivo, B);
+        Check(!C.Load(Arquivo, Why) && Why.find("parametros") != std::string::npos,
+              "outra versao dos parametros de bake e recusada, com o motivo certo");
+
+        Check(!C.Load(Dir / "nao_existe.somm", Why), "arquivo inexistente e falso");
+    }
+
+    std::filesystem::remove_all(Dir, Ec);
+    if (Falhas == 0) std::printf("[OMM TEST] sidecar .somm: 14 casos OK\n");
     return Falhas;
 }
 
 int main(int argc, char** argv) {
     using namespace Smile;
     if (TestarChaveDeEntradas() != 0) return 5;
-    if (TestarDivisaoDeWorkload() != 0) return 9;
+    {
+        std::vector<std::shared_ptr<FOpacityMicromapData>> Bakes;
+        if (TestarDivisaoDeWorkload(Bakes) != 0) return 9;
+        if (TestarSidecar(Bakes) != 0) return 12;
+    }
     if (argc != 2) {
         std::fprintf(stderr, "uso: SmileOpacityMicromapBakeTests <cena.sscene>\n");
         return 2;
@@ -246,6 +374,8 @@ int main(int argc, char** argv) {
     u64 TriangulosMascarados = 0, TriangulosExcluidos = 0;
     u64 CobResolvidos = 0, CobMicromap = 0, CobUnknown = 0;
     double CobAreaPorTri = 0.0;
+    // O bake de RUNTIME de cada par, para o sidecar ser conferido contra ele no fim.
+    std::unordered_map<u64, std::shared_ptr<FOpacityMicromapData>> BakesDeRuntime;
     for (u32 I = 0; I < Imported->Renderables.size(); ++I) {
         const SSceneRenderable& R = Imported->Renderables[I];
         if (R.MaterialIndex == kNoMaterial || R.MaterialIndex >= Imported->Materials.size() ||
@@ -302,6 +432,7 @@ int main(int argc, char** argv) {
         }
         TriangulosMascarados += Omm->TriangleCount;
         TriangulosExcluidos  += Omm->WorkloadExcludedTriangles;
+        BakesDeRuntime[Key] = Omm;
 
         // A cobertura tem de fechar com o buffer: as tres contagens somam a malha, a area e uma
         // fracao, e todo excluido e um UNKNOWN inteiro.
@@ -614,6 +745,117 @@ int main(int argc, char** argv) {
         }
         std::printf("[OMM TEST] leitor sob demanda: %u malhas e %u texturas identicas ao loader\n",
                     Conferidas, TexturasConferidas);
+    }
+
+    // O SIDECAR REAL da cena, quando existe. E o teste que pega o defeito que mais importa nesta
+    // serie: a ferramenta e o import gerarem CHAVES diferentes, e o load nunca achar o bake
+    // offline (silenciosamente — cairia no bake de runtime e so o tempo de load denunciaria).
+    //
+    // Estrito de proposito: sidecar presente tem de estar inteiro e atual. Desatualizado depois de
+    // um recook e estado local, e a mensagem diz o que rodar.
+    {
+        const std::vector<FOmmBakeJob> Jobs = CollectOmmBakeJobs(*Imported);
+        const std::filesystem::path Sidecar = FOmmBakeCache::PathFor(Imported->BasePath);
+        if (Jobs.size() != BakesDeRuntime.size()) {
+            std::fprintf(stderr, "CollectOmmBakeJobs achou %zu pares, o teste achou %zu\n",
+                         Jobs.size(), BakesDeRuntime.size());
+            return 13;
+        }
+        if (!std::filesystem::exists(Sidecar)) {
+            std::printf("[OMM TEST] sem sidecar %s: conferencia do bake offline pulada\n",
+                        Sidecar.filename().string().c_str());
+        } else {
+            FOmmBakeCache Cache;
+            std::string Why;
+            if (!Cache.Load(Sidecar, Why)) {
+                std::fprintf(stderr, "sidecar %s recusado: %s (rode SmileOmmBaker)\n",
+                             Sidecar.string().c_str(), Why.c_str());
+                return 14;
+            }
+            u32 Identicos = 0, Melhores = 0, Divergentes = 0;
+            u64 UnknownOffline = 0;
+            for (const FOmmBakeJob& J : Jobs) {
+                std::shared_ptr<FOpacityMicromapData> D;
+                if (Cache.Lookup(J.Key, D) != FOmmBakeCache::ELookup::Hit) {
+                    std::fprintf(stderr, "sidecar sem bake atual para mesh=%u material=%u "
+                                         "(rode SmileOmmBaker)\n", J.Key.MeshIndex,
+                                 J.Key.MaterialIndex);
+                    return 15;
+                }
+                if (D->WorkloadExcludedTriangles != 0) {
+                    std::fprintf(stderr, "bake offline com triangulos excluidos (mesh=%u)\n",
+                                 J.Key.MeshIndex);
+                    return 16;
+                }
+                UnknownOffline += D->Coverage.FullyUnknownTriangles;
+                const FOpacityMicromapData& R =
+                    *BakesDeRuntime.at((static_cast<u64>(J.Key.MeshIndex) << 32) | J.Key.MaterialIndex);
+                if (R.WorkloadExcludedTriangles == 0) {
+                    // Coube no teto de runtime: o offline tem de ser o MESMO bake, byte a byte.
+                    // E isto que prova que sidecar e runtime enxergam as mesmas entradas.
+                    const bool Igual =
+                        D->Indices == R.Indices && D->ArrayData == R.ArrayData &&
+                        D->IndexStride == R.IndexStride && D->Descs.size() == R.Descs.size() &&
+                        std::memcmp(D->Descs.data(), R.Descs.data(),
+                                    R.Descs.size() * sizeof(R.Descs[0])) == 0;
+                    if (!Igual) {
+                        // Quanto diverge: triangulos cuja CLASSE mudou (especial T/O, especial
+                        // UNKNOWN ou micro-map) e a cobertura dos dois lados.
+                        auto Classe = [](i32 I) { return I >= 0 ? 0 : (I >= -2 ? 1 : 2); };
+                        u32 ClasseMudou = 0;
+                        for (u32 T = 0; T < R.TriangleCount; ++T)
+                            if (Classe(D->IndexOf(T)) != Classe(R.IndexOf(T))) ++ClasseMudou;
+                        // stderr so quando e falha (mesma configuracao); entre configuracoes e
+                        // informacao, e decidida pela tolerancia abaixo.
+                        const bool MesmaConfig = Cache.Flavor() == FOmmBakeCache::CurrentFlavor();
+                        std::fprintf(MesmaConfig ? stderr : stdout,
+                            "[OMM TEST] bake offline diverge do de runtime (mesh=%u material=%u, sidecar %s / "
+                            "teste %s): %u de %u triangulos mudaram de classe; offline %u/%u/%u area "
+                            "%.4f, runtime %u/%u/%u area %.4f; array %zu vs %zu B, %zu vs %zu descs\n",
+                            J.Key.MeshIndex, J.Key.MaterialIndex,
+                            Cache.Flavor() == FOmmBakeCache::kFlavorDebug ? "Debug" : "otimizado",
+                            FOmmBakeCache::CurrentFlavor() == FOmmBakeCache::kFlavorDebug ? "Debug" : "otimizado",
+                            ClasseMudou, R.TriangleCount,
+                            D->Coverage.FullyKnownTriangles, D->Coverage.MicromapTriangles,
+                            D->Coverage.FullyUnknownTriangles, D->Coverage.KnownArea,
+                            R.Coverage.FullyKnownTriangles, R.Coverage.MicromapTriangles,
+                            R.Coverage.FullyUnknownTriangles, R.Coverage.KnownArea,
+                            D->ArrayData.size(), R.ArrayData.size(), D->Descs.size(), R.Descs.size());
+                        // Mesma configuracao de build: tem de ser o MESMO bake. Configuracoes
+                        // diferentes: /fp:fast no omm-lib torna o bake nao reprodutivel bit a bit.
+                        if (MesmaConfig) return 17;
+                        // Entre Debug e Release, a TOLERANCIA medida (Bistro, 2026-10-31): nos 12
+                        // pares que divergem, zero triangulos mudaram de classe, contagens, array
+                        // e descritores identicos, e a area conhecida variou no maximo 1e-4 — so
+                        // estados de microtriangulo na borda do contorno. O teto e 10x isso.
+                        // Passar dele ja nao e arredondamento de /fp:fast, e outra entrada.
+                        if (ClasseMudou != 0 || D->ArrayData.size() != R.ArrayData.size() ||
+                            D->Descs.size() != R.Descs.size() ||
+                            std::abs(D->Coverage.KnownArea - R.Coverage.KnownArea) > 1e-3f) {
+                            std::fprintf(stderr, "divergencia entre configuracoes acima do que "
+                                                 "/fp:fast explica (mesh=%u)\n", J.Key.MeshIndex);
+                            return 19;
+                        }
+                        ++Divergentes;
+                        continue;
+                    }
+                    ++Identicos;
+                } else {
+                    // Dividido em runtime: o offline cobre o que o teto tinha deixado de fora.
+                    if (D->Coverage.FullyUnknownTriangles >= R.Coverage.FullyUnknownTriangles) {
+                        std::fprintf(stderr, "bake offline nao cobriu mais que o dividido (mesh=%u)\n",
+                                     J.Key.MeshIndex);
+                        return 18;
+                    }
+                    ++Melhores;
+                }
+            }
+            std::printf("[OMM TEST] sidecar: %zu pares atuais — %u identicos ao bake de runtime, %u "
+                        "divergentes por configuracao de build, %u divididos em runtime agora "
+                        "cobertos; %llu triangulos UNKNOWN inteiros offline\n",
+                        Jobs.size(), Identicos, Divergentes, Melhores,
+                        static_cast<unsigned long long>(UnknownOffline));
+        }
     }
 
     std::printf("[OMM TEST] %u pares mesh/material masked validados; entrada compacta identica a "

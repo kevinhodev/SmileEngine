@@ -32,6 +32,12 @@
     unica forma de respeitar as dependencias reais do target (ufbx, CMakeLists, headers
     transitivos) em vez de adivinhar por timestamp de dois arquivos.
 
+.PARAMETER NoOmm
+    Nao roda o SmileOmmBaker depois de cozinhar. Sem ele a cena carrega do mesmo jeito, mas
+    bakeia os Opacity Micro-Maps em runtime, com teto de workload (mais lento e com cobertura
+    menor). O sidecar <cena>.somm se valida sozinho por hash de conteudo e NAO entra na baseline:
+    um .somm velho e recusado par a par no load, nunca usado errado. Ver Docs/OMM-AUDIT.md.
+
 .PARAMETER Config
     Configuracao do cooker (default Release).
 
@@ -50,6 +56,7 @@ param(
     [switch] $Verify,
     [switch] $Record,
     [switch] $NoBuild,
+    [switch] $NoOmm,
     [string] $Only     = "",
     [string] $Config   = "Release",
     [string] $BuildDir = "build"
@@ -72,6 +79,8 @@ $BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir }
 $BuildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
 if (-not $Recipe.cookerName) { throw "receita sem 'cookerName'" }
 $CookerPath = Join-Path $BuildRoot (Join-Path "bin" (Join-Path $Config $Recipe.cookerName))
+# O bake offline de OMM: ferramenta propria porque linka a engine (o Cooker nao linka).
+$OmmBakerPath = Join-Path $BuildRoot (Join-Path "bin" (Join-Path $Config "SmileOmmBaker.exe"))
 
 if (-not $Recipe.expect) { throw "receita sem bloco 'expect' (magic/versao esperados)" }
 $ExpectVersion = [int] $Recipe.expect.version
@@ -339,9 +348,17 @@ if (-not $NoBuild) {
     Write-Host "reconstruindo SmileCooker ($Config)..."
     & cmake --build $BuildRoot --target SmileCooker --config $Config | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "build do SmileCooker falhou (exit $LASTEXITCODE)" }
+    if (-not $NoOmm) {
+        Write-Host "reconstruindo SmileOmmBaker ($Config)..."
+        & cmake --build $BuildRoot --target SmileOmmBaker --config $Config | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "build do SmileOmmBaker falhou (exit $LASTEXITCODE)" }
+    }
 }
 if (-not (Test-Path $CookerPath)) {
     throw "cooker nao encontrado: $CookerPath`nRode antes: cmake --build $BuildRoot --target SmileCooker --config $Config"
+}
+if (-not $NoOmm -and -not (Test-Path $OmmBakerPath)) {
+    throw "SmileOmmBaker nao encontrado: $OmmBakerPath`nRode antes: cmake --build $BuildRoot --target SmileOmmBaker --config $Config, ou passe -NoOmm"
 }
 $CookerFingerprint = Get-Fingerprint $CookerPath
 Write-Host ("cooker sha256={0}" -f $CookerFingerprint.sha256.Substring(0, 16))
@@ -363,7 +380,16 @@ foreach ($Scene in $Selected) {
     if ($LASTEXITCODE -ne 0) { Write-Host ("    FALHOU (exit {0})" -f $LASTEXITCODE); $Failed++; continue }
 
     # -Strict: saida fora do formato esperado aborta ANTES de virar hash na baseline.
-    $Outputs += ,(Get-OutputRecord $Scene -Strict)
+    $Record = Get-OutputRecord $Scene -Strict
+    $Outputs += ,$Record
+
+    # Bake offline de OMM sobre o que ACABOU de ser cozido. Incremental: pares cujo bake no .somm
+    # ainda bate com a cena nova sao reaproveitados, o resto e refeito.
+    if (-not $NoOmm) {
+        $SscenePath = Join-Path $RepoRoot "$($Record.outBase).sscene"
+        & $OmmBakerPath $SscenePath | Select-String -Pattern "OMM BAKER" | ForEach-Object { "    $_" }
+        if ($LASTEXITCODE -ne 0) { Write-Host ("    OMM FALHOU (exit {0})" -f $LASTEXITCODE); $Failed++ }
+    }
 }
 
 if ($Failed -gt 0) { throw "$Failed cena(s) falharam" }

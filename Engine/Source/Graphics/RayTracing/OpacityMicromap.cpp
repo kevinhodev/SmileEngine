@@ -308,20 +308,20 @@ namespace Smile {
     std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
         const FMesh& _Mesh, const FTextureCPUData* _AlphaTexture,
         f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
-        u32 _InternalThreadCount) {
+        u32 _InternalThreadCount, u64 _MaxWorkloadSize) {
         // O teto de 32 bits e conferido AQUI, sobre o vetor, e nao na FOmmGeometry: la os
         // tamanhos ja sao u32, entao o estouro teria acontecido no cast silenciosamente.
         if (_Mesh.Vertices.size() > std::numeric_limits<u32>::max() ||
             _Mesh.Indices.size() > std::numeric_limits<u32>::max())
             Fail("mesh excede os limites de 32 bits do baker");
         return Bake(GeometryOf(_Mesh), _AlphaTexture, _BaseAlpha, _AlphaCutoff,
-                    _EnableInternalThreads, _InternalThreadCount);
+                    _EnableInternalThreads, _InternalThreadCount, _MaxWorkloadSize);
     }
 
     std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
         const FOmmGeometry& _Geometry, const FTextureCPUData* _AlphaTexture,
         f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
-        u32 _InternalThreadCount) {
+        u32 _InternalThreadCount, u64 _MaxWorkloadSize) {
         if (!_Geometry.Valid())
             Fail("geometria de bake invalida (sem UV, sem indice, ou contagem nao-triangular)");
 
@@ -392,8 +392,9 @@ namespace Smile {
             // Limite UV/texel: impede ilhas patologicas de monopolizarem minutos do commit.
             // Acima dele os triangulos mais caros saem do bake com indice especial UNKNOWN (ver
             // SplitByWorkload); continua sendo a geometria DXR 1.2, e o alpha-test exato so roda
-            // nesses triangulos.
-            constexpr u64 kMaxWorkloadSize = 1ull << 30;
+            // nesses triangulos. O bake offline passa kOmmNoWorkloadLimit, que e o "sem limite"
+            // do proprio SDK — ai WORKLOAD_TOO_BIG nao acontece e a divisao nunca roda.
+            const u64 kMaxWorkloadSize = _MaxWorkloadSize;
             Input.maxWorkloadSize = kMaxWorkloadSize;
 
             omm::Result BakeStatus = omm::Cpu::Bake(Baker, Input, &Result);
@@ -428,7 +429,7 @@ namespace Smile {
 
             if (BakeStatus == omm::Result::WORKLOAD_TOO_BIG) {
                 auto Out = MakeAllUnknown(_Geometry, _BaseAlpha, _AlphaCutoff);
-                LogWarning("[OMM] - Workload excedeu 2^30 e nem a divisao coube; usando indices "
+                LogWarning("[OMM] - Workload excedeu o teto e nem a divisao coube; usando indices "
                            "OMM UNKNOWN em " + std::to_string(Out->TriangleCount) + " triangulos");
                 omm::Cpu::DestroyTexture(Baker, Texture); Texture = 0;
                 omm::DestroyBaker(Baker); Baker = nullptr;
@@ -505,7 +506,7 @@ namespace Smile {
                 // subir o teto resolve; muitas vezes acima, so o bake offline.
                 const double OverCap = Split.TotalCost / static_cast<double>(kMaxWorkloadSize);
                 LogWarning("[OMM] - Workload " + std::to_string(OverCap).substr(0, 5) +
-                           "x o teto de 2^30; " + std::to_string(Split.Excluded) + " de " +
+                           "x o teto; " + std::to_string(Split.Excluded) + " de " +
                            std::to_string(TriangleCount) +
                            " triangulos (os maiores em UV) ficam com indice UNKNOWN, o resto foi "
                            "bakeado");

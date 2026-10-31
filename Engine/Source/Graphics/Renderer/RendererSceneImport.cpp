@@ -4,6 +4,7 @@
 #include "Smile/Graphics/Backend/RenderBackend.h"
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Renderer/RenderSettings.h"
+#include "Smile/Graphics/RayTracing/OmmBakeCache.h"
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
 #include "Smile/Scene/SceneLoader.h"
 #include "Smile/Graphics/Debug/VramTracker.h"
@@ -404,99 +405,51 @@ namespace Smile {
             return "Mesh " + std::to_string(fallbackIdx);
         };
 
-        struct FOmmBakeJob {
-            u64 Key = 0;
-            const FMesh* Mesh = nullptr;
-            const FTextureCPUData* AlphaTexture = nullptr;
-            f32 BaseAlpha = 1.0f;
-            f32 AlphaCutoff = 0.5f;
-        };
-
-        std::vector<FOmmBakeJob> ommJobs;
+        // Os pares mascarados, pela MESMA enumeracao do SmileOmmBaker: e isso que garante que as
+        // chaves gravadas offline sejam as que este load procura (ver OmmBakeCache.h). Os valores
+        // de alpha saem do SSceneMaterial exatamente como o FMaterial acima foi montado.
+        const std::vector<FOmmBakeJob> ommJobs = CollectOmmBakeJobs(Imported);
         std::unordered_map<u64, size_t> ommJobByMeshMaterial;
-        ommJobs.reserve(sh.RenderableCount);
-        for (u32 i = 0; i < sh.RenderableCount; ++i) {
-            const SSceneRenderable& r = rnds[i];
-            if (r.MeshIndex >= mh.MeshCount) continue;
-            FMaterial* Material = matOf(r.MaterialIndex);
-            if (!Material || !Material->Constants.AlphaTest) continue;
-            if (r.MaterialIndex == kNoMaterial || r.MaterialIndex >= sh.MaterialCount)
-                throw std::runtime_error("Renderable alpha-tested sem material valido para OMM");
-
-            const u64 Key = (static_cast<u64>(r.MeshIndex) << 32) |
-                            static_cast<u64>(r.MaterialIndex);
-            if (ommJobByMeshMaterial.contains(Key)) continue;
-            const SSceneMaterial& Sm = mats[r.MaterialIndex];
-            ommJobByMeshMaterial.emplace(Key, ommJobs.size());
-            ommJobs.push_back({ Key, &Imported.Meshes[r.MeshIndex], getTexCpu(Sm.BaseColor),
-                                Material->Constants.BaseColorFactor.W,
-                                Material->Constants.AlphaCutoff });
-        }
-
-        // Comecar pelas geometrias maiores reduz a cauda: os ultimos workers nao ficam presos
-        // sozinhos nos bakes caros depois que todos os jobs pequenos ja terminaram.
-        std::stable_sort(ommJobs.begin(), ommJobs.end(),
-            [](const FOmmBakeJob& A, const FOmmBakeJob& B) {
-                return A.Mesh->Indices.size() > B.Mesh->Indices.size();
-            });
-        ommJobByMeshMaterial.clear();
         for (size_t I = 0; I < ommJobs.size(); ++I)
-            ommJobByMeshMaterial.emplace(ommJobs[I].Key, I);
+            ommJobByMeshMaterial.emplace((static_cast<u64>(ommJobs[I].Key.MeshIndex) << 32) |
+                                             ommJobs[I].Key.MaterialIndex, I);
 
-        // OMM possui dois perfis bem diferentes: geometrias grandes/UVs patologicas escalam com
-        // o OpenMP interno, enquanto muitos jobs pequenos ganham mais sendo executados em
-        // paralelo sem equipes aninhadas. Separar as duas faixas evita uma cauda single-thread.
+        // O SIDECAR primeiro: o bake offline, sem teto, que o SmileOmmBaker grava em <cena>.somm.
+        // O que ele nao cobre — sidecar ausente, recusado inteiro ou par desatualizado — vai para o
+        // bake de runtime, com teto, exatamente como antes de o sidecar existir. Nao e fallback
+        // para geometria sem OMM: os dois caminhos produzem o mesmo tipo de micro-map.
         const Clock::time_point tOmmBakeStart = Clock::now();
         std::vector<std::shared_ptr<FOpacityMicromapData>> ommResults(ommJobs.size());
-        const unsigned HardwareThreads = std::max(1u, std::thread::hardware_concurrency());
-        const unsigned WorkerBudget = HardwareThreads > 2 ? HardwareThreads - 2 : 1;
-        constexpr size_t kInternalThreadTriangleThreshold = 4096;
-        std::vector<size_t> parallelJobIndices;
-        parallelJobIndices.reserve(ommJobs.size());
-        size_t InternalJobCount = 0;
-        for (size_t I = 0; I < ommJobs.size(); ++I) {
-            const FOmmBakeJob& Job = ommJobs[I];
-            const size_t TriangleCount = Job.Mesh->Indices.size() / 3;
-            if (TriangleCount >= kInternalThreadTriangleThreshold) {
-                ommResults[I] = FOpacityMicromapBaker::Bake(
-                    *Job.Mesh, Job.AlphaTexture, Job.BaseAlpha, Job.AlphaCutoff,
-                    true, WorkerBudget);
-                ++InternalJobCount;
-            } else {
-                parallelJobIndices.push_back(I);
-            }
-        }
-
-        const unsigned WorkerCount = std::min<unsigned>(
-            std::min(WorkerBudget, 8u), static_cast<unsigned>(parallelJobIndices.size()));
-        std::atomic_size_t NextJob{ 0 };
-        std::atomic_bool StopWorkers{ false };
-        std::mutex ErrorMutex;
-        std::exception_ptr FirstError;
-        auto BakeWorker = [&]() {
-            while (!StopWorkers.load(std::memory_order_relaxed)) {
-                const size_t Slot = NextJob.fetch_add(1, std::memory_order_relaxed);
-                if (Slot >= parallelJobIndices.size()) return;
-                const size_t JobIndex = parallelJobIndices[Slot];
-                const FOmmBakeJob& Job = ommJobs[JobIndex];
-                try {
-                    ommResults[JobIndex] = FOpacityMicromapBaker::Bake(
-                        *Job.Mesh, Job.AlphaTexture, Job.BaseAlpha, Job.AlphaCutoff, false);
-                } catch (...) {
-                    {
-                        std::scoped_lock Lock(ErrorMutex);
-                        if (!FirstError) FirstError = std::current_exception();
-                    }
-                    StopWorkers.store(true, std::memory_order_relaxed);
-                    return;
+        std::vector<size_t> ommPending;
+        u32 ommFromSidecar = 0, ommStale = 0, ommMissing = 0;
+        if (!ommJobs.empty()) {
+            const fs::path SidecarPath   = FOmmBakeCache::PathFor(Imported.BasePath);
+            const bool     SidecarExists = fs::exists(SidecarPath);
+            FOmmBakeCache  Sidecar;
+            std::string    Why;
+            const bool     SidecarOk = SidecarExists && Sidecar.Load(SidecarPath, Why);
+            if (SidecarExists && !SidecarOk)
+                LogWarning("[OMM] Sidecar " + SidecarPath.filename().string() + " recusado (" + Why +
+                           "); todos os pares vao pelo bake de runtime. Rode SmileOmmBaker na cena");
+            for (size_t I = 0; I < ommJobs.size(); ++I) {
+                switch (Sidecar.Lookup(ommJobs[I].Key, ommResults[I])) {
+                    case FOmmBakeCache::ELookup::Hit:     ++ommFromSidecar; break;
+                    case FOmmBakeCache::ELookup::Stale:   ++ommStale;   ommPending.push_back(I); break;
+                    case FOmmBakeCache::ELookup::Missing: ++ommMissing; ommPending.push_back(I); break;
                 }
             }
-        };
-        std::vector<std::jthread> ommWorkers;
-        ommWorkers.reserve(WorkerCount);
-        for (unsigned I = 0; I < WorkerCount; ++I) ommWorkers.emplace_back(BakeWorker);
-        for (std::jthread& Worker : ommWorkers) Worker.join();
-        if (FirstError) std::rethrow_exception(FirstError);
+            if (SidecarOk && (ommStale || ommMissing))
+                LogWarning("[OMM] Sidecar desatualizado: " + std::to_string(ommStale) +
+                           " pares mudaram e " + std::to_string(ommMissing) +
+                           " faltam desde o bake offline; esses vao pelo bake de runtime, com teto. "
+                           "Rode SmileOmmBaker na cena");
+            else if (!SidecarExists)
+                LogDebug("[OMM] Sem sidecar " + SidecarPath.filename().string() +
+                         "; bake de runtime, com teto, em todos os pares (o SmileOmmBaker gera o "
+                         "bake offline)");
+        }
+        const FOmmBakeRunStats ommRun =
+            BakeOmmJobs(ommJobs, ommPending, kOmmRuntimeMaxWorkload, ommResults);
         const double msOmmBake = MsSince(tOmmBakeStart);
         if (!ommJobs.empty()) {
             // Quanto da geometria mascarada ficou SEM micro-map por causa do teto de workload. E
@@ -522,10 +475,12 @@ namespace Smile {
                 return std::to_string(TotalTriangles
                     ? static_cast<int>(100.0 * _V / static_cast<double>(TotalTriangles) + 0.5) : 0) + "%";
             };
-            LogDebug("[OMM] Bake paralelo: " + std::to_string(ommJobs.size()) +
-                     " pares (" + std::to_string(InternalJobCount) + " grandes internos + " +
-                     std::to_string(parallelJobIndices.size()) + " pequenos em " +
-                     std::to_string(WorkerCount) + " workers) em " +
+            LogDebug("[OMM] " + std::to_string(ommJobs.size()) + " pares: " +
+                     std::to_string(ommFromSidecar) + " do sidecar, " +
+                     std::to_string(ommPending.size()) + " bakeados em runtime (" +
+                     std::to_string(ommRun.InternalJobs) + " grandes internos + " +
+                     std::to_string(ommRun.ParallelJobs) + " pequenos em " +
+                     std::to_string(ommRun.Workers) + " workers) em " +
                      std::to_string(static_cast<int>(msOmmBake)) + " ms | sem micro-map por "
                      "workload: " + std::to_string(ExcludedTriangles) + " de " +
                      std::to_string(TotalTriangles) + " triangulos");

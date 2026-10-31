@@ -77,6 +77,7 @@ add_subdirectory(Engine)
 add_subdirectory(Shaders)
 add_subdirectory(Editor)
 add_subdirectory(Tools/Cooker)
+add_subdirectory(Tools/OmmBaker)
 add_subdirectory(Tools/AllocBench)
 
 if(BUILD_TESTING)

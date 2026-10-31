@@ -1,0 +1,122 @@
+// SmileOmmBaker — bake OFFLINE dos Opacity Micro-Maps de uma cena cozida, para o sidecar
+// <cena>.somm que o load consome em vez de bakear.
+//
+// Por que e uma ferramenta propria, e nao um passo do SmileCooker: o Cooker nao linka a engine (nem
+// OMM SDK, nem DirectXTex, nem o loader de textura) — ele so referencia os DDS do disco. O bake tem
+// de enxergar o alpha EXATAMENTE como o runtime o enxerga: o BC decodificado dos bytes que sobem
+// para a GPU, as UVs do .smesh pos-weld. Por isso esta ferramenta carrega a cena pelo MESMO
+// LoadCookedSceneData do runtime e enumera os pares pela MESMA CollectOmmBakeJobs do import.
+//
+// Sem teto de workload: e a razao de existir. No BistroExterior o teto de runtime deixava 113 k
+// triangulos mascarados sem micro-map, em malhas 4x a 34x acima dele.
+//
+// Incremental por padrao: pares cujo bake no sidecar existente ainda bate com a cena sao
+// reaproveitados. --force refaz todos.
+
+#include "Smile/Graphics/RayTracing/OmmBakeCache.h"
+#include "Smile/Scene/SceneLoader.h"
+
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+int main(int argc, char** argv) {
+    using namespace Smile;
+    const char* ScenePath = nullptr;
+    bool Force = false;
+    for (int I = 1; I < argc; ++I) {
+        if (std::strcmp(argv[I], "--force") == 0) Force = true;
+        else if (!ScenePath) ScenePath = argv[I];
+        else { ScenePath = nullptr; break; }
+    }
+    if (!ScenePath) {
+        std::fprintf(stderr, "uso: SmileOmmBaker <cena.sscene> [--force]\n");
+        return 2;
+    }
+
+    try {
+        const auto Start = std::chrono::steady_clock::now();
+        const auto Scene = LoadCookedSceneData(std::filesystem::path(ScenePath).wstring());
+        if (!Scene) {
+            std::fprintf(stderr, "falha ao carregar a cena: %s\n", ScenePath);
+            return 3;
+        }
+
+        const std::vector<FOmmBakeJob> Jobs = CollectOmmBakeJobs(*Scene);
+        const std::filesystem::path OutPath = FOmmBakeCache::PathFor(Scene->BasePath);
+
+        FOmmBakeCache Previous;
+        if (!Force && std::filesystem::exists(OutPath)) {
+            std::string Why;
+            if (!Previous.Load(OutPath, Why))
+                std::printf("[OMM BAKER] sidecar existente ignorado: %s\n", Why.c_str());
+        }
+
+        std::vector<std::shared_ptr<FOpacityMicromapData>> Results(Jobs.size());
+        std::vector<size_t> Pending;
+        u32 Reused = 0, Stale = 0;
+        for (size_t I = 0; I < Jobs.size(); ++I) {
+            switch (Previous.Lookup(Jobs[I].Key, Results[I])) {
+                case FOmmBakeCache::ELookup::Hit:     ++Reused; break;
+                case FOmmBakeCache::ELookup::Stale:   ++Stale; Pending.push_back(I); break;
+                case FOmmBakeCache::ELookup::Missing: Pending.push_back(I); break;
+            }
+        }
+        std::printf("[OMM BAKER] %zu pares mascarados: %u reaproveitados, %zu a bakear "
+                    "(%u desatualizados)\n", Jobs.size(), Reused, Pending.size(), Stale);
+        std::fflush(stdout);
+
+        const FOmmBakeRunStats Run = BakeOmmJobs(Jobs, Pending, kOmmNoWorkloadLimit, Results);
+
+        FOmmBakeCache Out;
+        u64 Triangles = 0, Known = 0, Micromap = 0, Unknown = 0, ArrayBytes = 0, Excluded = 0;
+        for (size_t I = 0; I < Jobs.size(); ++I) {
+            const FOpacityMicromapData& D = *Results[I];
+            Triangles  += D.TriangleCount;
+            Known      += D.Coverage.FullyKnownTriangles;
+            Micromap   += D.Coverage.MicromapTriangles;
+            Unknown    += D.Coverage.FullyUnknownTriangles;
+            ArrayBytes += D.ArrayData.size();
+            Excluded   += D.WorkloadExcludedTriangles;
+            Out.Put(Jobs[I].Key, Results[I]);
+        }
+        // Sem teto nao ha divisao: um excluido aqui significa que o baker de runtime vazou para
+        // o caminho offline, e o sidecar gravaria exatamente o buraco que ele existe para fechar.
+        if (Excluded != 0) {
+            std::fprintf(stderr, "[OMM BAKER] %llu triangulos excluidos por workload num bake sem "
+                                 "teto — nao gravando\n",
+                         static_cast<unsigned long long>(Excluded));
+            return 4;
+        }
+
+        std::string Why;
+        if (!Out.Save(OutPath, Why)) {
+            std::fprintf(stderr, "[OMM BAKER] falha ao gravar %s: %s\n", OutPath.string().c_str(),
+                         Why.c_str());
+            return 5;
+        }
+
+        const double TotalS =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - Start).count();
+        const double N = Triangles ? static_cast<double>(Triangles) : 1.0;
+        std::printf("[OMM BAKER] bake de %zu pares em %.1f s (%u grandes internos + %u pequenos em "
+                    "%u workers); total %.1f s\n",
+                    Pending.size(), Run.Ms / 1000.0, Run.InternalJobs, Run.ParallelJobs,
+                    Run.Workers, TotalS);
+        std::printf("[OMM BAKER] cobertura de %llu triangulos: %.1f%% resolvidos inteiros, %.1f%% com "
+                    "micro-map, %.1f%% UNKNOWN inteiros; %.1f MB de array\n",
+                    static_cast<unsigned long long>(Triangles), 100.0 * Known / N,
+                    100.0 * Micromap / N, 100.0 * Unknown / N,
+                    static_cast<double>(ArrayBytes) / (1024.0 * 1024.0));
+        std::printf("[OMM BAKER] gravado: %s\n", OutPath.string().c_str());
+        return 0;
+    } catch (const std::exception& E) {
+        std::fprintf(stderr, "[OMM BAKER] falhou: %s\n", E.what());
+        return 1;
+    }
+}

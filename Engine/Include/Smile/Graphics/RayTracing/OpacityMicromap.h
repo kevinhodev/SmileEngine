@@ -147,6 +147,20 @@ namespace Smile {
         }
     };
 
+    // Teto de workload do bake de RUNTIME — o load de cena e o rebake do editor. Existe para o load
+    // nao levar minutos; acima dele a malha e dividida (ver SplitByWorkload). O bake OFFLINE do
+    // SmileOmmBaker roda sem teto e e o que cobre o resto.
+    inline constexpr u64 kOmmRuntimeMaxWorkload = 1ull << 30;
+    // "Sem teto", no mesmo valor que o SDK usa como default de maxWorkloadSize.
+    inline constexpr u64 kOmmNoWorkloadLimit    = ~0ull;
+
+    // Versao dos PARAMETROS do bake (formato, promocao de unknown, subdivisao, sampler, cutoff,
+    // flags). Vai no cabecalho do sidecar .somm: um bake gravado com parametros diferentes dos de
+    // agora e outro micro-map, e o sidecar inteiro e recusado. BUMPAR a cada mudanca em
+    // FOpacityMicromapBaker::Bake que altere o resultado — o teto de workload NAO conta, ele so
+    // decide quanto e bakeado, e o cache offline e sem teto por definicao.
+    inline constexpr u32 kOmmBakeSettingsVersion = 1u;
+
     class FOpacityMicromapBaker {
     public:
         // Baker CPU oficial NVIDIA, em 4-state. AlphaTexture nula representa uma textura branca;
@@ -157,7 +171,8 @@ namespace Smile {
                                                           f32 BaseAlpha,
                                                           f32 AlphaCutoff,
                                                           bool EnableInternalThreads = true,
-                                                          u32 InternalThreadCount = 0);
+                                                          u32 InternalThreadCount = 0,
+                                                          u64 MaxWorkloadSize = kOmmRuntimeMaxWorkload);
 
         // Conveniencia para quem tem a malha inteira em maos (o import). Extrai a FOmmGeometry e
         // delega — o bake resultante e o MESMO, e o teste prova isso comparando byte a byte.
@@ -166,7 +181,8 @@ namespace Smile {
                                                           f32 BaseAlpha,
                                                           f32 AlphaCutoff,
                                                           bool EnableInternalThreads = true,
-                                                          u32 InternalThreadCount = 0);
+                                                          u32 InternalThreadCount = 0,
+                                                          u64 MaxWorkloadSize = kOmmRuntimeMaxWorkload);
 
         // A geometria de bake de uma malha, apontando PARA DENTRO dela. Nao copia: o chamador
         // garante que a malha sobreviva ao uso.
