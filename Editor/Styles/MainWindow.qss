@@ -1,14 +1,14 @@
-/* O viewport e a superficie mais escura do conceito (#09090A), sem moldura e sem raio: a
-   toolbar em cima e as hairlines dos docks ja delimitam a area de render. */
+/* O viewport fica sobre o fundo dos gutters (#121212), sem moldura e sem raio: a toolbar em
+   cima e os fios escuros dos docks ja delimitam a area de render. */
 QFrame#ViewportPanel {
-    background: #09090A;
+    background: #121212;
     border: none;
 }
 
 QWidget#MainViewport {
-    background: #09090A;
+    background: #121212;
 }
 
 QWidget#ConsolePanel {
-    background: #111113;
+    background: #212121;
 }

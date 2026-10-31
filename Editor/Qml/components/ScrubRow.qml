@@ -16,7 +16,7 @@ Item {
     property string prefix: ""
     property string suffix: ""
     property bool interactive: true
-    property real fieldRatio: 0.58
+    property real fieldRatio: 1 - Theme.labelRatio
 
     signal moved(real value)
     signal committed(real value)
@@ -31,10 +31,10 @@ Item {
         anchors.right: field.left
         anchors.rightMargin: 10
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         elide: Text.ElideRight
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Rectangle {

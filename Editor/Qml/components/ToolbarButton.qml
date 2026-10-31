@@ -28,18 +28,24 @@ Rectangle {
 
     signal tapped()
 
-    implicitWidth: contents.implicitWidth + 13
-    implicitHeight: 24
+    implicitWidth: contents.implicitWidth + 16
+    implicitHeight: 26
     radius: Theme.radiusControl
     opacity: enabledVisual ? 1.0 : 0.42
-    color: active ? Theme.accentBg
-         : hover.hovered && enabledVisual ? Theme.surfaceRaised
+    // Botao em relevo (um degrau acima do painel); ligado = afundado em cinza claro com o
+    // icone no accent. Sem borda: o degrau de luminancia ja recorta o controle.
+    color: active ? Theme.raisedOn
+         : hover.hovered && enabledVisual ? Theme.raisedHover
          : flat ? "transparent"
-         : Theme.surface
-    border.color: active ? Theme.accentBorder
-                : flat ? "transparent"
-                : (hover.hovered && enabledVisual ? Theme.hairlineStrong : Theme.hairline)
-    border.width: 1
+         : Theme.surfaceRaised
+    border.width: 0
+
+    Rectangle {
+        visible: !control.flat || control.active || hover.hovered
+        anchors { left: parent.left; right: parent.right; top: parent.top; leftMargin: 2; rightMargin: 2 }
+        height: 1
+        color: Theme.raisedTop
+    }
 
     Row {
         id: contents
@@ -65,11 +71,11 @@ Rectangle {
             visible: control.label !== ""
             anchors.verticalCenter: parent.verticalCenter
             text: control.label
-            color: control.active ? Theme.accent
-                 : control.strongLabel ? Theme.textPrimary
+            color: control.active || control.strongLabel ? Theme.textPrimary
                  : Theme.textSecondary
-            font.family: control.monoLabel ? Theme.fontMono : Theme.fontFamily
-            font.pixelSize: control.monoLabel ? 10 : 11
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.textBody
+            font.weight: Font.Medium
             renderType: Text.NativeRendering
         }
 
@@ -77,15 +83,15 @@ Rectangle {
             visible: control.dropDown
             width: 10; height: 7
             anchors.verticalCenter: parent.verticalCenter
-            property color strokeColor: control.active ? Theme.accent : Theme.textMuted
+            property color strokeColor: Theme.textMuted
             onStrokeColorChanged: requestPaint()
             onPaint: {
                 const ctx = getContext("2d")
                 ctx.reset()
                 ctx.strokeStyle = strokeColor
                 ctx.lineWidth = 1.35
-                ctx.lineCap = "round"
-                ctx.lineJoin = "round"
+                ctx.lineCap = "square"
+                ctx.lineJoin = "miter"
                 ctx.beginPath()
                 ctx.moveTo(1.5, 1.5)
                 ctx.lineTo(5, 5)

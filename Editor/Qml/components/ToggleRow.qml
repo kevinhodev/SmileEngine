@@ -17,10 +17,10 @@ Item {
         anchors.right: hintText.left
         anchors.rightMargin: 8
         text: toggleRow.label
-        color: toggleRow.interactive ? Theme.textMuted : Theme.textDisabled
+        color: toggleRow.interactive ? Theme.textSecondary : Theme.textDisabled
         elide: Text.ElideRight
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Text {
@@ -31,7 +31,7 @@ Item {
         text: toggleRow.hint
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 9
+        font.pixelSize: Theme.textMeta
     }
 
     Toggle {

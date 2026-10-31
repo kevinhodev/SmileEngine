@@ -51,9 +51,7 @@ Column {
         signal clicked()
         implicitWidth: buttonRow.implicitWidth + 18
         height: 26; radius: C.Theme.radiusControl
-        color: buttonHover.hovered ? C.Theme.controlHover : C.Theme.surface
-        border.color: C.Theme.controlBorder
-        border.width: 1
+        color: buttonHover.hovered ? C.Theme.raisedHover : C.Theme.surfaceRaised
         Row {
             id: buttonRow
             anchors.centerIn: parent
@@ -61,16 +59,16 @@ Column {
             UI.LucideIcon {
                 visible: button.iconName !== ""
                 anchors.verticalCenter: parent.verticalCenter
-                name: button.iconName; size: 11
+                name: button.iconName; size: 13
                 color: C.Theme.textSecondary
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: button.label
-                color: C.Theme.textNormal
+                color: C.Theme.textPrimary
                 font.family: C.Theme.fontFamily
-                font.pixelSize: 9
-                font.weight: Font.DemiBold
+                font.pixelSize: C.Theme.textBody
+                font.weight: Font.Medium
             }
         }
         HoverHandler { id: buttonHover; cursorShape: Qt.PointingHandCursor }
@@ -278,7 +276,7 @@ Column {
                   : "Distribuição procedural; trocar seed recompõe o weather map."
             color: C.Theme.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 9
+            font.pixelSize: C.Theme.textMeta
             wrapMode: Text.WordWrap
         }
     }

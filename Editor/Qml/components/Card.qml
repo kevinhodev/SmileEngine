@@ -14,7 +14,7 @@ Rectangle {
     width: parent.width
     radius: Theme.radiusCard
     color: Theme.cardBg
-    border.color: Theme.borderColor
+    border.color: Theme.hairlineStrong
     border.width: 1
     implicitHeight: 40 + inner.implicitHeight + 14
 
@@ -30,8 +30,8 @@ Rectangle {
         text: card.title
         color: Theme.textPrimary
         font.family: Theme.fontFamily
-        font.pixelSize: 12
-        font.weight: Font.Medium
+        font.pixelSize: Theme.textSection
+        font.weight: Font.DemiBold
     }
     Item {
         id: headerSlot

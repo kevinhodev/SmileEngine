@@ -15,7 +15,7 @@ Rectangle {
 
     color: C.Theme.shell
     implicitWidth: 900
-    implicitHeight: 36
+    implicitHeight: 38
 
     readonly property color textPrimary: C.Theme.textPrimary
     readonly property color textNormal: C.Theme.textSecondary
@@ -27,7 +27,7 @@ Rectangle {
     // Metrica UNICA da faixa. Botao de icone e chip tinham alturas diferentes (28 x 24) e a
     // Row alinha pelo topo: os chips ficavam 2 px acima do centro. Com um valor so nao ha
     // como divergir de novo, e cada controle novo herda o alinhamento de graca.
-    readonly property int controlH: 24
+    readonly property int controlH: 26
     readonly property int iconPx: 14
     readonly property int dividerH: 16
 
@@ -72,11 +72,10 @@ Rectangle {
         implicitHeight: root.controlH
         radius: C.Theme.radiusControl
         opacity: enabledVisual ? 1.0 : 0.38
-        color: active ? C.Theme.accentBg
-                      : (iconHover.hovered && enabledVisual ? C.Theme.surfaceRaised
+        // Ligado = segmento afundado em cinza claro com o icone no accent (ferramenta ativa).
+        color: active ? C.Theme.raisedOn
+                      : (iconHover.hovered && enabledVisual ? C.Theme.raisedHover
                                                             : "transparent")
-        border.color: active ? C.Theme.accentBorder : "transparent"
-        border.width: 1
         C.ToolbarIcon {
             anchors.centerIn: parent
             width: root.iconPx; height: root.iconPx
@@ -136,7 +135,7 @@ Rectangle {
         signal tapped()
 
         radius: C.Theme.radiusControl
-        color: selected ? C.Theme.accentBg : (modeHover.hovered ? C.Theme.surfaceRaised : "transparent")
+        color: selected ? C.Theme.accentBg : (modeHover.hovered ? C.Theme.raisedHover : "transparent")
 
         RadioMark {
             anchors.left: parent.left
@@ -161,15 +160,16 @@ Rectangle {
             anchors.left: modeLabel.right
             anchors.leftMargin: 8
             anchors.verticalCenter: modeLabel.verticalCenter
-            width: 34; height: 15; radius: C.Theme.radiusChip
-            color: C.Theme.surfaceRaised
-            border.color: C.Theme.hairlineStrong
+            width: betaText.implicitWidth + 10; height: 16; radius: C.Theme.radiusChip
+            color: C.Theme.warnRow
             Text {
+                id: betaText
                 anchors.centerIn: parent
-                text: "BETA"
+                text: "beta"
                 color: C.Theme.amber
-                font.family: C.Theme.fontMono
-                font.pixelSize: 9
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textMeta
+                font.weight: Font.Medium
             }
         }
         Text {
@@ -181,7 +181,7 @@ Rectangle {
             text: modeRow.sublabel
             color: root.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 10
+            font.pixelSize: C.Theme.textMeta
         }
         Text {
             visible: modeRow.shortcutText !== ""
@@ -189,9 +189,9 @@ Rectangle {
             anchors.rightMargin: 7
             anchors.verticalCenter: modeLabel.verticalCenter
             text: modeRow.shortcutText
-            color: modeRow.selected ? C.Theme.accent : root.textMuted
+            color: root.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 10
+            font.pixelSize: C.Theme.textMeta
         }
         Canvas {
             visible: modeRow.hasSubmenu
@@ -204,7 +204,7 @@ Rectangle {
                 ctx.reset()
                 ctx.strokeStyle = root.textMuted
                 ctx.lineWidth = 1.3
-                ctx.lineCap = "round"
+                ctx.lineCap = "square"
                 ctx.beginPath()
                 ctx.moveTo(1.5, 1.5)
                 ctx.lineTo(5.5, 6)
@@ -226,7 +226,7 @@ Rectangle {
 
         radius: C.Theme.radiusControl
         opacity: interactive ? 1.0 : 0.48
-        color: toggleHover.hovered && interactive ? C.Theme.surfaceRaised : "transparent"
+        color: toggleHover.hovered && interactive ? C.Theme.raisedHover : "transparent"
 
         Text {
             id: toggleLabel
@@ -246,23 +246,18 @@ Rectangle {
             text: "· " + toggleRow.detail
             color: root.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 10
+            font.pixelSize: C.Theme.textMeta
         }
-        Rectangle {
+        // Mesmo checkbox do resto do editor (components/Toggle.qml), so que passivo: quem
+        // recebe o clique e a linha inteira.
+        C.Toggle {
             id: toggleTrack
             anchors.right: parent.right
             anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
-            width: 28; height: 16; radius: 8
-            color: toggleRow.checked ? root.accent : C.Theme.controlBg
-            border.color: toggleRow.checked ? root.accent : C.Theme.hairlineStrong
-            Rectangle {
-                width: 11; height: 11; radius: 5.5
-                y: 2.5
-                x: toggleRow.checked ? 14.5 : 2.5
-                color: toggleRow.checked ? C.Theme.knob : C.Theme.textMuted
-                Behavior on x { NumberAnimation { duration: 100 } }
-            }
+            checked: toggleRow.checked
+            interactive: false
+            opacity: 1.0
         }
         HoverHandler {
             id: toggleHover
@@ -317,7 +312,7 @@ Rectangle {
                 padding: 4
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
                 background: Rectangle {
-                    color: C.Theme.surface; border.color: C.Theme.hairlineStrong; border.width: 1
+                    color: C.Theme.surfaceRaised; border.color: C.Theme.hairlineStrong; border.width: 1
                     radius: C.Theme.radiusCard
                 }
                 contentItem: Column {
@@ -356,7 +351,7 @@ Rectangle {
             property bool muted: false
             signal picked()
             width: 124; height: 26; radius: 4
-            color: snapRowHover.hovered ? C.Theme.surfaceRaised : "transparent"
+            color: snapRowHover.hovered ? C.Theme.raisedOn : "transparent"
             RadioMark {
                 anchors.left: parent.left; anchors.leftMargin: 7
                 anchors.verticalCenter: parent.verticalCenter
@@ -405,7 +400,6 @@ Rectangle {
                 anchors.fill: parent
                 radius: C.Theme.radiusControl
                 color: C.Theme.surface
-                border.color: C.Theme.hairline
             }
             // Grupo exclusivo: o estado vive no GizmoController (C++), nao aqui — os atalhos
             // Q/W/E/R chegam pelo ViewportWidget e a marcacao acompanha pelo mesmo binding.
@@ -586,7 +580,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: C.Theme.hairline
+        color: C.Theme.hairlineStrong
     }
 
     Popup {
@@ -603,10 +597,10 @@ Rectangle {
         }
 
         background: Rectangle {
-            color: C.Theme.surface
+            color: C.Theme.surfaceRaised
             border.color: C.Theme.hairlineStrong
             border.width: 1
-            radius: 8
+            radius: C.Theme.radiusCard
         }
 
         contentItem: Item {
@@ -700,7 +694,7 @@ Rectangle {
             Rectangle { x: 14; y: 354; width: 252; height: 1; color: C.Theme.hairline }
             Rectangle {
                 x: 8; y: 360; width: 264; height: 28; radius: 5
-                color: settingsHover.hovered ? C.Theme.surfaceRaised : "transparent"
+                color: settingsHover.hovered ? C.Theme.raisedOn : "transparent"
                 Text {
                     x: 8
                     anchors.verticalCenter: parent.verticalCenter
@@ -754,10 +748,10 @@ Rectangle {
         padding: 6
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
-            color: C.Theme.surface
+            color: C.Theme.surfaceRaised
             border.color: C.Theme.hairlineStrong
             border.width: 1
-            radius: 7
+            radius: C.Theme.radiusCard
         }
         contentItem: Flickable {
             contentHeight: debugTargetCol.height
@@ -766,7 +760,7 @@ Rectangle {
                 id: debugTargetCol
                 Rectangle {
                     width: 220; height: 28; radius: 4
-                    color: offHover.hovered ? C.Theme.surfaceRaised : "transparent"
+                    color: offHover.hovered ? C.Theme.raisedOn : "transparent"
                     RadioMark {
                         anchors.left: parent.left; anchors.leftMargin: 7
                         anchors.verticalCenter: parent.verticalCenter
@@ -796,7 +790,7 @@ Rectangle {
                          required property string modelData
                          required property int index
                         width: 220; height: 28; radius: 4
-                        color: targetHover.hovered ? C.Theme.surfaceRaised : "transparent"
+                        color: targetHover.hovered ? C.Theme.raisedOn : "transparent"
                         RadioMark {
                             anchors.left: parent.left; anchors.leftMargin: 7
                             anchors.verticalCenter: parent.verticalCenter

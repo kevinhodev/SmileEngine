@@ -1,21 +1,21 @@
-/* Widgets Qt do editor no conceito "Signal Graphite" (Docs/Design/EditorRedesign).
+/* Widgets Qt do editor no conceito "Cartao 18%" (Docs/Design/EditorRedesign/cartao-18.md).
    O grosso da UI e QML e le os tokens de Qml/components/Theme.qml; este arquivo cobre o
    que ainda e widget nativo — separadores de dock, scroll areas, dialogos de arquivo.
    Os hex aqui repetem os do Theme de proposito: QSS nao le o singleton QML. */
 * {
-    font-family: "Inter", "Segoe UI", "Arial";
+    font-family: "Archivo Smile", "Segoe UI", "Arial";
     font-size: 12px;
-    color: #C9C9CF;
-    selection-background-color: #FF6B2C;
-    selection-color: #09090A;
+    color: #D4D4D4;
+    selection-background-color: #F4C430;
+    selection-color: #1E1E1E;
 }
 
 QMainWindow#SmileMainWindow {
-    background: #09090A;
+    background: #121212;
 }
 
 QStatusBar#EditorStatusBar {
-    background: #111113;
+    background: #1A1A1A;
     border: none;
     margin: 0;
     padding: 0;
@@ -30,17 +30,17 @@ QWidget {
 }
 
 QToolTip {
-    color: #F2F2F0;
-    background-color: #18181B;
-    border: 1px solid #333338;
+    color: #EDEDED;
+    background-color: #171717;
+    border: 1px solid #0F0F0F;
     border-radius: 4px;
     padding: 6px 8px;
 }
 
 QMenu {
-    background: #18181B;
-    color: #C9C9CF;
-    border: 1px solid #333338;
+    background: #171717;
+    color: #D4D4D4;
+    border: 1px solid #0F0F0F;
     padding: 6px;
 }
 
@@ -50,12 +50,12 @@ QMenu::item {
 }
 
 QMenu::item:selected {
-    background: #1F1F23;
-    color: #F2F2F0;
+    background: #2E2E2E;
+    color: #EDEDED;
 }
 
 QMenu::item:disabled {
-    color: #5F5F66;
+    color: #595959;
 }
 
 QComboBox::drop-down {
@@ -69,33 +69,31 @@ QComboBox::down-arrow {
     height: 0;
 }
 
-/* O separador fica na cor do shell, invisivel: quem desenha a divisa e a hairline de 1 px
-   na borda de cada painel QML (a mesma linha que o conceito usa como elemento de identidade).
-   Pintar a faixa inteira de #26262B daria um fio de 3 px, grosso demais ao lado dela.
-   A largura existe so para o cursor de resize ter onde pegar; o hover acende no accent
-   porque arrastar e uma acao. */
+/* O separador E o fio escuro entre paineis (hairlineStrong): no conceito os paineis encostam
+   e a divisa e um sulco, nao uma faixa. 2 px para o cursor de resize ter onde pegar; o hover
+   acende no accent porque arrastar e uma acao. */
 QMainWindow::separator {
-    background: #111113;
-    width: 3px;
-    height: 3px;
+    background: #0F0F0F;
+    width: 2px;
+    height: 2px;
 }
 
 QMainWindow::separator:hover {
-    background: #FF6B2C;
+    background: #F4C430;
 }
 
 /* Docks nao tem moldura nem raio: cada painel QML fecha a propria borda com hairline, e uma
    segunda borda aqui viraria fio duplo. A title bar nativa e substituida por um widget de
    altura zero no MainWindow. */
 QDockWidget {
-    background: #111113;
-    color: #F2F2F0;
+    background: #212121;
+    color: #EDEDED;
     border: none;
 }
 
 QAbstractScrollArea,
 QScrollArea {
-    background: #111113;
+    background: #212121;
     border: none;
 }
 
@@ -106,13 +104,13 @@ QScrollBar:vertical {
 }
 
 QScrollBar::handle:vertical {
-    background: #333338;
+    background: #3C3C3C;
     border-radius: 4px;
     min-height: 28px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #5F5F66;
+    background: #8C8C8C;
 }
 
 QScrollBar::add-line:vertical,
@@ -124,10 +122,10 @@ QScrollBar::sub-page:vertical {
 }
 
 QGroupBox {
-    background: #18181B;
-    color: #A0A0A8;
+    background: #171717;
+    color: #BDBDBD;
     font-weight: 600;
-    border: 1px solid #26262B;
+    border: 1px solid #0F0F0F;
     border-radius: 4px;
     margin-top: 14px;
     padding-top: 12px;
@@ -138,12 +136,12 @@ QGroupBox::title {
     subcontrol-position: top left;
     left: 10px;
     padding: 0 5px;
-    color: #A0A0A8;
-    background: #111113;
+    color: #BDBDBD;
+    background: #212121;
 }
 
 QLabel {
-    color: #C9C9CF;
+    color: #D4D4D4;
 }
 
 QLineEdit,
@@ -152,9 +150,9 @@ QPlainTextEdit,
 QDoubleSpinBox,
 QSpinBox,
 QComboBox {
-    background: #18181B;
-    color: #F2F2F0;
-    border: 1px solid #26262B;
+    background: #171717;
+    color: #EDEDED;
+    border: 1px solid #0F0F0F;
     border-radius: 3px;
     padding: 4px 7px;
 }
@@ -165,8 +163,8 @@ QPlainTextEdit:focus,
 QDoubleSpinBox:focus,
 QSpinBox:focus,
 QComboBox:focus {
-    border-color: #FF6B2C;
-    background: #1F1F23;
+    border-color: #F4C430;
+    background: #2E2E2E;
 }
 
 QDoubleSpinBox::up-button,
@@ -179,46 +177,46 @@ QSpinBox::down-button {
 
 QPushButton,
 QToolButton {
-    background: #18181B;
-    color: #C9C9CF;
-    border: 1px solid #26262B;
+    background: #171717;
+    color: #D4D4D4;
+    border: 1px solid #0F0F0F;
     border-radius: 3px;
     padding: 5px 10px;
 }
 
 QPushButton:hover,
 QToolButton:hover {
-    background: #1F1F23;
-    border-color: #333338;
-    color: #F2F2F0;
+    background: #2E2E2E;
+    border-color: #0F0F0F;
+    color: #EDEDED;
 }
 
 QPushButton:pressed,
 QToolButton:pressed,
 QToolButton:checked {
-    background: rgba(255, 107, 44, 0.12);
-    border-color: rgba(255, 107, 44, 0.45);
-    color: #FF6B2C;
+    background: #3C3C3C;
+    border-color: #0F0F0F;
+    color: #EDEDED;
 }
 
 QCheckBox {
-    color: #A0A0A8;
+    color: #BDBDBD;
     spacing: 7px;
 }
 
 QCheckBox::indicator {
     width: 14px;
     height: 14px;
-    border: 1px solid #333338;
+    border: 1px solid #0F0F0F;
     border-radius: 2px;
-    background: #18181B;
+    background: #171717;
 }
 
 QCheckBox::indicator:hover {
-    border-color: #5F5F66;
+    border-color: #8C8C8C;
 }
 
 QCheckBox::indicator:checked {
-    background: #FF6B2C;
-    border-color: #FF6B2C;
+    background: #D9D9D9;
+    border-color: #D9D9D9;
 }

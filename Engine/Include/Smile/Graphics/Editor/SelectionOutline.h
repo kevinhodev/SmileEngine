@@ -92,7 +92,7 @@ namespace Smile {
         ComPtr<ID3D12Resource>      ObjectCB;
         u8*                         MappedObjectCB = nullptr;
 
-        Vec3 Color        = { 1.0f, 0.5f, 0.05f }; // laranja editor
+        Vec3 Color        = { 0.957f, 0.769f, 0.188f }; // accent do editor (Theme.accent #F4C430)
         f32  Thickness    = 1.5f;                  // raio da borda em texels
         f32  Intensity    = 1.0f;                  // alpha do blend da borda
         f32  FillStrength = 0.25f;                 // lavagem de cor sobre o objeto (estilo Cry)

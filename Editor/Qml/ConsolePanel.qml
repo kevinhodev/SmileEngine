@@ -5,7 +5,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "components" as C
 
-// Console inferior do editor no conceito Signal Graphite. Concentra abas, filtros, busca e
+// Console inferior do editor no conceito Cartao 18%. Concentra abas, filtros, busca e
 // acoes. O rodape de metricas vive no StatusBar.qml, fora deste dock, para continuar visivel
 // quando o usuario fecha os paineis e libera mais area para o viewport.
 //
@@ -80,19 +80,17 @@ Rectangle {
 
         implicitWidth: 24
         implicitHeight: 22
-        radius: C.Theme.radiusChip
+        radius: C.Theme.radiusControl
         opacity: enabledVisual ? 1.0 : 0.38
-        color: active ? C.Theme.accentBg
-                      : (buttonHover.hovered && enabledVisual ? C.Theme.surfaceRaised
+        color: active ? C.Theme.raisedOn
+                      : (buttonHover.hovered && enabledVisual ? C.Theme.raisedHover
                                                               : "transparent")
-        border.color: active ? C.Theme.accentBorder : "transparent"
-        border.width: 1
 
         LucideIcon {
             anchors.centerIn: parent
             name: iconButton.iconName
-            size: 13
-            color: iconButton.active ? C.Theme.accent
+            size: 14
+            color: iconButton.active ? C.Theme.textPrimary
                                      : (buttonHover.hovered ? C.Theme.textPrimary
                                                             : C.Theme.textSecondary)
         }
@@ -112,39 +110,66 @@ Rectangle {
         }
     }
 
-    // Aba da faixa. Sublinhado accent de 2 px marca a ativa — sem pilula e sem moldura,
-    // que e o que mantem a densidade do chrome.
+    // Aba da faixa (Cartao 18%): a ativa e um bloco da cor do painel, ligado ao conteudo sem
+    // fio por baixo; as outras ficam no chrome. Traco accent em cima so com o foco no console.
     component PanelTab: Item {
         id: tab
 
         required property string label
         property bool current: false
         property bool available: true
+        property int badge: -1
         signal picked()
 
-        implicitWidth: tabLabel.implicitWidth + 20
-        implicitHeight: 36
+        implicitWidth: tabLabel.implicitWidth + 28 + (badgeBox.visible ? badgeBox.width + 7 : 0)
+        implicitHeight: C.Theme.tabHeight
 
+        Rectangle {
+            visible: tab.current
+            anchors.fill: parent
+            color: C.Theme.shell
+            Rectangle { anchors { left: parent.left; top: parent.top; bottom: parent.bottom } width: 1; color: C.Theme.hairlineStrong }
+            Rectangle { anchors { right: parent.right; top: parent.top; bottom: parent.bottom } width: 1; color: C.Theme.hairlineStrong }
+            Rectangle {
+                visible: root.activeFocus || searchInput.activeFocus
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                height: 2
+                color: C.Theme.accent
+            }
+        }
         Text {
             id: tabLabel
-            anchors.centerIn: parent
+            x: 14
+            anchors.verticalCenter: parent.verticalCenter
             text: tab.label
-            color: !tab.available ? C.Theme.textMuted
+            color: !tab.available ? C.Theme.textDisabled
                  : tab.current ? C.Theme.textPrimary
                  : (tabHover.hovered ? C.Theme.textSecondary : C.Theme.textMuted)
             font.family: C.Theme.fontFamily
-            font.pixelSize: 12
-            font.weight: tab.current ? Font.DemiBold : Font.Normal
+            font.pixelSize: C.Theme.textSection
+            font.weight: tab.current ? Font.DemiBold : Font.Medium
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
         }
         Rectangle {
-            visible: tab.current
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            width: parent.width - 8
-            height: 2
-            color: C.Theme.accent
+            id: badgeBox
+            visible: tab.badge >= 0
+            anchors.left: tabLabel.right
+            anchors.leftMargin: 7
+            anchors.verticalCenter: parent.verticalCenter
+            width: badgeText.implicitWidth + 10
+            height: 16
+            radius: C.Theme.radiusChip
+            color: C.Theme.surfaceRaised
+            Text {
+                id: badgeText
+                anchors.centerIn: parent
+                text: tab.badge
+                color: C.Theme.textSecondary
+                font.family: C.Theme.fontNum
+                font.pixelSize: C.Theme.textMeta
+                font.weight: Font.Medium
+            }
         }
         HoverHandler {
             id: tabHover
@@ -158,33 +183,53 @@ Rectangle {
         }
     }
 
-    // Chip de filtro por nivel, com a contagem do que esta no historico.
+    // Filtro por nivel: ponto na cor semantica do nivel + rotulo + contagem do historico.
+    // Ligado = botao em relevo; desligado = so texto.
     component FilterChip: Rectangle {
         id: chip
 
         required property string label
         property string level: ""
         property int badge: -1
+        property color dotColor: "transparent"
         readonly property bool active: root.levelFilter === level
 
-        implicitWidth: chipLabel.implicitWidth + 22
+        implicitWidth: chipRow.implicitWidth + 18
         implicitHeight: 22
-        radius: C.Theme.radiusChip
-        color: active ? C.Theme.accentBg
-                      : (chipHover.hovered ? C.Theme.surfaceRaised : C.Theme.surface)
-        border.color: active ? C.Theme.accentBorder : C.Theme.hairline
-        border.width: 1
+        radius: C.Theme.radiusControl
+        color: active ? C.Theme.raisedOn
+                      : (chipHover.hovered ? C.Theme.raisedHover : "transparent")
 
-        Text {
-            id: chipLabel
+        Row {
+            id: chipRow
             anchors.centerIn: parent
-            text: chip.badge >= 0 ? chip.label + " · " + chip.badge : chip.label
-            color: chip.active ? C.Theme.accent : C.Theme.textSecondary
-            font.family: C.Theme.fontFamily
-            font.pixelSize: 10
-            font.weight: chip.active ? Font.DemiBold : Font.Normal
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
+            spacing: 6
+            Rectangle {
+                visible: chip.dotColor.a > 0
+                anchors.verticalCenter: parent.verticalCenter
+                width: 7; height: 7; radius: 3.5
+                color: chip.badge === 0 ? C.Theme.textDisabled : chip.dotColor
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: chip.label
+                color: chip.active ? C.Theme.textPrimary : C.Theme.textSecondary
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textBody
+                font.weight: Font.Medium
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
+            Text {
+                visible: chip.badge >= 0
+                anchors.verticalCenter: parent.verticalCenter
+                text: chip.badge
+                color: C.Theme.textMuted
+                font.family: C.Theme.fontNum
+                font.pixelSize: C.Theme.textBody
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
         }
 
         HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
@@ -210,12 +255,11 @@ Rectangle {
             rightPadding: 16
         }
         background: Rectangle {
-            color: menuItem.highlighted ? C.Theme.surfaceRaised : "transparent"
+            color: menuItem.highlighted ? C.Theme.raisedOn : "transparent"
         }
     }
 
-    // Hairline FORTE no topo: e ela que separa a faixa do viewport, e o conceito reserva o
-    // fio de #333338 exatamente para as separacoes de primeira ordem.
+    // Fio escuro no topo: separacao de primeira ordem (painel x viewport).
     Rectangle {
         anchors { left: parent.left; right: parent.right; top: parent.top }
         height: 1
@@ -230,57 +274,43 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: 37
+        height: C.Theme.tabHeight
+
+        Rectangle { anchors.fill: parent; color: C.Theme.chrome }
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 14
             anchors.rightMargin: 8
             spacing: 0
 
-            LucideIcon {
-                Layout.alignment: Qt.AlignVCenter
-                Layout.rightMargin: 9
-                name: "terminal"
-                size: 15
-                color: C.Theme.textPrimary
-            }
-
-            PanelTab { label: "Console"; current: true }
+            PanelTab { label: "Console"; current: true; badge: root.logModel.count }
             PanelTab { label: "Build";    available: false }
             PanelTab { label: "Profiler"; available: false }
             PanelTab { label: "Assets";   available: false }
 
-            Rectangle {
-                Layout.leftMargin: 10
-                Layout.rightMargin: 12
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 20
-                color: C.Theme.hairline
-            }
+            Item { Layout.fillWidth: true }
 
             Row {
                 Layout.alignment: Qt.AlignVCenter
-                spacing: 8
+                Layout.rightMargin: 10
+                spacing: 4
 
                 FilterChip { label: "Todos" }
-                FilterChip { label: "Info";   level: "INFO"; badge: root.logModel.infoCount }
-                FilterChip { label: "Avisos"; level: "WARN"; badge: root.logModel.warnCount }
-                FilterChip { label: "Erros";  level: "ERR";  badge: root.logModel.errorCount }
+                FilterChip { label: "Info";   level: "INFO"; badge: root.logModel.infoCount; dotColor: C.Theme.blue }
+                FilterChip { label: "Avisos"; level: "WARN"; badge: root.logModel.warnCount; dotColor: C.Theme.warn }
+                FilterChip { label: "Erros";  level: "ERR";  badge: root.logModel.errorCount; dotColor: C.Theme.error }
             }
-
-            Item { Layout.fillWidth: true }
 
             Rectangle {
                 id: searchBox
 
                 visible: !root.compact || root.searchExpanded || searchInput.text !== ""
                 Layout.preferredWidth: root.width > 1400 ? 240 : 180
-                Layout.preferredHeight: 24
+                Layout.preferredHeight: 22
                 Layout.rightMargin: 6
                 radius: C.Theme.radiusControl
                 color: C.Theme.surface
-                border.color: searchInput.activeFocus ? C.Theme.accentBorder : C.Theme.hairline
+                border.color: searchInput.activeFocus ? C.Theme.accent : "transparent"
                 border.width: 1
 
                 LucideIcon {
@@ -289,7 +319,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     name: "search"
                     size: 13
-                    color: searchInput.activeFocus ? C.Theme.accent : C.Theme.textMuted
+                    color: C.Theme.textMuted
                 }
 
                 Text {
@@ -297,10 +327,10 @@ Rectangle {
                     anchors.leftMargin: 28
                     anchors.verticalCenter: parent.verticalCenter
                     visible: searchInput.text === "" && !searchInput.activeFocus
-                    text: "Filtrar mensagens…"
+                    text: "Filtrar mensagens"
                     color: C.Theme.textMuted
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: C.Theme.textBody
                     renderType: Text.QtRendering
                     renderTypeQuality: Text.HighRenderTypeQuality
                 }
@@ -316,10 +346,10 @@ Rectangle {
                     anchors.bottom: parent.bottom
                     verticalAlignment: TextInput.AlignVCenter
                     color: C.Theme.textPrimary
-                    selectionColor: C.Theme.accentBorder
-                    selectedTextColor: C.Theme.shell
+                    selectionColor: C.Theme.accent
+                    selectedTextColor: C.Theme.accentInk
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: C.Theme.textBody
                     renderType: Text.QtRendering
                     selectByMouse: true
                     clip: true
@@ -369,8 +399,8 @@ Rectangle {
                 Layout.rightMargin: 6
                 text: root.logModel.count + "/" + root.logModel.maxLines
                 color: root.logModel.droppedCount > 0 ? C.Theme.amber : C.Theme.textMuted
-                font.family: C.Theme.fontMono
-                font.pixelSize: 10
+                font.family: C.Theme.fontNum
+                font.pixelSize: C.Theme.textMeta
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
 
@@ -419,7 +449,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: 1
-            color: C.Theme.hairline
+            color: C.Theme.hairlineStrong
         }
     }
 
@@ -427,7 +457,7 @@ Rectangle {
         id: contextMenu
 
         background: Rectangle {
-            color: C.Theme.surface
+            color: C.Theme.surfaceRaised
             border.color: C.Theme.hairlineStrong
             border.width: 1
             radius: C.Theme.radiusCard
@@ -486,7 +516,7 @@ Rectangle {
                 : "Nenhuma mensagem para este filtro"
             color: C.Theme.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 11
+            font.pixelSize: C.Theme.textBody
         }
 
         ListView {
@@ -518,74 +548,69 @@ Rectangle {
                 // Azul e info/GPU, ambar e atencao, vermelho e erro — mesma tabela semantica
                 // do resto do editor, e nenhum deles e o accent.
                 readonly property color tagColor: tag === "ERR" ? C.Theme.error
-                                                : tag === "WARN" ? C.Theme.amber
-                                                : C.Theme.textSecondary
+                                                : tag === "WARN" ? C.Theme.warn
+                                                : tag === "INFO" ? C.Theme.blue
+                                                : C.Theme.textMuted
 
                 width: logView.width
-                height: accepted ? 24 : 0
+                height: accepted ? 22 : 0
                 visible: accepted
                 clip: true
 
+                // Aviso e erro tingem a LINHA inteira: num log comprido e o fundo que o olho
+                // acha primeiro, nao a sigla.
                 Rectangle {
                     anchors.fill: parent
-                    color: rowHover.hovered ? C.Theme.surface : "transparent"
+                    color: logRow.tag === "ERR" ? C.Theme.errorBg
+                         : logRow.tag === "WARN" ? C.Theme.warnRow
+                         : rowHover.hovered ? C.Theme.rowHover : "transparent"
                 }
 
                 Text {
                     id: timeColumn
 
                     anchors.left: parent.left
-                    anchors.leftMargin: 16
+                    anchors.leftMargin: 14
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 82
+                    width: 96
                     text: logRow.time
                     color: C.Theme.textMuted
                     font.family: C.Theme.fontMono
-                    font.pixelSize: 10
+                    font.pixelSize: C.Theme.textBody
                     renderType: Text.QtRendering
                     renderTypeQuality: Text.VeryHighRenderTypeQuality
                 }
 
-                // Badge do nivel: retangulo de raio 2 com a sigla em mono, no lugar da barra
-                // colorida da borda — e o que faz o nivel ser LIDO e nao so percebido.
-                Rectangle {
+                // Nivel: sigla em mono na cor semantica, sem caixa — a coluna fixa ja alinha.
+                Text {
                     id: levelBadge
 
                     anchors.left: timeColumn.right
-                    anchors.leftMargin: 8
+                    anchors.leftMargin: 4
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 42
-                    height: 16
-                    radius: C.Theme.radiusChip
-                    color: logRow.tag === "ERR" ? C.Theme.errorBg
-                         : logRow.tag === "WARN" ? "#2A2413"
-                         : C.Theme.surfaceRaised
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: logRow.tag
-                        color: logRow.tagColor
-                        font.family: C.Theme.fontMono
-                        font.pixelSize: 9
-                        renderType: Text.QtRendering
-                        renderTypeQuality: Text.VeryHighRenderTypeQuality
-                    }
+                    width: 44
+                    text: logRow.tag
+                    color: logRow.tagColor
+                    font.family: C.Theme.fontMono
+                    font.pixelSize: C.Theme.textBody
+                    renderType: Text.QtRendering
+                    renderTypeQuality: Text.VeryHighRenderTypeQuality
                 }
 
                 Text {
                     id: messageColumn
 
                     anchors.left: levelBadge.right
-                    anchors.leftMargin: 16
+                    anchors.leftMargin: 10
                     anchors.right: parent.right
                     anchors.rightMargin: 7
                     anchors.verticalCenter: parent.verticalCenter
                     text: logRow.message
-                    color: logRow.tag === "ERR" ? C.Theme.error
-                         : logRow.tag === "WARN" ? C.Theme.textNormal
-                         : C.Theme.textSecondary
-                    font.family: C.Theme.fontFamily
-                    font.pixelSize: 11
+                    color: logRow.tag === "ERR" ? C.Theme.errorText
+                         : logRow.tag === "WARN" ? C.Theme.warnText
+                         : C.Theme.textNormal
+                    font.family: C.Theme.fontConsole
+                    font.pixelSize: C.Theme.textBody
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     maximumLineCount: 1

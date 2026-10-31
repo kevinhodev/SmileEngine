@@ -1,2 +1,2 @@
 <!-- Desenho do conceito Signal Graphite (Docs/Design/EditorRedesign). -->
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round"><path d="M19 5L5 19"/><circle cx="6.8" cy="6.8" r="2.4"/><circle cx="17.2" cy="17.2" r="2.4"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="square"><path d="M19 5L5 19"/><circle cx="6.8" cy="6.8" r="2.4"/><circle cx="17.2" cy="17.2" r="2.4"/></g></svg>

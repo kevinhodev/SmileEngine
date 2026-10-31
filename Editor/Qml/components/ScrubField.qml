@@ -86,24 +86,29 @@ Item {
         }
     }
 
+    // Slider de preenchimento (Cartao 18%): o campo rebaixado enche ate o valor em cinza; ao
+    // arrastar o preenchimento esquenta e a borda do valor acende no accent.
     Rectangle {
         anchors.fill: parent
         radius: Theme.radiusControl
-        color: root.editing ? Theme.accentBg
-                            : dragArea.containsMouse ? Theme.surfaceRaised : Theme.surface
+        color: dragArea.containsMouse && !root.dragging ? Theme.surfaceHover : Theme.surface
         border.width: 1
-        border.color: root.editing || root.dragging ? Theme.accent
-                                                    : dragArea.containsMouse ? Theme.accentBorder
-                                                                             : Theme.controlBorder
+        border.color: root.editing ? Theme.accent : "transparent"
+        clip: true
 
         Rectangle {
-            visible: root.showProgress
-            anchors.left: parent.left
-            anchors.bottom: parent.bottom
+            id: fill
+            visible: root.showProgress && !root.editing
             width: Math.max(0, Math.min(1, root.visualPosition)) * parent.width
-            height: 2
-            radius: 1
-            color: Theme.accent
+            height: parent.height
+            color: root.dragging ? Theme.sliderDrag : Theme.sliderFill
+        }
+        Rectangle {
+            visible: fill.visible && fill.width > 0
+            x: fill.width - 1
+            width: 1
+            height: parent.height
+            color: root.dragging ? Theme.accent : Theme.sliderEdge
         }
     }
 
@@ -111,36 +116,24 @@ Item {
         anchors.left: parent.left
         anchors.leftMargin: 8
         anchors.verticalCenter: parent.verticalCenter
-        visible: root.caption !== "" && !dragArea.containsMouse && !root.dragging
-        text: root.caption.toUpperCase()
+        visible: root.caption !== "" && !root.editing
+        text: root.caption
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 7
+        font.pixelSize: Theme.textMeta
         font.weight: Font.DemiBold
-    }
-
-    Text {
-        anchors.left: parent.left
-        anchors.leftMargin: 9
-        anchors.verticalCenter: parent.verticalCenter
-        visible: (dragArea.containsMouse || root.dragging) && !root.editing
-        text: "\u2194"
-        color: Theme.accent
-        font.family: Theme.fontFamily
-        font.pixelSize: 12
     }
 
     Text {
         id: valueLabel
         anchors.right: parent.right
-        anchors.rightMargin: 9
+        anchors.rightMargin: 8
         anchors.verticalCenter: parent.verticalCenter
         visible: !root.editing
         text: root.formatted(root.displayValue)
-        color: root.dragging ? Theme.accent : Theme.textPrimary
-        font.family: Theme.fontMono
-        font.pixelSize: 9
-        font.weight: Font.DemiBold
+        color: Theme.textPrimary
+        font.family: Theme.fontNum
+        font.pixelSize: Theme.textBody
     }
 
     TextInput {
@@ -151,12 +144,12 @@ Item {
         width: Math.min(82, parent.width - 16)
         visible: root.editing
         color: Theme.textPrimary
-        selectionColor: Theme.accentBorder
-        selectedTextColor: Theme.textPrimary
+        selectionColor: Theme.accent
+        selectedTextColor: Theme.accentInk
         horizontalAlignment: TextInput.AlignRight
         inputMethodHints: Qt.ImhFormattedNumbersOnly
-        font.family: Theme.fontMono
-        font.pixelSize: 9
+        font.family: Theme.fontNum
+        font.pixelSize: Theme.textBody
         onEditingFinished: root.commitEdit()
         Keys.onPressed: event => {
             if (event.key === Qt.Key_Escape) {

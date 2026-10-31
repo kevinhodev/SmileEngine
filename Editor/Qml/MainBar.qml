@@ -3,9 +3,9 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import "components" as C
 
-// Barra superior unificada (titulo + janela) 100% QML, no conceito Signal Graphite:
-// marca e menus a esquerda, breadcrumb da cena no centro, telemetria e controles de janela
-// a direita. Chrome fino (44 px) fechado por uma hairline de 1 px, sem gradiente.
+// Barra superior unificada (titulo + janela) 100% QML, no conceito Cartao 18%:
+// marca e menus a esquerda, cena aberta no centro, estado do MCP e controles de janela
+// a direita. Chrome de 36 px no degrau mais escuro dos paineis, fechado por um fio escuro.
 //
 // Dependencias explicitas da raiz (chegam por setInitialProperties; sem o `required property`
 // aqui a propriedade fica undefined e o handler morre em silencio):
@@ -26,30 +26,26 @@ Rectangle {
     required property var mcpModel
     required property var statusModel
 
-    color: C.Theme.shell
+    color: C.Theme.chrome
     implicitWidth: 800
-    implicitHeight: 44
+    implicitHeight: 36
 
-    // Hairline inferior: no conceito ela e elemento de identidade, nao so separador.
     Rectangle {
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: 1
-        color: C.Theme.hairline
+        color: C.Theme.hairlineStrong
     }
 
-    // ---- Chip de dado (mono, superficie + hairline) ----
+    // ---- Indicador de estado (ponto semantico + rotulo, sem caixa) ----
     component DataChip: Rectangle {
         id: dataChip
         property color dotColor: "transparent"
         property alias text: dataChipLabel.text
         property color textColor: C.Theme.textSecondary
         property int maxTextWidth: 100000
-        implicitWidth: dataChipRow.implicitWidth + 24
+        implicitWidth: dataChipRow.implicitWidth + 12
         implicitHeight: 22
-        radius: C.Theme.radiusControl
-        color: C.Theme.surface
-        border.color: C.Theme.hairline
-        border.width: 1
+        color: "transparent"
         Row {
             id: dataChipRow
             anchors.centerIn: parent
@@ -65,8 +61,9 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.min(implicitWidth, dataChip.maxTextWidth)
                 color: dataChip.textColor
-                font.family: C.Theme.fontMono
-                font.pixelSize: 10
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textBody
+                font.weight: Font.Medium
                 elide: Text.ElideRight
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
@@ -97,7 +94,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             source: "image://smilelogo/48"
             sourceSize: Qt.size(48, 48) // 2x p/ nitidez
-            height: 24; width: 24
+            height: 20; width: 20
             fillMode: Image.PreserveAspectFit
             smooth: true; mipmap: true
         }
@@ -106,19 +103,8 @@ Rectangle {
             text: "Smile"
             color: C.Theme.textPrimary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 14
-            font.weight: Font.DemiBold
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
-        }
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.verticalCenterOffset: 1
-            text: "EDITOR"
-            color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
-            font.pixelSize: 9
-            font.letterSpacing: 1.2
+            font.pixelSize: C.Theme.textTitle
+            font.weight: Font.Bold
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
         }
@@ -147,15 +133,19 @@ Rectangle {
         onDoubleClicked: bar.windowBridge.toggleMaximize()
     }
 
-    // ---- Breadcrumb da cena (centro) ----
+    // ---- Cena aberta (centro) ----
     // O ponto accent e o dirty state: mesma linguagem do ponto no botao de salvar do outliner.
+    // Sem caixa: nome em destaque, pasta em texto meta depois de uma barra.
     Rectangle {
         id: breadcrumb
         readonly property real availableWidth: Math.max(
             0, rightChips.x - (menuBar.x + menuBar.width) - 24)
-        readonly property real naturalWidth: 6 + folderLabel.implicitWidth
-            + sceneLabel.implicitWidth + (dirtyLabel.visible ? dirtyLabel.implicitWidth + 8 : 0)
-            + 24 + 16
+        // margens (2 x 12) + ponto + espacos da Row + textos. Faltando os espacos, a largura
+        // natural saia menor que o conteudo e o nome da cena era cortado mesmo com folga.
+        readonly property real naturalWidth: 24 + 6
+            + breadcrumbRow.spacing * (dirtyLabel.visible ? 3 : 2)
+            + sceneLabel.implicitWidth + folderLabel.implicitWidth
+            + (dirtyLabel.visible ? dirtyLabel.implicitWidth : 0) + 1
 
         x: Math.max(
             menuBar.x + menuBar.width + 12,
@@ -164,10 +154,7 @@ Rectangle {
         visible: bar.sceneDoc.available && availableWidth >= 120
         width: Math.min(naturalWidth, bar.width * 0.34, availableWidth)
         height: 26
-        radius: C.Theme.radiusControl
-        color: C.Theme.surface
-        border.color: C.Theme.hairline
-        border.width: 1
+        color: "transparent"
         clip: true
 
         Row {
@@ -184,28 +171,31 @@ Rectangle {
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 6; height: 6; radius: 3
-                color: bar.sceneDoc.dirty ? C.Theme.accent : C.Theme.textMuted
+                color: bar.sceneDoc.dirty ? C.Theme.accent : C.Theme.textDisabled
             }
             Text {
-                id: folderLabel
+                id: sceneLabel
                 anchors.verticalCenter: parent.verticalCenter
-                width: breadcrumbRow.textWidth * 0.45
-                text: bar.sceneDoc.sceneFolder + " /"
-                color: C.Theme.textMuted
-                font.family: C.Theme.fontMono
-                font.pixelSize: 11
+                // O nome tem prioridade: a pasta so leva o que sobra (no maximo 30% quando falta).
+                width: Math.min(implicitWidth, breadcrumbRow.textWidth
+                    - Math.min(folderLabel.implicitWidth, breadcrumbRow.textWidth * 0.3))
+                text: bar.sceneDoc.sceneName
+                color: C.Theme.textPrimary
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textSection
+                font.weight: Font.DemiBold
                 elide: Text.ElideMiddle
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
             }
             Text {
-                id: sceneLabel
+                id: folderLabel
                 anchors.verticalCenter: parent.verticalCenter
-                width: breadcrumbRow.textWidth * 0.55
-                text: bar.sceneDoc.sceneName
-                color: C.Theme.textPrimary
-                font.family: C.Theme.fontMono
-                font.pixelSize: 11
+                width: Math.min(implicitWidth, breadcrumbRow.textWidth - sceneLabel.width)
+                text: "/  " + bar.sceneDoc.sceneFolder
+                color: C.Theme.textMuted
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textSection
                 elide: Text.ElideMiddle
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
@@ -214,10 +204,10 @@ Rectangle {
                 id: dirtyLabel
                 anchors.verticalCenter: parent.verticalCenter
                 visible: bar.sceneDoc.dirty
-                text: "modificado"
+                text: "não salvo"
                 color: C.Theme.textMuted
-                font.family: C.Theme.fontMono
-                font.pixelSize: 10
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textMeta
                 renderType: Text.QtRendering
                 renderTypeQuality: Text.HighRenderTypeQuality
             }

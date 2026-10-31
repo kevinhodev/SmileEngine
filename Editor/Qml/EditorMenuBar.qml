@@ -20,14 +20,14 @@ MenuBar {
             text: mbi.text
             color: C.Theme.textSecondary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: C.Theme.textSection
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             leftPadding: 10; rightPadding: 10
         }
         background: Rectangle {
             radius: C.Theme.radiusControl
-            color: mbi.highlighted ? C.Theme.surfaceRaised : "transparent"
+            color: mbi.highlighted ? C.Theme.raisedHover : "transparent"
         }
     }
     background: Rectangle { color: "transparent" }
@@ -63,7 +63,7 @@ MenuBar {
                 anchors.horizontalCenter: parent.left
                 anchors.horizontalCenterOffset: mi.padX + mi.checkW / 2
                 anchors.verticalCenter: parent.verticalCenter
-                text: "✓"; color: C.Theme.accent; font.pixelSize: 12
+                text: "✓"; color: C.Theme.textPrimary; font.pixelSize: 12
             }
             Text {
                 id: label
@@ -72,7 +72,8 @@ MenuBar {
                 anchors.verticalCenter: parent.verticalCenter
                 text: mi.text
                 color: mi.enabled ? C.Theme.textNormal : C.Theme.textDisabled
-                font.pixelSize: 13
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textBody + 1
             }
             Text {
                 id: shortcut
@@ -81,11 +82,11 @@ MenuBar {
                 anchors.rightMargin: mi.padX
                 anchors.verticalCenter: parent.verticalCenter
                 text: mi.shortcutText
-                color: C.Theme.textMuted; font.pixelSize: 11
-                font.family: C.Theme.fontMono
+                color: C.Theme.textMuted; font.pixelSize: C.Theme.textMeta
+                font.family: C.Theme.fontFamily
             }
         }
-        background: Rectangle { color: mi.highlighted ? C.Theme.surfaceRaised : "transparent" }
+        background: Rectangle { color: mi.highlighted ? C.Theme.raisedOn : "transparent" }
     }
 
     component MSep: MenuSeparator {
@@ -113,7 +114,7 @@ MenuBar {
             return w;
         }
         background: Rectangle {
-            color: C.Theme.surface; border.color: C.Theme.hairlineStrong; border.width: 1
+            color: C.Theme.surfaceRaised; border.color: C.Theme.hairlineStrong; border.width: 1
             radius: C.Theme.radiusCard
         }
     }

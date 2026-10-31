@@ -1,7 +1,7 @@
 import QtQuick
 
-// Linha rotulo -> valor das secoes de estatistica. O valor e DADO, entao sai em mono; o
-// rotulo e prosa, entao sai em sans.
+// Linha rotulo -> valor das secoes de estatistica. Rotulo no tier de rotulo (textSecondary),
+// valor em texto principal com os algarismos tabulares da fonte da UI.
 Item {
     id: root
 
@@ -11,17 +11,14 @@ Item {
     width: parent ? parent.width : 0
     height: 26
 
-    // Mesmo tier do rotulo do VectorRow ("Posicao", "Rotacao"): rotulo de dado e LEGENDA do
-    // numero, nao titulo. Em textSecondary ele empatava com o SectionHeader logo acima e a
-    // secao perdia o inicio — o cabecalho so se le como cabecalho se a linha abaixo recuar.
     Text {
         id: rowLabel
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
         renderType: Text.QtRendering
         renderTypeQuality: Text.HighRenderTypeQuality
     }
@@ -33,8 +30,8 @@ Item {
         horizontalAlignment: Text.AlignRight
         text: root.value
         color: Theme.textPrimary
-        font.family: Theme.fontMono
-        font.pixelSize: 11
+        font.family: Theme.fontNum
+        font.pixelSize: Theme.textBody
         elide: Text.ElideMiddle
         renderType: Text.QtRendering
         renderTypeQuality: Text.HighRenderTypeQuality

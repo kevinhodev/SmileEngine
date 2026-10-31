@@ -8,7 +8,7 @@ Rectangle {
     signal tapped()
     width: 46
     height: 40
-    color: winHover.hovered ? (danger ? "#c42b1c" : Theme.controlBg) : "transparent"
+    color: winHover.hovered ? (danger ? "#c42b1c" : Theme.raisedHover) : "transparent"
     Text {
         anchors.centerIn: parent
         text: windowButton.glyph

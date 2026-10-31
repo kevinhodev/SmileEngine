@@ -31,18 +31,18 @@ Item {
         anchors.left: parent.left
         y: 0
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Text {
         anchors.right: parent.right
         y: 0
         text: root.valueText
-        color: Theme.textSecondary
-        font.family: Theme.fontFamily
-        font.pixelSize: 9
+        color: Theme.textPrimary
+        font.family: Theme.fontNum
+        font.pixelSize: Theme.textBody
     }
 
     Text {
@@ -51,7 +51,7 @@ Item {
         text: root.minimumLabel
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 8
+        font.pixelSize: Theme.textMeta - 1
     }
 
     Text {
@@ -60,7 +60,7 @@ Item {
         text: root.maximumLabel
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 8
+        font.pixelSize: Theme.textMeta - 1
     }
 
     Slider {
@@ -92,7 +92,7 @@ Item {
             Rectangle {
                 anchors.fill: parent
                 radius: 1
-                color: Theme.controlBg
+                color: Theme.surface
             }
 
             Rectangle {
@@ -100,7 +100,7 @@ Item {
                 width: Math.abs(slider.visualPosition - root.centerPosition) * parent.width
                 height: parent.height
                 radius: 1
-                color: Theme.accent
+                color: slider.pressed ? Theme.accent : Theme.textMuted
             }
 
             Rectangle {
@@ -117,10 +117,10 @@ Item {
             y: slider.topPadding + slider.availableHeight / 2 - height / 2
             width: 10
             height: 10
-            radius: 5
-            color: Theme.knob
-            border.color: Theme.accent
-            border.width: 1.3
+            radius: Theme.radiusChip
+            color: slider.pressed ? Theme.accent : Theme.knob
+            border.color: Theme.hairlineStrong
+            border.width: 1
         }
     }
 
@@ -130,6 +130,6 @@ Item {
         text: root.centerLabel
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 7
+        font.pixelSize: Theme.textMeta - 1
     }
 }

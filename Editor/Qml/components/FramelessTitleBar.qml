@@ -15,8 +15,8 @@ Rectangle {
     property bool showMaximize: true
     property Component actions
 
-    implicitHeight: 40
-    color: Theme.shell
+    implicitHeight: 36
+    color: Theme.chrome
 
     Image {
         id: sourceIcon
@@ -55,8 +55,8 @@ Rectangle {
         text: root.title
         color: Theme.textPrimary
         font.family: Theme.fontFamily
-        font.pixelSize: 13
-        font.weight: Font.Medium
+        font.pixelSize: Theme.textSection
+        font.weight: Font.DemiBold
     }
 
     Text {
@@ -68,7 +68,7 @@ Rectangle {
         text: root.subtitle
         color: root.subtitleColor
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: Theme.textMeta
         elide: Text.ElideRight
     }
 
@@ -122,6 +122,6 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: Theme.hairline
+        color: Theme.hairlineStrong
     }
 }

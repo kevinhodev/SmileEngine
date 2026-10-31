@@ -24,9 +24,9 @@ Item {
         anchors.left: parent.left
         y: 3
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Rectangle {
@@ -35,18 +35,16 @@ Item {
         width: Math.max(48, badgeText.implicitWidth + 16)
         height: 20
         radius: Theme.radiusChip
-        color: Theme.accentBg
-        border.color: Theme.accentBorder
-        border.width: 1
+        color: Theme.surface
 
         Text {
             id: badgeText
             anchors.centerIn: parent
             text: root.valueText
-            color: Theme.accent
-            font.family: Theme.fontMono
-            font.pixelSize: 8
-            font.weight: Font.DemiBold
+            color: Theme.textPrimary
+            font.family: Theme.fontNum
+            font.pixelSize: Theme.textBody
+            font.weight: Font.Medium
         }
     }
 
@@ -76,13 +74,13 @@ Item {
             width: slider.availableWidth
             height: 2
             radius: 1
-            color: Theme.controlBg
+            color: Theme.surface
 
             Rectangle {
                 width: slider.visualPosition * parent.width
                 height: parent.height
                 radius: 1
-                color: Theme.accent
+                color: slider.pressed ? Theme.accent : Theme.textMuted
             }
         }
 
@@ -92,9 +90,9 @@ Item {
             width: 10
             height: 10
             radius: Theme.radiusControl
-            color: Theme.knob
-            border.color: Theme.accent
-            border.width: 1.3
+            color: slider.pressed ? Theme.accent : Theme.knob
+            border.color: Theme.hairlineStrong
+            border.width: 1
         }
     }
 }

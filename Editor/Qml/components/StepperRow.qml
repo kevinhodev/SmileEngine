@@ -55,9 +55,9 @@ Item {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Rectangle {
@@ -67,7 +67,7 @@ Item {
         height: 24
         radius: Theme.radiusControl
         color: Theme.surface
-        border.color: root.editing ? Theme.accent : Theme.controlBorder
+        border.color: root.editing ? Theme.accent : "transparent"
         border.width: 1
 
         Rectangle {
@@ -77,7 +77,7 @@ Item {
             anchors.bottom: parent.bottom
             width: 34
             radius: Theme.radiusControl
-            color: minusHover.containsMouse ? Theme.controlHover : Theme.controlBg
+            color: minusHover.containsMouse ? Theme.raisedHover : Theme.surfaceRaised
 
             Text {
                 anchors.centerIn: parent
@@ -104,14 +104,12 @@ Item {
             anchors.bottom: parent.bottom
             width: 34
             radius: Theme.radiusControl
-            color: plusHover.containsMouse ? Theme.accentBg : "transparent"
-            border.color: plusHover.containsMouse ? Theme.accentBorder : "transparent"
-            border.width: 1
+            color: plusHover.containsMouse ? Theme.raisedHover : Theme.surfaceRaised
 
             Text {
                 anchors.centerIn: parent
                 text: "+"
-                color: Theme.accent
+                color: Theme.textSecondary
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
             }
@@ -134,9 +132,8 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: root.boundValue + root.suffix
             color: Theme.textPrimary
-            font.family: Theme.fontMono
-            font.pixelSize: 9
-            font.weight: Font.DemiBold
+            font.family: Theme.fontNum
+            font.pixelSize: Theme.textBody
         }
 
         TextInput {
@@ -146,12 +143,12 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             visible: root.editing
             color: Theme.textPrimary
-            selectionColor: Theme.accentBorder
-            selectedTextColor: Theme.textPrimary
+            selectionColor: Theme.accent
+            selectedTextColor: Theme.accentInk
             horizontalAlignment: TextInput.AlignHCenter
             inputMethodHints: Qt.ImhDigitsOnly
-            font.family: Theme.fontMono
-            font.pixelSize: 9
+            font.family: Theme.fontNum
+            font.pixelSize: Theme.textBody
             onEditingFinished: root.commitEdit()
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_Escape) {

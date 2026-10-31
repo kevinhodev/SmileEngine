@@ -78,7 +78,7 @@ Rectangle {
             anchors.centerIn: parent
             text: parent.label
             color: probeButtonHover.hovered ? root.blue : root.textSecondary
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 10
         }
         HoverHandler { id: probeButtonHover; cursorShape: Qt.PointingHandCursor }
@@ -450,7 +450,7 @@ Rectangle {
                 y: 107
                 text: root.debugModel.debugExposure.toFixed(2).replace(".", ",") + "×"
                 color: root.blue
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 11
             }
 
@@ -564,7 +564,7 @@ Rectangle {
                 anchors.topMargin: 29
                 text: root.debugModel.debugProbeWorld + "  •  " + root.debugModel.debugProbeGrid
                 color: root.textMuted
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 9
             }
 
@@ -578,7 +578,7 @@ Rectangle {
                       ? "passe o mouse sobre um oct-map para ler a direção"
                       : root.debugModel.debugProbeDirection
                 color: root.debugModel.debugProbeDirection === "" ? root.textMuted : root.blue
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 9
             }
 
@@ -593,7 +593,7 @@ Rectangle {
                       ? "lendo valores do texel..."
                       : root.debugModel.debugProbeSample
                 color: root.debugModel.debugProbeSample === "" ? root.textMuted : root.green
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 9
             }
 
@@ -678,7 +678,7 @@ Rectangle {
                 elide: Text.ElideRight
                 color: root.debugModel.debugProbePointPickArmed
                        ? "#e7c65c" : root.textSecondary
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 10
             }
 
@@ -738,7 +738,7 @@ Rectangle {
                             color: parent.contributorRisk ? "#f0a261"
                                  : parent.contributorDominant ? root.green
                                  : root.textPrimary
-                            font.family: C.Theme.fontMono
+                            font.family: C.Theme.fontNum
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
                         }
@@ -756,7 +756,7 @@ Rectangle {
                                     "%"
                                   : "inativa · descartada"
                             color: root.textNormal
-                            font.family: C.Theme.fontMono
+                            font.family: C.Theme.fontNum
                             font.pixelSize: 10
                         }
 
@@ -773,7 +773,7 @@ Rectangle {
                                   (Number(parent.modelData.leakRisk) * 100).toFixed(1) + "%"
                             elide: Text.ElideRight
                             color: root.textSecondary
-                            font.family: C.Theme.fontMono
+                            font.family: C.Theme.fontNum
                             font.pixelSize: 9
                         }
 
@@ -872,7 +872,7 @@ Rectangle {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: (previewTile.index + 1) + "."
                                 color: root.blue
-                                font.family: C.Theme.fontMono
+                                font.family: C.Theme.fontNum
                                 font.pixelSize: 10
                             }
 
@@ -910,7 +910,7 @@ Rectangle {
                                 visible: !previewTile.distanceTarget
                                 text: "irradiância decodificada  •  interior 6 × 6  •  sem padding"
                                 color: root.textSecondary
-                                font.family: C.Theme.fontMono
+                                font.family: C.Theme.fontNum
                                 font.pixelSize: 9
                             }
 
@@ -921,7 +921,7 @@ Rectangle {
                                 visible: previewTile.distanceTarget
                                 text: root.debugModel.debugProbeDistanceRange
                                 color: root.textSecondary
-                                font.family: C.Theme.fontMono
+                                font.family: C.Theme.fontNum
                                 font.pixelSize: 8
                             }
 

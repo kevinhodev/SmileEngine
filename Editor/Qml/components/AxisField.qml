@@ -1,10 +1,12 @@
 import QtQuick
 
-// Campo numerico do Inspector: valor em mono, alinhado a direita, com faixa de eixo opcional.
+// Campo numerico do Inspector: campo rebaixado, valor alinhado a direita, barra de eixo de
+// 3 px na borda esquerda.
 //
-// A faixa de 2 px e o unico lugar do editor em que vermelho/verde/azul aparecem sem sentido
+// A barra e o unico lugar do editor em que vermelho/verde/azul aparecem sem sentido
 // semantico — ali eles SAO os eixos X/Y/Z, a mesma convencao do gizmo no viewport. Trocar por
-// outra coisa quebraria o pareamento entre o campo e a alca que o usuario arrasta.
+// outra coisa quebraria o pareamento entre o campo e a alca que o usuario arrasta. Sem cor de
+// eixo (escala), o campo mostra a letra em texto meta no lugar da barra.
 Rectangle {
     id: root
 
@@ -17,44 +19,48 @@ Rectangle {
 
     signal committed(real v)
 
-    height: 26
+    height: Theme.controlHeight
     radius: Theme.radiusControl
-    color: Theme.surface
-    border.color: input.activeFocus ? Theme.accentBorder : Theme.hairline
+    color: hover.hovered && !input.activeFocus ? Theme.surfaceHover : Theme.surface
+    border.color: input.activeFocus ? Theme.accent : "transparent"
     border.width: 1
     opacity: editable ? 1.0 : 0.5
+    clip: true
+
+    HoverHandler { id: hover; cursorShape: Qt.IBeamCursor }
 
     Rectangle {
         visible: root.axisColor.a > 0
-        x: 1; y: 1
-        width: 2; height: parent.height - 2
+        width: 3; height: parent.height
         color: root.axisColor
     }
     Text {
-        x: 10
+        x: 8
         anchors.verticalCenter: parent.verticalCenter
-        visible: root.axis !== ""
+        visible: root.axis !== "" && root.axisColor.a === 0
         text: root.axis
         color: Theme.textMuted
-        font.family: Theme.fontMono
-        font.pixelSize: 10
+        font.family: Theme.fontFamily
+        font.pixelSize: Theme.textMeta
+        font.weight: Font.DemiBold
         renderType: Text.QtRendering
         renderTypeQuality: Text.HighRenderTypeQuality
     }
     TextInput {
         id: input
         anchors.fill: parent
-        anchors.leftMargin: root.axis !== "" ? 24 : 10
-        anchors.rightMargin: 9
+        anchors.leftMargin: root.axis !== "" ? 20 : 8
+        anchors.rightMargin: 8
         verticalAlignment: TextInput.AlignVCenter
         horizontalAlignment: TextInput.AlignRight
         enabled: root.editable
         color: Theme.textPrimary
-        font.family: Theme.fontMono
-        font.pixelSize: 11
+        font.family: Theme.fontNum
+        font.pixelSize: Theme.textBody
         selectByMouse: true
-        selectionColor: Theme.accentBorder
-        text: root.value.toFixed(root.decimals) + root.suffix
+        selectionColor: Theme.accent
+        selectedTextColor: Theme.accentInk
+        text: root.value.toFixed(root.decimals).replace(".", ",") + root.suffix
         validator: RegularExpressionValidator {
             regularExpression: /^[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)?$/
         }
@@ -67,7 +73,7 @@ Rectangle {
         // Valor externo (gizmo arrastando) atualiza o campo quando ele nao esta em edicao.
         Binding {
             target: input; property: "text"
-            value: root.value.toFixed(root.decimals) + root.suffix
+            value: root.value.toFixed(root.decimals).replace(".", ",") + root.suffix
             when: !input.activeFocus
             restoreMode: Binding.RestoreBinding
         }

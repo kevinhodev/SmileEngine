@@ -80,11 +80,11 @@ namespace SmileEditor {
 
         setDockNestingEnabled(true);
         setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
-        // A faixa inferior atravessa a janela inteira, por baixo dos docks laterais. Sem isto o
-        // Qt entrega os cantos as areas esquerda/direita e o console nasce espremido entre o
-        // outliner e o inspector — o oposto da faixa cheia que o conceito pede.
+        // Cartao 18%: o console passa por baixo do outliner e do viewport, mas o Inspector
+        // desce ate o rodape — ele e a coluna mais alta da janela (secoes empilhadas) e e o
+        // que mais perdia altura quando a faixa inferior atravessava a janela inteira.
         setCorner(Qt::BottomLeftCorner,  Qt::BottomDockWidgetArea);
-        setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
+        setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
 
         // O sink deve existir antes de qualquer host QML emitir logs.
         ConsoleLog = new LogBridge(this);
@@ -432,7 +432,7 @@ namespace SmileEditor {
         Bar->setObjectName(QStringLiteral("EditorStatusBar"));
         Bar->setSizeGripEnabled(false);
         Bar->setContentsMargins(0, 0, 0, 0);
-        Bar->setFixedHeight(30);
+        Bar->setFixedHeight(26);
 
         QQuickWidget* Metrics = CreateQmlPanel(*SharedQmlEngine,
             QStringLiteral("StatusBar.qml"),
@@ -440,7 +440,7 @@ namespace SmileEditor {
               { QStringLiteral("statsModel"),  StatsBr } },
             Bar);
         Metrics->setObjectName(QStringLiteral("StatusBarPanel"));
-        Metrics->setFixedHeight(30);
+        Metrics->setFixedHeight(26);
         Metrics->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         Bar->addWidget(Metrics, 1);
 
@@ -685,7 +685,7 @@ namespace SmileEditor {
             {},
             ToolbarProperties);
         Toolbar->setObjectName("ViewportToolbar");
-        Toolbar->setFixedHeight(34);
+        Toolbar->setFixedHeight(38);
         Toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         RegisterViewport(Viewport, Toolbar);
         Layout->addWidget(Toolbar);
@@ -718,7 +718,7 @@ namespace SmileEditor {
 
         addDockWidget(Qt::BottomDockWidgetArea, ConsoleDock);
         Console->setMinimumHeight(102); // faixa de comando + 2 linhas de log
-        resizeDocks({ ConsoleDock }, { 146 }, Qt::Vertical);
+        resizeDocks({ ConsoleDock }, { 200 }, Qt::Vertical);
 
         connect(ConsoleDock, &QDockWidget::visibilityChanged, Menus, &MenuBridge::SetConsoleVisible);
 

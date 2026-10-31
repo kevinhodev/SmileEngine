@@ -1,8 +1,9 @@
 import QtQuick
 import ".." // LucideIcon.qml mora na raiz de Qml/
 
-// Trio X/Y/Z do Inspector: rotulo em cima, tres AxisField de largura igual embaixo.
-// `showLink` acende o elo da escala uniforme (accent quando ligado — e estado ativo).
+// Trio X/Y/Z do Inspector numa linha so: rotulo na coluna de rotulos, tres AxisField de
+// largura igual na coluna de valores. `showLink` acende o elo da escala uniforme, encostado
+// no fim da coluna de rotulo (accent quando ligado — e estado ativo).
 Item {
     id: root
 
@@ -13,7 +14,7 @@ Item {
     property real xValue: 0
     property real yValue: 0
     property real zValue: 0
-    // Escala nao tem convencao de cor por eixo: sem tinta, os tres campos ficam neutros.
+    // Escala nao tem convencao de cor por eixo: sem tinta, os campos mostram a letra.
     property bool tinted: true
 
     signal linkToggled()
@@ -22,28 +23,32 @@ Item {
     signal zCommitted(real v)
 
     width: parent ? parent.width : 0
-    height: 48
+    height: Theme.controlHeight + 6
 
     Text {
         id: rowLabel
         anchors.left: parent.left
-        anchors.top: parent.top
+        anchors.right: linkButton.visible ? linkButton.left : fields.left
+        anchors.rightMargin: 6
+        anchors.verticalCenter: parent.verticalCenter
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
+        elide: Text.ElideRight
         renderType: Text.QtRendering
         renderTypeQuality: Text.HighRenderTypeQuality
     }
     Item {
+        id: linkButton
         visible: root.showLink
-        anchors.left: rowLabel.right
-        anchors.leftMargin: 8
-        anchors.verticalCenter: rowLabel.verticalCenter
+        anchors.right: fields.left
+        anchors.rightMargin: 4
+        anchors.verticalCenter: parent.verticalCenter
         width: 18; height: 18
         LucideIcon {
             anchors.centerIn: parent
-            name: "link"; size: 12
+            name: "link"; size: 13
             color: root.linked ? Theme.accent
                  : linkHover.hovered ? Theme.textSecondary
                  : Theme.textMuted
@@ -60,10 +65,10 @@ Item {
 
     Row {
         id: fields
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        spacing: 8
+        x: Math.round(parent.width * Theme.labelRatio)
+        width: parent.width - x
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 4
         readonly property real fieldWidth: (width - 2 * spacing) / 3
 
         AxisField {

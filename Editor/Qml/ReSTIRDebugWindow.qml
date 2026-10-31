@@ -386,7 +386,7 @@ Rectangle {
             width: 70
             text: debugField.label
             color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 8
             font.letterSpacing: 0.4
         }
@@ -397,7 +397,7 @@ Rectangle {
             text: debugField.value
             color: debugField.valueColor
             elide: Text.ElideRight
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 9
         }
     }
@@ -424,7 +424,7 @@ Rectangle {
             x: 26; y: 10
             text: status.label
             color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 9
             font.letterSpacing: 1.0
         }
@@ -432,7 +432,7 @@ Rectangle {
             x: 12; y: 29
             text: status.value
             color: C.Theme.textPrimary
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 13
             font.weight: Font.DemiBold
         }
@@ -469,7 +469,7 @@ Rectangle {
             anchors.top: parent.top
             text: metric.value
             color: metric.tone
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 11
             font.weight: Font.DemiBold
         }
@@ -481,7 +481,7 @@ Rectangle {
             anchors.topMargin: 20
             text: metric.detail
             color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
+            font.family: C.Theme.fontNum
             font.pixelSize: 9
             wrapMode: Text.WordWrap
         }
@@ -572,7 +572,7 @@ Rectangle {
             Text {
                 text: "DIAGNÓSTICO"
                 color: C.Theme.textMuted
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 9
                 font.letterSpacing: 1.4
                 bottomPadding: 8
@@ -603,7 +603,7 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         text: nav.modelData.label
                         color: root.page === nav.index ? C.Theme.textPrimary : C.Theme.textSecondary
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 9
                         font.weight: root.page === nav.index ? Font.DemiBold : Font.Normal
                         font.letterSpacing: 0.7
@@ -623,7 +623,7 @@ Rectangle {
             Text {
                 text: "PIXEL DEBUG"
                 color: C.Theme.textMuted
-                font.family: C.Theme.fontMono
+                font.family: C.Theme.fontNum
                 font.pixelSize: 9
                 font.letterSpacing: 1.2
             }
@@ -637,7 +637,7 @@ Rectangle {
                 Text {
                     text: root.restirModel.pixelDebugStatus
                     color: C.Theme.textSecondary
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                 }
             }
@@ -834,7 +834,7 @@ Rectangle {
                     width: parent.width
                     text: root.transport.summary || "Ative a telemetria do radiance cache para preencher o resumo."
                     color: C.Theme.textSecondary
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                     lineHeight: 1.35
                     wrapMode: Text.WordWrap
@@ -924,7 +924,7 @@ Rectangle {
                 Text {
                     text: "Estimador primário"
                     color: C.Theme.textMuted
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                     font.letterSpacing: 0.8
                 }
@@ -938,7 +938,7 @@ Rectangle {
                 Text {
                     text: "Fallback do miss secundário"
                     color: C.Theme.textMuted
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                     font.letterSpacing: 0.8
                 }
@@ -1119,7 +1119,7 @@ Rectangle {
                     width: parent.width
                     text: root.transport.sourceBreakdown || "Sem breakdown de fonte."
                     color: C.Theme.textSecondary
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                     lineHeight: 1.35
                     wrapMode: Text.WordWrap
@@ -1128,7 +1128,7 @@ Rectangle {
                     width: parent.width
                     text: root.transport.missBreakdown || "Sem detalhe de misses."
                     color: C.Theme.textMuted
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                     lineHeight: 1.35
                     wrapMode: Text.WordWrap
@@ -1254,7 +1254,7 @@ Rectangle {
                         y: 34
                         text: "TIPO DE VISUALIZAÇÃO"
                         color: C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 8
                         font.letterSpacing: 0.9
                     }
@@ -1365,7 +1365,7 @@ Rectangle {
                         id: sharcModeLabel
                         text: "SHARC · TIPO DE VISUALIZAÇÃO"
                         color: C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 8
                         font.letterSpacing: 0.9
                     }
@@ -1442,7 +1442,7 @@ Rectangle {
                               ? "PIXEL " + root.pixelDebug.pixel : "PIXEL —"
                         color: pixelDebugCard.hasSnapshot
                                ? C.Theme.textPrimary : C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 13
                         font.weight: Font.DemiBold
                     }
@@ -1455,7 +1455,7 @@ Rectangle {
                               : "arme e clique no viewport"
                         color: C.Theme.textSecondary
                         elide: Text.ElideRight
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 8
                     }
                     ActionButton {
@@ -1495,7 +1495,7 @@ Rectangle {
                               : "Readback 1×1 assíncrono; não bloqueia a GPU."
                         color: root.restirModel.pixelDebugArmed
                                ? C.Theme.accent : C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 8
                     }
                 }
@@ -1525,7 +1525,7 @@ Rectangle {
                         text: "SUPERFÍCIE"
                         color: pixelDebugCard.surfaceData.valid
                                ? C.Theme.green : C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 9
                         font.letterSpacing: 0.8
                     }
@@ -1565,7 +1565,7 @@ Rectangle {
                                ? (pixelDebugCard.diData.valid
                                   ? C.Theme.green : C.Theme.warn)
                                : C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 9
                         font.letterSpacing: 0.8
                     }
@@ -1605,7 +1605,7 @@ Rectangle {
                                ? (pixelDebugCard.giData.valid
                                   ? C.Theme.green : C.Theme.warn)
                                : C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 9
                         font.letterSpacing: 0.8
                     }
@@ -1713,7 +1713,7 @@ Rectangle {
                                               ? root.targetSlot(targetRow.index) : "+"
                                         color: targetRow.selected ? C.Theme.shell
                                                                   : C.Theme.textMuted
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                         font.weight: Font.DemiBold
                                     }
@@ -1790,7 +1790,7 @@ Rectangle {
                         y: 43
                         text: "COLUNAS"
                         color: C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 8
                         font.letterSpacing: 0.9
                     }
@@ -1844,7 +1844,7 @@ Rectangle {
                           : "PREVIEW OFFSCREEN  ·  " + root.targetGridColumns +
                             " × " + root.targetGridRows
                     color: C.Theme.textMuted
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 9
                     font.letterSpacing: 1.0
                 }
@@ -1856,7 +1856,7 @@ Rectangle {
                           ? "READBACK PRONTO" : "AGUARDANDO GPU"
                     color: root.debugModel.debugPreviewReady
                            ? C.Theme.green : C.Theme.warn
-                    font.family: C.Theme.fontMono
+                    font.family: C.Theme.fontNum
                     font.pixelSize: 8
                     font.letterSpacing: 0.8
                 }
@@ -1958,7 +1958,7 @@ Rectangle {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: (targetOverlay.index + 1) + "."
                                         color: C.Theme.blue
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                     }
                                     Text {
@@ -2014,7 +2014,7 @@ Rectangle {
                                         text: root.legendSummary(targetOverlay.targetName)
                                         elide: Text.ElideRight
                                         color: C.Theme.textSecondary
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 8
                                     }
                                 }
@@ -2088,7 +2088,7 @@ Rectangle {
                                 y: 7
                                 text: root.legendTitle(root.focusedTargetName)
                                 color: C.Theme.textMuted
-                                font.family: C.Theme.fontMono
+                                font.family: C.Theme.fontNum
                                 font.pixelSize: 8
                                 font.letterSpacing: 0.9
                             }
@@ -2128,7 +2128,7 @@ Rectangle {
                                             Text {
                                                 text: legendEntry.modelData.label
                                                 color: C.Theme.textSecondary
-                                                font.family: C.Theme.fontMono
+                                                font.family: C.Theme.fontNum
                                                 font.pixelSize: 8
                                                 anchors.verticalCenter: parent.verticalCenter
                                             }
@@ -2171,7 +2171,7 @@ Rectangle {
                                  !root.debugModel.debugPreviewReady
                         text: "Preparando preview…"
                         color: C.Theme.textMuted
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 10
                     }
                 }

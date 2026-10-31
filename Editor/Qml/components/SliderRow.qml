@@ -25,16 +25,16 @@ Item {
     Text {
         x: 0; y: 0
         text: row.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
     Text {
         anchors.right: parent.right; y: 0
         text: row.valueText
         color: Theme.textPrimary
-        font.family: Theme.fontMono
-        font.pixelSize: 11
+        font.family: Theme.fontNum
+        font.pixelSize: Theme.textBody
     }
     Slider {
         id: sl
@@ -60,20 +60,20 @@ Item {
             y: sl.topPadding + sl.availableHeight / 2 - height / 2
             width: sl.availableWidth
             height: 4; radius: 2
-            color: Theme.controlBg
+            color: Theme.surface
             Rectangle {
                 width: sl.visualPosition * parent.width
                 height: parent.height; radius: 2
-                color: Theme.accent
+                color: sl.pressed ? Theme.accent : Theme.textMuted
             }
         }
         handle: Rectangle {
             x: sl.leftPadding + sl.visualPosition * (sl.availableWidth - width)
             y: sl.topPadding + sl.availableHeight / 2 - height / 2
-            width: 12; height: 12; radius: 6
-            color: Theme.knob
-            border.color: Theme.accent
-            border.width: 1.5
+            width: 10; height: 10; radius: Theme.radiusChip
+            color: sl.pressed ? Theme.accent : Theme.knob
+            border.color: Theme.hairlineStrong
+            border.width: 1
         }
     }
 }

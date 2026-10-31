@@ -20,9 +20,9 @@ Item {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: "Preset"
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     ComboBox {
@@ -35,7 +35,7 @@ Item {
         currentIndex: root.currentIndex
         onActivated: index => root.activated(index)
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: Theme.textBody
 
         contentItem: Text {
             leftPadding: 10
@@ -51,13 +51,13 @@ Item {
             anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             name: "chevron-down"
-            size: 11
-            color: Theme.textSecondary
+            size: 12
+            color: Theme.textMuted
         }
         background: Rectangle {
             radius: Theme.radiusControl
-            color: combo.hovered ? Theme.surfaceRaised : Theme.surface
-            border.color: combo.activeFocus ? Theme.accentBorder : Theme.controlBorder
+            color: combo.hovered ? Theme.surfaceHover : Theme.surface
+            border.color: combo.activeFocus ? Theme.accent : "transparent"
             border.width: 1
         }
         popup: Popup {
@@ -90,12 +90,12 @@ Item {
                 text: option.modelData
                 color: option.highlighted ? Theme.textPrimary : Theme.textNormal
                 font.family: Theme.fontFamily
-                font.pixelSize: 10
+                font.pixelSize: Theme.textBody
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
                 radius: Theme.radiusChip
-                color: option.highlighted ? Theme.accentBg : "transparent"
+                color: option.highlighted ? Theme.raisedHover : "transparent"
             }
         }
     }

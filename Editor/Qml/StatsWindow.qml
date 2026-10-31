@@ -179,7 +179,7 @@ Rectangle {
                         x: 16; y: 37
                         text: root.statsModel.gpuFrameText
                         color: root.textPrimary
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 26
                         font.weight: Font.DemiBold
                     }
@@ -191,7 +191,7 @@ Rectangle {
                               ? (1000.0 / root.statsModel.gpuFrameMs).toFixed(0) + " FPS GPU"
                               : "— FPS GPU"
                         color: root.statsModel.gpuFrameMs <= 16.67 ? root.green : root.warn
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 11
                     }
                     MicroBar {
@@ -204,7 +204,7 @@ Rectangle {
                         x: 16; y: 99
                         text: "CPU  " + root.formatMs(root.statsModel.frameTimeMs)
                         color: root.textSecondary
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 10
                     }
                     Text {
@@ -215,7 +215,7 @@ Rectangle {
                               ? "+" + root.formatMs(16.67 - root.statsModel.gpuFrameMs) + " livres"
                               : root.formatMs(root.statsModel.gpuFrameMs - 16.67) + " acima"
                         color: root.statsModel.gpuFrameMs <= 16.67 ? root.textMuted : root.warn
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 10
                     }
                 }
@@ -237,7 +237,7 @@ Rectangle {
                         x: 16; y: 37
                         text: root.statsModel.vramUsageText
                         color: root.statsModel.vramOverBudget ? root.warn : root.blue
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 24
                         font.weight: Font.DemiBold
                     }
@@ -255,7 +255,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: Math.round(root.statsModel.vramBudgetFrac * 100) + "% DO BUDGET"
                             color: root.statsModel.vramOverBudget ? root.warn : root.blue
-                            font.family: C.Theme.fontMono
+                            font.family: C.Theme.fontNum
                             font.pixelSize: 9
                             font.weight: Font.DemiBold
                         }
@@ -314,7 +314,7 @@ Rectangle {
                         y: 17
                         text: root.statsModel.gpuFrameText
                         color: root.textSecondary
-                        font.family: C.Theme.fontMono
+                        font.family: C.Theme.fontNum
                         font.pixelSize: 10
                     }
 
@@ -352,7 +352,7 @@ Rectangle {
                                     visible: passRow.expandable
                                     text: passRow.expanded ? "−" : "+"
                                     color: root.textMuted
-                                    font.family: C.Theme.fontMono
+                                    font.family: C.Theme.fontNum
                                     font.pixelSize: 11
                                 }
                                 Text {
@@ -401,7 +401,7 @@ Rectangle {
                                     y: 5
                                     text: passRow.modelData.text
                                     color: root.textPrimary
-                                    font.family: C.Theme.fontMono
+                                    font.family: C.Theme.fontNum
                                     font.pixelSize: 10
                                     font.weight: Font.DemiBold
                                 }
@@ -410,7 +410,7 @@ Rectangle {
                                     y: 5
                                     text: passRow.modelData.percentText
                                     color: root.textMuted
-                                    font.family: C.Theme.fontMono
+                                    font.family: C.Theme.fontNum
                                     font.pixelSize: 9
                                 }
                                 MicroBar {
@@ -487,7 +487,7 @@ Rectangle {
                                                 y: 3
                                                 text: childRow.modelData.text
                                                 color: childRow.active ? root.textNormal : root.textMuted
-                                                font.family: C.Theme.fontMono
+                                                font.family: C.Theme.fontNum
                                                 font.pixelSize: 9
                                             }
                                             Text {
@@ -495,7 +495,7 @@ Rectangle {
                                                 y: 3
                                                 text: childRow.modelData.shareText
                                                 color: childRow.active ? root.textMuted : "#73776b"
-                                                font.family: C.Theme.fontMono
+                                                font.family: C.Theme.fontNum
                                                 font.pixelSize: 8
                                             }
                                         }
@@ -569,7 +569,7 @@ Rectangle {
                                         visible: vramRow.expandable
                                         text: vramRow.expanded ? "−" : "+"
                                         color: root.textMuted
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 10
                                     }
                                     Text {
@@ -587,7 +587,7 @@ Rectangle {
                                         y: 0
                                         text: vramRow.modelData.text
                                         color: root.textNormal
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                     }
                                     MicroBar {
@@ -659,7 +659,7 @@ Rectangle {
                                                     y: 3
                                                     text: vramChild.modelData.text
                                                     color: vramChild.active ? root.textNormal : root.textMuted
-                                                    font.family: C.Theme.fontMono
+                                                    font.family: C.Theme.fontNum
                                                     font.pixelSize: 9
                                                 }
                                                 Text {
@@ -667,7 +667,7 @@ Rectangle {
                                                     y: 3
                                                     text: vramChild.modelData.shareText
                                                     color: vramChild.active ? root.textMuted : "#73776b"
-                                                    font.family: C.Theme.fontMono
+                                                    font.family: C.Theme.fontNum
                                                     font.pixelSize: 8
                                                 }
                                             }
@@ -742,7 +742,7 @@ Rectangle {
                                         anchors.verticalCenter: parent.verticalCenter
                                          text: summaryRow.modelData.value
                                         color: root.textNormal
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                     }
                                     Rectangle {
@@ -803,7 +803,7 @@ Rectangle {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: cpuRow.modelData.ms.toFixed(3) + " ms"
                                         color: root.textNormal
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                     }
                                 }
@@ -845,7 +845,7 @@ Rectangle {
                                                     submitPassRow.modelData.matRows + " linhas"
                                                   : submitPassRow.modelData.matBinds + " mat")
                                         color: root.textNormal
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                     }
                                 }
@@ -914,7 +914,7 @@ Rectangle {
                                         anchors.verticalCenter: csmName.verticalCenter
                                         text: csmRow.modelData.shareText
                                         color: root.textMuted
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                         horizontalAlignment: Text.AlignRight
                                         width: 52
@@ -925,7 +925,7 @@ Rectangle {
                                         anchors.verticalCenter: csmName.verticalCenter
                                         text: csmRow.modelData.text
                                         color: root.textNormal
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 9
                                     }
                                     // Diagnóstico: cortes de cada filtro e deslocamento do fit.
@@ -937,7 +937,7 @@ Rectangle {
                                         text: csmRow.modelData.cullText
                                         color: root.textMuted
                                         opacity: 0.6
-                                        font.family: C.Theme.fontMono
+                                        font.family: C.Theme.fontNum
                                         font.pixelSize: 8
                                         elide: Text.ElideRight
                                         visible: !csmRow.summary

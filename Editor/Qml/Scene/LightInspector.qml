@@ -19,14 +19,14 @@ Column {
     readonly property bool isSpot: lightsModel.lightType === 1
 
     // ---- Identidade ----
-    C.SectionHeader { firstInColumn: true; label: "IDENTIFICAÇÃO" }
+    C.SectionHeader { firstInColumn: true; label: "Identificação" }
 
     Rectangle {
         width: parent.width
         height: C.Theme.controlHeight
         radius: C.Theme.radiusControl
         color: C.Theme.surface
-        border.color: nameInput.activeFocus ? C.Theme.accentBorder : C.Theme.hairline
+        border.color: nameInput.activeFocus ? C.Theme.accent : "transparent"
         border.width: 1
         TextInput {
             id: nameInput
@@ -35,9 +35,10 @@ Column {
             verticalAlignment: TextInput.AlignVCenter
             color: C.Theme.textPrimary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: C.Theme.textBody
             selectByMouse: true
-            selectionColor: C.Theme.accentBorder
+            selectionColor: C.Theme.accent
+            selectedTextColor: C.Theme.accentInk
             text: root.lightsModel.name
             onEditingFinished: { root.lightsModel.name = text; focus = false }
             Binding {
@@ -50,7 +51,7 @@ Column {
     }
 
     // ---- Cor ----
-    C.SectionHeader { label: "COR" }
+    C.SectionHeader { label: "Cor" }
 
     C.HsvColorPicker {
         width: parent.width
@@ -62,7 +63,7 @@ Column {
     }
 
     // ---- Emissao ----
-    C.SectionHeader { label: "EMISSÃO" }
+    C.SectionHeader { label: "Emissão" }
 
     C.SliderRow {
         label: "Intensidade"
@@ -97,7 +98,7 @@ Column {
     }
 
     // ---- Cone (so spot) ----
-    C.SectionHeader { visible: root.isSpot; label: "CONE" }
+    C.SectionHeader { visible: root.isSpot; label: "Cone" }
 
     C.SliderRow {
         visible: root.isSpot
@@ -133,7 +134,7 @@ Column {
     }
 
     // ---- Transform ----
-    C.SectionHeader { label: "TRANSFORM" }
+    C.SectionHeader { label: "Transform" }
 
     // A luz nao tem rotacao nem escala editaveis (spot orienta pelo azimute/inclinacao acima),
     // entao o trio de posicao vem sozinho, com o atalho de reposicionar na camera ao lado.
@@ -146,9 +147,9 @@ Column {
             anchors.left: parent.left
             anchors.top: parent.top
             text: "Posição"
-            color: C.Theme.textMuted
+            color: C.Theme.textSecondary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 11
+            font.pixelSize: C.Theme.textBody
         }
         Item {
             anchors.left: posLabel.right
@@ -197,7 +198,7 @@ Column {
 
     // ---- Sombras ----
     C.SectionHeader {
-        label: "SOMBRAS"
+        label: "Sombras"
         // Orcamento por quadro do atlas: e a informacao que decide se vale ligar mais uma.
         trailing: root.isSpot ? "8 SPOTS/QUADRO" : "4 POINTS/QUADRO"
     }

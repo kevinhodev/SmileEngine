@@ -43,7 +43,7 @@ QQC.ToolTip {
             text: tip.text
             color: Theme.textPrimary
             font.family: Theme.fontFamily
-            font.pixelSize: 10
+            font.pixelSize: Theme.textBody
             font.weight: Font.Medium
             renderType: Text.NativeRendering
         }
@@ -54,17 +54,15 @@ QQC.ToolTip {
             implicitWidth: shortcutLabel.implicitWidth + 10
             implicitHeight: 17
             radius: Theme.radiusChip
-            color: Theme.surfaceRaised
-            border.color: Theme.hairlineStrong
-            border.width: 1
+            color: Theme.surface
 
             Text {
                 id: shortcutLabel
                 anchors.centerIn: parent
                 text: tip.shortcut
                 color: Theme.textSecondary
-                font.family: Theme.fontMono
-                font.pixelSize: 9
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.textMeta
                 font.weight: Font.DemiBold
                 renderType: Text.NativeRendering
             }
@@ -85,18 +83,9 @@ QQC.ToolTip {
         Rectangle {
             anchors.fill: parent
             radius: Theme.radiusCard
-            color: Theme.surface
+            color: Theme.surfaceRaised
             border.color: Theme.hairlineStrong
             border.width: 1
-        }
-        Rectangle {
-            x: 1
-            y: 7
-            width: 2
-            height: parent.height - 14
-            radius: 1
-            color: Theme.accent
-            opacity: 0.9
         }
     }
 

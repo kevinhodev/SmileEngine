@@ -972,7 +972,7 @@ Rectangle {
                             x: 29; y: 25
                             text: root.viewportModel.internalResolution + "  →  " + root.viewportModel.outputResolution
                             color: root.textPrimary
-                            font.family: C.Theme.fontMono
+                            font.family: C.Theme.fontNum
                             font.pixelSize: 10
                         }
                         Rectangle {

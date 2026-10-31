@@ -4,7 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import "components" as C
 
-// Scene Outliner — dock ESQUERDO no conceito Signal Graphite. O painel e so hierarquia,
+// Scene Outliner — dock ESQUERDO no conceito Cartao 18%. O painel e so hierarquia,
 // busca e visibilidade; as propriedades da selecao vivem no InspectorPanel (dock direito),
 // no split classico de engine outliner|viewport|inspector.
 //
@@ -62,8 +62,18 @@ Rectangle {
     readonly property bool hasLightSelection: lightsModel.selectedIndex >= 0
     readonly property bool hasMeshSelection: outlinerModel.meshSelected
 
-    // Contagens sao DADO: separador de milhar no formato do usuario, desenhado em mono.
+    // Contagens sao DADO: separador de milhar no formato do usuario (digitos tabulares da UI).
     function fmtCount(n) { return n.toLocaleString(Qt.locale("pt-BR"), 'f', 0) }
+
+    // Cor do icone pelo TIPO do objeto, nao pelo estado: ambar = luz, verde-agua = ambiente,
+    // azul = mesh. A selecao nao recolore o icone — quem marca a selecao e a faixa da linha.
+    function iconTint(name) {
+        if (name === "lightbulb" || name === "cone") return C.Theme.amber
+        if (name === "box") return C.Theme.blue
+        if (name === "leaf") return C.Theme.green
+        if (name === "folder" || name === "list-tree") return C.Theme.textMuted
+        return C.Theme.teal
+    }
 
     // ---- Componentes locais ----
 
@@ -77,8 +87,8 @@ Rectangle {
         signal clicked()
         width: 22; height: 22
         Rectangle {
-            anchors.fill: parent; radius: C.Theme.radiusChip
-            color: ibHover.hovered ? C.Theme.surfaceRaised : "transparent"
+            anchors.fill: parent; radius: C.Theme.radiusControl
+            color: ibHover.hovered ? C.Theme.raisedHover : "transparent"
         }
         LucideIcon {
             anchors.centerIn: parent
@@ -100,8 +110,8 @@ Rectangle {
         signal clicked()
         width: 22; height: 22
         Rectangle {
-            anchors.fill: parent; radius: C.Theme.radiusChip
-            color: eyeHover.hovered ? C.Theme.surfaceRaised : "transparent"
+            anchors.fill: parent; radius: C.Theme.radiusControl
+            color: eyeHover.hovered ? C.Theme.raisedHover : "transparent"
         }
         LucideIcon {
             anchors.centerIn: parent
@@ -117,27 +127,24 @@ Rectangle {
         TapHandler { onTapped: eye.clicked() }
     }
 
-    // Chip de filtro. Raio 2 e o do conceito para chips/badges; ativo usa o accent.
+    // Segmento do filtro: os quatro dividem um trilho rebaixado; o ativo sobe em cinza claro.
     component FilterChip: Rectangle {
         id: chip
         property string label
         property int value: 0
         readonly property bool active: root.outlinerModel.filter === value
-        width: chipText.implicitWidth + 22
         height: 22
         radius: C.Theme.radiusChip
-        color: active ? C.Theme.accentBg
-                      : (chipHover.hovered ? C.Theme.surfaceRaised : C.Theme.surface)
-        border.color: active ? C.Theme.accentBorder : C.Theme.hairline
-        border.width: 1
+        color: active ? C.Theme.raisedOn
+                      : (chipHover.hovered ? C.Theme.surfaceHover : "transparent")
         Text {
             id: chipText
             anchors.centerIn: parent
             text: chip.label
-            color: chip.active ? C.Theme.accent : C.Theme.textSecondary
+            color: chip.active ? C.Theme.textPrimary : C.Theme.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 11
-            font.weight: chip.active ? Font.DemiBold : Font.Normal
+            font.pixelSize: C.Theme.textBody
+            font.weight: Font.Medium
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
         }
@@ -145,25 +152,23 @@ Rectangle {
         TapHandler { onTapped: root.outlinerModel.filter = chip.value }
     }
 
-    // Botao "+ POINT" / "+ SPOT" do header do grupo Luzes: rotulo em mono e caixa alta,
-    // igual aos demais chips de acao da referencia.
+    // Botao "+ Point" / "+ Spot" do header do grupo Luzes: botao em relevo, compacto.
     component AddLightChip: Rectangle {
         id: addChip
         property string label
         signal clicked()
-        width: addChipText.implicitWidth + 16
+        width: addChipText.implicitWidth + 14
         height: 20
-        radius: C.Theme.radiusChip
-        color: addChipHover.hovered ? C.Theme.surfaceRaised : C.Theme.surface
-        border.color: addChipHover.hovered ? C.Theme.hairlineStrong : C.Theme.hairline
-        border.width: 1
+        radius: C.Theme.radiusControl
+        color: addChipHover.hovered ? C.Theme.raisedHover : C.Theme.surfaceRaised
         Text {
             id: addChipText
             anchors.centerIn: parent
             text: addChip.label
             color: addChipHover.hovered ? C.Theme.textPrimary : C.Theme.textSecondary
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
+            font.family: C.Theme.fontFamily
+            font.pixelSize: C.Theme.textMeta
+            font.weight: Font.Medium
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
         }
@@ -171,19 +176,19 @@ Rectangle {
         TapHandler { onTapped: addChip.clicked() }
     }
 
-    // Hairline da divisa com o viewport. O separador do QMainWindow fica na cor do shell:
-    // e este fio de 1 px que marca a borda, do mesmo jeito que na referencia.
+    // Fio escuro da divisa com o viewport (continua o separador do QMainWindow).
     Rectangle {
         anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
         width: 1
-        color: C.Theme.hairline
+        color: C.Theme.hairlineStrong
         z: 1
     }
 
     C.DockPanelHeader {
         id: header
         anchors.left: parent.left; anchors.right: parent.right
-        title: "CENA"
+        title: "Cena"
+        focused: root.activeFocus || searchInput.activeFocus
         detail: root.outlinerModel.totalCount > 0 ? root.fmtCount(root.outlinerModel.totalCount) : ""
         actions: Component {
             Row {
@@ -194,9 +199,9 @@ Rectangle {
                     width: 24; height: 24
                     opacity: root.lightsModel.hasSceneFile ? 1.0 : 0.35
                     Rectangle {
-                        anchors.fill: parent; radius: C.Theme.radiusChip
+                        anchors.fill: parent; radius: C.Theme.radiusControl
                         color: saveHover.hovered && root.lightsModel.hasSceneFile
-                               ? C.Theme.surfaceRaised : "transparent"
+                               ? C.Theme.raisedHover : "transparent"
                     }
                     LucideIcon {
                         anchors.centerIn: parent
@@ -209,7 +214,7 @@ Rectangle {
                         x: 15; y: 2
                         width: 7; height: 7; radius: 3.5
                         color: C.Theme.accent
-                        border.color: C.Theme.shell
+                        border.color: C.Theme.chrome
                         border.width: 1
                     }
                     HoverHandler {
@@ -245,18 +250,18 @@ Rectangle {
         id: searchBox
         anchors.top: header.bottom
         anchors.left: parent.left; anchors.right: parent.right
-        anchors.leftMargin: 12; anchors.rightMargin: 12
-        anchors.topMargin: 12
-        height: C.Theme.controlHeight
+        anchors.leftMargin: 10; anchors.rightMargin: 10
+        anchors.topMargin: 10
+        height: 26
         radius: C.Theme.radiusControl
         color: C.Theme.surface
-        border.color: searchInput.activeFocus ? C.Theme.accentBorder : C.Theme.hairline
+        border.color: searchInput.activeFocus ? C.Theme.accent : "transparent"
         border.width: 1
 
         LucideIcon {
             x: 10; anchors.verticalCenter: parent.verticalCenter
             name: "search"; size: 14
-            color: searchInput.activeFocus ? C.Theme.accent : C.Theme.textMuted
+            color: C.Theme.textMuted
         }
         TextInput {
             id: searchInput
@@ -266,32 +271,42 @@ Rectangle {
             verticalAlignment: TextInput.AlignVCenter
             color: C.Theme.textPrimary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 11
+            font.pixelSize: C.Theme.textBody
             selectByMouse: true
-            selectionColor: C.Theme.accentBorder
+            selectionColor: C.Theme.accent
+            selectedTextColor: C.Theme.accentInk
             onTextEdited: root.outlinerModel.search = text
             Text {
                 anchors.fill: parent
                 verticalAlignment: Text.AlignVCenter
                 visible: searchInput.text === "" && !searchInput.activeFocus
-                text: "Buscar na cena…"
+                text: "Buscar na cena"
                 color: C.Theme.textMuted
                 font.family: C.Theme.fontFamily
-                font.pixelSize: 12
+                font.pixelSize: C.Theme.textBody
             }
         }
-        // Atalho impresso no campo: mesma pratica de mostrar a estrutura em vez de esconde-la.
-        Text {
+        // Atalho impresso no campo, como tecla: mostra a estrutura em vez de esconde-la.
+        Rectangle {
             anchors.right: parent.right
-            anchors.rightMargin: 10
+            anchors.rightMargin: 5
             anchors.verticalCenter: parent.verticalCenter
             visible: searchInput.text === "" && !searchInput.activeFocus
-            text: "CTRL K"
-            color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
-            font.pixelSize: 9
-            renderType: Text.QtRendering
-            renderTypeQuality: Text.HighRenderTypeQuality
+            width: keyCap.implicitWidth + 10
+            height: 16
+            radius: C.Theme.radiusChip
+            color: C.Theme.surfaceRaised
+            Text {
+                id: keyCap
+                anchors.centerIn: parent
+                text: "Ctrl K"
+                color: C.Theme.textMuted
+                font.family: C.Theme.fontFamily
+                font.pixelSize: C.Theme.textMeta - 1
+                font.weight: Font.Medium
+                renderType: Text.QtRendering
+                renderTypeQuality: Text.HighRenderTypeQuality
+            }
         }
         IconButton {
             id: clearSearch
@@ -309,19 +324,27 @@ Rectangle {
         onActivated: { searchInput.forceActiveFocus(); searchInput.selectAll() }
     }
 
-    // ---- Chips de filtro ----
-    Row {
+    // ---- Filtro (controle segmentado) ----
+    Rectangle {
         id: chipsRow
         anchors.top: searchBox.bottom
-        anchors.left: parent.left
-        anchors.topMargin: 12
-        anchors.leftMargin: 12
-        spacing: 6
-        // valores casam com SceneOutlinerBridge: 0 = Tudo, senao EGroup+1
-        FilterChip { label: "Tudo";     value: 0 }
-        FilterChip { label: "Luzes";    value: 2 }
-        FilterChip { label: "Meshes";   value: 3 }
-        FilterChip { label: "Ambiente"; value: 1 }
+        anchors.left: parent.left; anchors.right: parent.right
+        anchors.topMargin: 8
+        anchors.leftMargin: 10; anchors.rightMargin: 10
+        height: 26
+        radius: C.Theme.radiusControl
+        color: C.Theme.surface
+        Row {
+            id: segments
+            anchors.fill: parent
+            anchors.margins: 2
+            readonly property real segmentWidth: width / 4
+            // valores casam com SceneOutlinerBridge: 0 = Tudo, senao EGroup+1
+            FilterChip { width: segments.segmentWidth; label: "Tudo";     value: 0 }
+            FilterChip { width: segments.segmentWidth; label: "Luzes";    value: 2 }
+            FilterChip { width: segments.segmentWidth; label: "Meshes";   value: 3 }
+            FilterChip { width: segments.segmentWidth; label: "Ambiente"; value: 1 }
+        }
     }
 
     // ---- Arvore da cena ----
@@ -332,7 +355,7 @@ Rectangle {
         anchors.top: chipsRow.bottom
         anchors.left: parent.left; anchors.right: parent.right
         anchors.bottom: footer.top
-        anchors.topMargin: 14
+        anchors.topMargin: 10
         opacity: root.outlinerModel.available ? 1.0 : 0.45
 
         // estado vazio
@@ -345,7 +368,7 @@ Rectangle {
                   : "Carregue uma cena (Ctrl+O) para povoar o outliner."
             color: C.Theme.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 11
+            font.pixelSize: C.Theme.textBody
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             lineHeight: 1.3
@@ -410,11 +433,23 @@ Rectangle {
                 readonly property bool dimmed: hasEye && !eyeOn
 
                 width: ListView.view.width
-                height: isGroup ? 30 : C.Theme.rowHeight
+                height: C.Theme.rowHeight
                 // Selecao: faixa accent de baixa opacidade + barra de 2 px na borda. Sem raio
-                // e sem borda em volta — a linha vai de ponta a ponta, como na referencia.
+                // e sem borda em volta — a linha vai de ponta a ponta.
                 color: selected ? C.Theme.accentBg
-                     : rowHover.hovered ? C.Theme.surface : "transparent"
+                     : rowHover.hovered ? C.Theme.rowHover : "transparent"
+
+                // Guias de indentacao: um fio por nivel, na coluna do chevron do pai.
+                Repeater {
+                    model: rowItem.depth
+                    delegate: Rectangle {
+                        required property int index
+                        x: 17 + index * 16
+                        width: 1
+                        height: rowItem.height
+                        color: C.Theme.treeGuide
+                    }
+                }
 
                 Rectangle {
                     visible: rowItem.selected
@@ -427,11 +462,11 @@ Rectangle {
                 LucideIcon {
                     id: chevron
                     visible: rowItem.isBranch
-                    x: 12 + rowItem.depth * 13
+                    x: 11 + rowItem.depth * 16
                     anchors.verticalCenter: parent.verticalCenter
                     name: "chevron-right"
-                    size: 13
-                    color: rowItem.selected ? C.Theme.accent : C.Theme.textMuted
+                    size: 12
+                    color: C.Theme.textMuted
                     rotation: rowItem.expanded ? 90 : 0
                     Behavior on rotation { NumberAnimation { duration: 100 } }
                 }
@@ -439,7 +474,7 @@ Rectangle {
                 // dot da cor da luz
                 Rectangle {
                     visible: rowItem.hasDot
-                    x: 14 + rowItem.depth * 13 + 15
+                    x: 14 + rowItem.depth * 16 + 15
                     anchors.verticalCenter: parent.verticalCenter
                     width: 8; height: 8; radius: 4
                     color: rowItem.dotColor
@@ -451,25 +486,17 @@ Rectangle {
                 LucideIcon {
                     id: rowIcon
                     visible: !rowItem.isMore
-                    x: 14 + rowItem.depth * 13 + (rowItem.isBranch ? 16 : 5)
-                       + (rowItem.hasDot ? 13 : 0)
+                    x: 11 + rowItem.depth * 16 + 16 + (rowItem.hasDot ? 13 : 0)
                     anchors.verticalCenter: parent.verticalCenter
                     name: rowItem.icon
-                    size: rowItem.isGroup ? 15 : 14
-                    // Ambar so onde ele significa LUZ; folhagem verde e o unico outro desvio.
-                    // Fora disso o icone segue o tier de texto da linha.
-                    color: rowItem.dimmed ? C.Theme.textDisabled
-                         : rowItem.selected ? C.Theme.accent
-                         : rowItem.isLight || (rowItem.isGroup && rowItem.sceneIdx === 1)
-                               ? C.Theme.amber
-                         : rowItem.icon === "leaf" ? "#7FC98F"
-                         : C.Theme.textSecondary
+                    size: 15
+                    color: rowItem.dimmed ? C.Theme.textDisabled : root.iconTint(rowItem.icon)
                 }
 
                 Text {
                     id: rowLabel
-                    x: rowItem.isMore ? 19 + rowItem.depth * 13
-                                      : rowIcon.x + rowIcon.width + 6
+                    x: rowItem.isMore ? 27 + rowItem.depth * 16
+                                      : rowIcon.x + rowIcon.width + 7
                     anchors.verticalCenter: parent.verticalCenter
                     width: Math.max(0, rightActions.x - x - 4)
                     text: rowItem.isMore
@@ -477,14 +504,14 @@ Rectangle {
                             + (rowItem.count === 1 ? " objeto…" : " objetos…")
                           : rowItem.name
                     color: rowItem.isMore
-                         ? (rowHover.hovered ? C.Theme.accentText : C.Theme.textMuted)
-                         : rowItem.dimmed ? C.Theme.textMuted
+                         ? (rowHover.hovered ? C.Theme.textPrimary : C.Theme.textMuted)
+                         : rowItem.dimmed ? C.Theme.textDisabled
                          : rowItem.selected || rowItem.isGroup ? C.Theme.textPrimary
                          : C.Theme.textSecondary
-                    font.family: rowItem.isMore ? C.Theme.fontMono : C.Theme.fontFamily
-                    font.pixelSize: rowItem.isMore ? 10 : 11
-                    font.weight: rowItem.selected ? Font.DemiBold
-                               : rowItem.isGroup ? Font.Medium
+                    font.family: C.Theme.fontFamily
+                    font.pixelSize: C.Theme.textBody
+                    font.weight: rowItem.isGroup ? Font.DemiBold
+                               : rowItem.selected ? Font.Medium
                                : Font.Normal
                     elide: Text.ElideRight
                     renderType: Text.QtRendering
@@ -503,7 +530,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
 
-                    // Contagem de grupos/pastas: numero cru em mono, sem badge (o badge
+                    // Contagem de grupos/pastas: numero cru em texto meta, sem badge (o badge
                     // duplicava a moldura que a propria linha ja da). Fica DENTRO da faixa de
                     // acoes para o olho nao cair por cima dela e para o rotulo poder medir a
                     // largura livre por rightActions.x.
@@ -513,9 +540,9 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         rightPadding: rowItem.hasEye ? 2 : 6
                         text: root.fmtCount(rowItem.count)
-                        color: rowItem.selected ? C.Theme.accent : C.Theme.textMuted
-                        font.family: C.Theme.fontMono
-                        font.pixelSize: 10
+                        color: C.Theme.textMuted
+                        font.family: C.Theme.fontNum
+                        font.pixelSize: C.Theme.textMeta
                         renderType: Text.QtRendering
                         renderTypeQuality: Text.HighRenderTypeQuality
                     }
@@ -524,13 +551,13 @@ Rectangle {
                     AddLightChip {
                         visible: rowItem.isGroup && rowItem.sceneIdx === 1
                         anchors.verticalCenter: parent.verticalCenter
-                        label: "+ POINT"
+                        label: "+ Point"
                         onClicked: root.lightsModel.addLight(0)
                     }
                     AddLightChip {
                         visible: rowItem.isGroup && rowItem.sceneIdx === 1
                         anchors.verticalCenter: parent.verticalCenter
-                        label: "+ SPOT"
+                        label: "+ Spot"
                         onClicked: root.lightsModel.addLight(1)
                     }
 
@@ -636,14 +663,14 @@ Rectangle {
         id: footer
         anchors.left: parent.left; anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 28
+        height: 26
         Rectangle {
             anchors.left: parent.left; anchors.right: parent.right
             anchors.top: parent.top
             height: 1; color: C.Theme.hairline
         }
         Text {
-            x: 16
+            x: 12
             anchors.verticalCenter: parent.verticalCenter
             text: {
                 var t = root.fmtCount(root.outlinerModel.totalCount) + " objetos"
@@ -654,10 +681,10 @@ Rectangle {
                 return t
             }
             color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
+            font.family: C.Theme.fontNum
+            font.pixelSize: C.Theme.textMeta
             elide: Text.ElideRight
-            width: parent.width - 28
+            width: parent.width - 24
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
         }

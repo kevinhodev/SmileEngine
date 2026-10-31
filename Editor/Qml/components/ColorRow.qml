@@ -21,9 +21,9 @@ Item {
     Text {
         y: 4
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Text {
@@ -45,7 +45,7 @@ Item {
         height: 18
         radius: Theme.radiusControl
         color: root.value
-        border.color: swatchHover.hovered ? Theme.accent : Theme.hairline
+        border.color: swatchHover.hovered ? Theme.textSecondary : Theme.hairlineStrong
         border.width: 1
 
         HoverHandler { id: swatchHover; cursorShape: Qt.PointingHandCursor }
@@ -70,6 +70,6 @@ Item {
         text: "arraste no quadrado (S/V) e na barra (matiz)"
         color: Theme.textMuted
         font.family: Theme.fontFamily
-        font.pixelSize: 10
+        font.pixelSize: Theme.textMeta
     }
 }

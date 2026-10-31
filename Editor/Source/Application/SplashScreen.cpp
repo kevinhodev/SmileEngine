@@ -90,14 +90,14 @@ namespace SmileEditor {
         }
 
         QFont UIFont(qreal PointlessPixelSize, QFont::Weight Weight = QFont::Normal) {
-            QFont Font(QStringLiteral("Inter"));
+            QFont Font(QStringLiteral("Archivo Smile"));
             Font.setPixelSize(qRound(PointlessPixelSize));
             Font.setWeight(Weight);
             return Font;
         }
 
         QFont MonoFont(qreal PixelSize) {
-            QFont Font(QStringLiteral("Consolas"));
+            QFont Font(QStringLiteral("IBM Plex Mono"));
             Font.setStyleHint(QFont::Monospace);
             Font.setPixelSize(qRound(PixelSize));
             return Font;

@@ -36,10 +36,10 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         width: Math.max(66, parent.width * 0.25)
         text: root.label
-        color: Theme.textMuted
+        color: Theme.textSecondary
         elide: Text.ElideRight
         font.family: Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: Theme.textBody
     }
 
     Row {

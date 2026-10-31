@@ -5,11 +5,12 @@ import QtQuick.Controls
 import "components" as C
 import "Scene" as Scene
 
-// Inspector — dock DIREITO do conceito Signal Graphite. O conteudo se adapta ao TIPO da
+// Inspector — dock DIREITO do conceito Cartao 18%. O conteudo se adapta ao TIPO da
 // selecao (mesh, luz, componente de ambiente); a hierarquia fica no SceneOutlinerPanel.
 //
-// Sem cards: o conceito separa secoes por header em caixa alta + hairline de 1 px, o que
-// devolve a largura que a moldura consumia num dock de 320 px.
+// Sem cards: as secoes sao faixas de borda a borda (SectionHeader) e as propriedades seguem
+// duas colunas — rotulo (Theme.labelRatio da largura) e valor —, entao campos de secoes diferentes
+// comecam na mesma vertical.
 //
 // Dependencias explicitas da raiz (chegam por setInitialProperties):
 //  - `outlinerModel` (SceneOutlinerBridge): selecao, transform, estatisticas e material da mesh.
@@ -38,9 +39,8 @@ Rectangle {
     // "1.24M TRI" — a contagem exata mora na secao de estatisticas; aqui e so a ordem de
     // grandeza que cabe na linha do subtitulo.
     function shortTris(n) {
-        if (n >= 1000000) return (n / 1000000).toFixed(2) + "M TRI"
-        if (n >= 1000)    return (n / 1000).toFixed(0) + "K TRI"
-        return n + " TRI"
+        if (n >= 1000000) return (n / 1000000).toFixed(2).replace(".", ",") + " M tri"
+        return fmtCount(n) + " tri"
     }
 
     // ---- Blocos compartilhados ----
@@ -51,49 +51,42 @@ Rectangle {
     component StatRow: C.StatRow {}
     component SwitchRow: C.SwitchRow {}
 
-    // Hairline da divisa com o viewport (espelho da do outliner, do outro lado).
+    // Fio escuro da divisa com o viewport (espelho do outliner, do outro lado).
     Rectangle {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
         width: 1
-        color: C.Theme.hairline
+        color: C.Theme.hairlineStrong
         z: 1
     }
 
     C.DockPanelHeader {
         id: header
         anchors.left: parent.left; anchors.right: parent.right
-        title: "INSPECTOR"
+        title: "Detalhes"
     }
 
-    // ---- Card de identidade da selecao ----
-    // Unico card do painel: e ele que responde "o que esta selecionado?" antes de qualquer
-    // propriedade, e a moldura e o que o separa do resto do conteudo.
-    Rectangle {
+    // ---- Identidade da selecao ----
+    // Responde "o que esta selecionado?" antes de qualquer propriedade: icone na cor do TIPO
+    // (azul mesh, ambar luz, verde-agua ambiente), nome e uma linha de meta.
+    Item {
         id: identity
         anchors.top: header.bottom
         anchors.left: parent.left; anchors.right: parent.right
-        anchors.leftMargin: 14; anchors.rightMargin: 14
-        anchors.topMargin: 14
+        anchors.leftMargin: 12; anchors.rightMargin: 12
         visible: root.hasAny
-        height: 54
-        radius: C.Theme.radiusCard
-        color: C.Theme.surface
-        border.color: C.Theme.hairline
-        border.width: 1
+        height: 64
 
         Rectangle {
             id: identityIcon
-            x: 12
+            x: 0
             anchors.verticalCenter: parent.verticalCenter
-            width: 30; height: 30
-            radius: C.Theme.radiusControl
-            color: C.Theme.accentBg
-            border.color: C.Theme.accentBorder
-            border.width: 1
+            width: 38; height: 38
+            radius: C.Theme.radiusCard
+            color: C.Theme.surface
             LucideIcon {
                 anchors.centerIn: parent
-                size: 16
-                color: C.Theme.accent
+                size: 20
+                color: root.hasMesh ? C.Theme.blue : root.hasLight ? C.Theme.amber : C.Theme.teal
                 name: root.hasMesh ? "box"
                     : root.hasLight ? (root.lightsModel.lightType === 1 ? "cone" : "lightbulb")
                     : root.hasClouds ? "cloud"
@@ -107,7 +100,7 @@ Rectangle {
             anchors.leftMargin: 12
             anchors.right: identityToggle.left
             anchors.rightMargin: 8
-            y: 12
+            y: 13
             text: root.hasMesh ? root.outlinerModel.meshName
                 : root.hasLight ? root.lightsModel.name
                 : root.hasClouds ? "Nuvens Volumétricas"
@@ -115,7 +108,7 @@ Rectangle {
                 : "Oceano FFT"
             color: C.Theme.textPrimary
             font.family: C.Theme.fontFamily
-            font.pixelSize: 14
+            font.pixelSize: C.Theme.textTitle
             font.weight: Font.DemiBold
             elide: Text.ElideMiddle
             renderType: Text.QtRendering
@@ -126,17 +119,16 @@ Rectangle {
             anchors.leftMargin: 12
             anchors.right: identityToggle.left
             anchors.rightMargin: 8
-            y: 32
+            y: 34
             text: root.hasMesh
-                    ? (root.outlinerModel.meshDynamic ? "MESH DINÂMICA · " : "STATIC MESH · ")
+                    ? (root.outlinerModel.meshDynamic ? "Mesh dinâmica  ·  " : "Mesh estática  ·  ")
                       + root.shortTris(root.outlinerModel.meshTris)
                 : root.hasLight
-                    ? (root.lightsModel.lightType === 1 ? "LUZ SPOT" : "LUZ POINT")
-                : "AMBIENTE · TEMPO REAL"
+                    ? (root.lightsModel.lightType === 1 ? "Luz spot" : "Luz point")
+                : "Ambiente  ·  tempo real"
             color: C.Theme.textMuted
-            font.family: C.Theme.fontMono
-            font.pixelSize: 10
-            font.letterSpacing: 0.6
+            font.family: C.Theme.fontNum
+            font.pixelSize: C.Theme.textMeta + 1
             elide: Text.ElideRight
             renderType: Text.QtRendering
             renderTypeQuality: Text.HighRenderTypeQuality
@@ -145,7 +137,7 @@ Rectangle {
         C.Toggle {
             id: identityToggle
             anchors.right: parent.right
-            anchors.rightMargin: 12
+            anchors.rightMargin: 4
             anchors.verticalCenter: parent.verticalCenter
             visible: root.hasLight || root.hasClouds
             checked: root.hasLight ? root.lightsModel.lightEnabled
@@ -166,7 +158,7 @@ Rectangle {
         text: "Selecione um objeto na árvore da cena ou clique nele no viewport."
         color: C.Theme.textMuted
         font.family: C.Theme.fontFamily
-        font.pixelSize: 11
+        font.pixelSize: C.Theme.textBody
         wrapMode: Text.WordWrap
         horizontalAlignment: Text.AlignHCenter
         lineHeight: 1.3
@@ -178,24 +170,25 @@ Rectangle {
         anchors.top: identity.bottom
         anchors.left: parent.left; anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.leftMargin: 14; anchors.rightMargin: 14
-        anchors.topMargin: 6
         visible: root.hasAny
         contentHeight: content.implicitHeight + 16
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ThinScrollBar {}
 
+        // Margem lateral na COLUNA, nao no Flickable: as faixas de secao vazam 14 px para
+        // cada lado e o clip do Flickable cortaria o vazamento.
         Column {
             id: content
-            width: parent.width
+            x: 14
+            width: body.width - 28
             spacing: 0
 
             // ======== MESH ========
             SectionHeader {
                 visible: root.hasMesh
                 firstInColumn: true
-                label: "TRANSFORM"
+                label: "Transform"
             }
             VectorRow {
                 visible: root.hasMesh
@@ -237,7 +230,7 @@ Rectangle {
 
             SectionHeader {
                 visible: root.hasMesh && root.outlinerModel.meshMaterial !== ""
-                label: "MATERIAL"
+                label: "Material"
             }
             Item {
                 visible: root.hasMesh && root.outlinerModel.meshMaterial !== ""
@@ -250,11 +243,12 @@ Rectangle {
                     text: root.outlinerModel.meshMaterial
                     color: C.Theme.textPrimary
                     font.family: C.Theme.fontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: C.Theme.textBody
+                    font.weight: Font.Medium
                     elide: Text.ElideMiddle
                 }
             }
-            // Flags do material (folhagem/two-sided/masked/translucido) em chips mono.
+            // Flags do material (folhagem/two-sided/masked/translucido) em chips.
             Flow {
                 visible: root.hasMesh && root.outlinerModel.meshFlags.length > 0
                 width: parent.width
@@ -267,24 +261,22 @@ Rectangle {
                          id: flagChip
                          required property string modelData
                         width: flagText.implicitWidth + 14
-                        height: 18
+                        height: 20
                         radius: C.Theme.radiusChip
-                        color: C.Theme.surface
-                        border.color: C.Theme.hairline
-                        border.width: 1
+                        color: C.Theme.surfaceRaised
                         Text {
                             id: flagText
                             anchors.centerIn: parent
                              text: flagChip.modelData
                             color: C.Theme.textSecondary
-                            font.family: C.Theme.fontMono
-                            font.pixelSize: 9
+                            font.family: C.Theme.fontFamily
+                            font.pixelSize: C.Theme.textMeta
                         }
                     }
                 }
             }
 
-            SectionHeader { visible: root.hasMesh; label: "RENDERIZAÇÃO" }
+            SectionHeader { visible: root.hasMesh; label: "Renderização" }
             // Mobilidade: estatico deixa o CSM reaproveitar o shadow map entre frames. O hint
             // diz o que a marcacao CUSTA, nao o que ela e — quem abre este painel ja sabe o que
             // "dinamico" significa, e o que nao e obvio e que marcar tudo como dinamico devolve
@@ -306,7 +298,7 @@ Rectangle {
                 }
             }
 
-            SectionHeader { visible: root.hasMesh; label: "ESTATÍSTICAS" }
+            SectionHeader { visible: root.hasMesh; label: "Estatísticas" }
             StatRow {
                 visible: root.hasMesh
                 label: "Triângulos"; value: root.fmtCount(root.outlinerModel.meshTris)
@@ -327,7 +319,7 @@ Rectangle {
                 text: "Duplo-clique na árvore (ou F) enquadra a câmera. Ctrl+D duplica, Del remove."
                 color: C.Theme.textMuted
                 font.family: C.Theme.fontFamily
-                font.pixelSize: 10
+                font.pixelSize: C.Theme.textMeta
                 wrapMode: Text.WordWrap
                 lineHeight: 1.3
             }

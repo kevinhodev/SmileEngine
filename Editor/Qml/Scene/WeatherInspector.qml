@@ -161,7 +161,7 @@ Column {
             text: "A intensidade da chuva reduz a radiância do céu, a luz-chave e o ambiente."
             color: C.Theme.textMuted
             font.family: C.Theme.fontFamily
-            font.pixelSize: 9
+            font.pixelSize: C.Theme.textMeta
             wrapMode: Text.WordWrap
         }
     }
