@@ -503,11 +503,25 @@ namespace Smile {
             // o numero que diz se o OMM cobre a folhagem da cena, e o que um force-2-state
             // transformaria em opaco solido.
             u64 TotalTriangles = 0, ExcludedTriangles = 0;
+            u64 FullyKnown = 0, WithMicromap = 0, FullyUnknown = 0;
+            // A area conhecida de cada malha e ponderada em UV, e UV nao se compara entre texturas.
+            // Na cena ela entra ponderada por TRIANGULO: e uma media de "quanto cada malha resolve",
+            // nao uma area.
+            double KnownAreaByTriangle = 0.0;
             for (const auto& Omm : ommResults) {
                 if (!Omm) continue;
-                TotalTriangles    += Omm->TriangleCount;
-                ExcludedTriangles += Omm->WorkloadExcludedTriangles;
+                TotalTriangles      += Omm->TriangleCount;
+                ExcludedTriangles   += Omm->WorkloadExcludedTriangles;
+                FullyKnown          += Omm->Coverage.FullyKnownTriangles;
+                WithMicromap        += Omm->Coverage.MicromapTriangles;
+                FullyUnknown        += Omm->Coverage.FullyUnknownTriangles;
+                KnownAreaByTriangle += static_cast<double>(Omm->Coverage.KnownArea) *
+                                       Omm->TriangleCount;
             }
+            auto Pct = [TotalTriangles](double _V) {
+                return std::to_string(TotalTriangles
+                    ? static_cast<int>(100.0 * _V / static_cast<double>(TotalTriangles) + 0.5) : 0) + "%";
+            };
             LogDebug("[OMM] Bake paralelo: " + std::to_string(ommJobs.size()) +
                      " pares (" + std::to_string(InternalJobCount) + " grandes internos + " +
                      std::to_string(parallelJobIndices.size()) + " pequenos em " +
@@ -515,6 +529,12 @@ namespace Smile {
                      std::to_string(static_cast<int>(msOmmBake)) + " ms | sem micro-map por "
                      "workload: " + std::to_string(ExcludedTriangles) + " de " +
                      std::to_string(TotalTriangles) + " triangulos");
+            LogDebug("[OMM] Cobertura de " + std::to_string(TotalTriangles) +
+                     " triangulos mascarados: " + Pct(static_cast<double>(FullyKnown)) +
+                     " resolvidos inteiros pelo hardware, " + Pct(static_cast<double>(WithMicromap)) +
+                     " com micro-map, " + Pct(static_cast<double>(FullyUnknown)) +
+                     " UNKNOWN inteiros (alpha-test em todo candidato) | area de UV conhecida, "
+                     "media por triangulo: " + Pct(KnownAreaByTriangle));
         }
 
         const Clock::time_point tMeshUploadStart = Clock::now();

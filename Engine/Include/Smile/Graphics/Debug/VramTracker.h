@@ -14,7 +14,7 @@ namespace Smile {
         SceneTextures,  // texturas de material, skybox, IBL/HDR
         RenderTargets,  // G-buffer, HDR, depth, historicos de temporal, AO
         Shadows,        // CSM do sol + atlas/cubemaps de luzes locais
-        RaytracingAS,   // BLAS/TLAS
+        RaytracingAS,   // BLAS/TLAS + OMM Arrays (acceleration structures tambem)
         GI,             // DDGI, ReSTIR, reflexoes, NRD
         Sky,            // atmosfera, nuvens (noises 3D/weather), estrelas, sun shafts
         Water,          // FFT + superficie

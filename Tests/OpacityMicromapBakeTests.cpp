@@ -5,6 +5,7 @@
 #include "Smile/Graphics/Resources/Texture.h"
 #include "Smile/Scene/CookedFormat.h"
 #include "Smile/Scene/SceneLoader.h"
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -183,6 +184,24 @@ static int TestarDivisaoDeWorkload() {
                       Referencia->Descs.size() * sizeof(Referencia->Descs[0])) == 0,
           "descritores identicos aos da referencia");
 
+    // COBERTURA. As contagens saem do buffer final; a area conhecida, do SDK sobre o que foi
+    // bakeado, dobrada com a area de UV dos excluidos.
+    {
+        const FOmmCoverage& R = Referencia->Coverage;
+        Check(R.FullyKnownTriangles == 2 && R.MicromapTriangles == 1 && R.FullyUnknownTriangles == 0,
+              "referencia: A e B resolvidos inteiros, C com micro-map, nada UNKNOWN");
+        Check(R.KnownArea > 0.0f && R.KnownArea < 1.0f,
+              "referencia: area conhecida entre 0 e 1 (C tem microtriangulos na borda)");
+        const FOmmCoverage& D = Dividido->Coverage;
+        Check(D.FullyKnownTriangles == 2 && D.MicromapTriangles == 1 && D.FullyUnknownTriangles == 1,
+              "dividido: o gigante conta como UNKNOWN inteiro, o resto igual a referencia");
+        // Areas de UV exatas: A e B = 0,045 cada, C = 0,06, G = 800. O SDK mediu so A+B+C; o
+        // gigante entra no denominador como area toda desconhecida.
+        const double Esperado = static_cast<double>(R.KnownArea) * 0.15 / (0.15 + 800.0);
+        Check(std::abs(D.KnownArea - Esperado) <= Esperado * 1e-3,
+              "dividido: area conhecida dobrada com a area de UV dos excluidos");
+    }
+
     // CASO NEGATIVO: nada cabe. Tem de cair no all-unknown, e nao devolver uma malha vazia nem
     // lancar — o BLAS OMM continua obrigatorio para ela.
     const auto Nada = FOpacityMicromapBaker::Bake(Geo(SoG), &Tex, 1.0f, 0.5f);
@@ -192,9 +211,11 @@ static int TestarDivisaoDeWorkload() {
               "malha sem nada que caiba conta tudo como excluido");
         Check(Nada->IndexOf(0) == kUnknownOpq, "e sai inteira com FULLY_UNKNOWN_OPAQUE");
         Check(Nada->Descs.empty() && Nada->ArrayData.empty(), "sem array: so indices especiais");
+        Check(Nada->Coverage.FullyUnknownTriangles == 1 && Nada->Coverage.KnownArea == 0.0f,
+              "all-unknown: cobertura toda UNKNOWN e area conhecida zero");
     }
 
-    if (Falhas == 0) std::printf("[OMM TEST] divisao de workload: 19 casos OK\n");
+    if (Falhas == 0) std::printf("[OMM TEST] divisao de workload + cobertura: 24 casos OK\n");
     return Falhas;
 }
 
@@ -223,6 +244,8 @@ int main(int argc, char** argv) {
     // assim couberam, e quantos triangulos mascarados ficaram sem micro-map.
     u32 ParesDivididos = 0, ParesSemNada = 0;
     u64 TriangulosMascarados = 0, TriangulosExcluidos = 0;
+    u64 CobResolvidos = 0, CobMicromap = 0, CobUnknown = 0;
+    double CobAreaPorTri = 0.0;
     for (u32 I = 0; I < Imported->Renderables.size(); ++I) {
         const SSceneRenderable& R = Imported->Renderables[I];
         if (R.MaterialIndex == kNoMaterial || R.MaterialIndex >= Imported->Materials.size() ||
@@ -279,6 +302,23 @@ int main(int argc, char** argv) {
         }
         TriangulosMascarados += Omm->TriangleCount;
         TriangulosExcluidos  += Omm->WorkloadExcludedTriangles;
+
+        // A cobertura tem de fechar com o buffer: as tres contagens somam a malha, a area e uma
+        // fracao, e todo excluido e um UNKNOWN inteiro.
+        const FOmmCoverage& Cob = Omm->Coverage;
+        if (static_cast<u64>(Cob.FullyKnownTriangles) + Cob.MicromapTriangles +
+                Cob.FullyUnknownTriangles != Omm->TriangleCount ||
+            !(Cob.KnownArea >= 0.0f && Cob.KnownArea <= 1.0f) ||
+            Cob.FullyUnknownTriangles < Omm->WorkloadExcludedTriangles) {
+            std::fprintf(stderr, "bake %u: cobertura inconsistente (%u+%u+%u de %u, area %f)\n",
+                         BakeCount, Cob.FullyKnownTriangles, Cob.MicromapTriangles,
+                         Cob.FullyUnknownTriangles, Omm->TriangleCount, Cob.KnownArea);
+            return 11;
+        }
+        CobResolvidos += Cob.FullyKnownTriangles;
+        CobMicromap   += Cob.MicromapTriangles;
+        CobUnknown    += Cob.FullyUnknownTriangles;
+        CobAreaPorTri += static_cast<double>(Cob.KnownArea) * Omm->TriangleCount;
 
         // O MESMO bake, a partir da entrada COMPACTA que o rebake em runtime monta: UVs extraidas
         // do Vertex e os indices, sem posicao nem normal.
@@ -583,5 +623,12 @@ int main(int argc, char** argv) {
                 ParesDivididos, ParesSemNada,
                 static_cast<unsigned long long>(TriangulosExcluidos),
                 static_cast<unsigned long long>(TriangulosMascarados));
+    if (TriangulosMascarados) {
+        const double N = static_cast<double>(TriangulosMascarados);
+        std::printf("[OMM TEST] cobertura: %.1f%% resolvidos inteiros, %.1f%% com micro-map, "
+                    "%.1f%% UNKNOWN inteiros; area de UV conhecida (media por triangulo) %.1f%%\n",
+                    100.0 * CobResolvidos / N, 100.0 * CobMicromap / N, 100.0 * CobUnknown / N,
+                    100.0 * CobAreaPorTri / N);
+    }
     return BakeCount ? 0 : 6;
 }

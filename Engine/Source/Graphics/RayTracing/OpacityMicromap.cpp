@@ -152,8 +152,43 @@ namespace Smile {
                 std::memcpy(Out->Indices.data() + static_cast<size_t>(I) * sizeof(u32),
                             &Special, sizeof(Special));
             Out->WorkloadExcludedTriangles = Out->TriangleCount;
+            Out->Coverage.FullyUnknownTriangles = Out->TriangleCount;
+            Out->Coverage.KnownArea = 0.0f;
             if (!Out->Valid()) Fail("OMM all-unknown internamente inconsistente");
             return Out;
+        }
+
+        // As contagens da cobertura, lidas do index buffer FINAL — o unico que conhece os
+        // triangulos que a divisao de workload tirou do bake.
+        void CountCoverage(FOpacityMicromapData& _Out) {
+            FOmmCoverage& C = _Out.Coverage;
+            C.FullyKnownTriangles = C.MicromapTriangles = C.FullyUnknownTriangles = 0;
+            for (u32 T = 0; T < _Out.TriangleCount; ++T) {
+                const i32 I = _Out.IndexOf(T);
+                if (I >= 0)
+                    ++C.MicromapTriangles;
+                else if (I == D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_TRANSPARENT ||
+                         I == D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE)
+                    ++C.FullyKnownTriangles;
+                else
+                    ++C.FullyUnknownTriangles;
+            }
+        }
+
+        // Area do triangulo em espaco de UV — a mesma GetArea2D com que o SDK pondera o
+        // knownAreaMetric. UV nao-finita nao tem area (o SDK tambem a deixa em zero).
+        double UvArea(const FOmmGeometry& _Geometry, u32 _Triangle) {
+            const auto* Base = reinterpret_cast<const u8*>(_Geometry.TexCoords);
+            f32 P[6];
+            for (u32 C = 0; C < 3; ++C)
+                std::memcpy(&P[C * 2],
+                            Base + static_cast<size_t>(_Geometry.Indices[_Triangle * 3u + C]) *
+                                       _Geometry.TexCoordStride,
+                            sizeof(f32) * 2);
+            const double Cross = (static_cast<double>(P[2]) - P[0]) * (static_cast<double>(P[5]) - P[1]) -
+                                 (static_cast<double>(P[4]) - P[0]) * (static_cast<double>(P[3]) - P[1]);
+            const double Area = 0.5 * std::abs(Cross);
+            return std::isfinite(Area) ? Area : 0.0;
         }
 
         // A DIVISAO de uma malha que estourou o teto de workload: quais triangulos vao ao baker e
@@ -477,9 +512,34 @@ namespace Smile {
             }
             if (!Out->Valid()) Fail("resultado do baker e internamente inconsistente");
 
+            // COBERTURA. GetStats2, e nao GetStats: so a variante que recebe o handle do resultado
+            // tem a area por triangulo; a outra devolve knownAreaMetric = 0 (debug_impl.cpp:638).
+            CountCoverage(*Out);
+            omm::Debug::Stats Stats{};
+            CheckOmm(omm::Debug::GetStats2(Baker, Result, &Stats), "GetStats2");
+            // Triangulo de UV toda degenerada deixa a area total em zero, e o SDK divide por ela.
+            double Known = std::isfinite(Stats.knownAreaMetric) ? Stats.knownAreaMetric : 0.0;
+            if (Divided) {
+                // O SDK so mediu o que bakeou. Os excluidos sao area 100% desconhecida, e entram
+                // no denominador com a area de UV deles.
+                std::vector<u8> IsKept(TriangleCount, 0);
+                for (u32 T : Split.Kept) IsKept[T] = 1;
+                double AreaBaked = 0.0, AreaExcluded = 0.0;
+                for (u32 T = 0; T < TriangleCount; ++T)
+                    (IsKept[T] ? AreaBaked : AreaExcluded) += UvArea(_Geometry, T);
+                const double AreaTotal = AreaBaked + AreaExcluded;
+                Known = AreaTotal > 0.0 ? Known * AreaBaked / AreaTotal : 0.0;
+            }
+            Out->Coverage.KnownArea = static_cast<f32>(std::clamp(Known, 0.0, 1.0));
+
             LogDebug("[OMM] - Bake 4-state: " + std::to_string(Out->TriangleCount) +
                      " triangulos, " + std::to_string(Out->Descs.size()) +
-                     " micro-maps, " + std::to_string(Out->ArrayData.size()) + " bytes");
+                     " micro-maps, " + std::to_string(Out->ArrayData.size()) + " bytes | " +
+                     std::to_string(Out->Coverage.FullyKnownTriangles) + " resolvidos, " +
+                     std::to_string(Out->Coverage.MicromapTriangles) + " com micro-map, " +
+                     std::to_string(Out->Coverage.FullyUnknownTriangles) + " UNKNOWN, area " +
+                     std::to_string(static_cast<int>(Out->Coverage.KnownArea * 100.0f + 0.5f)) +
+                     "% conhecida");
 
             omm::Cpu::DestroyBakeResult(Result); Result = 0;
             omm::Cpu::DestroyTexture(Baker, Texture); Texture = 0;

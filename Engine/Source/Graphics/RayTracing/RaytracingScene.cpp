@@ -592,6 +592,8 @@ namespace Smile {
         };
         std::vector<FBlasPlan> Plans(NumBlas);
         UINT64 TotalScratch = 0, TotalBuild = 0;
+        // VRAM dos OMM Arrays, que nao moram no BlasPool: o log dava so a CONTAGEM deles.
+        UINT64 TotalOmmArrayBytes = 0;
         for (u32 i = 0; i < NumBlas; ++i) {
             const FBlasKey& Key = UniqueBlas[i];
             const FGpuMesh* M = Key.Mesh;
@@ -642,6 +644,7 @@ namespace Smile {
                     P.OmmArray = CreateUAVBuffer(Dev5, OmmInfo.ResultDataMaxSizeInBytes,
                         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
                     OmmArrays.push_back(P.OmmArray);
+                    TotalOmmArrayBytes += OmmInfo.ResultDataMaxSizeInBytes;
                 }
 
                 P.OmmLinkage.OpacityMicromapIndexBuffer = {
@@ -888,11 +891,12 @@ namespace Smile {
         TlasOrigin_ = _TlasOrigin;
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);
         const double FinalMB   = static_cast<double>(Compact ? TotalCompact : TotalBuild) / (1024.0 * 1024.0);
+        const double OmmMB     = static_cast<double>(TotalOmmArrayBytes) / (1024.0 * 1024.0);
         LogDebug("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
-                " instancias / " + std::to_string(NumBlas) + " BLAS / " +
-                std::to_string(OmmArrays.size()) + " OMM Arrays (pool " +
+                " instancias / " + std::to_string(NumBlas) + " BLAS (pool " +
                 std::to_string(FinalMB).substr(0, 6) + " MB, build " +
                 std::to_string(BuildMB).substr(0, 6) + " MB, compaction " +
-                (Compact ? "ON" : "OFF") + ")");
+                (Compact ? "ON" : "OFF") + ") / " + std::to_string(OmmArrays.size()) +
+                " OMM Arrays (" + std::to_string(OmmMB).substr(0, 6) + " MB)");
     }
 }

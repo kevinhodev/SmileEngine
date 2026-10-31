@@ -46,6 +46,28 @@ namespace Smile {
         friend bool operator!=(const FOmmInputKey& A, const FOmmInputKey& B) { return !(A == B); }
     };
 
+    // QUANTO do alpha-test este micro-map tira do trace. Sem isto nao ha como saber se um OMM esta
+    // pagando — e o rejectionThreshold do baker seria um knob sem instrumento.
+    //
+    // As contagens saem do index buffer FINAL, e nao das estatisticas do SDK: so o buffer final
+    // conhece os triangulos que a divisao de workload tirou do bake. As tres somam TriangleCount.
+    struct FOmmCoverage {
+        // Indice especial opaco ou transparente: o hardware resolve o triangulo inteiro e o
+        // alpha-test nunca roda nele.
+        u32 FullyKnownTriangles   = 0;
+        // Apontam para um micro-map do array: o hardware resolve os microtriangulos conhecidos e
+        // so os UNKNOWN chegam ao alpha-test.
+        u32 MicromapTriangles     = 0;
+        // Indice especial UNKNOWN: alpha-test em todo candidato, ganho zero. Inclui os excluidos
+        // pelo teto de workload e os de UV nao-finita.
+        u32 FullyUnknownTriangles = 0;
+        // Fracao da AREA DE UV cujo estado o micro-map conhece, em [0,1] — o knownAreaMetric do
+        // SDK (debug_impl.cpp, CollectStats), estendido aos excluidos, que contam como area
+        // desconhecida. Ponderado em espaco de UV, nao de mundo: um triangulo de UV repetida 40x
+        // pesa 1600x mais que um card normal.
+        f32 KnownArea             = 0.0f;
+    };
+
     // Resultado independente do baker: os ponteiros devolvidos pelo OMM SDK deixam de ser
     // validos ao destruir o BakeResult, entao tudo que o D3D12 consumira e copiado para ca.
     struct FOpacityMicromapData {
@@ -63,6 +85,7 @@ namespace Smile {
         // nenhum ganho de micro-map. Zero no bake normal; TriangleCount quando nem a divisao
         // coube. Publicado porque e a grandeza que diz quanto da folhagem o OMM nao cobre.
         u32         WorkloadExcludedTriangles = 0;
+        FOmmCoverage Coverage;
 
         // O indice OMM do triangulo, com sinal: >= 0 aponta para um micro-map do array, -1..-4
         // sao os indices especiais do D3D12. Le no formato que o bake escolheu (8/16/32 bits),
