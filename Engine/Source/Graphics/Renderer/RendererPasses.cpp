@@ -2220,10 +2220,20 @@ namespace Smile {
         VisibleScratch.reserve(AllItems.size());
         if (_Ctx.GpuIndirectMainView) CpuFallback.reserve(AllItems.size());
         const bool PickingNeedsCpuList = ObjectPicker.HasPendingRequest();
+        const auto PublishedMaterials = MaterialTable.PublishedRows();
+        const auto PublishedMeshes = MeshTable.PublishedRows();
+        auto IndirectObject = [&](const FDrawItem& Item) {
+            FGpuSceneInstanceMeta Meta{};
+            if (!InstanceTable.MetaFor(Item.R->GpuHandle, Meta) ||
+                Meta.MaterialId >= PublishedMaterials.size() || Meta.MeshId >= PublishedMeshes.size())
+                return false;
+            return GpuIndirectEligible(PublishedMaterials[Meta.MaterialId].PipelineClass,
+                                       PublishedMeshes[Meta.MeshId].Flags);
+        };
         for (const FDrawItem& A : AllItems) {
             // The GPU owns supported main-view visibility. Only an actual picking request
             // needs those objects in the CPU list; shadows use AllItems independently.
-            const bool GpuObject = _Ctx.GpuCulling && GpuIndirectDraws(A.R->Mesh, A.R->Material);
+            const bool GpuObject = _Ctx.GpuCulling && IndirectObject(A);
             if (GpuObject && !PickingNeedsCpuList) continue;
             if (UseFrustumCulling && Vw.AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
             // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
@@ -2242,15 +2252,20 @@ namespace Smile {
             };
             VisibleScratch.push_back(Visible);
             if (_Ctx.GpuIndirectMainView &&
-                !(_Ctx.GpuCulling ? GpuObject : GpuIndirectDraws(A.R->Mesh, A.R->Material)))
+                !(_Ctx.GpuCulling ? GpuObject : IndirectObject(A)))
                 CpuFallback.push_back(Visible);
         }
         std::sort(VisibleScratch.begin(), VisibleScratch.end(),
                   [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
         // O fallback preserva a mesma ordem front-to-back do caminho inteiro. Nao afeta o
         // G-buffer (que reordena por lote), mas mantem o contrato do z-prepass para as excecoes.
-        std::sort(CpuFallback.begin(), CpuFallback.end(),
-                  [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
+        if (_Ctx.GpuCulling && !PickingNeedsCpuList) {
+            // These are exactly the same items. Sort once and copy into already reserved storage.
+            std::copy(VisibleScratch.begin(), VisibleScratch.end(), CpuFallback.begin());
+        } else {
+            std::sort(CpuFallback.begin(), CpuFallback.end(),
+                      [](const FVisibleItem& a, const FVisibleItem& b) { return a.Dist < b.Dist; });
+        }
         LastVisibleCount  = static_cast<u32>(VisibleScratch.size());
         LastOccludedCount = OccludedCount;
 

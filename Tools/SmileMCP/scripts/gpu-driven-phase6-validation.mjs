@@ -46,12 +46,19 @@ try {
         occlusionCulling: true,
       });
       require(configured.settings?.gpuCulling === enabled, `${scene.key}/${label}: toggle refused`);
-      const profile = await call("smile_profile_gpu", { warmupSeconds: 3, samples: 12,
+      const profile = await call("smile_profile_gpu", { warmupSeconds: 5,
+        samples: scene.slot === 1 ? 48 : 24,
         intervalMs: 200, includeSamples: true });
       const chain = profile.cpu?.indirectMainView;
       result.cases.push({ label, profile });
       require(chain?.active && chain.countersValid && chain.gpuStatus === 1 && chain.gpuReason === 0,
         `${scene.key}/${label}: invalid chain ${JSON.stringify(chain)}`);
+      for (const sample of profile.samples ?? []) {
+        const state = sample.cpu?.indirectMainView;
+        require(sample.settings?.gpuCulling === enabled && state?.active && state.countersValid &&
+          state.gpuStatus === 1 && state.gpuReason === 0 && state.lastReason === 0,
+          `${scene.key}/${label}: invalid intermediate sample`);
+      }
       if (enabled && !scene.allVisible) {
         require(chain.frustumRejected?.max + chain.occlusionRejected?.max > 0,
           `${scene.key}: no GPU rejection ${JSON.stringify(chain)}`);

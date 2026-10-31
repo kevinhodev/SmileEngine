@@ -594,7 +594,6 @@ namespace Smile {
                        FGpuMaterialTable::kDefaultRow &&
                    IndirectMainView.IsBuilt() && PipelineState.IndirectDrawSignature() != nullptr;
         }
-        bool GpuIndirectDraws(const FGpuMesh* Mesh, const FMaterial* Material) const;
 
         const FGpuProfiler& GetGpuProfiler() const;
 

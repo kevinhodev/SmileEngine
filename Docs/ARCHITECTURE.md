@@ -62,6 +62,9 @@ No braço GPU, o culling/sort CPU visita apenas as exceções. Um pedido real de
 opacos suportados na lista CPU naquele frame, para preservar a seleção sem readback de visibilidade.
 `VisibleItems` mede essa lista CPU; comandos GPU têm contador próprio. As sombras ainda usam
 `AllItems`, até a Fase 7.
+O complemento CPU consulta mesh/material pelos IDs dos metadados publicados, com validação de
+generation, evitando buscas por ponteiro e reavaliação de capabilities por objeto. Fora do
+picking, a lista visível CPU e o fallback têm os mesmos itens e são ordenados uma única vez.
 
 A SmileEngine é uma engine pessoal de aprendizado/render sobre **DirectX 12**, com
 **deferred shading** + **ray tracing por DXR 1.1 inline (RayQuery)**. É dividida em

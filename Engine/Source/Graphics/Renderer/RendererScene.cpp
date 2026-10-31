@@ -120,21 +120,6 @@ namespace Smile {
         return true;
     }
 
-    bool Renderer::GpuIndirectDraws(const FGpuMesh* _Mesh, const FMaterial* _Material) const {
-        if (!UseGpuIndirectMainView || !GpuIndirectMainViewReady() || !_Mesh) return false;
-
-        // A mesma imagem publicada que o classify le: material autoral finalizado ou o material
-        // ativo para nulo/nao finalizado. BuildDrawLists usa exatamente esta resolucao.
-        const FMaterial* PublishedMaterial =
-            _Material && _Material->IsFinalized() ? _Material : ActiveMaterial;
-        const u32 MaterialRow = MaterialTable.RowOf(PublishedMaterial);
-        const u32 MeshRow     = MeshTable.RowOf(_Mesh);
-        const auto Materials  = MaterialTable.PublishedRows();
-        const auto Meshes     = MeshTable.PublishedRows();
-        if (MaterialRow >= Materials.size() || MeshRow >= Meshes.size()) return false;
-        return GpuIndirectEligible(Materials[MaterialRow].PipelineClass, Meshes[MeshRow].Flags);
-    }
-
     bool Renderer::RepublishMaterialTextures(FMaterial& _Material) {
         if (!Initialized || !_Material.IsFinalized()) return false;
 
