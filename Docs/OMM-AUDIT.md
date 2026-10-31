@@ -268,17 +268,40 @@ mascarado vira candidato e passa pelo alpha-test. Um toggle de debug nisso dá a
 P1. O próprio `ALLOW_DISABLE_OMMS` pode custar algo no trace — medir com o toggle desligado antes
 de deixar ligado.
 
-## P3 — Ninguém sabe se cada micro-map está pagando
+## P3 — Ninguém sabia se cada micro-map estava pagando — **FEITO (metade CPU)**
 
-`omm::Debug::GetStats` (`omm.hpp:953-967`) devolve as contagens por estado e um `knownAreaMetric` —
-a fração conhecida, que é o número que diz se uma malha merece micro-map. Sem ele,
-`rejectionThreshold = 0.0f`
-([linha 231](Engine/Source/Graphics/RayTracing/OpacityMicromap.cpp#L231)) é knob sem instrumento.
-Os OMM Arrays entram em `EVramCategory::RaytracingAS`, comentado como "BLAS/TLAS"
-([VramTracker.h:17](Engine/Include/Smile/Graphics/Debug/VramTracker.h#L17)), e o log do build imprime
-a **contagem** de arrays, não os bytes
-([RaytracingScene.cpp:893](Engine/Source/Graphics/RayTracing/RaytracingScene.cpp#L893)). Para
+Agora cada `FOpacityMicromapData` carrega um `FOmmCoverage`:
+
+- **contagens** — resolvidos inteiros pelo hardware (especial T/O), com micro-map, UNKNOWN
+  inteiros. Saem do index buffer **final**, e não das estatísticas do SDK, porque só o buffer
+  final conhece os triângulos que a divisão de workload tirou do bake;
+- **área de UV conhecida** — o `knownAreaMetric` do SDK. Só a `GetStats2` (que recebe o handle do
+  resultado) tem a área por triângulo; a `GetStats` devolve 0 (`debug_impl.cpp:638`). Em bake
+  dividido, a métrica cobre só o que foi bakeado, e a engine dobra nela a área de UV dos excluídos
+  como 100% desconhecida.
+
+O log do import soma a cena, e o build da TLAS imprime os **bytes** dos OMM Arrays, além da
+contagem. O comentário de `EVramCategory::RaytracingAS` passou a dizer que eles moram lá. Custo:
+nenhum mensurável (teste Release 44,8 s → 44,1 s). Teste: 5 casos sintéticos novos, inclusive a
+conta da dobra conferida contra as áreas de UV exatas, e a consistência por bake nos 122 pares.
+
+**Primeira foto do BistroExterior:**
+
+| triângulos mascarados (898 896) | |
+|---|---|
+| resolvidos inteiros pelo hardware | **56,4%** |
+| com micro-map | **31,0%** |
+| UNKNOWN inteiros (alpha-test em todo candidato) | **12,6%** — exatamente os excluídos pelo teto |
+| área de UV conhecida, média por triângulo | **83,9%** |
+
+Cuidado ao ler a área: é ponderada em UV, então uma malha dividida aparece com 0–5% porque o
+triângulo de UV repetida domina a soma. Para decisão de custo, as contagens são o número mais
+honesto.
+
+Ainda em aberto: o toggle `DISABLE_OMMS` (a metade GPU, ON/OFF para medir o ganho) e o
+`rejectionThreshold = 0.0f`, que agora tem instrumento mas ainda não tem valor escolhido. Para
 conferir um bake suspeito, `omm::Debug::SaveAsImages` desenha o overlay de estados sobre a textura.
+O log da TLAS com bytes de OMM só foi compilado, não rodou ainda (precisa do editor com GPU).
 
 ## P3 — OMM Arrays como recurso committed individual
 
@@ -325,8 +348,8 @@ procurar uma flag que não existe.
 
 1. ~~Escada de retry no fallback~~ → **divisão de workload, FEITA** (P1). Recuperou 21 k dos 134 k
    triângulos do Bistro; o resto está 4–34× acima do teto.
-2. **Instrumento:** `GetStats` + bytes de OMM no log + toggle `DISABLE_OMMS` (P3 de medição). Sem
-   ele, nenhum dos passos seguintes tem A/B.
+2. **Instrumento:** cobertura por bake + bytes de OMM no log — **FEITO** (metade CPU). Falta o
+   toggle `DISABLE_OMMS`, que fica para logo antes do P0, quando houver o que medir na GPU.
 3. **Bake no Cooker com `Serialize`, sem teto** — 78% do load do Bistro, e agora também o que zera
    os 113 k triângulos sem micro-map. Maior escopo: exige bump de `kCookedVersion` e recozinhar tudo.
 4. **`FORCE_OMM_2_STATE` nos passes indiretos** (P0), pela flag de runtime do `TraceRayInline`, com
