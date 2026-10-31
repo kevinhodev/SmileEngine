@@ -499,11 +499,22 @@ namespace Smile {
         if (FirstError) std::rethrow_exception(FirstError);
         const double msOmmBake = MsSince(tOmmBakeStart);
         if (!ommJobs.empty()) {
+            // Quanto da geometria mascarada ficou SEM micro-map por causa do teto de workload. E
+            // o numero que diz se o OMM cobre a folhagem da cena, e o que um force-2-state
+            // transformaria em opaco solido.
+            u64 TotalTriangles = 0, ExcludedTriangles = 0;
+            for (const auto& Omm : ommResults) {
+                if (!Omm) continue;
+                TotalTriangles    += Omm->TriangleCount;
+                ExcludedTriangles += Omm->WorkloadExcludedTriangles;
+            }
             LogDebug("[OMM] Bake paralelo: " + std::to_string(ommJobs.size()) +
                      " pares (" + std::to_string(InternalJobCount) + " grandes internos + " +
                      std::to_string(parallelJobIndices.size()) + " pequenos em " +
                      std::to_string(WorkerCount) + " workers) em " +
-                     std::to_string(static_cast<int>(msOmmBake)) + " ms");
+                     std::to_string(static_cast<int>(msOmmBake)) + " ms | sem micro-map por "
+                     "workload: " + std::to_string(ExcludedTriangles) + " de " +
+                     std::to_string(TotalTriangles) + " triangulos");
         }
 
         const Clock::time_point tMeshUploadStart = Clock::now();

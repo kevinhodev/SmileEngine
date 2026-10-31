@@ -105,9 +105,103 @@ static int TestarChaveDeEntradas() {
     return Falhas;
 }
 
+// A DIVISAO DE WORKLOAD. Antes dela, um unico triangulo com UV enorme derrubava a malha INTEIRA
+// para FULLY_UNKNOWN_OPAQUE — no BistroExterior, 10 malhas e um sexto da folhagem sem micro-map.
+// Agora so os triangulos caros saem do bake; o resto tem de sair IGUAL ao bake deles sozinhos.
+//
+// Sintetico e sem cena: textura 1024^2 com a metade esquerda opaca, tres triangulos normais e um
+// gigante cuja AABB de UV cobre 40x40 repeticoes (1,68e9 texels — acima do teto de 2^30 e abaixo
+// do 2^31 em que a conta int do SDK daria wrap).
+static int TestarDivisaoDeWorkload() {
+    using namespace Smile;
+    int Falhas = 0;
+    auto Check = [&](bool Cond, const char* Msg) {
+        if (!Cond) { ++Falhas; std::fprintf(stderr, "  FAIL: %s\n", Msg); }
+    };
+
+    constexpr u32 kTex = 1024;
+    FTextureCPUData Tex;
+    Tex.Width = Tex.Height = kTex;
+    Tex.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    FMipData Mip;
+    Mip.Width = Mip.Height = kTex;
+    Mip.Pixels.assign(static_cast<size_t>(kTex) * kTex * 4, 255);
+    for (u32 Y = 0; Y < kTex; ++Y)
+        for (u32 X = kTex / 2; X < kTex; ++X)
+            Mip.Pixels[(static_cast<size_t>(Y) * kTex + X) * 4 + 3] = 0;
+    Tex.Mips.push_back(std::move(Mip));
+
+    // Longe da borda u=0/1 de proposito: com Wrap a bilinear de u~0 mistura a coluna 1023, que e
+    // transparente, e o triangulo "opaco" deixaria de ser uniforme.
+    const std::vector<f32> UVs = {
+        0.1f, 0.1f,  0.4f, 0.1f,  0.1f, 0.4f,   // 0-2: A, opaco por inteiro
+        0.0f, 0.0f, 40.0f, 0.0f,  0.0f, 40.0f,  // 3-5: G, o gigante
+        0.6f, 0.1f,  0.9f, 0.1f,  0.6f, 0.4f,   // 6-8: B, transparente por inteiro
+        0.3f, 0.6f,  0.7f, 0.6f,  0.3f, 0.9f,   // 9-11: C, atravessa a borda x=512
+    };
+    // G no MEIO (triangulo 1), para a costura ter de devolver os bakeados ao lugar certo.
+    const std::vector<u32> Todos   = { 0, 1, 2,  3, 4, 5,  6, 7, 8,  9, 10, 11 };
+    const std::vector<u32> SemG    = { 0, 1, 2,  6, 7, 8,  9, 10, 11 };
+    const std::vector<u32> SoG     = { 3, 4, 5 };
+    auto Geo = [&](const std::vector<u32>& I) {
+        FOmmGeometry G;
+        G.TexCoords = UVs.data(); G.TexCoordStride = sizeof(f32) * 2;
+        G.VertexCount = static_cast<u32>(UVs.size() / 2);
+        G.Indices = I.data(); G.IndexCount = static_cast<u32>(I.size());
+        return G;
+    };
+    constexpr i32 kTransparent = D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_TRANSPARENT;
+    constexpr i32 kOpaque      = D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE;
+    constexpr i32 kUnknownOpq  = D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE;
+
+    const auto Dividido = FOpacityMicromapBaker::Bake(Geo(Todos), &Tex, 1.0f, 0.5f);
+    const auto Referencia = FOpacityMicromapBaker::Bake(Geo(SemG), &Tex, 1.0f, 0.5f);
+    Check(Dividido && Dividido->Valid(), "bake dividido e valido");
+    Check(Referencia && Referencia->Valid(), "bake de referencia (sem o gigante) e valido");
+    if (!Dividido || !Referencia || !Dividido->Valid() || !Referencia->Valid()) return Falhas;
+
+    Check(Dividido->TriangleCount == 4, "uma entrada por triangulo da malha inteira");
+    Check(Dividido->WorkloadExcludedTriangles == 1, "so o gigante saiu do bake");
+    Check(Dividido->IndexOf(1) == kUnknownOpq, "o gigante saiu com FULLY_UNKNOWN_OPAQUE");
+    Check(Referencia->WorkloadExcludedTriangles == 0, "bake que cabe nao exclui nada");
+
+    // O que distingue a divisao do fallback antigo: os outros tres AINDA tem micro-map.
+    Check(Dividido->IndexOf(0) == kOpaque, "A (opaco) virou especial opaco");
+    Check(Dividido->IndexOf(2) == kTransparent, "B (transparente) virou especial transparente");
+    Check(Dividido->IndexOf(3) >= 0, "C (borda) ganhou micro-map de verdade");
+    Check(!Dividido->Descs.empty(), "o array nao ficou vazio");
+
+    // E IGUAIS ao bake deles sozinhos: mesma entrada para o baker, mesmo resultado. Comparando o
+    // indice decodificado, porque o dividido e 32 bits fixos e a referencia escolhe a largura.
+    const u32 Origem[3] = { 0, 2, 3 };
+    for (u32 K = 0; K < 3; ++K)
+        Check(Dividido->IndexOf(Origem[K]) == Referencia->IndexOf(K),
+              "indice do bakeado identico ao bake sem o gigante");
+    Check(Dividido->ArrayData == Referencia->ArrayData, "ArrayData identico ao da referencia");
+    Check(Dividido->Descs.size() == Referencia->Descs.size() &&
+          std::memcmp(Dividido->Descs.data(), Referencia->Descs.data(),
+                      Referencia->Descs.size() * sizeof(Referencia->Descs[0])) == 0,
+          "descritores identicos aos da referencia");
+
+    // CASO NEGATIVO: nada cabe. Tem de cair no all-unknown, e nao devolver uma malha vazia nem
+    // lancar — o BLAS OMM continua obrigatorio para ela.
+    const auto Nada = FOpacityMicromapBaker::Bake(Geo(SoG), &Tex, 1.0f, 0.5f);
+    Check(Nada && Nada->Valid(), "malha so com o gigante ainda produz OMM valido");
+    if (Nada && Nada->Valid()) {
+        Check(Nada->WorkloadExcludedTriangles == Nada->TriangleCount,
+              "malha sem nada que caiba conta tudo como excluido");
+        Check(Nada->IndexOf(0) == kUnknownOpq, "e sai inteira com FULLY_UNKNOWN_OPAQUE");
+        Check(Nada->Descs.empty() && Nada->ArrayData.empty(), "sem array: so indices especiais");
+    }
+
+    if (Falhas == 0) std::printf("[OMM TEST] divisao de workload: 19 casos OK\n");
+    return Falhas;
+}
+
 int main(int argc, char** argv) {
     using namespace Smile;
     if (TestarChaveDeEntradas() != 0) return 5;
+    if (TestarDivisaoDeWorkload() != 0) return 9;
     if (argc != 2) {
         std::fprintf(stderr, "uso: SmileOpacityMicromapBakeTests <cena.sscene>\n");
         return 2;
@@ -125,6 +219,10 @@ int main(int argc, char** argv) {
 
     std::unordered_set<u64> Seen;
     u32 BakeCount = 0;
+    // Cobertura do teto de workload na cena real: quantos pares foram divididos, quantos nem
+    // assim couberam, e quantos triangulos mascarados ficaram sem micro-map.
+    u32 ParesDivididos = 0, ParesSemNada = 0;
+    u64 TriangulosMascarados = 0, TriangulosExcluidos = 0;
     for (u32 I = 0; I < Imported->Renderables.size(); ++I) {
         const SSceneRenderable& R = Imported->Renderables[I];
         if (R.MaterialIndex == kNoMaterial || R.MaterialIndex >= Imported->Materials.size() ||
@@ -163,6 +261,24 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "bake %u devolveu resultado invalido\n", BakeCount);
             return 5;
         }
+        // Todo excluido tem de estar no buffer como FULLY_UNKNOWN_OPAQUE. Conta >= e nao ==: o
+        // baker tambem usa esse especial para triangulo de UV nao-finita, que nao e exclusao.
+        if (Omm->WorkloadExcludedTriangles > 0) {
+            u32 Especiais = 0;
+            for (u32 T = 0; T < Omm->TriangleCount; ++T)
+                if (Omm->IndexOf(T) ==
+                    D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE)
+                    ++Especiais;
+            if (Especiais < Omm->WorkloadExcludedTriangles) {
+                std::fprintf(stderr, "bake %u: %u excluidos mas so %u indices UNKNOWN\n",
+                             BakeCount, Omm->WorkloadExcludedTriangles, Especiais);
+                return 10;
+            }
+            if (Omm->WorkloadExcludedTriangles == Omm->TriangleCount) ++ParesSemNada;
+            else ++ParesDivididos;
+        }
+        TriangulosMascarados += Omm->TriangleCount;
+        TriangulosExcluidos  += Omm->WorkloadExcludedTriangles;
 
         // O MESMO bake, a partir da entrada COMPACTA que o rebake em runtime monta: UVs extraidas
         // do Vertex e os indices, sem posicao nem normal.
@@ -462,5 +578,10 @@ int main(int argc, char** argv) {
 
     std::printf("[OMM TEST] %u pares mesh/material masked validados; entrada compacta identica a "
                 "malha completa nos primeiros 8\n", BakeCount);
+    std::printf("[OMM TEST] teto de workload: %u pares divididos, %u sem nada que coubesse; "
+                "%llu de %llu triangulos mascarados sem micro-map\n",
+                ParesDivididos, ParesSemNada,
+                static_cast<unsigned long long>(TriangulosExcluidos),
+                static_cast<unsigned long long>(TriangulosMascarados));
     return BakeCount ? 0 : 6;
 }

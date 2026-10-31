@@ -58,6 +58,16 @@ namespace Smile {
         u32         TriangleCount = 0;
         f32         BakedBaseAlpha = 1.0f;
         f32         BakedAlphaCutoff = 0.5f;
+        // Triangulos que ficaram FORA do bake por estourar o teto de workload e sairam com o
+        // indice especial FULLY_UNKNOWN_OPAQUE: corretos (o alpha-test exato resolve), mas sem
+        // nenhum ganho de micro-map. Zero no bake normal; TriangleCount quando nem a divisao
+        // coube. Publicado porque e a grandeza que diz quanto da folhagem o OMM nao cobre.
+        u32         WorkloadExcludedTriangles = 0;
+
+        // O indice OMM do triangulo, com sinal: >= 0 aponta para um micro-map do array, -1..-4
+        // sao os indices especiais do D3D12. Le no formato que o bake escolheu (8/16/32 bits),
+        // estendendo o sinal — o -4 de 16 bits e 0xFFFC, nao 65532.
+        i32 IndexOf(u32 Triangle) const;
 
         // Um bake inteiramente uniforme pode usar apenas indices especiais (-1..-4), sem
         // ArrayData/Descs. Continua sendo OMM valido e ainda elimina o alpha-test por hardware.

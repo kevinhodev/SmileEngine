@@ -1,4 +1,5 @@
 #include "Smile/Graphics/RayTracing/OpacityMicromap.h"
+#include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
 #include "Smile/Graphics/Resources/Material.h"
 #include "Smile/Graphics/Resources/Mesh.h"
 #include "Smile/Graphics/Resources/Texture.h"
@@ -12,10 +13,24 @@
 #if defined(_OPENMP)
 #include <omp.h>
 #endif
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace Smile {
+    i32 FOpacityMicromapData::IndexOf(u32 _Triangle) const {
+        const size_t Offset = static_cast<size_t>(_Triangle) * IndexStride;
+        if (_Triangle >= TriangleCount || Offset + IndexStride > Indices.size())
+            throw std::out_of_range("Opacity Micromap: IndexOf fora do index buffer");
+        switch (IndexStride) {
+            case 1: { i8  V; std::memcpy(&V, Indices.data() + Offset, 1); return V; }
+            case 2: { i16 V; std::memcpy(&V, Indices.data() + Offset, 2); return V; }
+            case 4: { i32 V; std::memcpy(&V, Indices.data() + Offset, 4); return V; }
+            default: throw std::logic_error("Opacity Micromap: IndexStride invalido");
+        }
+    }
+
     FOmmInputKey FOmmInputKey::From(const FGpuMesh* _Mesh, const FMaterial* _Material) {
         FOmmInputKey K{};
         if (!_Mesh || !_Material) return K;
@@ -136,7 +151,110 @@ namespace Smile {
             for (u32 I = 0; I < Out->TriangleCount; ++I)
                 std::memcpy(Out->Indices.data() + static_cast<size_t>(I) * sizeof(u32),
                             &Special, sizeof(Special));
+            Out->WorkloadExcludedTriangles = Out->TriangleCount;
             if (!Out->Valid()) Fail("OMM all-unknown internamente inconsistente");
+            return Out;
+        }
+
+        // A DIVISAO de uma malha que estourou o teto de workload: quais triangulos vao ao baker e
+        // quais saem como UNKNOWN.
+        //
+        // Por que existe: antes disto, WORKLOAD_TOO_BIG derrubava a malha INTEIRA para
+        // FULLY_UNKNOWN_OPAQUE. No BistroExterior eram 10 malhas e 134 k triangulos — um sexto da
+        // folhagem sem ganho nenhum de micro-map, por causa de poucos triangulos com UV enorme.
+        //
+        // E por que nao baixar o nivel de subdivisao e tentar de novo, que seria o obvio: o
+        // workload do SDK NAO depende do nivel. ComputeWorkloadSize (bake_cpu_impl.cpp:662) soma a
+        // area da AABB de UV em texels do mip 0, uma vez por triangulo de UV unico. Baixar 8 -> 4
+        // devolveria o mesmo numero. O que reduz o workload e tirar os triangulos caros.
+        //
+        // O custo aqui e a MESMA conta, com a mesma deduplicacao. Mas em double: no SDK o produto
+        // e int*int e da wrap acima de 2^31 texels.
+        struct FWorkloadSplit {
+            std::vector<u32> Kept;  // triangulos que vao ao baker, na ordem original
+            u32 Excluded = 0;
+            double TotalCost = 0.0; // workload da malha inteira, na conta do SDK
+        };
+
+        FWorkloadSplit SplitByWorkload(const FOmmGeometry& _Geometry, u32 _TexWidth,
+                                       u32 _TexHeight, u64 _Budget) {
+            struct FUvTri {
+                u32 Bits[6];
+                bool operator==(const FUvTri& O) const {
+                    return std::memcmp(Bits, O.Bits, sizeof(Bits)) == 0;
+                }
+            };
+            struct FUvTriHash {
+                size_t operator()(const FUvTri& K) const {
+                    return static_cast<size_t>(
+                        OmmHashFinish(OmmHashAppend(kOmmHashSeed, K.Bits, sizeof(K.Bits))));
+                }
+            };
+
+            const u32 TriangleCount = _Geometry.IndexCount / 3u;
+            const auto* Base = reinterpret_cast<const u8*>(_Geometry.TexCoords);
+            std::unordered_map<FUvTri, u32, FUvTriHash> UniqueId;
+            UniqueId.reserve(TriangleCount);
+            std::vector<double> Cost;
+            std::vector<u32> UniqueOfTriangle(TriangleCount);
+
+            for (u32 T = 0; T < TriangleCount; ++T) {
+                FUvTri Key;
+                f32 Uv[6];
+                for (u32 C = 0; C < 3; ++C) {
+                    const u32 V = _Geometry.Indices[T * 3u + C];
+                    if (V >= _Geometry.VertexCount)
+                        Fail("indice de vertice fora da malha na divisao de workload");
+                    std::memcpy(&Uv[C * 2], Base + static_cast<size_t>(V) * _Geometry.TexCoordStride,
+                                sizeof(f32) * 2);
+                }
+                std::memcpy(Key.Bits, Uv, sizeof(Key.Bits));
+                const auto [It, Inserted] =
+                    UniqueId.try_emplace(Key, static_cast<u32>(Cost.size()));
+                UniqueOfTriangle[T] = It->second;
+                if (!Inserted) continue;
+
+                const f32 MinU = std::min({ Uv[0], Uv[2], Uv[4] });
+                const f32 MaxU = std::max({ Uv[0], Uv[2], Uv[4] });
+                const f32 MinV = std::min({ Uv[1], Uv[3], Uv[5] });
+                const f32 MaxV = std::max({ Uv[1], Uv[3], Uv[5] });
+                // UV nao-finita: o SDK nao bakeia (GetIsInvalid) e nao cobra nada por ela.
+                double C = 0.0;
+                if (std::isfinite(MinU) && std::isfinite(MaxU) &&
+                    std::isfinite(MinV) && std::isfinite(MaxV))
+                    C = std::floor((static_cast<double>(MaxU) - MinU) * _TexWidth) *
+                        std::floor((static_cast<double>(MaxV) - MinV) * _TexHeight);
+                Cost.push_back(C);
+            }
+
+            // Guloso pelos mais caros: com valor igual por triangulo, e o que mantem o MAIOR numero
+            // deles dentro do teto.
+            //
+            // O que isto NAO e: um conserto para malha com "uns poucos triangulos de UV enorme". No
+            // BistroExterior (2026-10-31) as 10 malhas que estouram sao o contrario — a maioria
+            // dos triangulos e cara (34 192 de 37 366 numa delas), cards grandes no atlas que somam
+            // varias vezes o teto. A divisao recuperou 21 k dos 134 k triangulos perdidos. O resto
+            // pede um teto maior, e teto maior so cabe no bake OFFLINE.
+            double Total = std::accumulate(Cost.begin(), Cost.end(), 0.0);
+            const double MeshTotal = Total;
+            std::vector<u32> Order(Cost.size());
+            std::iota(Order.begin(), Order.end(), 0u);
+            std::sort(Order.begin(), Order.end(),
+                      [&](u32 A, u32 B) { return Cost[A] > Cost[B]; });
+            std::vector<u8> Drop(Cost.size(), 0);
+            for (u32 Id : Order) {
+                if (Total <= static_cast<double>(_Budget)) break;
+                Drop[Id] = 1;
+                Total -= Cost[Id];
+            }
+
+            FWorkloadSplit Out;
+            Out.TotalCost = MeshTotal;
+            Out.Kept.reserve(TriangleCount);
+            for (u32 T = 0; T < TriangleCount; ++T) {
+                if (Drop[UniqueOfTriangle[T]]) ++Out.Excluded;
+                else Out.Kept.push_back(T);
+            }
             return Out;
         }
     }
@@ -237,15 +355,46 @@ namespace Smile {
             Input.unresolvedTriState       = omm::SpecialIndex::FullyUnknownOpaque;
             Input.maxSubdivisionLevel      = 8;
             // Limite UV/texel: impede ilhas patologicas de monopolizarem minutos do commit.
-            // Acima dele anexamos indices especiais UNKNOWN ao BLAS OMM; continua sendo a
-            // geometria DXR 1.2, e o alpha-test exato so roda nesses triangulos.
-            Input.maxWorkloadSize = 1ull << 30;
+            // Acima dele os triangulos mais caros saem do bake com indice especial UNKNOWN (ver
+            // SplitByWorkload); continua sendo a geometria DXR 1.2, e o alpha-test exato so roda
+            // nesses triangulos.
+            constexpr u64 kMaxWorkloadSize = 1ull << 30;
+            Input.maxWorkloadSize = kMaxWorkloadSize;
 
-            const omm::Result BakeStatus = omm::Cpu::Bake(Baker, Input, &Result);
+            omm::Result BakeStatus = omm::Cpu::Bake(Baker, Input, &Result);
+
+            // Estourou: bakear o que cabe em vez de desistir da malha. O orcamento de tempo e o
+            // mesmo — o que vai ao baker continua abaixo do teto. A primeira tentativa usa o
+            // proprio teto, e a conta e a do SDK, entao ela deve passar; reduzir pela metade cobre
+            // uma divergencia entre as duas contas (o wrap de int do lado de la).
+            const u32 TriangleCount = _Geometry.IndexCount / 3u;
+            FWorkloadSplit Split;
+            std::vector<u32> KeptIndices; // vivo ate a copia do resultado: o Input aponta para ca
+            bool Divided = false;
+            u64 Budget = kMaxWorkloadSize;
+            for (u32 Attempt = 0; BakeStatus == omm::Result::WORKLOAD_TOO_BIG && Attempt < 4;
+                 ++Attempt, Budget /= 2) {
+                Split = SplitByWorkload(_Geometry, Alpha.Width, Alpha.Height, Budget);
+                if (Split.Kept.empty()) break;
+                KeptIndices.resize(Split.Kept.size() * 3u);
+                for (size_t K = 0; K < Split.Kept.size(); ++K)
+                    std::memcpy(&KeptIndices[K * 3u], &_Geometry.Indices[Split.Kept[K] * 3u],
+                                sizeof(u32) * 3u);
+                Input.indexBuffer = KeptIndices.data();
+                Input.indexCount  = static_cast<u32>(KeptIndices.size());
+                // 32 bits fixos: a costura abaixo encaixa os especiais dos excluidos no MESMO
+                // buffer, e assim nao ha largura de indice para negociar com o que o baker escolheu.
+                Input.bakeFlags = static_cast<omm::Cpu::BakeFlags>(
+                    static_cast<u32>(Input.bakeFlags) |
+                    static_cast<u32>(omm::Cpu::BakeFlags::Force32BitIndices));
+                Divided = true;
+                BakeStatus = omm::Cpu::Bake(Baker, Input, &Result);
+            }
+
             if (BakeStatus == omm::Result::WORKLOAD_TOO_BIG) {
                 auto Out = MakeAllUnknown(_Geometry, _BaseAlpha, _AlphaCutoff);
-                LogWarning("[OMM] - Workload excedeu 2^30; usando indices OMM UNKNOWN em " +
-                           std::to_string(Out->TriangleCount) + " triangulos");
+                LogWarning("[OMM] - Workload excedeu 2^30 e nem a divisao coube; usando indices "
+                           "OMM UNKNOWN em " + std::to_string(Out->TriangleCount) + " triangulos");
                 omm::Cpu::DestroyTexture(Baker, Texture); Texture = 0;
                 omm::DestroyBaker(Baker); Baker = nullptr;
                 return Out;
@@ -256,11 +405,12 @@ namespace Smile {
             if (!Baked) Fail("baker devolveu descritor nulo");
 
             auto Out = std::make_shared<FOpacityMicromapData>();
-            Out->TriangleCount = _Geometry.IndexCount / 3u;
+            Out->TriangleCount = TriangleCount;
             Out->BakedBaseAlpha = _BaseAlpha;
             Out->BakedAlphaCutoff = _AlphaCutoff;
-            if (Baked->indexCount != Out->TriangleCount)
-                Fail("indice OMM nao possui uma entrada por triangulo");
+            const u32 BakedTriangles = Divided ? static_cast<u32>(Split.Kept.size()) : TriangleCount;
+            if (Baked->indexCount != BakedTriangles)
+                Fail("indice OMM nao possui uma entrada por triangulo bakeado");
 
             switch (Baked->indexFormat) {
                 case omm::IndexFormat::UINT_8:
@@ -271,6 +421,8 @@ namespace Smile {
                     Out->IndexFormat = DXGI_FORMAT_R32_UINT; Out->IndexStride = 4; break;
                 default: Fail("formato do index buffer OMM desconhecido");
             }
+            if (Divided && Out->IndexStride != sizeof(u32))
+                Fail("baker ignorou Force32BitIndices no bake dividido");
 
             Out->ArrayData.resize(Baked->arrayDataSize);
             if (Baked->arrayDataSize)
@@ -296,9 +448,33 @@ namespace Smile {
                 Out->Histogram.push_back(Dst);
             }
 
-            Out->Indices.resize(static_cast<size_t>(Baked->indexCount) * Out->IndexStride);
-            if (!Out->Indices.empty())
-                std::memcpy(Out->Indices.data(), Baked->indexBuffer, Out->Indices.size());
+            Out->Indices.resize(static_cast<size_t>(TriangleCount) * Out->IndexStride);
+            if (!Divided) {
+                if (!Out->Indices.empty())
+                    std::memcpy(Out->Indices.data(), Baked->indexBuffer, Out->Indices.size());
+            } else {
+                // A COSTURA: os excluidos com o especial, os bakeados no lugar de origem. Os
+                // indices do baker apontam para Descs/ArrayData deste mesmo resultado, entao o
+                // array nao muda — so a posicao de cada entrada no buffer da malha.
+                const i32 Special =
+                    D3D12_RAYTRACING_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE;
+                for (u32 T = 0; T < TriangleCount; ++T)
+                    std::memcpy(Out->Indices.data() + static_cast<size_t>(T) * sizeof(u32),
+                                &Special, sizeof(Special));
+                const auto* Src = static_cast<const u8*>(Baked->indexBuffer);
+                for (size_t K = 0; K < Split.Kept.size(); ++K)
+                    std::memcpy(Out->Indices.data() + static_cast<size_t>(Split.Kept[K]) * sizeof(u32),
+                                Src + K * sizeof(u32), sizeof(u32));
+                Out->WorkloadExcludedTriangles = Split.Excluded;
+                // O multiplo do teto e o numero que decide o que fazer com o resto: perto de 1x,
+                // subir o teto resolve; muitas vezes acima, so o bake offline.
+                const double OverCap = Split.TotalCost / static_cast<double>(kMaxWorkloadSize);
+                LogWarning("[OMM] - Workload " + std::to_string(OverCap).substr(0, 5) +
+                           "x o teto de 2^30; " + std::to_string(Split.Excluded) + " de " +
+                           std::to_string(TriangleCount) +
+                           " triangulos (os maiores em UV) ficam com indice UNKNOWN, o resto foi "
+                           "bakeado");
+            }
             if (!Out->Valid()) Fail("resultado do baker e internamente inconsistente");
 
             LogDebug("[OMM] - Bake 4-state: " + std::to_string(Out->TriangleCount) +

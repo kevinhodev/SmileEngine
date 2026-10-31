@@ -609,10 +609,13 @@ add_test(
             "${PROJECT_SOURCE_DIR}/Assets/Scenes/Bistro/BistroExterior.sscene"
 )
 
+# 450 s, e nao 300: e o Debug que dimensiona. A divisao de workload (2026-10-31) passou a bakear a
+# parte que cabe das 10 malhas do Bistro que antes caiam inteiras no all-unknown sem bakear nada,
+# e o teste em Debug foi de 233 s para 300 s — exatamente o teto antigo. Release: 40 s -> 45 s.
 set_tests_properties(Smile.OpacityMicromapBake.BistroExterior PROPERTIES
     LABELS "graphics;raytracing;omm;integration"
     RESOURCE_LOCK CookedSceneMemory
-    TIMEOUT 300
+    TIMEOUT 450
 )
 
 # Harness de carga da cena cozida, independente de OMM. O SmileOpacityMicromapBakeTests so
