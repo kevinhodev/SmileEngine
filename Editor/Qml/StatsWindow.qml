@@ -712,8 +712,8 @@ Rectangle {
                                     // "visível / total" sempre foram RENDERÁVEIS da cena, nunca
                                     // draws — o rótulo antigo dizia "Draws visíveis" e mentia.
                                     // Draws de verdade ficam na seção "CPU / submissão".
-                                    { label: "Malhas visíveis", value: root.statsModel.visibleDrawCount + " / " + root.statsModel.totalDrawCount },
-                                    { label: "Ocultados (HZB)", value: root.statsModel.occludedDrawCount },
+                                    { label: "Lista visível CPU", value: root.statsModel.visibleDrawCount + " / " + root.statsModel.totalDrawCount },
+                                    { label: "Oclusão CPU (legado)", value: root.statsModel.occludedDrawCount },
                                     { label: "Draws de cena", value: root.statsModel.sceneMeshDraws },
                                     { label: "Binds de material", value: root.statsModel.materialBinds },
                                     { label: "Draws com material fora do bindless", value: root.statsModel.materialFallbackDraws },

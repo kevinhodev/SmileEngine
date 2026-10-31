@@ -104,7 +104,7 @@ Rectangle {
         }
         Metric {
             visible: root.width > 1280
-            label: "Meshes"
+            label: "Lista CPU"
             value: root.statsModel.visibleDrawCount + "/" + root.statsModel.totalDrawCount
         }
         Metric {

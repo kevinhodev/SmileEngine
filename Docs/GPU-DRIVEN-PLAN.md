@@ -1698,8 +1698,9 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 > legada; as exceções CPU conservam apenas frustum. O culling/sort CPU dos opacos suportados só
 > reaparece em um pedido real de picking. Os dois toggles continuam desligados por default.
 > Testes e evidências estão em [GPU-DRIVEN-PHASE6-PROGRESS.md](GPU-DRIVEN-PHASE6-PROGRESS.md).
-> A promoção depende também da rodada final de custo e comparação de pixels; código implementado
-> não substitui esse gate.
+> O gate técnico passou em RTX 3060 Ti (Emerald e 1M externa/interna), com comparação de pixels,
+> mediana e p95. As capturas `ac4c07d-dirty` são shakedown: a baseline formal não foi promovida,
+> pois havia um rascunho não rastreado do proprietário. A ressalva está no relatório da fase.
 
 ### Objetivo
 
@@ -1728,11 +1729,11 @@ comportamento conservador.
 
 ### Gate de saída
 
-- desligar readback de visibilidade não muda a imagem esperada;
-- câmera em movimento rápido/teleport não produz desaparecimentos falsos;
-- selected objects não precisam de exceção para mascarar atraso de readback;
-- métricas separam candidates, frustum rejected, occlusion rejected e drawn;
-- custo de culling + trabalho restante não piora o critical path nas cenas de gate.
+- [x] desligar readback de visibilidade não muda a imagem esperada;
+- [x] câmera em movimento rápido/teleport não produz desaparecimentos falsos;
+- [x] selected objects não precisam de exceção para mascarar atraso de readback;
+- [x] métricas separam candidates, frustum rejected, occlusion rejected e drawn;
+- [x] custo de culling + trabalho restante não piora o critical path nas cenas de gate.
 
 ## Fase 7 — Pass masks, shadows, alpha test e fallback endurecido
 

@@ -878,7 +878,7 @@ namespace SmileEditor {
 
         QString SceneText;
         if (RendererAccess->GetSceneRenderableCount() > 0) {
-            SceneText = QString("meshes: %1/%2")
+            SceneText = QString("lista CPU: %1/%2")
                 .arg(RendererAccess->GetVisibleCount())
                 .arg(RendererAccess->GetSceneRenderableCount());
         }
