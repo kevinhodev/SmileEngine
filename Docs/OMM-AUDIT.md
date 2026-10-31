@@ -121,6 +121,12 @@ zerou — e o que sobra só sai com o bake offline. A ordem passa a ser: Cooker 
 Antes disso, um 2-state só é seguro em instância cuja malha tenha `WorkloadExcludedTriangles == 0`,
 e essa granularidade não existe na ray flag (é por raio, não por instância).
 
+**Atualização: o pré-requisito está cumprido no Bistro.** Com o sidecar atual são 0 triângulos
+UNKNOWN inteiros. Mas o fallback de runtime continua existindo: uma cena sem `.somm`, ou com um
+`.somm` desatualizado depois de um recook, volta a ter UNKNOWN. Então o P0 precisa de uma guarda
+**por cena**: só ligar o 2-state quando a cobertura do load (que o log já soma) tiver
+`FullyUnknown == 0`, e avisar alto quando não tiver. Não basta a flag de runtime.
+
 **[2ª] Correção da implementação.** A primeira passada disse que, como as flags do `RayQuery<>`
 são de tipo e `PT_ResolveSelfIntersection` recebe `RayQuery<RAY_FLAG_NONE, …>`, seria preciso
 trocar o tipo por um `#define`. Não é. As flags efetivas são o OR do template com as do
@@ -189,7 +195,80 @@ Ainda em aberto:
    micro-map que a NVIDIA adicionou no SDK 1.7 para substituir o "pular OMMs acima de 0,5 MB" deles
    (tinham um de 43 MB). No Bistro o maior é 2,7 MB, então hoje não morde — é salvaguarda.
 
-## P1 — O bake é 78% do load de cena; ele pertence ao Cooker
+## P1 — O bake é 78% do load de cena; ele pertence ao Cooker — **FEITO (sidecar `.somm`)**
+
+**O que entrou**, com um desenho diferente do que esta seção propunha (ver o texto original abaixo):
+
+- **`SmileOmmBaker`** ([Tools/OmmBaker](Tools/OmmBaker/main.cpp)): carrega a cena cozida pelo
+  **mesmo** `LoadCookedSceneData` do runtime e bakeia **sem teto**, gravando `<cena>.somm`. É
+  incremental: pares cujo bake no sidecar ainda bate com a cena são reaproveitados (`--force`
+  refaz todos). Não é um passo do `SmileCooker` porque o Cooker não linka a engine: não tem OMM
+  SDK, DirectXTex nem o loader de textura, e o bake tem de ver o alpha exatamente como a GPU.
+  O [CookScenes.ps1](Tools/CookScenes.ps1) roda o baker depois de cada cena (`-NoOmm` pula).
+- **Sidecar, e não bump de `kCookedVersion`.** O `.somm` se valida sozinho, par a par, por
+  hash do conteúdo carregado (UVs+índices, pixels de alpha) e pelos bits de alpha/cutoff. O
+  header guarda a versão do formato, a dos parâmetros do bake (`kOmmBakeSettingsVersion`) e a do
+  SDK, mais um hash do payload inteiro. Não precisou recozinhar nada, não colide com os `.smesh`
+  v9 antigos da árvore e não mexe no schema da baseline do `CookScenes.ps1`.
+- **Formato próprio, e não `omm::Cpu::Serialize`.** O sidecar guarda o `FOpacityMicromapData` já
+  na forma do D3D12. O load nem passa pelo SDK.
+- **Uma só enumeração** ([OmmBakeCache.h](Engine/Include/Smile/Graphics/RayTracing/OmmBakeCache.h)):
+  `CollectOmmBakeJobs` e o agendador `BakeOmmJobs` saíram do import e são chamados pelos dois
+  lados, o que garante a mesma chave por construção.
+- **O import** procura cada par no sidecar. Sidecar ausente, recusado inteiro ou com par
+  desatualizado: o par vai pelo bake de runtime, com teto, como antes, e o log diz quantos e
+  manda rodar o baker. Não é fallback para geometria sem OMM.
+
+**Medido no BistroExterior:**
+
+| | runtime com teto | sidecar offline |
+|---|---|---|
+| triângulos UNKNOWN inteiros | 113 154 (12,6%) | **0** |
+| resolvidos inteiros pelo hardware | 56,4% | **69,0%** |
+| com micro-map | 31,0% | 31,0% |
+| dado de array | 20,1 MB | 20,1 MB (sidecar de 23 MB) |
+| custo | ~22 s **a cada load** | 54 s **uma vez**, offline |
+| ferramenta inteira com o sidecar pronto (load da cena + validação) | — | **0,6 s** |
+
+Os triângulos que estouravam o teto eram **uniformes**: viraram índice especial resolvido pelo
+hardware, sem micro-map. Por isso a cobertura subiu 12,6 pontos sem crescer o array.
+
+O teste confere o sidecar real contra a cena: as 122 chaves batem, **os 112 pares que cabem
+no teto são byte a byte iguais ao bake de runtime** (offline e runtime enxergam as mesmas
+entradas), e os 10 antes divididos agora estão cobertos. Mais 14 casos sintéticos: ida e volta
+exata, bytes determinísticos e as recusas (chave com um ULP de cutoff diferente, textura
+diferente, par ausente, byte trocado, arquivo truncado, versão de parâmetros, arquivo
+inexistente).
+
+**O bake não é reprodutível entre Debug e Release.** O `omm-lib` compila com `/fp:fast` em todas
+as configurações, e `/Od` contra `/O2` reassocia e contrai o ponto flutuante de formas diferentes.
+Medido com o sidecar de Release e o teste em Debug: 12 dos 112 pares divergem, mas em **zero**
+triângulos muda a classe (resolvido inteiro / micro-map / UNKNOWN), contagens, tamanho do array e
+descritores são idênticos, e a área conhecida varia no máximo 1·10⁻⁴. A divergência fica nos
+estados de microtriângulo na borda do contorno. Os dois resultados são micro-maps válidos, então
+o sidecar não recusa um bake de outra configuração. O header grava a configuração de quem bakeou
+(`BakerFlavor`, só informativo), e o teste exige identidade byte a byte na mesma configuração e
+aplica essa tolerância medida (com teto 10× maior) entre configurações.
+
+**Verificado no editor (Release, GPU, 31/10/2026)**, abrindo o BistroExterior pela linha de
+comando, nas mesmas condições, com segundos de diferença entre as aberturas:
+
+| | sem sidecar | **com sidecar** | sidecar corrompido |
+|---|---|---|---|
+| etapa de OMM | 28 698 ms | **27 ms** | 29 713 ms |
+| `Commit scene GPU` | 29 658 ms | **661 ms** | — |
+| **load da cena** | **30 220 ms** | **1 175 ms** | 31 169 ms |
+| triângulos UNKNOWN | 13% | **0%** | 13% |
+
+Com o sidecar, o load fica **~26× mais rápido**. O corrompido foi recusado inteiro com o motivo
+("hash do payload não confere"), avisou e caiu no bake de runtime sem quebrar. Nas três aberturas
+a cena renderizou 8 s sem erro no log: nenhum BLAS sem micro-map na TLAS e nenhum "OMM
+desatualizado". A linha da TLAS com bytes de OMM rodou: `61 OMM Arrays (20.295 MB)`. **Ainda não
+verificado:** o ramo de par desatualizado com o resto do sidecar válido. A contagem dele é a mesma
+`Lookup` coberta pelo teste sintético, mas não houve um recook real para exercitá-la.
+
+<details><summary>Texto original desta seção (antes da implementação)</summary>
+
 
 **[2ª] Agora com número:** 22,0 s de bake numa carga de 28,2 s do BistroExterior, refeitos a cada
 load. O Cooker não conhece OMM.
@@ -206,6 +285,8 @@ Caminho: bump de `kCookedVersion` (hoje 8,
 [CookedFormat.h:8](Engine/Include/Smile/Scene/CookedFormat.h#L8)), bake por par no Cooker, blob num
 sidecar, baker de runtime só para o rebake do editor. A validação já existe: `FOmmInputKey` + os
 hashes do `FOmmBakeInputStore` são a camada que diz "este blob descreve este par".
+
+</details>
 
 ## P2 — `ExtractAlpha`: 16 B/texel de intermediário, por par, em até 8 workers
 
@@ -342,6 +423,17 @@ máximo `TRIANGLE_CULL_DISABLE`
 decide é o OMM. Num código em que os comentários carregam a decisão, este manda o próximo leitor
 procurar uma flag que não existe.
 
+## P3 — Latente: textura de albedo que falha no upload diverge do bake
+
+Achado de passagem, ao conferir que o import e o `SmileOmmBaker` enxergam as mesmas entradas. Em
+[RendererSceneImport.cpp](Engine/Source/Graphics/Renderer/RendererSceneImport.cpp), quando a
+textura decodifica na CPU mas o upload para a GPU falha (`!texs[i].IsValid()`), o material cai em
+`TexDefaultWhite` com `HasAlbedoMap = 0`, e o `AlphaTestPass` trata o material como **opaco**. Já o
+bake usa o alpha **real** da CPU (`TextureData[i]`). O micro-map passa a descrever recortes que o
+shader não aplica: microtriângulos classificados como transparentes somem, mesmo com o raster
+desenhando a folha opaca. Não vi isso acontecer; precisa de upload falhando. O conserto é bakear com
+a mesma textura que o material recebeu: plano branco quando ele caiu no default.
+
 ---
 
 ## Ordem sugerida **[2ª] — reordenada**
@@ -350,10 +442,11 @@ procurar uma flag que não existe.
    triângulos do Bistro; o resto está 4–34× acima do teto.
 2. **Instrumento:** cobertura por bake + bytes de OMM no log — **FEITO** (metade CPU). Falta o
    toggle `DISABLE_OMMS`, que fica para logo antes do P0, quando houver o que medir na GPU.
-3. **Bake no Cooker com `Serialize`, sem teto** — 78% do load do Bistro, e agora também o que zera
-   os 113 k triângulos sem micro-map. Maior escopo: exige bump de `kCookedVersion` e recozinhar tudo.
+3. **Bake offline sem teto** → **sidecar `.somm` + `SmileOmmBaker`, FEITO** (P1). 0 triângulos
+   UNKNOWN no Bistro; sem bump de `kCookedVersion`. Falta medir o load no editor com GPU.
 4. **`FORCE_OMM_2_STATE` nos passes indiretos** (P0), pela flag de runtime do `TraceRayInline`, com
-   A/B de frame e de GI na folhagem. É onde está o ganho de dois dígitos — e só é seguro depois do 3.
+   A/B de frame e de GI na folhagem, **com a guarda por cena** (só com `FullyUnknown == 0` no load)
+   e com o toggle `DISABLE_OMMS` para medir. É onde está o ganho de dois dígitos.
 5. **`maxSubdivisionLevel 6`** — uma linha, com A/B de recorte. **Não** reduz fallback (o workload
    não depende do nível); reduz array e bake time.
 6. **Plano de alpha por textura + UNORM8 + baker compartilhado**, e o agendamento — importam para
