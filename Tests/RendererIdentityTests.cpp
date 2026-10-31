@@ -440,6 +440,28 @@ int wmain(int Argc, wchar_t** Argv) try {
             Require(FRendererIdentityTestAccess::ObjectCBReserved(R) == 0,
                     "depois da coleta a telemetria continua contando os bytes do aposentado");
 
+            Settings.SetGpuIndirectMainView(true);
+            Settings.SetGpuCulling(true);
+            Require(Settings.GetGpuCulling(), "GPU culling unavailable on capable test device");
+            Frames(R, 6);
+            Require(R.CpuStats().GpuIndirectMainViewActive && R.CpuStats().GpuIndirectCountersValid &&
+                        R.CpuStats().GpuIndirectStatus == 1 && R.CpuStats().GpuIndirectGpuReason == 0,
+                    "GPU culling failed in actual renderer");
+            Require(PickAt(SkewX, SkewY) == HitId,
+                    "GPU culling changed selected transformed object's identity");
+            R.Resize(641, 361);
+            Frames(R, 4);
+            Settings.SetRenderScale(0.75f);
+            Frames(R, 4);
+            Require(R.CpuStats().GpuIndirectStatus == 1 && R.CpuStats().GpuIndirectGpuReason == 0,
+                    "GPU culling failed after odd resize and render scale change");
+            Settings.SetRenderScale(1.0f);
+            R.Resize(640, 360);
+            Frames(R, 4);
+            Require(PickAt(SkewX, SkewY) == HitId, "GPU culling resize lost pick identity");
+            Settings.SetGpuCulling(false);
+            Settings.SetGpuIndirectMainView(false);
+
             Settings.SetBindlessTransforms(false);
             Settings.SetBindlessMaterials(false);
         }

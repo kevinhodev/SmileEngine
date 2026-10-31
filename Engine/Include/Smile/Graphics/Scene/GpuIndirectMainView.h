@@ -81,6 +81,14 @@ namespace Smile {
     class FScene;
     class FTextureSRVHeap;
 
+    struct FGpuMainViewCull {
+        Mat44 ViewProjection = Mat44::Identity();
+        bool Frustum = false;
+        bool Occlusion = false;
+        u32 Width = 1, Height = 1, Mips = 0;
+        u32 HzbSrv = 0xFFFFFFFFu;
+    };
+
     // Um passe que vai gravar `ExecuteIndirect` com a saida da cadeia: a command signature dele, criada
     // contra a root signature do passe, e a classe de pipeline que ele desenha. A porta da GRAVACAO dos
     // draws (`GpuIndirectRecordPreflight`) roda para cada um ANTES da cadeia: recusada no passe, a cadeia
@@ -174,7 +182,7 @@ namespace Smile {
         // Os tres buffers de contadores e o `Status`: terminam a cadeia copiados para o readback.
         static constexpr D3D12_RESOURCE_STATES kCountersRestState   = D3D12_RESOURCE_STATE_COPY_SOURCE;
 
-        // Root signatures e PSOs dos quatro passos. Lanca se faltar shader.
+        // Root signatures e PSOs da cadeia, incluindo o culling opcional. Lanca se faltar shader.
         void Initialize(ID3D12Device* Device);
 
         // Os buffers da cadeia para uma cena de ate `SlotCapacity` slots de instancia e `PoolCount` pools.
@@ -196,7 +204,12 @@ namespace Smile {
         u32 Record(ID3D12GraphicsCommandList* CommandList, u32 FrameSlot, FTextureSRVHeap& SRVHeap,
                    const FGpuMaterialTable& Materials, const FGpuMeshTable& Meshes,
                    const FGpuSceneInstanceTable& Instances,
-                   std::span<const FGpuIndirectPassSignature> Passes) noexcept;
+                   std::span<const FGpuIndirectPassSignature> Passes,
+                   const FGpuMainViewCull* Cull = nullptr, bool Late = false) noexcept;
+
+        // Late=true pode ser usado uma vez depois do depth Record aceito, na mesma lista/slot,
+        // sem Prepare extra. Recursos DEFAULT sao reutilizados apos os draws de depth; CBs,
+        // descritores e readbacks tem bancos separados para depth e late em cada frame slot.
 
         bool IsBuilt() const { return Built_; }
         u32  SlotCapacity() const { return SlotCapacity_; }
@@ -238,6 +251,7 @@ namespace Smile {
 
         Microsoft::WRL::ComPtr<ID3D12Device> Device_;
         FComputePipeline ExpandPipeline_;
+        FComputePipeline CullPipeline_;
         FComputePipeline ClassifyPipeline_;
         FComputePipeline ScatterPipeline_;
         FComputePipeline FinalizePipeline_;
@@ -264,9 +278,10 @@ namespace Smile {
         GpuResources::FUploadBuffer            ConstantBuffers_; // 4 por frame slot
         Microsoft::WRL::ComPtr<ID3D12Resource> Readback_;
         const u8*                              ReadbackMapped_ = nullptr;
-        std::array<bool, kFrameSlots>          ReadbackPending_{};
+        std::array<bool, kFrameSlots * 2>      ReadbackPending_{};
         // A tabela de descritores de cada frame slot; invalida ate o Setup.
-        std::array<u32, kFrameSlots>           DescriptorBase_{ 0xFFFFFFFFu, 0xFFFFFFFFu };
+        std::array<u32, kFrameSlots * 2>       DescriptorBase_{ 0xFFFFFFFFu, 0xFFFFFFFFu,
+                                                              0xFFFFFFFFu, 0xFFFFFFFFu };
 
         FGpuSceneCandidates     Candidates_;
         FGpuIndirectLayoutState LayoutState_;
@@ -295,5 +310,7 @@ namespace Smile {
         bool Built_                 = false;
         bool Prepared_              = false;
         ID3D12GraphicsCommandList* PreparedList_ = nullptr;
+        ID3D12GraphicsCommandList* LateList_ = nullptr;
+        u32 LateFrameSlot_ = 0;
     };
 }

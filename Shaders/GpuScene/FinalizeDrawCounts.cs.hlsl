@@ -92,7 +92,9 @@ void main() {
     for (uint K = 0u; K < SMILE_CLASSIFY_OUTCOME_COUNT; ++K) {
         const bool MantemFrame = K == SMILE_CLASSIFY_INDIRECT ||
                                  K == SMILE_CLASSIFY_NOT_ELIGIBLE ||
-                                 K == SMILE_CLASSIFY_MESH_UNUSABLE;
+                                 K == SMILE_CLASSIFY_MESH_UNUSABLE ||
+                                 K == SMILE_CLASSIFY_FRUSTUM_REJECTED ||
+                                 K == SMILE_CLASSIFY_OCCLUSION_REJECTED;
         if (!MantemFrame && ClassifyCounters[K] != 0u)
             Motivo |= SMILE_FINALIZE_CLASSIFY_CANARY;
     }

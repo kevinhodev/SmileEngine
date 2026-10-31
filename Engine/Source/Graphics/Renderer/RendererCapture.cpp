@@ -544,6 +544,7 @@ namespace Smile {
         S.BindlessMaterials = UseBindlessMaterials;
         S.BindlessTransforms = UseBindlessTransforms;
         S.GpuIndirectMainView = CpuStatsBuilding.GpuIndirectMainViewActive;
+        S.GpuCulling = S.GpuIndirectMainView && UseGpuCulling;
         S.DerivedTemporalTransforms = Settings().GetDerivedTemporalTransforms();
         // Pre-requisitos da leitura dos contadores de sombra. Ver a nota no FrameCapture.h.
         S.UseSunShadows      = UseSunShadows;

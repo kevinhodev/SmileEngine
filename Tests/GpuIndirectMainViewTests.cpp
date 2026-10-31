@@ -271,6 +271,10 @@ namespace {
         u32       GravacoesContadas     = 0;
 
         u64 IdOpaco[3]{}, IdTroca[2]{}, IdMascarado = 0, IdOpacoB = 0;
+        const FGpuMainViewCull* Cull = nullptr;
+        const FGpuMainViewCull* LateCull = nullptr;
+        std::vector<std::pair<u32, u32>> Rejected;
+        wrl::ComPtr<ID3D12Resource> DepthDrawReadback;
 
         void Construir() {
             wrl::ComPtr<ID3D12Debug> Debug;
@@ -396,6 +400,9 @@ namespace {
             const FGpuSceneCandidates& C    = View.Candidates();
             const auto                 Meta = Instances.PublishedMeta();
             E.Slots = ExpandirComoAGpu(C.Ranges(), C.InstanceIds(), Meta, E.Expand);
+            for (u32& Slot : E.Slots)
+                for (const auto& [Id, Outcome] : Rejected)
+                    if (Slot == Id) { Slot = Outcome; break; }
 
             const FGpuClassifyInput In{ E.Slots, Meta, Materials.PublishedRows(), Meshes.PublishedRows(),
                                         static_cast<u32>(Meshes.GeometryPools().size()),
@@ -467,14 +474,27 @@ namespace {
             u64 Alocacoes = 0;
             {
                 FContagemDeAlocacoes Contagem;
-                Res.Gravacao = View.Record(L, _Slot, Heap, Materials, Meshes, Instances, _Passes);
+                Res.Gravacao = View.Record(L, _Slot, Heap, Materials, Meshes, Instances, _Passes, Cull);
+                if (LateCull && DepthDrawReadback) {
+                    D3D12_RESOURCE_BARRIER B{};
+                    B.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                    B.Transition = {View.DrawCounts(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_COPY_SOURCE};
+                    L->ResourceBarrier(1, &B);
+                    L->CopyResource(DepthDrawReadback.Get(), View.DrawCounts());
+                    std::swap(B.Transition.StateBefore, B.Transition.StateAfter);
+                    L->ResourceBarrier(1, &B);
+                }
+                if (LateCull && Res.Gravacao == GpuMainViewOk)
+                    Res.Gravacao = View.Record(L, _Slot, Heap, Materials, Meshes, Instances,
+                                              _Passes, LateCull, true);
                 Alocacoes    = Contagem.Total();
             }
             CheckEq64(Alocacoes, 0ull, "gravar a cadeia nao aloca");
             ++GravacoesContadas;
 
             // A telemetria coletada no inicio da gravacao e a da cadeia ANTERIOR deste slot.
-            if (CadeiaNoSlot[_Slot]) {
+            if (CadeiaNoSlot[_Slot] && !LateCull) {
                 const FGpuMainViewGpuCounters& T = View.LastGpuCounters();
                 const FEsperado&               E = TelemetriaEsperada[_Slot];
                 Check(T.Valid, "telemetria: a cadeia anterior do slot foi coletada");
@@ -877,6 +897,110 @@ int main() try {
     Check(G.GravacoesContadas >= 20u, "a contagem de alocacoes cobriu as gravacoes do teste");
     Check(G.TelemetriasConferidas >= 8u, "a telemetria foi conferida em varios frames");
     G.Drenar("fim");
+
+    // Phase 6: literal geometric expectations, independent of the culling implementation.
+    // Both chains execute in one list; the late CB/descriptors must not overwrite the depth ones.
+    {
+        FRig C;
+        C.Construir();
+        C.Montar(C.Instances.Capacity(), 2u);
+        auto Place = [&](u64 Id, Vec3 P, f32 Extent = 0.05f) {
+            auto& R = C.R(Id);
+            R.LocalAABBMin = { -Extent, -Extent, -Extent };
+            R.LocalAABBMax = { Extent, Extent, Extent };
+            R.Transform.Position = P;
+            R.RefreshWorldBounds();
+            C.Scene.BumpTransformsVersion(C.Indice(Id));
+        };
+        Place(C.IdOpaco[0], {0, 0, 0.8f}); // ahead of occluder
+        Place(C.IdOpaco[1], {0, 0, 0.2f}); // behind occluder
+        Place(C.IdOpaco[2], {3, 0, 0.2f}); // lateral frustum rejection
+        Place(C.IdTroca[0], {0, 0, 0.98f}, 0.1f); // near crossing: kept
+        Place(C.IdTroca[1], {0, 0, -0.3f}); // outside far
+        Place(C.IdMascarado, {0, 0, 0.8f});
+        Place(C.IdOpacoB, {0, 0, 0.2f}, 1.0f); // camera/near enclosed: kept
+
+        wrl::ComPtr<ID3D12Resource> Hzb;
+        D3D12_HEAP_PROPERTIES Hp{}; Hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC Desc{};
+        Desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        Desc.Width = Desc.Height = 32;
+        Desc.DepthOrArraySize = 1; Desc.MipLevels = 1; Desc.SampleDesc.Count = 1;
+        Desc.Format = DXGI_FORMAT_R32_FLOAT;
+        Desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        const D3D12_CLEAR_VALUE Clear{DXGI_FORMAT_R32_FLOAT, {0.5f, 0.5f, 0.5f, 0.5f}};
+        Hr(C.Device->CreateCommittedResource(&Hp, D3D12_HEAP_FLAG_NONE, &Desc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &Clear, IID_PPV_ARGS(&Hzb)), "culling HZB");
+        D3D12_DESCRIPTOR_HEAP_DESC Hd{}; Hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; Hd.NumDescriptors = 1;
+        wrl::ComPtr<ID3D12DescriptorHeap> Rt;
+        Hr(C.Device->CreateDescriptorHeap(&Hd, IID_PPV_ARGS(&Rt)), "culling RTV");
+        C.Device->CreateRenderTargetView(Hzb.Get(), nullptr, Rt->GetCPUDescriptorHandleForHeapStart());
+        auto* L = C.List[0].Get();
+        Hr(C.Allocator[0]->Reset(), "culling reset");
+        Hr(L->Reset(C.Allocator[0].Get(), nullptr), "culling reset list");
+        const FLOAT Depth[4]{0.5f, 0.5f, 0.5f, 0.5f};
+        L->ClearRenderTargetView(Rt->GetCPUDescriptorHandleForHeapStart(), Depth, 0, nullptr);
+        D3D12_RESOURCE_BARRIER Barrier{};
+        Barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        Barrier.Transition = { Hzb.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+        L->ResourceBarrier(1, &Barrier);
+        Hr(L->Close(), "culling close");
+        C.Executar(0, "HZB initialized");
+        const u32 Srv = C.Heap.Allocate();
+        D3D12_SHADER_RESOURCE_VIEW_DESC Sd{};
+        Sd.Format = DXGI_FORMAT_R32_FLOAT; Sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        Sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        Sd.Texture2D.MipLevels = 1;
+        C.Heap.CreateSRV(C.Device.Get(), Hzb.Get(), Sd, Srv);
+        FGpuMainViewCull DepthCull{Mat44::Identity(), true, false, 64, 64};
+        FGpuMainViewCull Late{Mat44::Identity(), true, true, 64, 64, 1, Srv};
+        C.Cull = &DepthCull;
+        C.Rejected = {{C.R(C.IdOpaco[2]).GpuHandle.Slot, 0xFFFFFFFEu},
+                      {C.R(C.IdTroca[1]).GpuHandle.Slot, 0xFFFFFFFEu}};
+        CheckEq(C.Frame(C.Passe, "GPU frustum").Gravacao, GpuMainViewOk, "frustum chain accepted");
+        CheckEq(C.UltimaCadeia.Classify[GpuClassifyIndirect], 4, "four depth commands survive");
+        C.LateCull = &Late;
+        C.DepthDrawReadback = GpuResources::CreateReadbackBuffer(C.Device.Get(), C.View.DrawCounts()->GetDesc().Width);
+        C.Rejected.emplace_back(C.R(C.IdOpaco[1]).GpuHandle.Slot, 0xFFFFFFFDu);
+        CheckEq(C.Frame(C.Passe, "GPU current-frame HZB").Gravacao, GpuMainViewOk, "late chain accepted");
+        CheckEq(C.UltimaCadeia.Classify[GpuClassifyIndirect], 3, "three commands survive HZB");
+        CheckEq(C.UltimaCadeia.Classify[GpuClassifyOcclusionRejected], 1, "one occluded object");
+        u32* DepthCounts = nullptr;
+        Hr(C.DepthDrawReadback->Map(0, nullptr, reinterpret_cast<void**>(&DepthCounts)), "depth count map");
+        CheckEq(DepthCounts[0] + DepthCounts[1], 4, "depth CB survives late CB recording");
+        C.DepthDrawReadback->Unmap(0, nullptr);
+        // Camera teleport: use a new current-frame VP, no history invalidation required.
+        DepthCull.ViewProjection = Late.ViewProjection = Mat44::Translation({-3, 0, 0});
+        C.Rejected.clear();
+        for (const auto& R : C.Scene.Renderables())
+            if (R.Id != C.IdOpaco[2]) C.Rejected.emplace_back(R.GpuHandle.Slot, 0xFFFFFFFEu);
+        // Former offscreen object is behind HZB at the new position.
+        C.Rejected.emplace_back(C.R(C.IdOpaco[2]).GpuHandle.Slot, 0xFFFFFFFDu);
+        C.Frame(C.Passe, "teleport current frame");
+
+        // Reverse-Z perspective, camera enclosed by B, actual near-plane crossing, jitter and
+        // an odd dynamic resolution. Expectations remain literal, not a copy of the shader math.
+        Place(C.IdOpaco[0], {0, 0, 0.15f}, 0.02f);
+        Place(C.IdOpaco[1], {0, 0, 5});
+        Place(C.IdOpaco[2], {10, 0, 5});
+        Place(C.IdTroca[0], {0, 0, 0.1f}, 0.05f);
+        Place(C.IdTroca[1], {0, 0, -5});
+        Place(C.IdMascarado, {0, 0, 0.15f}, 0.02f);
+        Place(C.IdOpacoB, {0, 0, 0}, 1.0f);
+        Mat44 Projection = Mat44::PerspectiveFovReverseZLH(1.57079632679f, 1.0f, 0.1f, 100.0f);
+        Projection.M[2][0] += 0.49f * 2.0f / 63.0f;
+        Projection.M[2][1] -= 0.49f * 2.0f / 47.0f;
+        DepthCull.ViewProjection = Late.ViewProjection = Projection;
+        DepthCull.Width = Late.Width = 63; DepthCull.Height = Late.Height = 47;
+        C.Rejected = {{C.R(C.IdOpaco[2]).GpuHandle.Slot, 0xFFFFFFFEu},
+                      {C.R(C.IdTroca[1]).GpuHandle.Slot, 0xFFFFFFFEu},
+                      {C.R(C.IdOpaco[1]).GpuHandle.Slot, 0xFFFFFFFDu}};
+        C.Frame(C.Passe, "perspective jitter odd resolution camera inside near crossing");
+        C.View.Release(C.Heap);
+        C.Heap.Free(Srv);
+        C.Drenar("culling end");
+    }
 
     if (Failures == 0) std::cout << "  OK\n";
     return Failures == 0 ? 0 : 1;

@@ -45,6 +45,7 @@
     "benchmark:gpu-driven:capture": "npm run build && node scripts/gpu-driven-baseline.mjs --capture-only",
     "validate:gpu-driven:phase3": "npm run build && node scripts/gpu-driven-phase3-validation.mjs",
     "validate:gpu-driven:phase5": "npm run build && node scripts/gpu-driven-phase5-validation.mjs",
+    "validate:gpu-driven:phase6": "npm run build && node scripts/gpu-driven-phase6-validation.mjs",
     "baseline:promote": "node scripts/promote-baseline.mjs"
   },
   "engines": {

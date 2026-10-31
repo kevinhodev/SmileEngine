@@ -39,7 +39,7 @@ namespace SmileEditor {
         // 14: A/B do main view indireto, chamadas ExecuteIndirect por passe e o bloco de
         // telemetria da cadeia. Um cliente 13 nao consegue distinguir fallback CPU de cadeia
         // ativa e portanto nao pode validar o gate da Fase 5.
-        constexpr int kProtocolVersion = 14;
+        constexpr int kProtocolVersion = 15;
         constexpr qsizetype kMaxRequestBytes = 64 * 1024;
 
         bool ReadInteger(const QJsonObject& _Object, const char* _Name,
@@ -213,6 +213,9 @@ namespace SmileEditor {
                 { QStringLiteral("bindlessMaterials"), _Settings.BindlessMaterials },
                 { QStringLiteral("bindlessTransforms"), _Settings.BindlessTransforms },
                 { QStringLiteral("gpuIndirectMainView"), _Settings.GpuIndirectMainView },
+                { QStringLiteral("gpuCulling"), _Settings.GpuCulling },
+                { QStringLiteral("frustumCulling"), _Settings.FrustumCulling },
+                { QStringLiteral("occlusionCulling"), _Settings.OcclusionCulling },
                 { QStringLiteral("derivedTemporalTransforms"),
                   _Settings.DerivedTemporalTransforms },
                 { QStringLiteral("sunShadows"), _Settings.SunShadows },
@@ -372,6 +375,8 @@ namespace SmileEditor {
                       static_cast<double>(_Cpu.GpuIndirectGpuReason) },
                     { QStringLiteral("gpuCommands"),
                       static_cast<double>(_Cpu.GpuIndirectGpuCommands) },
+                    { QStringLiteral("frustumRejected"), static_cast<double>(_Cpu.GpuFrustumRejected) },
+                    { QStringLiteral("occlusionRejected"), static_cast<double>(_Cpu.GpuOcclusionRejected) },
                     { QStringLiteral("residentBytes"),
                       static_cast<double>(_Cpu.GpuIndirectResidentBytes) },
                     { QStringLiteral("stagingBytes"),
@@ -847,6 +852,9 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "bindlessTransforms", Overrides.BindlessTransforms) &&
             ReadOptionalBool(_Arguments, "gpuIndirectMainView",
                              Overrides.GpuIndirectMainView) &&
+            ReadOptionalBool(_Arguments, "gpuCulling", Overrides.GpuCulling) &&
+            ReadOptionalBool(_Arguments, "frustumCulling", Overrides.FrustumCulling) &&
+            ReadOptionalBool(_Arguments, "occlusionCulling", Overrides.OcclusionCulling) &&
             ReadOptionalBool(_Arguments, "derivedTemporalTransforms",
                              Overrides.DerivedTemporalTransforms) &&
             ReadOptionalBool(_Arguments, "sunShadows", Overrides.SunShadows) &&

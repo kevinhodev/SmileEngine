@@ -72,6 +72,9 @@ namespace SmileEditor {
         Out.BindlessTransforms          = Settings.GetBindlessTransforms();
         Out.BindlessTransformsAvailable = Settings.BindlessTransformsAvailable();
         Out.GpuIndirectMainView          = Settings.GetGpuIndirectMainView();
+        Out.GpuCulling                   = Settings.GetGpuCulling();
+        Out.FrustumCulling               = Settings.GetFrustumCulling();
+        Out.OcclusionCulling             = Settings.GetOcclusionCulling();
         Out.GpuIndirectMainViewAvailable = Settings.GpuIndirectMainViewAvailable();
         Out.DerivedTemporalTransforms = Settings.GetDerivedTemporalTransforms();
         Out.DerivedTemporalTransformsAvailable =
@@ -279,6 +282,10 @@ namespace SmileEditor {
             // deles nao ficou efetivamente ligado.
             if (_Overrides.GpuIndirectMainView)
                 Settings.SetGpuIndirectMainView(*_Overrides.GpuIndirectMainView);
+            if (_Overrides.GpuCulling)
+                Settings.SetGpuCulling(*_Overrides.GpuCulling);
+            if (_Overrides.FrustumCulling) Settings.SetFrustumCulling(*_Overrides.FrustumCulling);
+            if (_Overrides.OcclusionCulling) Settings.SetOcclusionCulling(*_Overrides.OcclusionCulling);
             if (_Overrides.DerivedTemporalTransforms)
                 Settings.SetDerivedTemporalTransforms(*_Overrides.DerivedTemporalTransforms);
             if (_Overrides.SunShadows)
@@ -373,6 +380,8 @@ namespace SmileEditor {
         Out.GpuIndirectStatus         = S.GpuIndirectStatus;
         Out.GpuIndirectGpuReason      = S.GpuIndirectGpuReason;
         Out.GpuIndirectGpuCommands    = S.GpuIndirectGpuCommands;
+        Out.GpuFrustumRejected        = S.GpuFrustumRejected;
+        Out.GpuOcclusionRejected      = S.GpuOcclusionRejected;
         Out.GpuIndirectResidentBytes  = S.GpuIndirectResidentBytes;
         Out.GpuIndirectStagingBytes   = S.GpuIndirectStagingBytes;
         Out.GpuIndirectUploadBytes    = S.GpuIndirectUploadBytes;

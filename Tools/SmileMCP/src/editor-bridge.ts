@@ -42,7 +42,8 @@ import path from "node:path";
 // 13: derivedTemporalTransforms introduced the three-consumer A/B. After promotion, true is the
 // only executable arm; false is refused because the classic TransformBuffer no longer exists.
 // 14: main-view indirect A/B, per-pass ExecuteIndirect calls and delayed chain telemetry.
-const PROTOCOL_VERSION = 14;
+// 15: current-frame GPU frustum/HiZ A/B and separate rejection counters.
+const PROTOCOL_VERSION = 15;
 const DEFAULT_PIPE_NAME = "SmileEngine-MCP-v1";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -221,6 +222,8 @@ export interface CpuProfileStats {
     gpuStatus: number;
     gpuReason: number;
     gpuCommands: number;
+    frustumRejected: number;
+    occlusionRejected: number;
     residentBytes: number;
     stagingBytes: number;
     uploadBytes: number;
@@ -393,6 +396,9 @@ export interface ProfileOverrides {
   bindlessMaterials?: boolean;
   bindlessTransforms?: boolean;
   gpuIndirectMainView?: boolean;
+  gpuCulling?: boolean;
+  frustumCulling?: boolean;
+  occlusionCulling?: boolean;
   derivedTemporalTransforms?: boolean;
   sunShadows?: boolean;
   shadowCascadeCache?: boolean;
@@ -724,7 +730,7 @@ export class SmileEditorBridge {
       | Partial<CpuProfileStats["indirectMainView"]>
       | undefined;
     if (!indirect || typeof indirect !== "object") {
-      throw new Error("Snapshot de perfil sem o bloco cpu.indirectMainView (protocolo 14).");
+      throw new Error("Snapshot de perfil sem o bloco cpu.indirectMainView (protocolo 15).");
     }
     for (const campo of ["active", "countersValid"] as const) {
       if (typeof indirect[campo] !== "boolean") {
@@ -732,7 +738,7 @@ export class SmileEditorBridge {
       }
     }
     for (const campo of ["lastReason", "lastDetail", "outputs", "commands", "gpuStatus",
-                         "gpuReason", "gpuCommands"] as const) {
+                         "gpuReason", "gpuCommands", "frustumRejected", "occlusionRejected"] as const) {
       const valor = indirect[campo];
       if (!Number.isInteger(valor) || (valor as number) < 0 || (valor as number) > kU32Max) {
         throw new Error(`Snapshot de perfil com cpu.indirectMainView.${campo} invalido.`);

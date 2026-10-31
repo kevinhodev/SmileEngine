@@ -51,7 +51,7 @@
 // O QUE A SOMA DOS DESFECHOS PROVA, E O QUE ELA NAO PROVA
 // ==============================================================================================
 //
-// A soma dos nove contadores e igual ao numero de candidatos. Isso prova UM RESULTADO DE
+// A soma dos contadores e igual ao numero de candidatos. Isso prova UM RESULTADO DE
 // CLASSIFICACAO por candidato — nenhum caminho esquece de contar, nenhum conta duas vezes.
 //
 // NAO prova `draw indireto + draw CPU == 1`. Canario e "quem desenha" nao sao a mesma particao, e o
@@ -106,15 +106,18 @@ namespace Smile {
         // pelo mesmo lugar porque a porta e uma mascara so. POLITICA.
         GpuClassifyMeshUnusable   = 7,
         GpuClassifyOverflow          = 8, // lote fora da capacidade de BatchCounts — CANARIO
-        GpuClassifyOutcomeCount      = 9,
+        GpuClassifyFrustumRejected   = 9,
+        GpuClassifyOcclusionRejected = 10,
+        GpuClassifyOutcomeCount      = 11,
     };
 
     // CANARIO e tudo o que NAO esta na lista fechada dos desfechos que mantem o frame: o comando e as
-    // duas recusas de politica, que a CPU desenha pelo caminho classico. Um desfecho acrescentado sem
+    // recusas de politica e de visibilidade. Um desfecho acrescentado sem
     // passar por aqui nasce canario. Espelhado na finalizacao (FinalizeDrawCounts.cs.hlsl).
     inline bool GpuClassifyOutcomeIsCanary(u32 _Outcome) {
         return _Outcome != GpuClassifyIndirect && _Outcome != GpuClassifyNotEligible &&
-               _Outcome != GpuClassifyMeshUnusable;
+               _Outcome != GpuClassifyMeshUnusable && _Outcome != GpuClassifyFrustumRejected &&
+               _Outcome != GpuClassifyOcclusionRejected;
     }
 
     // O lote a que um comando pertence.
@@ -186,6 +189,8 @@ namespace Smile {
                                     std::span<const FGpuMeshRecord> _Meshes,
                                     u32 _PoolCount,
                                     FGpuClassifyCommand& _Out) {
+        if (_Slot == 0xFFFFFFFEu) return GpuClassifyFrustumRejected;
+        if (_Slot == 0xFFFFFFFDu) return GpuClassifyOcclusionRejected;
         if (_Slot == kGpuExpandNoSlot) return GpuClassifyNoSlot;
         if (_Slot >= _Meta.size())     return GpuClassifyInvalidSlot;
 

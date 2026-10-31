@@ -97,6 +97,8 @@ namespace Smile {
         void SetGpuIndirectMainView(bool Use);
         bool GetGpuIndirectMainView() const;
         bool GpuIndirectMainViewAvailable() const;
+        void SetGpuCulling(bool Use);
+        bool GetGpuCulling() const;
         // Experimental A/B for Phase 4 temporal reprojection. The three consumers move
         // together so a mixed frame cannot be mistaken for a valid comparison.
         void SetDerivedTemporalTransforms(bool Use);

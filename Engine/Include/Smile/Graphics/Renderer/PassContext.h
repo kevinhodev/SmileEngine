@@ -113,6 +113,7 @@ namespace Smile {
         // A cadeia expand/classify/scatter/finalize foi gravada e os passes deste frame devem
         // consumir os opacos elegiveis por ExecuteIndirect. Falso = caminho CPU inteiro.
         bool                        GpuIndirectMainView = false;
+        bool                        GpuCulling = false;
 
         // Fence da fila de COMPUTE assincrona. 0 = o DDGI rodou na fila direta neste frame (async
         // desligado, ou relocacao de sondas pedindo ordem estrita). Diferente do resto do

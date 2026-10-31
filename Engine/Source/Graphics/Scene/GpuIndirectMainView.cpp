@@ -14,7 +14,7 @@ namespace Smile {
     namespace {
         constexpr u32 kInvalidSlot = 0xFFFFFFFFu;
 
-        // A tabela de descritores de UM frame slot: os quatro passos em sequencia, cada um com as SRVs e
+        // A tabela de descritores de UM banco de passe/frame slot: os passos em sequencia, com SRVs e
         // depois as UAVs, na ordem dos registradores do shader.
         //
         //   expand:   t0 ranges  t1 prefixos  t2 candidatos  t3 meta                       u0 saidas  u1 contadores
@@ -32,7 +32,8 @@ namespace Smile {
         constexpr FPasso kClassify { 6u, 4u, 10u, 2u };
         constexpr FPasso kScatter  { 12u, 6u, 18u, 3u };
         constexpr FPasso kFinalize { 21u, 6u, 27u, 2u };
-        constexpr u32 kDescriptorsPerSlot = 29u;
+        constexpr FPasso kCull     { 29u, 2u, 31u, 1u };
+        constexpr u32 kDescriptorsPerSlot = 32u;
         static_assert(kExpand.Uav == kExpand.Srv + kExpand.NumSrv &&
                       kClassify.Srv == kExpand.Uav + kExpand.NumUav &&
                       kClassify.Uav == kClassify.Srv + kClassify.NumSrv &&
@@ -40,13 +41,22 @@ namespace Smile {
                       kScatter.Uav == kScatter.Srv + kScatter.NumSrv &&
                       kFinalize.Srv == kScatter.Uav + kScatter.NumUav &&
                       kFinalize.Uav == kFinalize.Srv + kFinalize.NumSrv &&
-                      kDescriptorsPerSlot == kFinalize.Uav + kFinalize.NumUav,
-                      "as tabelas dos quatro passos sao contiguas e cobrem o slot inteiro");
+                      kCull.Srv == kFinalize.Uav + kFinalize.NumUav &&
+                      kDescriptorsPerSlot == kCull.Uav + kCull.NumUav,
+                      "as tabelas dos passos sao contiguas e cobrem o banco inteiro");
 
         constexpr u32 kCbExpand = 0u, kCbClassify = 1u, kCbScatter = 2u, kCbFinalize = 3u;
-        constexpr u32 kCbsPerSlot = 4u;
+        constexpr u32 kCbCull = 4u;
+        constexpr u32 kCbsPerSlot = 5u;
         // Os dois `uint4` de cada cbuffer.
         constexpr u32 kCbBytes = 32u;
+        struct FCullConstants {
+            Mat44 ViewProjection;
+            u32 Outputs, BoundsCapacity, Frustum, Occlusion;
+            f32 Width, Height, Mips, Bias;
+        };
+        static_assert(sizeof(FCullConstants) == 96 && offsetof(FCullConstants, Outputs) == 64 &&
+                      offsetof(FCullConstants, Width) == 80);
 
         constexpr u64 kStatusBytes   = 2u * sizeof(u32);
         constexpr u64 kExpandBytes   = GpuExpandCounterCount * sizeof(u32);
@@ -93,6 +103,7 @@ namespace Smile {
         Initialized_ = false;
         ExpandPipeline_.Initialize(_Device, "ExpandInstanceRanges.cs_6_0.cso", kExpand.NumSrv,
                                    kExpand.NumUav);
+        CullPipeline_.Initialize(_Device, "CullCandidates.cs_6_0.cso", kCull.NumSrv, kCull.NumUav);
         ClassifyPipeline_.Initialize(_Device, "ClassifyCandidates.cs_6_0.cso", kClassify.NumSrv,
                                      kClassify.NumUav);
         ScatterPipeline_.Initialize(_Device, "ScatterIndirectArgs.cs_6_0.cso", kScatter.NumSrv,
@@ -151,12 +162,12 @@ namespace Smile {
             Zeros_ = GpuResources::CreateUploadBuffer(_Device, BytesDeZero, 1, /*ForConstantBuffer=*/false);
             std::memset(Zeros_.Mapped, 0, static_cast<size_t>(BytesDeZero));
 
-            ConstantBuffers_ = GpuResources::CreateUploadBuffer(_Device, kCbBytes,
-                                                                kCbsPerSlot * kFrameSlots, true);
+            ConstantBuffers_ = GpuResources::CreateUploadBuffer(_Device, sizeof(FCullConstants),
+                                                                kCbsPerSlot * kFrameSlots * 2, true);
             std::memset(ConstantBuffers_.Mapped, 0,
                         static_cast<size_t>(ConstantBuffers_.SliceBytes * ConstantBuffers_.SliceCount));
 
-            Readback_ = GpuResources::CreateReadbackBuffer(_Device, kReadbackPerSlot * kFrameSlots);
+            Readback_ = GpuResources::CreateReadbackBuffer(_Device, kReadbackPerSlot * kFrameSlots * 2);
             u8* Mapeado = nullptr;
             SMILE_HR(Readback_->Map(0, nullptr, reinterpret_cast<void**>(&Mapeado)));
             ReadbackMapped_ = Mapeado;
@@ -196,6 +207,14 @@ namespace Smile {
                 Srv(ExpandCounters_.Get(), GpuExpandCounterCount, Dword, Base + kFinalize.Srv + 5u);
                 UavView(DrawCounts_.Get(), LinhasDeLote, Dword, Base + kFinalize.Uav + 0u);
                 UavView(Status_.Get(), 2u, Dword, Base + kFinalize.Uav + 1u);
+                UavView(ExpandedSlots_.Get(), Slots, Dword, Base + kCull.Uav);
+                // Valid null texture for frustum-only dispatches; no HZB read occurs there.
+                D3D12_SHADER_RESOURCE_VIEW_DESC NullHzb{};
+                NullHzb.Format = DXGI_FORMAT_R32_FLOAT;
+                NullHzb.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                NullHzb.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                NullHzb.Texture2D.MipLevels = 1;
+                _Device->CreateShaderResourceView(nullptr, &NullHzb, _SRVHeap.CpuHandle(Base + kCull.Srv + 1));
             }
 
             AllRegionRows_.resize(LinhasDeLote);
@@ -224,6 +243,7 @@ namespace Smile {
         Built_        = false;
         Prepared_     = false;
         PreparedList_ = nullptr;
+        LateList_ = nullptr;
         for (u32& Base : DescriptorBase_) _SRVHeap.Release(Base, kDescriptorsPerSlot);
         CandidateStorage_.Release(_SRVHeap);
         RangeStorage_.Release(_SRVHeap);
@@ -277,6 +297,7 @@ namespace Smile {
                                       ID3D12GraphicsCommandList* _CommandList) {
         Prepared_     = false;
         PreparedList_ = nullptr;
+        LateList_     = nullptr;
         if (!Built_) return Refuse(GpuMainViewNotBuilt);
         if (!_CommandList) return Refuse(GpuMainViewNoCommandList);
 
@@ -345,17 +366,23 @@ namespace Smile {
                                      FTextureSRVHeap& _SRVHeap, const FGpuMaterialTable& _Materials,
                                      const FGpuMeshTable& _Meshes,
                                      const FGpuSceneInstanceTable& _Instances,
-                                     std::span<const FGpuIndirectPassSignature> _Passes) noexcept {
+                                     std::span<const FGpuIndirectPassSignature> _Passes,
+                                     const FGpuMainViewCull* _Cull, bool _Late) noexcept {
         const u32 Slot = _FrameSlot % kFrameSlots;
+        const u32 Bank = Slot + (_Late ? kFrameSlots : 0u);
         // O uso anterior deste slot ja executou — o BeginFrame esperou a fence dele —, entao o readback
         // que ele gravou esta completo. Telemetria: nada abaixo o consulta.
-        CollectGpuCounters(Slot);
+        CollectGpuCounters(Bank);
 
         if (!Built_) return Refuse(GpuMainViewNotBuilt);
-        const bool Preparada = Prepared_ && _CommandList != nullptr && PreparedList_ == _CommandList &&
+        const bool Preparada = (_Late ? LateList_ == _CommandList && LateFrameSlot_ == Slot :
+                                        Prepared_ && PreparedList_ == _CommandList) && _CommandList != nullptr &&
                                _Meshes.GeometryPools().size() == PreparedPools_;
-        Prepared_ = false;
+        if (!_Late) { Prepared_ = false; LateList_ = nullptr; }
         if (!Preparada) return Refuse(GpuMainViewNotPrepared);
+        if (_Cull && (_Instances.BoundsSrv() == kInvalidSlot ||
+            (_Cull->Occlusion && (_Cull->HzbSrv == kInvalidSlot || !_Cull->Mips || !_Cull->Width || !_Cull->Height))))
+            return Refuse(GpuMainViewNotBuilt);
 
         // ---- PORTAS: todas antes do primeiro comando da cadeia ----
 
@@ -436,7 +463,7 @@ namespace Smile {
         const u32 ScatterCb[8]  { Saidas, LinhasMeta, LinhasMat, LinhasMalha, Pools, SlotCapacity_,
                                   Layout.Version(), 0u };
         const u32 FinalizeCb[8] { Lotes, Saidas, 0u, 0u, 0u, 0u, 0u, 0u };
-        const u32 CbBase = Slot * kCbsPerSlot;
+        const u32 CbBase = Bank * kCbsPerSlot;
         std::memcpy(ConstantBuffers_.Slice(CbBase + kCbExpand), ExpandCb, kCbBytes);
         std::memcpy(ConstantBuffers_.Slice(CbBase + kCbClassify), ClassifyCb, kCbBytes);
         std::memcpy(ConstantBuffers_.Slice(CbBase + kCbScatter), ScatterCb, kCbBytes);
@@ -445,7 +472,7 @@ namespace Smile {
         // As views que moram em slots de OUTROS donos, copiadas para a tabela deste frame slot: o
         // `FGpuTableStorage::Create` reescreve a origem quando o recurso muda, e a copia do slot so e
         // reescrita depois da espera dele.
-        const u32 Base = DescriptorBase_[Slot];
+        const u32 Base = DescriptorBase_[Bank];
         auto Copiar = [&](u32 _Destino, u32 _Origem) {
             Device_->CopyDescriptorsSimple(1, _SRVHeap.CpuHandle(Base + _Destino),
                                            _SRVHeap.CpuHandleStaging(_Origem),
@@ -463,6 +490,15 @@ namespace Smile {
         Copiar(kScatter.Srv + 3u, MeshSrv);
         Copiar(kScatter.Srv + 4u, RegionStorage_.Srv());
         Copiar(kFinalize.Srv + 1u, RegionStorage_.Srv());
+        if (_Cull) {
+            const FCullConstants C{ _Cull->ViewProjection, Saidas, _Instances.Capacity(),
+                _Cull->Frustum ? 1u : 0u, _Cull->Occlusion ? 1u : 0u,
+                static_cast<f32>(_Cull->Width), static_cast<f32>(_Cull->Height),
+                static_cast<f32>(_Cull->Mips), 1e-5f };
+            std::memcpy(ConstantBuffers_.Slice(CbBase + kCbCull), &C, sizeof(C));
+            Copiar(kCull.Srv, _Instances.BoundsSrv());
+            if (_Cull->Occlusion) Copiar(kCull.Srv + 1u, _Cull->HzbSrv);
+        }
 
         auto Amarrar = [&](const FComputePipeline& _Pipeline, u32 _Cb, const FPasso& _Passo) {
             _Pipeline.Bind(_CommandList);
@@ -476,34 +512,44 @@ namespace Smile {
         const UINT Grupos = (Saidas + kThreadGroupSize - 1u) / kThreadGroupSize;
         const u64  BytesDeLote = static_cast<u64>(BatchRows_) * sizeof(u32);
 
-        // 0. RESET: os CINCO acumuladores — os contadores do expand tambem, agora que ele esta na cadeia.
-        // Um reset so, um dono so; sem ele, um frame vazio depois de um cheio publicaria os contadores do
-        // cheio.
+        // 0. RESET: cinco acumuladores no depth; late preserva expand/Slots do mesmo frame e reinicia
+        // os quatro acumuladores de classify/scatter. Um frame novo nunca herda contagens do anterior.
         {
             FBarrierBatch B;
-            B.Transition(ExpandCounters_.Get(), kCountersRestState, DEST);
+            if (!_Late) B.Transition(ExpandCounters_.Get(), kCountersRestState, DEST);
             B.Transition(ClassifyCounters_.Get(), kCountersRestState, DEST);
             B.Transition(ScatterCounters_.Get(), kCountersRestState, DEST);
             B.Transition(BatchCounts_.Get(), kBatchRestState, DEST);
             B.Transition(BatchCursors_.Get(), kBatchRestState, DEST);
             B.Flush(_CommandList);
         }
-        _CommandList->CopyBufferRegion(ExpandCounters_.Get(), 0, Zeros_.Get(), 0, kExpandBytes);
+        if (!_Late) _CommandList->CopyBufferRegion(ExpandCounters_.Get(), 0, Zeros_.Get(), 0, kExpandBytes);
         _CommandList->CopyBufferRegion(ClassifyCounters_.Get(), 0, Zeros_.Get(), 0, kClassifyBytes);
         _CommandList->CopyBufferRegion(ScatterCounters_.Get(), 0, Zeros_.Get(), 0, kScatterBytes);
         _CommandList->CopyBufferRegion(BatchCounts_.Get(), 0, Zeros_.Get(), 0, BytesDeLote);
         _CommandList->CopyBufferRegion(BatchCursors_.Get(), 0, Zeros_.Get(), 0, BytesDeLote);
 
-        // 1. expand. Os tres passos por candidato pulam o dispatch sem candidato, mas NAO as barreiras: o
-        // frame vazio termina nos mesmos estados de um cheio.
+        // 1. Expand no depth; late reutiliza seus slots (inclusive rejeitados pelo frustum). O frame
+        // vazio pula dispatches, mas nao barreiras nem finalizacao, e termina nos mesmos estados.
         {
             FBarrierBatch B;
             B.Transition(ExpandedSlots_.Get(), kExpandedRestState, UAV);
-            B.Transition(ExpandCounters_.Get(), DEST, UAV);
+            if (!_Late) B.Transition(ExpandCounters_.Get(), DEST, UAV);
             B.Flush(_CommandList);
         }
-        Amarrar(ExpandPipeline_, kCbExpand, kExpand);
-        if (Grupos > 0) _CommandList->Dispatch(Grupos, 1, 1);
+        if (!_Late) {
+            Amarrar(ExpandPipeline_, kCbExpand, kExpand);
+            if (Grupos > 0) _CommandList->Dispatch(Grupos, 1, 1);
+        }
+
+        if (_Cull) {
+            // Expand and cull both write Slots. Explicit UAV ordering before the in-place update.
+            FBarrierBatch B;
+            B.UAV(ExpandedSlots_.Get());
+            B.Flush(_CommandList);
+            Amarrar(CullPipeline_, kCbCull, kCull);
+            if (Grupos > 0) _CommandList->Dispatch(Grupos, 1, 1);
+        }
 
         // 2. classify. A saida do expand vira leitura: a barreira e o ponto de sincronizacao da secao 6.4.
         {
@@ -536,7 +582,7 @@ namespace Smile {
             B.Transition(ScatterCounters_.Get(), UAV, SRV);
             B.Transition(BatchCursors_.Get(), UAV, SRV);
             B.Transition(ClassifyCounters_.Get(), UAV, SRV);
-            B.Transition(ExpandCounters_.Get(), UAV, SRV);
+            B.Transition(ExpandCounters_.Get(), _Late ? kCountersRestState : UAV, SRV);
             B.Transition(DrawCounts_.Get(), kDrawCountsRestState, UAV);
             B.Transition(Status_.Get(), kCountersRestState, UAV);
             B.Flush(_CommandList);
@@ -556,7 +602,7 @@ namespace Smile {
             B.Transition(ScatterCounters_.Get(), SRV, kCountersRestState);
             B.Flush(_CommandList);
         }
-        const u64 Leitura = static_cast<u64>(Slot) * kReadbackPerSlot;
+        const u64 Leitura = static_cast<u64>(Bank) * kReadbackPerSlot;
         _CommandList->CopyBufferRegion(Readback_.Get(), Leitura + kReadStatus, Status_.Get(), 0, kStatusBytes);
         _CommandList->CopyBufferRegion(Readback_.Get(), Leitura + kReadExpand, ExpandCounters_.Get(), 0,
                                        kExpandBytes);
@@ -564,7 +610,9 @@ namespace Smile {
                                        kClassifyBytes);
         _CommandList->CopyBufferRegion(Readback_.Get(), Leitura + kReadScatter, ScatterCounters_.Get(), 0,
                                        kScatterBytes);
-        ReadbackPending_[Slot] = true;
+        ReadbackPending_[Bank] = true;
+        LateList_ = _Late ? nullptr : _CommandList;
+        LateFrameSlot_ = Slot;
 
         ++Stats_.ChainsRecorded;
         Stats_.LastReason        = GpuMainViewOk;
@@ -597,11 +645,11 @@ namespace Smile {
     }
 
     u64 FGpuIndirectMainView::ReadbackBytes() const {
-        return Readback_ ? kReadbackPerSlot * kFrameSlots : 0u;
+        return Readback_ ? kReadbackPerSlot * kFrameSlots * 2 : 0u;
     }
 
     u32 FGpuIndirectMainView::DescriptorCount() const {
         // Os quatro SRVs dos buffers que sobem, e a tabela de cada frame slot.
-        return Built_ ? 4u + kDescriptorsPerSlot * kFrameSlots : 0u;
+        return Built_ ? 4u + kDescriptorsPerSlot * kFrameSlots * 2 : 0u;
     }
 }

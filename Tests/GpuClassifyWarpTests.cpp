@@ -791,7 +791,7 @@ namespace {
     }
     // ---- parte CPU pura: UM RESULTADO DE CLASSIFICACAO por candidato --------------------------
     //
-    // A soma dos nove contadores tem de dar o numero de candidatos. Isso pega um caminho que esquece
+    // A soma dos contadores tem de dar o numero de candidatos. Isso pega um caminho que esquece
     // de contar e um que conta duas vezes — e so isso.
     //
     // Nao confundir com "desenhado exatamente uma vez": esse e outro invariante, sobre outra
@@ -2649,11 +2649,12 @@ int main() try {
         for (u32 O = 0; O < GpuClassifyOutcomeCount; ++O)
             if (GpuClassifyOutcomeIsCanary(O)) CanariosL += ContL[O];
         CheckEq(CanariosL, 0u, "lista limpa: nenhum canario");
-        // A particao, desfecho a desfecho: so os tres que mantem o frame nao sao canario.
+        // A particao inclui as duas rejeicoes de visibilidade introduzidas na Fase 6.
         for (u32 O = 0; O < GpuClassifyOutcomeCount; ++O)
             Check(GpuClassifyOutcomeIsCanary(O) ==
                       (O != GpuClassifyIndirect && O != GpuClassifyNotEligible &&
-                       O != GpuClassifyMeshUnusable),
+                       O != GpuClassifyMeshUnusable && O != GpuClassifyFrustumRejected &&
+                       O != GpuClassifyOcclusionRejected),
                   std::string("particao politica/canario em ") + NomeDesfecho(O));
     }
 

@@ -17,7 +17,7 @@
 #define SMILE_EXPAND_COUNTER_OVERFLOW     3u // nao coube na capacidade da saida
 #define SMILE_EXPAND_COUNTER_COUNT        4u
 
-// Do CLASSIFY. Espelha EGpuClassifyOutcome; o teste WARP le os nove de volta.
+// Do CLASSIFY. Espelha EGpuClassifyOutcome; o teste WARP le todos de volta.
 //
 // Moram aqui, e nao no GpuClassifyShared.hlsli, porque a finalizacao precisa deles e nao pode incluir
 // aquele header: ele declara as tabelas em t1..t3, que na finalizacao sao outros buffers.
@@ -30,7 +30,9 @@
 #define SMILE_CLASSIFY_NOT_ELIGIBLE        6u
 #define SMILE_CLASSIFY_MESH_UNUSABLE       7u
 #define SMILE_CLASSIFY_OVERFLOW            8u
-#define SMILE_CLASSIFY_OUTCOME_COUNT       9u
+#define SMILE_CLASSIFY_FRUSTUM_REJECTED    9u
+#define SMILE_CLASSIFY_OCCLUSION_REJECTED  10u
+#define SMILE_CLASSIFY_OUTCOME_COUNT       11u
 
 // A REGIAO de um lote em `IndirectArgs`: `[Offset, Offset + Capacity)`. Espelha FGpuIndirectRegion.
 //

@@ -1605,12 +1605,25 @@ namespace Smile {
             {
                 FGpuScope Scope(Backend->DirectProfiler, CommandList, "HZB");
                 HiZ.RecordBuild(CommandList, Backend->SRVHeap, Targets.DepthSRVSlot);
-                HiZ.RecordTest(CommandList, Backend->SRVHeap, FrameSlot, Vw.ViewProjUnjittered);
+                if (!_Ctx.GpuCulling)
+                    HiZ.RecordTest(CommandList, Backend->SRVHeap, FrameSlot, Vw.ViewProjUnjittered);
             }
             Batch.Transition(Targets.DepthBuffer.Get(),
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_DEPTH_WRITE);
             Batch.Flush(CommandList);
+        }
+
+        if (_Ctx.GpuCulling && HiZ.IsReady() && UseOcclusionCulling) {
+            FGpuScope Scope(Backend->DirectProfiler, CommandList, "GPU culling - late");
+            const FGpuIndirectPassSignature Pass{ PipelineState.IndirectDrawSignature(),
+                                                  GpuPipelineClassOpaqueOneSided };
+            const FGpuMainViewCull Cull{ Vw.ViewProjection, UseFrustumCulling, true,
+                RenderWidth(), RenderHeight(), HiZ.MipCount(), HiZ.ChainSRVSlot() };
+            const u32 Result = IndirectMainView.Record(CommandList, FrameSlot, Backend->SRVHeap,
+                MaterialTable, MeshTable, InstanceTable, std::span(&Pass, 1), &Cull, true);
+            // A refused late chain leaves the conservative depth stream intact.
+            if (Result != GpuMainViewOk) LogError("GPU late culling refused; using depth stream");
         }
 
         if (AO.IsReady()) {
@@ -2151,7 +2164,7 @@ namespace Smile {
         {
             const std::vector<FRenderable>& RList = SceneState->Scene.Renderables();
             AllItems.reserve(RList.size());
-            const bool WriteOcclusionBounds = UseOcclusionCulling && HiZ.ObjectsReady();
+            const bool WriteOcclusionBounds = !_Ctx.GpuCulling && UseOcclusionCulling && HiZ.ObjectsReady();
             if (WriteOcclusionBounds) HiZ.BeginFrame(FrameSlot, SceneState->Scene.GpuSlots());
             for (size_t si = 0; si < RList.size(); ++si) {
                 const FRenderable& R = RList[si];
@@ -2206,12 +2219,17 @@ namespace Smile {
         auto& CpuFallback    = _Ctx.CpuFallback;
         VisibleScratch.reserve(AllItems.size());
         if (_Ctx.GpuIndirectMainView) CpuFallback.reserve(AllItems.size());
+        const bool PickingNeedsCpuList = ObjectPicker.HasPendingRequest();
         for (const FDrawItem& A : AllItems) {
+            // The GPU owns supported main-view visibility. Only an actual picking request
+            // needs those objects in the CPU list; shadows use AllItems independently.
+            const bool GpuObject = _Ctx.GpuCulling && GpuIndirectDraws(A.R->Mesh, A.R->Material);
+            if (GpuObject && !PickingNeedsCpuList) continue;
             if (UseFrustumCulling && Vw.AABBOutsideFrustum(A.R->AABBMin, A.R->AABBMax)) continue;
             // Objeto selecionado nunca e cullado (gizmo/drag move mais rapido que a
             // latencia do readback e o pop incomodaria bem aqui). Handles sem resultado
             // na captura consumida ficam visiveis, inclusive residencias novas.
-            if (UseOcclusionCulling && !HiZ.IsVisible(A.R->GpuHandle) &&
+            if (!_Ctx.GpuCulling && UseOcclusionCulling && !HiZ.IsVisible(A.R->GpuHandle) &&
                 static_cast<int>(A.SceneIndex) != SelectedRenderable) {
                 ++OccludedCount;
                 continue;
@@ -2223,7 +2241,8 @@ namespace Smile {
                 A.R, A.Mat, cx*cx + cy*cy + cz*cz, A.Slot, A.SceneIndex
             };
             VisibleScratch.push_back(Visible);
-            if (_Ctx.GpuIndirectMainView && !GpuIndirectDraws(A.R->Mesh, A.R->Material))
+            if (_Ctx.GpuIndirectMainView &&
+                !(_Ctx.GpuCulling ? GpuObject : GpuIndirectDraws(A.R->Mesh, A.R->Material)))
                 CpuFallback.push_back(Visible);
         }
         std::sort(VisibleScratch.begin(), VisibleScratch.end(),

@@ -34,6 +34,35 @@
 
 ## 1. Visão geral
 
+### Atualização do main view — Fase 6 (2026-10-31)
+
+`gpuCulling` é um eixo de A/B sobre `gpuIndirectMainView` (ambos continuam desligados por
+default). O depth usa os candidatos expandidos e um teste de frustum na GPU. Depois do prepass,
+`FHiZOcclusion::RecordBuild` constrói o HZB reverse-Z atual; a cadeia tardia usa esse HZB para
+reduzir os comandos do G-buffer. A projeção de culling é a mesma matriz **jitterada** que escreveu
+o depth. Bounds cruzando o near plane, envolvendo a câmera, inválidos ou degenerados permanecem
+conservadoramente visíveis; o retângulo de oclusão é arredondado para fora e recebe um pixel de folga.
+
+`FGpuIndirectMainView` mantém um conjunto de recursos DEFAULT na fila direta. Os draws de depth
+terminam antes de a cadeia tardia reutilizar args/counts. A cadeia tardia preserva a expansão,
+incluindo os rejeitados de frustum; reinicia contagens e cursores, testa oclusão e republica os
+counts. Constantes, descritores e readback possuem **dois bancos por frame slot**, para gravar
+depth e late sem sobrescrever memória que a GPU ainda vai ler na mesma lista.
+
+As sentinelas de frustum/oclusão são desfechos de política compartilhados por classify e scatter;
+a contabilidade continua ancorada no total de candidatos. Canários continuam zerando todo o count
+buffer. Recusa CPU antes de gravar late preserva o stream conservador do depth.
+
+Quando o culling GPU está ativo, o renderer não grava o teste legado de visibilidade nem usa seu
+readback para filtrar draws; tampouco há exceção de objeto selecionado nesse braço. Masked,
+two-sided, blend, terreno e água conservam submissão CPU e frustum CPU, sem oclusão atrasada.
+O protocolo MCP 15 expõe o toggle efetivo, frustum/oclusão e os dois contadores de rejeição. Esses
+contadores são telemetria atrasada, sem participação nas decisões de draw.
+No braço GPU, o culling/sort CPU visita apenas as exceções. Um pedido real de picking inclui os
+opacos suportados na lista CPU naquele frame, para preservar a seleção sem readback de visibilidade.
+`VisibleItems` mede essa lista CPU; comandos GPU têm contador próprio. As sombras ainda usam
+`AllItems`, até a Fase 7.
+
 A SmileEngine é uma engine pessoal de aprendizado/render sobre **DirectX 12**, com
 **deferred shading** + **ray tracing por DXR 1.1 inline (RayQuery)**. É dividida em
 quatro artefatos:

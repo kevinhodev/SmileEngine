@@ -920,25 +920,30 @@ namespace Smile {
                                    "vale mais para a lista do frame");
 
         bool IndirectActive = false;
+        ObjectPicker.Tick();
+
+        IUpscaler* ActiveUp = ActiveUpscaler();
+        const FEffectiveIndirectPolicy Policy = ResolveIndirectPolicy();
+        const FFrameModes Modes = ResolveFrameModes(Policy);
+        const FFrameView  Vw = ResolveFrameView(Modes, ActiveUp);
         if (IndirectPrepared) {
+            FGpuScope IndirectScope(Backend->DirectProfiler, Backend->DirectQueue.List(),
+                                    "GPU main-view stream - depth");
             const FGpuIndirectPassSignature MainViewPass{
                 PipelineState.IndirectDrawSignature(), GpuPipelineClassOpaqueOneSided
             };
             const std::span<const FGpuIndirectPassSignature> IndirectPasses(&MainViewPass, 1u);
+            const FGpuMainViewCull Cull{ Vw.ViewProjection, UseFrustumCulling, false,
+                RenderWidth(), RenderHeight(), 0u, 0xFFFFFFFFu };
             IndirectActive =
                 IndirectMainView.Record(Backend->DirectQueue.List(),
                                         Backend->DirectQueue.FrameIndex(), Backend->SRVHeap,
-                                        MaterialTable, MeshTable, InstanceTable, IndirectPasses) ==
+                                        MaterialTable, MeshTable, InstanceTable, IndirectPasses,
+                                        UseGpuCulling ? &Cull : nullptr) ==
                 GpuMainViewOk;
         }
 
-        ObjectPicker.Tick();
-
-        IUpscaler* ActiveUp = ActiveUpscaler();
         // FFrameModes deriva desta unica politica efetiva do frame.
-        const FEffectiveIndirectPolicy Policy = ResolveIndirectPolicy();
-        const FFrameModes Modes = ResolveFrameModes(Policy);
-        const FFrameView  Vw    = ResolveFrameView(Modes, ActiveUp);
         FrameState->LastViewProj = Vw.ViewProjUnjittered;
 
         const u32 FrameSlot = Backend->DirectQueue.FrameIndex();
@@ -975,6 +980,7 @@ namespace Smile {
 
         FPassContext Ctx = MakePassContext(Modes, Policy, Vw, Lt, Amb, FrameSlot);
         Ctx.GpuIndirectMainView = IndirectActive;
+        Ctx.GpuCulling = IndirectActive && UseGpuCulling;
         // Aliases sobre o contexto — NAO copias. Sobrevivem a migracao porque os poucos blocos que
         // continuam inline aqui embaixo sao estrutura de FRAME, nao passe: a espera do fence da
         // fila assincrona, o clear dos alvos de instrumentacao e os dois ganchos de debug. Nenhum
@@ -1162,6 +1168,8 @@ namespace Smile {
         CpuStatsBuilding.GpuIndirectGpuReason      = IndirectGpu.Reason;
         CpuStatsBuilding.GpuIndirectGpuCommands =
             IndirectGpu.Classify[GpuClassifyIndirect];
+        CpuStatsBuilding.GpuFrustumRejected = IndirectGpu.Classify[GpuClassifyFrustumRejected];
+        CpuStatsBuilding.GpuOcclusionRejected = IndirectGpu.Classify[GpuClassifyOcclusionRejected];
         CpuStatsBuilding.GpuIndirectResidentBytes = IndirectMainView.ResidentBytes();
         CpuStatsBuilding.GpuIndirectStagingBytes  = IndirectMainView.StagingBytes();
         CpuStatsBuilding.GpuIndirectUploadBytes   = IndirectMainView.UploadBytes();

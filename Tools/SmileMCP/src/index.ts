@@ -210,6 +210,8 @@ function summarizeProfile(snapshots: ProfileSnapshot[], includeSamples: boolean)
           gpuStatus: cpuStats.at(-1)?.indirectMainView.gpuStatus ?? null,
           gpuReason: cpuStats.at(-1)?.indirectMainView.gpuReason ?? null,
           gpuCommands: summarize(cpuStats.map((c) => c.indirectMainView.gpuCommands)),
+          frustumRejected: summarize(cpuStats.map((c) => c.indirectMainView.frustumRejected)),
+          occlusionRejected: summarize(cpuStats.map((c) => c.indirectMainView.occlusionRejected)),
           residentBytes: cpuStats.at(-1)?.indirectMainView.residentBytes ?? null,
           stagingBytes: cpuStats.at(-1)?.indirectMainView.stagingBytes ?? null,
           uploadBytes: cpuStats.at(-1)?.indirectMainView.uploadBytes ?? null,
@@ -948,6 +950,11 @@ server.registerTool(
         .describe(
           "A/B da Fase 5: opacos suportados por ExecuteIndirect (true) ou submissao CPU (false). Exige bindlessMaterials e bindlessTransforms ligados; settings confirma o estado efetivo e passes[].indirectCalls prova as chamadas.",
         ),
+      gpuCulling: z.boolean().nullish().describe(
+        "Fase 6: frustum GPU antes do depth e HZB do frame atual antes do G-buffer. Exige gpuIndirectMainView; readback serve somente a telemetria.",
+      ),
+      frustumCulling: z.boolean().nullish().describe("Ativa o teste de frustum no braço corrente."),
+      occlusionCulling: z.boolean().nullish().describe("Ativa HiZ: atual na GPU ou legado por readback no braço CPU."),
       derivedTemporalTransforms: z
         .boolean()
         .nullish()

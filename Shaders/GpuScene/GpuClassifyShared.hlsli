@@ -24,6 +24,8 @@
 
 // Posicao sem candidato. TEM de valer o mesmo que o SMILE_EXPAND_NO_SLOT do produtor.
 #define SMILE_CLASSIFY_NO_SLOT_ID 0xFFFFFFFFu
+#define SMILE_CULL_FRUSTUM_ID 0xFFFFFFFEu
+#define SMILE_CULL_OCCLUSION_ID 0xFFFFFFFDu
 
 StructuredBuffer<GpuInstanceMeta>   InstanceMeta : register(t1);
 StructuredBuffer<GpuMaterialRecord> Materials    : register(t2);
@@ -64,6 +66,8 @@ GpuClassifyResult GpuClassifyOne(uint _Slot, uint _MetaCount, uint _MaterialCoun
     R.Args.BaseVertexLocation    = 0;
     R.Args.StartInstanceLocation = 0u;
 
+    if (_Slot == SMILE_CULL_FRUSTUM_ID) { R.Outcome = SMILE_CLASSIFY_FRUSTUM_REJECTED; return R; }
+    if (_Slot == SMILE_CULL_OCCLUSION_ID) { R.Outcome = SMILE_CLASSIFY_OCCLUSION_REJECTED; return R; }
     if (_Slot == SMILE_CLASSIFY_NO_SLOT_ID) { R.Outcome = SMILE_CLASSIFY_NO_SLOT;      return R; }
     if (_Slot >= _MetaCount)                { R.Outcome = SMILE_CLASSIFY_INVALID_SLOT; return R; }
 

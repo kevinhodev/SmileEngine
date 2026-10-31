@@ -1156,6 +1156,7 @@ namespace Smile {
         bool              UseBindlessTransforms = false;
         // Submissao indireta do main view (Fase 5), desligada por default para preservar o A/B.
         bool              UseGpuIndirectMainView = false;
+        bool              UseGpuCulling = false;
 
         FHiZOcclusion     HiZ; // occlusion culling HZB (build + teste + readback ring)
         bool              UseOcclusionCulling = true;

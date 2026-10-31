@@ -111,6 +111,7 @@ namespace Smile {
         // diferente teriam manifestos identicos — que e exatamente o par que esta sob teste.
         bool BindlessTransforms = false;
         bool GpuIndirectMainView = false;
+        bool GpuCulling = false;
         // The three temporal consumers are one A/B arm; recording only the raster toggle
         // would give identical provenance to captures produced by different reprojection paths.
         bool DerivedTemporalTransforms = false;

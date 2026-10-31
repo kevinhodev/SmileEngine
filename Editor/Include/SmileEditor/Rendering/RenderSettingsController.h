@@ -67,6 +67,9 @@ namespace SmileEditor {
         bool   BindlessTransforms          = false;
         bool   BindlessTransformsAvailable = false;
         bool   GpuIndirectMainView          = false;
+        bool   GpuCulling                   = false;
+        bool   FrustumCulling               = true;
+        bool   OcclusionCulling             = true;
         bool   GpuIndirectMainViewAvailable = false;
         bool   DerivedTemporalTransforms          = false;
         bool   DerivedTemporalTransformsAvailable = false;
@@ -109,6 +112,9 @@ namespace SmileEditor {
         std::optional<bool> BindlessMaterials;
         std::optional<bool> BindlessTransforms;
         std::optional<bool> GpuIndirectMainView;
+        std::optional<bool> GpuCulling;
+        std::optional<bool> FrustumCulling;
+        std::optional<bool> OcclusionCulling;
         std::optional<bool> DerivedTemporalTransforms;
         std::optional<bool> SunShadows;
         std::optional<bool> ShadowCascadeCache;
@@ -210,6 +216,8 @@ namespace SmileEditor {
         quint32 GpuIndirectStatus         = 0;
         quint32 GpuIndirectGpuReason      = 0;
         quint32 GpuIndirectGpuCommands    = 0;
+        quint32 GpuFrustumRejected        = 0;
+        quint32 GpuOcclusionRejected      = 0;
         quint64 GpuIndirectResidentBytes  = 0;
         quint64 GpuIndirectStagingBytes   = 0;
         quint64 GpuIndirectUploadBytes    = 0;

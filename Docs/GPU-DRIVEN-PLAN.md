@@ -1691,6 +1691,16 @@ frustum-visible ou até todos os candidatos para maximizar depuração.
 
 ## Fase 6 — Culling GPU e HiZ residente
 
+> **Implementação em 2026-10-31, autorizada pelo proprietário ao Codex.** O eixo `gpuCulling`
+> acrescenta frustum antes do depth e oclusão contra o HZB atual antes do G-buffer, sobre o stream
+> da Fase 5. O passe tardio reutiliza a expansão/frustum do depth, com constantes e descritores
+> separados por passe/frame slot. No braço GPU, não há consulta ou gravação da visibilidade HiZ
+> legada; as exceções CPU conservam apenas frustum. O culling/sort CPU dos opacos suportados só
+> reaparece em um pedido real de picking. Os dois toggles continuam desligados por default.
+> Testes e evidências estão em [GPU-DRIVEN-PHASE6-PROGRESS.md](GPU-DRIVEN-PHASE6-PROGRESS.md).
+> A promoção depende também da rodada final de custo e comparação de pixels; código implementado
+> não substitui esse gate.
+
 ### Objetivo
 
 Mover frustum e oclusão para a GPU, eliminar o readback do HiZ como decisão de frame e manter

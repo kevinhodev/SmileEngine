@@ -150,7 +150,7 @@ namespace Smile {
         // --- Cena (o denominador de tudo acima)
         u32 Renderables      = 0; // total na cena
         u32 DrawItems        = 0; // aceitos no frame (visivel, malha valida, nao so-RT)
-        u32 VisibleItems     = 0; // sobreviventes de frustum + oclusao
+        u32 VisibleItems     = 0; // itens da lista CPU; no culling GPU, so fallback (+ picking sob demanda)
         u32 OccludedItems    = 0;
         u32 Materials        = 0;
         u32 Meshes           = 0;
@@ -247,6 +247,8 @@ namespace Smile {
         u32  GpuIndirectStatus         = 0;
         u32  GpuIndirectGpuReason      = 0;
         u32  GpuIndirectGpuCommands    = 0;
+        u32  GpuFrustumRejected        = 0;
+        u32  GpuOcclusionRejected      = 0;
         u64  GpuIndirectResidentBytes  = 0;
         u64  GpuIndirectStagingBytes   = 0;
         u64  GpuIndirectUploadBytes    = 0;

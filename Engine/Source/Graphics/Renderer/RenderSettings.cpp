@@ -202,6 +202,14 @@ namespace Smile {
         return R.GpuIndirectMainViewReady();
     }
 
+    void FRenderSettings::SetGpuCulling(bool _Use) {
+        R.UseGpuCulling = _Use;
+        R.HiZ.InvalidateResults();
+    }
+    bool FRenderSettings::GetGpuCulling() const {
+        return R.UseGpuCulling && GetGpuIndirectMainView();
+    }
+
     void FRenderSettings::SetDerivedTemporalTransforms(bool _Use) {
         const bool Available = DerivedTemporalTransformsAvailable();
         if (!_Use) {
