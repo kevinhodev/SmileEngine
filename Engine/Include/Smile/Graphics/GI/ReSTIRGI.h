@@ -186,6 +186,12 @@ namespace Smile {
                                          BackfacePolicy = V; }
         bool GetBackfacePolicy() const { return BackfacePolicy; }
         bool GetFoliageShadows() const { return FoliageShadows; }
+        // OMM em 2-state forcado nos raios do ReSTIR GI (gather, revalidacao, visibilidade e
+        // sombras no hit). Muda o Lo gravado no reservoir, entao invalida como o FoliageShadows.
+        // O radiance cache herda daqui, pelo mesmo motivo do ShadowRayMask. Quem liga e o
+        // Renderer (knob + guarda de cobertura); ver Docs/OMM-AUDIT.md, P0.
+        void SetOmm2State(bool V) { if (V != Omm2State) InvalidateHistory(); Omm2State = V; }
+        bool GetOmm2State() const { return Omm2State; }
         // O passe espacial não realimenta o histórico temporal.
         void SetSpatial(bool V)    { Spatial = V; }
         bool GetSpatial() const    { return Spatial; }
@@ -298,6 +304,7 @@ namespace Smile {
         bool Spatial        = true;   // reuso espacial (off = só temporal = A2)
         bool UseNrd         = false;  // denoise via NRD RELAX (Fase C); off = ReSTIR cru no deferred
         bool FoliageShadows = true;   // folhagem nos shadow rays do hit (mask GATHER vs OPAQUE)
+        bool Omm2State      = false;  // RAY_FLAG_FORCE_OMM_2_STATE nos raios do passe
         bool BackfacePolicy = false;  // retrace + terminacao preta no verso one-sided (ver setter)
         bool MISVisibility  = false;  // optional visibility in the spatial MIS denominator
         bool Visibility     = true;   // final shading visibility, with or without spatial reuse

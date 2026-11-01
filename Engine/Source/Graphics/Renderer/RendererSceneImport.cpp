@@ -736,6 +736,8 @@ namespace Smile {
         const Clock::time_point GIStart = Clock::now();
         const auto GiCreationBase = GpuResources::CreationStats();
         SetupGIForScene(sceneMin, sceneMax);
+        // A cobertura de OMM da cena nova decide se o 2-state do GI pode ficar ligado.
+        RefreshOmmGI2State();
         const double msGI = MsSince(GIStart);
         GpuResources::AccumulatePhase(PhaseSum, "commit/setupGI", GiCreationBase);
 

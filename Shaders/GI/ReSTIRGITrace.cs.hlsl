@@ -149,9 +149,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     ray.Direction = dir;
     ray.TMin      = 0.0f;
     ray.TMax      = TraceParams.y;
+    // Politica de OMM do passe (EnvironmentSky.w), a mesma em TODO trace deste shader — gather,
+    // retrace, revalidacao, visibilidade e sombras no hit: um raio que ve a folhagem em 2-state
+    // num trace e em 4-state no seguinte compara geometrias diferentes.
+    const uint ommFlags = SMILE_OmmRayFlags(EnvironmentSky.w);
     // Sem culling: a política abaixo precisa classificar o verso.
     RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
-    q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
+    q.TraceRayInline(Scene, RAY_FLAG_NONE | ommFlags, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
@@ -164,6 +168,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.AlbedoLOD      = ShadeParams.y;
     P.NumLights      = (int)JitterParams.z; // F5
     P.ShadowRayMask  = (uint)SunColor.w;
+    P.OmmRayFlags    = ommFlags;
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
     P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
     P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
@@ -198,7 +203,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                                                                skipDist = kSelfIsectBackfaceDist;
         if (skipDist > 0.0f) {
             ray.TMin = skipDist;
-            q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
+            q.TraceRayInline(Scene, RAY_FLAG_NONE | ommFlags, SMILE_RT_MASK_GATHER, ray);
             SMILE_RT_PROCEED(q)
             ray.TMin = 0.0f; // a origem nao mudou; so o intervalo daquela consulta
             backface = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&
@@ -334,7 +339,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
                         vray.TMax      = TraceParams.y;
                         // Revalidação precisa reencontrar a mesma superfície.
                         RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> vq;
-                        vq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, vray);
+                        vq.TraceRayInline(Scene, RAY_FLAG_NONE | ommFlags, SMILE_RT_MASK_GATHER, vray);
                         SMILE_RT_PROCEED(vq)
 
                         // Aplica a mesma política de backface do gather.
@@ -356,7 +361,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
                             if (vSkip > 0.0f) {
                                 vray.TMin = vSkip;
-                                vq.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, vray);
+                                vq.TraceRayInline(Scene, RAY_FLAG_NONE | ommFlags, SMILE_RT_MASK_GATHER, vray);
                                 SMILE_RT_PROCEED(vq)
                                 vray.TMin = 0.0f;
                                 vBack = (vq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) &&

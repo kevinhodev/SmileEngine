@@ -280,6 +280,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.SkyIntensity = TraceParams.z; P.MaxRayDist = TraceParams.y;
         P.AlbedoLOD = ReflectParams.w;
         P.NumLights = (int)CameraPos.w; P.ShadowRayMask = (uint)SunColor.w;
+        P.OmmRayFlags = 0u; // reflexo fica em 4-state: a silhueta da folhagem e VISTA
         P.ReGIRGridMin = ReGIRGridMinSlots.xyz;
         P.ReGIRSlotsPerCell = (uint)ReGIRGridMinSlots.w;
         P.ReGIRInvCellSize = ReGIRInvCellEnabled.xyz;

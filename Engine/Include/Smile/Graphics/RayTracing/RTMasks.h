@@ -26,4 +26,9 @@ namespace Smile {
     constexpr u32 kRTMaskShadowFast  = kRTMaskOpaque;  // pula folhagem: traversal pura
     constexpr u32 kRTMaskShadowFull  = kRTMaskGather;  // folhagem sombreia via alpha-test
 
+    // D3D12_RAY_FLAG_FORCE_OMM_2_STATE, para os CBs dos passes de GI. Valor repetido aqui porque
+    // este header nao inclui d3d12.h; o static_assert mora em DDGI.cpp. O shader mascara o que
+    // chega (SMILE_OmmRayFlags), entao so este bit atravessa o CB.
+    constexpr u32 kRTRayFlagForceOmm2State = 0x400u;
+
 } // namespace Smile

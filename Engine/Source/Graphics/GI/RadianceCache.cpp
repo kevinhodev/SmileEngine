@@ -2,6 +2,7 @@
 #include "Smile/Graphics/Backend/D3D12/GpuResources.h"
 #include "Smile/Graphics/Backend/D3D12/TextureSRVHeap.h"
 #include "Smile/Graphics/Backend/D3D12/CommandQueue.h"
+#include "Smile/Graphics/RayTracing/RTMasks.h"
 #include "Smile/Graphics/Renderer/FrameContext.h"
 #include "Smile/Graphics/Renderer/SceneTargets.h"
 #include "Smile/Graphics/Debug/DebugTargets.h"
@@ -580,7 +581,7 @@ namespace Smile {
                                             f32 SunIntensity, const Vec3& SunColor,
                                             u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
                                             f32 MaxRayDist, u32 PunctualLightCount,
-                                            bool BackfacePolicy) {
+                                            bool BackfacePolicy, bool Omm2State) {
         UpdateDispatchX = UpdateDispatchY = 0;
         if (!UpdateReady || !MappedUpdateCB) return;
         UpdateFrameSlot = InFrameSlot;
@@ -603,7 +604,10 @@ namespace Smile {
                               static_cast<f32>(ShadowRayMask) };
         U.TraceParams     = { static_cast<f32>(FrameIndex), MaxRayDist, SkyIntensity,
                               RayEps.HitShadowRayBias };
-        U.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+        // .y = ray flags de OMM do passe (0 ou FORCE_OMM_2_STATE). O shader mascara o bit.
+        U.PolicyParams    = { BackfacePolicy ? 1.0f : 0.0f,
+                              Omm2State ? static_cast<f32>(kRTRayFlagForceOmm2State) : 0.0f,
+                              0.0f, 0.0f };
 
         // Fracao -> celulas do tile 5x5. O piso de 1 e deliberado: com o passe ligado e fracao
         // arredondando para zero, nenhum caminho sairia e a tabela envelheceria ate o despejo com

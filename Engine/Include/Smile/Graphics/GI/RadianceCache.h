@@ -343,11 +343,13 @@ namespace Smile {
         // resolvidos); a gravacao acontece depois do G-buffer.
         // BackfacePolicy vem de FORA (o toggle do ReSTIR GI) e nao e knob desta classe: o cache
         // alimenta o ReSTIR GI, e duas politicas de geometria diferentes fariam a mesma superficie
-        // ter duas radiancias conforme o caminho. Mesmo criterio do ShadowRayMask.
+        // ter duas radiancias conforme o caminho. Mesmo criterio do ShadowRayMask — e do
+        // Omm2State, o RAY_FLAG_FORCE_OMM_2_STATE que tambem vem do ReSTIR GI.
         void UpdatePassPerFrame(u32 InFrameSlot, const Mat44& InvViewProj, const Vec3& CameraPos,
                                 const Vec3& SunDir, f32 SunIntensity, const Vec3& SunColor,
                                 u32 ShadowRayMask, u32 FrameIndex, f32 SkyIntensity,
-                                f32 MaxRayDist, u32 PunctualLightCount, bool BackfacePolicy);
+                                f32 MaxRayDist, u32 PunctualLightCount, bool BackfacePolicy,
+                                bool Omm2State);
         void RecordUpdate(ID3D12GraphicsCommandList* CL, FTextureSRVHeap& SRVHeap);
 
         // Recursos do passe montados (tabelas validas). Nao diz que ele roda neste frame.

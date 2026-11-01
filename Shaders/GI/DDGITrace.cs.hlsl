@@ -119,9 +119,12 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     ray.TMin      = 0.0f;
     ray.TMax      = maxT;
 
+    // Politica de OMM do passe (EnvironmentSky.w): 4-state, ou 2-state quando o Renderer liga.
+    const uint ommFlags = SMILE_OmmRayFlags(EnvironmentSky.w);
     RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
-    // RAY_FLAG_NONE preserva backfaces para detectar sondas enterradas.
-    q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
+    // RAY_FLAG_NONE preserva backfaces para detectar sondas enterradas. O 2-state nao mexe nisso:
+    // ele so decide o UNKNOWN do micro-map, nao o culling.
+    q.TraceRayInline(Scene, RAY_FLAG_NONE | ommFlags, SMILE_RT_MASK_GATHER, ray);
     SMILE_RT_PROCEED(q)
 
     FHitShadeParams P;
@@ -135,6 +138,7 @@ void main(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID) {
     P.AlbedoLOD      = 4.0f;
     P.NumLights      = (int)MiscParams2.y;
     P.ShadowRayMask  = (uint)MiscParams2.z;
+    P.OmmRayFlags    = ommFlags;
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
     P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
     P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;

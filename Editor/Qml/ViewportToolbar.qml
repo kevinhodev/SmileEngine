@@ -589,9 +589,11 @@ Rectangle {
         x: leftTools.x + viewModeButton.x
         y: root.height
         width: 280
-        height: 396
+        height: 424
         padding: 0
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        // Estado que muda sem toggle (o 2-state de OMM bloqueia/libera no load de cena).
+        onAboutToShow: root.renderModel.RefreshGISettings()
         onClosed: {
             if (debugTargetPopup.opened) debugTargetPopup.close()
         }
@@ -661,29 +663,38 @@ Rectangle {
                 checked: root.renderModel.giFoliageShadows
                 onToggled: root.renderModel.ToggleGIFoliageShadows()
             }
+            // Pedido x valendo: o C++ so liga com a cena toda coberta por micro-map (.somm).
             ToggleRow {
                 x: 8; y: 234; width: 264; height: 28
+                label: "OMM 2-state no GI"
+                detail: !root.renderModel.giOmm2State ? "sem alpha-test"
+                        : (root.renderModel.giOmm2StateActive ? "ativo" : "bloqueado: sem .somm")
+                checked: root.renderModel.giOmm2State
+                onToggled: root.renderModel.ToggleGIOmm2State()
+            }
+            ToggleRow {
+                x: 8; y: 262; width: 264; height: 28
                 label: "GTAO"
                 checked: root.renderModel.gtaoEnabled
                 onToggled: root.renderModel.ToggleGTAO()
             }
             ToggleRow {
-                x: 8; y: 262; width: 264; height: 28
+                x: 8; y: 290; width: 264; height: 28
                 label: "GTAO meia-res"; detail: "upsample bilateral"
                 checked: root.renderModel.gtaoHalfRes
                 onToggled: root.renderModel.ToggleGTAOHalfRes()
             }
 
-            Rectangle { x: 14; y: 294; width: 252; height: 1; color: C.Theme.hairline }
+            Rectangle { x: 14; y: 322; width: 252; height: 1; color: C.Theme.hairline }
             Text {
-                x: 14; y: 304
+                x: 14; y: 332
                 text: "Reflexos"
                 color: root.textMuted
                 font.family: C.Theme.fontFamily
                 font.pixelSize: 11
             }
             ToggleRow {
-                x: 8; y: 322; width: 264; height: 28
+                x: 8; y: 350; width: 264; height: 28
                 label: "Reflexos RT"
                 checked: root.renderModel.reflectionsEnabled
                 onToggled: root.renderModel.ToggleReflections()
@@ -691,9 +702,9 @@ Rectangle {
             // O denoiser (Nenhum/NRD/DLSS Ray Reconstruction) saiu daqui: virou seletor na pagina
             // Renderizacao (Configuracoes), pois RR e uma escolha de 3 estados que acopla o upscaler.
 
-            Rectangle { x: 14; y: 354; width: 252; height: 1; color: C.Theme.hairline }
+            Rectangle { x: 14; y: 382; width: 252; height: 1; color: C.Theme.hairline }
             Rectangle {
-                x: 8; y: 360; width: 264; height: 28; radius: 5
+                x: 8; y: 388; width: 264; height: 28; radius: 5
                 color: settingsHover.hovered ? C.Theme.raisedOn : "transparent"
                 Text {
                     x: 8

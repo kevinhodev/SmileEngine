@@ -179,6 +179,7 @@ void main(uint3 DTid : SV_DispatchThreadID) {
         P.AlbedoLOD      = ReflectParams.w;
         P.NumLights      = (int)CameraPos.w; // F5 (w da CameraPos era constante 1.0, livre)
         P.ShadowRayMask  = (uint)SunColor.w;
+        P.OmmRayFlags    = 0u; // reflexo fica em 4-state: a silhueta da folhagem e VISTA
         P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
         P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
         P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;

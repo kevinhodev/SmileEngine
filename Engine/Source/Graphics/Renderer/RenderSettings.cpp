@@ -894,6 +894,17 @@ namespace Smile {
         OnGIHitSamplingChanged();
     }
 
+    // A fonte da verdade do PEDIDO e o Renderer, nao um passe: o estado efetivo depende da
+    // cobertura de OMM da cena, que so ele enxerga. O fan-out e a invalidacao moram la.
+    bool FRenderSettings::GetGIOmm2State() const { return R.OmmGI2StateRequested_; }
+    void FRenderSettings::SetGIOmm2State(bool _V) {
+        if (_V == R.OmmGI2StateRequested_) return;
+        R.OmmGI2StateRequested_ = _V;
+        R.RefreshOmmGI2State();
+    }
+    bool FRenderSettings::IsGIOmm2StateActive() const { return R.OmmGI2StateActive_; }
+    u64  FRenderSettings::GetOmmUnknownTriangles() const { return R.OmmUnknownTriangles_; }
+
     bool FRenderSettings::GetGIVisibility() const { return R.ReSTIRGI.GetVisibility(); }
     void FRenderSettings::SetGIVisibility(bool _V) {
         if (_V == R.ReSTIRGI.GetVisibility()) return;
@@ -1358,7 +1369,7 @@ namespace Smile {
         // primeiro leitor, inclusive o da fila de compute, que so e submetido depois de um
         // segmento posterior desta mesma lista.
         R.MaterialTable.MarkDirty();
-        R.SceneState->TlasFlagsDirty = true; // mask/FORCE_NON_OPAQUE/culling saem do material
+        R.SceneState->TlasFlagsDirty = true; // mask/culling saem do material (opacidade e do OMM)
         // E os historicos acumulados sobre a aparencia antiga.
         Invalidate(Dom::MaterialRTState);
     }

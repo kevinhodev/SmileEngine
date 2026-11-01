@@ -364,6 +364,14 @@ namespace SmileEditor {
         return Renderer && Renderer->Settings().GetGIFoliageShadows();
     }
 
+    bool RenderSettingsBridge::IsGIOmm2StateRequested() const {
+        return Renderer && Renderer->Settings().GetGIOmm2State();
+    }
+
+    bool RenderSettingsBridge::IsGIOmm2StateActive() const {
+        return Renderer && Renderer->Settings().IsGIOmm2StateActive();
+    }
+
     bool RenderSettingsBridge::IsGIAdaptiveHysteresisEnabled() const {
         return Renderer && Renderer->Settings().GetGIAdaptiveHysteresis();
     }
@@ -885,6 +893,17 @@ namespace SmileEditor {
         Settings.SetGIFoliageShadows(!Settings.GetGIFoliageShadows());
         emit GISettingsChanged();
     }
+
+    void RenderSettingsBridge::ToggleGIOmm2State() {
+        if (!Renderer) return;
+        auto RendererAccess = Renderer.Lock();
+        // A guarda de cobertura e o fan-out para os passes de GI moram no Renderer.
+        auto& Settings = RendererAccess->Settings();
+        Settings.SetGIOmm2State(!Settings.GetGIOmm2State());
+        emit GISettingsChanged();
+    }
+
+    void RenderSettingsBridge::RefreshGISettings() { emit GISettingsChanged(); }
 
     void RenderSettingsBridge::ToggleGIAdaptiveHysteresis() {
         if (!Renderer) return;

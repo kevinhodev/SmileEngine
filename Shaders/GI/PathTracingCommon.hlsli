@@ -295,7 +295,8 @@ float3 PT_ShadeDirectSun(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParam
         sray.TMax      = P.MaxRayDist;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                  RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> sq;
-        sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, sray);
+        sq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | P.OmmRayFlags,
+                          P.ShadowRayMask, sray);
         SMILE_RT_PROCEED(sq)
         vis = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
     }
@@ -340,7 +341,7 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
             lray.TMin = RayEpsB.x; lray.TMax = lTMax;
             RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                      RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> lq;
-            lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+            lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | P.OmmRayFlags,
                               P.ShadowRayMask, lray);
             SMILE_RT_PROCEED(lq)
             if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
@@ -381,7 +382,8 @@ void PT_AddDirectLocal(FHitSurface S, FHitMaterial M, float3 V, FHitShadeParams 
         lray.TMax      = lTMax;
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                  RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> lq;
-        lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, P.ShadowRayMask, lray);
+        lq.TraceRayInline(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | P.OmmRayFlags,
+                          P.ShadowRayMask, lray);
         SMILE_RT_PROCEED(lq)
         if (lq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) directLighting += contrib;
       }
@@ -459,9 +461,13 @@ float3 PT_ComposeIndirect(FHitSurface S, FHitMaterial M, float3 V, float3 indire
 // ⚠️ DUAS COPIAS DESTA POLITICA existem hoje no ReSTIRGITrace.cs.hlsl (gather e revalidacao),
 // escritas antes desta funcao. Elas devem migrar para ca — mas em commit proprio, com a
 // comparacao de DXIL que a serie usa, porque mexer nelas e mexer no caminho de RENDER.
+//
+// `rayFlags` e a politica de OMM do trace ORIGINAL (SMILE_OmmRayFlags): o retrace e o mesmo raio
+// e tem de ver a mesma geometria — um retrace em 4-state depois de um trace em 2-state acharia
+// folhagem onde o primeiro nao achou.
 bool PT_ResolveSelfIntersection(
     inout RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q,
-    inout RayDesc ray, uint mask) {
+    inout RayDesc ray, uint mask, uint rayFlags) {
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
 
     bool twoSided;
@@ -476,7 +482,7 @@ bool PT_ResolveSelfIntersection(
     if (skipDist > 0.0f) {
         const float tmin = ray.TMin;
         ray.TMin = skipDist;
-        q.TraceRayInline(Scene, RAY_FLAG_NONE, mask, ray);
+        q.TraceRayInline(Scene, rayFlags, mask, ray);
         SMILE_RT_PROCEED(q)
         ray.TMin = tmin; // a origem nao mudou; so o intervalo daquela consulta
         // Re-classifica SO aqui: no caminho comum a classificacao de cima ja vale, e o

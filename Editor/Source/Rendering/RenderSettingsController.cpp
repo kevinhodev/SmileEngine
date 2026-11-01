@@ -144,6 +144,9 @@ namespace SmileEditor {
         FGIStatusSnapshot Out;
         Out.FrameIndex             = _Renderer.GetFrameIndex();
         Out.Settings               = CollectSettings(_Renderer);
+        Out.Omm2StateRequested     = Settings.GetGIOmm2State();
+        Out.Omm2StateActive        = Settings.IsGIOmm2StateActive();
+        Out.OmmUnknownTriangles    = Settings.GetOmmUnknownTriangles();
         Out.ReSTIRGIHalfRes        = ReSTIRGI.GetHalfRes();
         Out.ReSTIRGIHalfResEffective = ReSTIRGI.HalfResEffective();
         Out.ReSTIRGIRenderWidth    = static_cast<int>(ReSTIRGI.TraceWidth());
@@ -623,6 +626,8 @@ namespace SmileEditor {
                 Settings.SetIndirectPrimary(*_Overrides.IndirectPrimary);
             if (_Overrides.IndirectFallback)
                 Settings.SetIndirectFallback(*_Overrides.IndirectFallback);
+            if (_Overrides.Omm2State)
+                Settings.SetGIOmm2State(*_Overrides.Omm2State);
 
             // Readback no mesmo lock. Desired/actual separados denunciam uma realocacao que nao
             // materializou, e requested/effective denunciam degradacao da politica.

@@ -304,6 +304,7 @@ export interface GIConfigureOverrides {
   halfRes?: boolean;
   adaptiveRays?: boolean;
   adaptiveHysteresis?: boolean;
+  omm2State?: boolean;
 }
 
 export interface GICascadeStatus {

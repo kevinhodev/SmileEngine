@@ -710,8 +710,12 @@ namespace Smile {
         CPU.RadianceCacheLodCapFlags = RadianceCacheParams.LodCapacityFlags;
         CPU.RadianceCacheResources   = RadianceCacheParams.Resources;
         CPU.SkyParams             = SkyLutParams;
+        // .w = ray flags de OMM do passe (0 ou FORCE_OMM_2_STATE). O shader mascara o bit.
+        static_assert(kRTRayFlagForceOmm2State == D3D12_RAY_FLAG_FORCE_OMM_2_STATE,
+                      "kRTRayFlagForceOmm2State tem de espelhar o D3D12");
         CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
-                                      GIHit.EnvironmentSky.Z, 0.0f };
+                                      GIHit.EnvironmentSky.Z,
+                                      Omm2State ? static_cast<f32>(kRTRayFlagForceOmm2State) : 0.0f };
         CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
                                       GIHit.EnvironmentGround.Z, 0.0f };
 

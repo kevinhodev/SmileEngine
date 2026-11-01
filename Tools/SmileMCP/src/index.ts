@@ -755,6 +755,9 @@ server.registerTool(
       halfRes: z.boolean().nullish(),
       adaptiveRays: z.boolean().nullish(),
       adaptiveHysteresis: z.boolean().nullish(),
+      // PEDIDO de OMM 2-state nos raios de GI. O status devolve omm2State.active: so liga com
+      // zero triangulos mascarados sem micro-map (sidecar .somm atual).
+      omm2State: z.boolean().nullish(),
       timeoutSeconds: z.number().min(1).max(120).default(30),
     },
     annotations: {

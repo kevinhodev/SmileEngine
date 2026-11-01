@@ -494,6 +494,12 @@ namespace SmileEditor {
 
             return QJsonObject{
                 { QStringLiteral("frameIndex"), static_cast<double>(_Status.FrameIndex) },
+                { QStringLiteral("omm2State"), QJsonObject{
+                    { QStringLiteral("requested"), _Status.Omm2StateRequested },
+                    { QStringLiteral("active"), _Status.Omm2StateActive },
+                    { QStringLiteral("unknownTriangles"),
+                      static_cast<double>(_Status.OmmUnknownTriangles) },
+                } },
                 { QStringLiteral("policy"), QJsonObject{
                     { QStringLiteral("primary"), QJsonObject{
                         { QStringLiteral("requested"), IndirectPrimaryName(
@@ -1088,7 +1094,8 @@ namespace SmileEditor {
             ReadOptionalBool(_Arguments, "halfRes", Overrides.HalfRes) &&
             ReadOptionalBool(_Arguments, "adaptiveRays", Overrides.AdaptiveRays) &&
             ReadOptionalBool(_Arguments, "adaptiveHysteresis",
-                             Overrides.AdaptiveHysteresis);
+                             Overrides.AdaptiveHysteresis) &&
+            ReadOptionalBool(_Arguments, "omm2State", Overrides.Omm2State);
         if (!Valid) {
             Reply(_Socket, _Id, false,
                   QJsonObject{ { QStringLiteral("error"),

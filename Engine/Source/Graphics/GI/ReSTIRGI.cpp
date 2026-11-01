@@ -324,8 +324,11 @@ namespace Smile {
         CPU.GICascades               = GICascadesCPU;
         CPU.SkyParams             = SkyLutParams;
         CPU.MeshLightCoverage     = MeshLightCoverageParams;
+        // .w = ray flags de OMM do passe (0 ou FORCE_OMM_2_STATE), lido tambem pelo Spatial —
+        // mesmo CB. O shader mascara o bit.
         CPU.EnvironmentSky        = { GIHit.EnvironmentSky.X, GIHit.EnvironmentSky.Y,
-                                      GIHit.EnvironmentSky.Z, 0.0f };
+                                      GIHit.EnvironmentSky.Z,
+                                      Omm2State ? static_cast<f32>(kRTRayFlagForceOmm2State) : 0.0f };
         CPU.EnvironmentGround     = { GIHit.EnvironmentGround.X, GIHit.EnvironmentGround.Y,
                                       GIHit.EnvironmentGround.Z, 0.0f };
 

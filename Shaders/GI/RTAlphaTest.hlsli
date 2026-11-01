@@ -12,9 +12,12 @@
 // heap-directly-indexed (ResourceDescriptorHeap). O payload por triangulo vem bindless via
 // InstanceGeo.TriangleSrv.
 //
-// Instancias com AlphaTest sao marcadas FORCE_NON_OPAQUE na TLAS (RaytracingScene.cpp) e cada
-// candidato nao-opaco amostra albedo.a vs cutoff. Sem isto, cards de folhagem seriam quads
-// solidos (partes transparentes pretas + auto-sombra chapada).
+// Geometria alpha-tested entra na BLAS com Opacity Micro-Map (OMM 4-state), e nenhuma instancia
+// tem flag de opacidade na TLAS (RaytracingScene.cpp, CollectInstances). Quem decide e o
+// micro-map: microtriangulo opaco ou transparente o hardware resolve sozinho, e so o UNKNOWN chega
+// aqui como candidato nao-opaco, que amostra albedo.a vs cutoff. Sem isto, cards de folhagem
+// seriam quads solidos (partes transparentes pretas + auto-sombra chapada). (Este comentario
+// dizia que as instancias eram marcadas FORCE_NON_OPAQUE; nao sao desde o OMM.)
 //
 // ⚠️ ESTE E O CAMINHO MAIS QUENTE dos que migraram, e por um motivo que nao e obvio: ele roda por
 // CANDIDATO de travessia (ver SMILE_RT_PROCEED), nao por hit comitado. Em folhagem um raio gera
@@ -37,6 +40,22 @@ bool AlphaTestPass(uint instId, uint tri, float2 bary) {
     // < 1 (fade de LOD, dissolve) sumia da tela e continuava SOLIDO para os raios — sombra, oclusao
     // de GI e reflexo de uma geometria que o raster ja tinha descartado.
     return albedoTex.SampleLevel(LinearWrap, uv, 0.0f).a * mat.BaseColor.a >= mat.AlphaCutoff;
+}
+
+// A POLITICA DE OMM de um passe, como chega do CB (float). Devolve 0 (4-state: o UNKNOWN passa
+// pelo alpha-test acima) ou RAY_FLAG_FORCE_OMM_2_STATE (o hardware resolve o UNKNOWN pelo bit
+// O/T e nenhum candidato chega ao SMILE_RT_PROCEED). MASCARADO: so este bit atravessa o CB, entao
+// um valor qualquer ali nunca injeta outra ray flag.
+//
+// Vai no argumento de RUNTIME do TraceRayInline, nao no template do RayQuery: as flags efetivas
+// sao o OR das duas, e o template so precisa de RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS (proposta
+// HLSL 0024) — que todos ja tem. Assim o tipo do RayQuery nao muda e a politica e um knob.
+//
+// Quem pode ligar: so os passes de GI (DDGI, ReSTIR GI, radiance cache), e so com a cena toda
+// coberta por micro-map — o 2-state transforma FULLY_UNKNOWN_OPAQUE em opaco solido. Reflexos e
+// ReSTIR DI ficam em 4-state. Ver Docs/OMM-AUDIT.md, P0.
+uint SMILE_OmmRayFlags(float packed) {
+    return ((uint)packed) & RAY_FLAG_FORCE_OMM_2_STATE;
 }
 
 // Drena a traversal honrando o alpha-test: opacos auto-comitam; candidatos nao-opacos so comitam

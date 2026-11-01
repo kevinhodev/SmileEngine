@@ -105,6 +105,10 @@ namespace SmileEditor {
         Q_PROPERTY(int indirectFallback READ GetIndirectFallback NOTIFY GISettingsChanged)
         Q_PROPERTY(bool restirGIVisibilityEnabled READ IsReSTIRGIVisibilityEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giFoliageShadows READ AreGIFoliageShadowsEnabled NOTIFY GISettingsChanged)
+        // Pedido x valendo: o 2-state so liga com a cena toda coberta por micro-map, e isso muda
+        // sozinho num load de cena — por isso o popup pede RefreshGISettings ao abrir.
+        Q_PROPERTY(bool giOmm2State READ IsGIOmm2StateRequested NOTIFY GISettingsChanged)
+        Q_PROPERTY(bool giOmm2StateActive READ IsGIOmm2StateActive NOTIFY GISettingsChanged)
         Q_PROPERTY(bool reflectionsCullBackface READ IsReflectionsCullBackfaceEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giBackfacePolicy READ IsGIBackfacePolicyEnabled NOTIFY GISettingsChanged)
         Q_PROPERTY(bool giAdaptiveHysteresis READ IsGIAdaptiveHysteresisEnabled NOTIFY GISettingsChanged)
@@ -236,6 +240,8 @@ namespace SmileEditor {
         QString           GetRadianceCacheMissBreakdown() const;
         bool              IsReSTIRGIVisibilityEnabled() const;
         bool              AreGIFoliageShadowsEnabled() const;
+        bool              IsGIOmm2StateRequested() const;
+        bool              IsGIOmm2StateActive() const;
         bool              IsReflectionsCullBackfaceEnabled() const;
         bool              IsGIBackfacePolicyEnabled() const;
         bool              IsGIAdaptiveHysteresisEnabled() const;
@@ -279,6 +285,9 @@ namespace SmileEditor {
         Q_INVOKABLE void RefreshRadianceCacheStats();
         Q_INVOKABLE void ToggleReSTIRGIVisibility();
         Q_INVOKABLE void ToggleGIFoliageShadows();
+        Q_INVOKABLE void ToggleGIOmm2State();
+        // Reemite GISettingsChanged: estado que muda sem toggle (load de cena) chega a UI.
+        Q_INVOKABLE void RefreshGISettings();
         Q_INVOKABLE void ToggleReflectionsCullBackface();
         Q_INVOKABLE void ToggleGIBackfacePolicy();
         Q_INVOKABLE void ToggleGIAdaptiveHysteresis();

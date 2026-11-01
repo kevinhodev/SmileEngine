@@ -342,6 +342,12 @@ namespace Smile {
         void SetFoliageShadows(bool V) { FoliageShadows = V; }
         bool GetFoliageShadows() const { return FoliageShadows; }
 
+        // OMM em 2-state forcado nos raios do DDGI (sondas e sombras no hit): o hardware resolve o
+        // estado UNKNOWN pelo bit O/T, sem alpha-test. Quem liga e o Renderer, pelo knob
+        // GIOmm2State COM a guarda de cobertura — nunca direto. Ver Docs/OMM-AUDIT.md, P0.
+        void SetOmm2State(bool V) { Omm2State = V; }
+        bool GetOmm2State() const { return Omm2State; }
+
         void SetRelocation(bool V) { Relocation = V; RelocateFramesLeft = V ? kRelocateConvergeFrames : 4; }
         bool GetRelocation() const { return Relocation; }
 
@@ -560,7 +566,8 @@ namespace Smile {
         Vec4               SkyLutParams{};
         f32  MaxRayDist   = 0.0f;
         bool FoliageShadows = true;
-        bool Relocation     = true; 
+        bool Omm2State      = false;
+        bool Relocation     = true;
         f32  DeactivationThreshold = 0.20f; 
         bool AdaptiveRays   = true;
         int  MaxRays        = 64;

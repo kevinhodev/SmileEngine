@@ -46,6 +46,9 @@ cbuffer ReSTIRCB : register(b0) {
     float4 GICascadeScrollOffset[4];
     float4 TraceScreenParams;
     float4 ResolutionParams;
+    // Mesmo offset do ReSTIRGITrace (vem logo depois do ResolutionParams la). So o .w e lido
+    // aqui: a politica de OMM, pela visibilidade (ReSTIRGIVisibility.hlsli).
+    float4 EnvironmentSky;
 };
 
 #include "../RayOffset.hlsli" // depois do cbuffer: le RayEpsA/RayEpsB

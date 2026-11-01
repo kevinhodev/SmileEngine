@@ -28,6 +28,9 @@ struct FHitShadeParams {
     uint   ShadowRayMask; // instance mask dos shadow rays: GATHER = folhagem sombreia (alpha-test
                           // por candidato); OPAQUE = pula folhagem (rapido, traversal pura).
                           // Nenhum dos dois inclui TRANSLUCENT — vidro nao faz sombra dura.
+    uint   OmmRayFlags;   // politica de OMM dos raios DO HIT (sombras): 0 = 4-state, ou
+                          // RAY_FLAG_FORCE_OMM_2_STATE. Do dono do passe, via SMILE_OmmRayFlags —
+                          // GI pode ligar, reflexos passam 0. TODO dono tem de preencher.
     float3 ReGIRGridMin;       uint ReGIRSlotsPerCell;
     float3 ReGIRInvCellSize;   bool ReGIREnabled;
     int3   ReGIRGridCount;     int  ReGIRSampleCount;

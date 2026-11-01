@@ -167,7 +167,7 @@ namespace Smile {
 
         // O TLAS vive relativo a camera (Cyberpunk 2077, GPU Zen 3, sec. 7.3.1): mover a camera
         // muda a translacao de TODAS as instancias, mesmo quando o mundo autoral ficou parado.
-        // TlasFlagsDirty cobre ainda mask/FORCE_NON_OPAQUE/two-sided de material.
+        // TlasFlagsDirty cobre ainda mask/two-sided de material (opacidade e do OMM, nao flag da TLAS).
         if (RaytracingScene.IsBuilt() &&
             (SceneState->Scene.TransformsVersion() != SceneState->TlasTransformsVersion ||
              SceneState->TlasFlagsDirty ||
@@ -333,7 +333,7 @@ namespace Smile {
                 Lt.KeyDir, Lt.KeyInt, Lt.KeyColor,
                 ReSTIRGI.GetFoliageShadows() ? kRTMaskShadowFull : kRTMaskShadowFast,
                 FrameState->TemporalSampleIndex, Lt.RainSkyDim, DDGI.MaxRayDistance(), GILightCount,
-                ReSTIRGI.GetBackfacePolicy());
+                ReSTIRGI.GetBackfacePolicy(), ReSTIRGI.GetOmm2State());
         }
     }
 

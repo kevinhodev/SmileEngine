@@ -17,6 +17,7 @@
 #include "Smile/Core/HResultCheck.h"
 #include "Smile/Core/Logger.h"
 #include <cstring>
+#include <unordered_set>
 #include <vector>
 #include <algorithm>
 #include <exception>
@@ -351,7 +352,7 @@ namespace Smile {
         for (const auto& [Mesh, Omm] : Forget) RaytracingScene.ForgetBlas(Mesh, Omm);
 
         // O snapshot por instancia nao carrega micro-map, mas a TLAS carrega: mask,
-        // FORCE_NON_OPAQUE e o proprio endereco do BLAS saem daqui.
+        // culling e o proprio endereco do BLAS saem daqui (opacidade e do OMM).
         SceneState->TlasFlagsDirty = true;
         // A aparencia mudou para os raios; os historicos acumulados sobre a antiga nao valem.
         Settings().NotifyMaterialRTStateChanged();
@@ -359,7 +360,39 @@ namespace Smile {
         if (!Rebaked.empty() || BuiltBlas > 0)
             LogInfo("[OMM] Rebake em runtime: " + std::to_string(Rebaked.size()) +
                     " par(es) rebakeado(s), " + std::to_string(BuiltBlas) + " BLAS reconstruido(s)");
+        // O rebake do editor e de RUNTIME, com teto: pode devolver triangulos UNKNOWN numa cena
+        // que estava toda coberta pelo sidecar. A guarda do 2-state tem de ver isso.
+        RefreshOmmGI2State();
         return static_cast<u32>(Rebaked.size());
+    }
+
+    void Renderer::RefreshOmmGI2State() {
+        // Por micro-map UNICO: as N instancias de um par (malha, material) compartilham o bake.
+        std::unordered_set<const FOpacityMicromapData*> Seen;
+        u64 Unknown = 0;
+        if (SceneState)
+            for (const FRenderable& R : SceneState->Scene.Renderables()) {
+                if (!R.Material || !R.Material->Constants.AlphaTest || !R.OpacityMicromap) continue;
+                if (Seen.insert(R.OpacityMicromap.get()).second)
+                    Unknown += R.OpacityMicromap->Coverage.FullyUnknownTriangles;
+            }
+        OmmUnknownTriangles_ = Unknown;
+
+        const bool Active = OmmGI2StateRequested_ && Unknown == 0;
+        if (OmmGI2StateRequested_ && !Active)
+            LogWarning("[OMM] 2-state no GI pedido, mas " + std::to_string(Unknown) +
+                       " triangulos mascarados estao sem micro-map: o 2-state os tornaria opacos "
+                       "solidos. Mantendo 4-state. Rode SmileOmmBaker na cena");
+        // Empurrado SEMPRE, e nao so na mudanca: um setup de cena que recrie o estado de um passe
+        // no default nao pode deixar a flag do passe divergindo da guarda.
+        DDGI.SetOmm2State(Active);
+        ReSTIRGI.SetOmm2State(Active); // o radiance cache herda daqui, no UpdatePassPerFrame
+        if (Active == OmmGI2StateActive_) return;
+        OmmGI2StateActive_ = Active;
+        // Muda a visibilidade dos raios de GI, e com ela o Lo gravado nas sondas e no reservoir:
+        // e a mesma invalidacao do FoliageShadows.
+        Settings().OnGIHitSamplingChanged();
+        LogInfo(std::string("[OMM] 2-state no GI ") + (Active ? "LIGADO" : "desligado"));
     }
 
     // Volta as ENTRADAS do bake para as que o micro-map existente descreve, quando o rebake nao

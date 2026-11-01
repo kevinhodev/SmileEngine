@@ -728,6 +728,19 @@ namespace Smile {
         // existe para impedir.
         std::shared_ptr<FOpacityMicromapData> BakeOpacityMicromapFor(const FGpuMesh* Mesh,
                                                                      const FMaterial* Material);
+
+        // A GUARDA do OMM 2-state no GI. O knob (FRenderSettings::SetGIOmm2State) so PEDE; quem
+        // liga e isto, e so com ZERO triangulos mascarados sem micro-map na cena: o 2-state
+        // transforma o FULLY_UNKNOWN_OPAQUE em opaco solido, e os cards de folhagem virariam
+        // quadrados para o GI. Recontada quando o conjunto de micro-maps muda (load de cena,
+        // rebake do editor) e quando o knob muda. Ver Docs/OMM-AUDIT.md, P0.
+        void RefreshOmmGI2State();
+        // Pedido LIGADO por default (decisao de 2026-10-31, apos o A/B no Bistro: -0,33 ms no
+        // ReSTIR GI, -0,10 ms no DDGI, imagem igual a menos de folhagem em 0,37% dos pixels). A
+        // guarda e o que torna o default seguro: cena sem .somm atual fica em 4-state e avisa.
+        bool OmmGI2StateRequested_ = true;
+        bool OmmGI2StateActive_    = false;
+        u64  OmmUnknownTriangles_  = 0;
         // Reconstrucao completa; drena as filas e exige command list fechado.
         void RebuildMeshLights();
         void SetupGIForScene(const Vec3& AABBMin, const Vec3& AABBMax);

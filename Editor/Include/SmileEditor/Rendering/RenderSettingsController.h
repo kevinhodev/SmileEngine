@@ -288,6 +288,8 @@ namespace SmileEditor {
         std::optional<bool> HalfRes;
         std::optional<bool> AdaptiveRays;
         std::optional<bool> AdaptiveHysteresis;
+        // OMM 2-state nos raios de GI. E um PEDIDO: o status devolve se esta valendo.
+        std::optional<bool> Omm2State;
     };
 
     struct FVolFogOverrides {
@@ -317,6 +319,11 @@ namespace SmileEditor {
     struct FGIStatusSnapshot {
         quint64 FrameIndex = 0;
         FRenderSettingsSnapshot Settings;
+        // Pedido x valendo do OMM 2-state, e o que o bloqueia: triangulos mascarados sem
+        // micro-map. Um A/B do 2-state que nao declara os tres nao prova que o braco ligou.
+        bool    Omm2StateRequested  = false;
+        bool    Omm2StateActive     = false;
+        quint64 OmmUnknownTriangles = 0;
         bool ReSTIRGIHalfRes = false;
         bool ReSTIRGIHalfResEffective = false;
         int  ReSTIRGIRenderWidth = 0;

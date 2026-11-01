@@ -340,6 +340,15 @@ namespace Smile {
         bool GetGIFoliageShadows() const;
         void SetGIFoliageShadows(bool V);
 
+        // OMM em 2-state forcado nos raios do GI (DDGI, ReSTIR GI, radiance cache): o hardware
+        // resolve o UNKNOWN do micro-map sem alpha-test. Reflexos e ReSTIR DI ficam em 4-state.
+        // O knob so PEDE: liga de fato apenas com zero triangulos mascarados sem micro-map na
+        // cena (Renderer::RefreshOmmGI2State). Active diz se esta valendo agora.
+        bool GetGIOmm2State() const;
+        void SetGIOmm2State(bool V);
+        bool IsGIOmm2StateActive() const;
+        u64  GetOmmUnknownTriangles() const;
+
         // Reuso de visibilidade do ReSTIR GI. Nao toca o reservoir (so o Pass B e o resolve),
         // por isso nao limpa reservoir — ver ReSTIRGI.h.
         bool GetGIVisibility() const;

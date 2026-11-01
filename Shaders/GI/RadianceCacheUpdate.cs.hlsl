@@ -265,6 +265,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     P.AlbedoLOD      = ShadeParams.y;
     P.NumLights      = (int)ShadeParams.x;
     P.ShadowRayMask  = (uint)SunColor.w;
+    // Politica de OMM do passe (PolicyParams.y), herdada do ReSTIR GI como o ShadowRayMask: o
+    // cache alimenta o ReSTIR GI, e as duas visoes da folhagem tem de ser a mesma.
+    P.OmmRayFlags    = SMILE_OmmRayFlags(PolicyParams.y);
     P.ReGIRGridMin       = ReGIRGridMinSlots.xyz;
     P.ReGIRSlotsPerCell  = (uint)ReGIRGridMinSlots.w;
     P.ReGIRInvCellSize   = ReGIRInvCellEnabled.xyz;
@@ -317,7 +320,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // de backface abaixo que decide entre re-tracar e matar — deixar o DXR cullar descartaria
         // o hit antes da classificacao.
         RayQuery<RAY_FLAG_NONE, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
-        q.TraceRayInline(Scene, RAY_FLAG_NONE, SMILE_RT_MASK_GATHER, ray);
+        q.TraceRayInline(Scene, RAY_FLAG_NONE | P.OmmRayFlags, SMILE_RT_MASK_GATHER, ray);
         SMILE_RT_PROCEED(q)
 
         // AUTO-INTERSECCAO / BACKFACE, sob o MESMO toggle do ReSTIR GI (PolicyParams.x) — e nao
@@ -344,7 +347,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         // continuam validos e recebem zero pela frente — matar o caminho inteiro jogaria fora a
         // direta e o emissivo que eles ja mediram. Em `bounce == 0` isto e equivalente a desistir,
         // porque `count` fica em zero e a volta nao grava nada.
-        if (PolicyParams.x > 0.5f && PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER)) {
+        if (PolicyParams.x > 0.5f &&
+            PT_ResolveSelfIntersection(q, ray, SMILE_RT_MASK_GATHER, P.OmmRayFlags)) {
             Lterm    = float3(0.0f, 0.0f, 0.0f);
             termKind = RCU_TERM_KILLED;
             break;
