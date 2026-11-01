@@ -419,7 +419,15 @@ namespace Smile {
         omm::Cpu::BakeResult Result = 0;
         try {
             omm::Cpu::BakeInputDesc Input{};
+            // Validacao do SDK so em Debug. Ela nao muda o resultado (bake_cpu_impl.cpp: so loga
+            // triangulos nao classificaveis e um aviso de workload > 128 texturas 1K, alem de
+            // calcular o workload mesmo sem teto), entao o Release grava os mesmos bytes; o
+            // messageCallback continua instalado nas duas configuracoes.
+#if defined(NDEBUG)
+            Input.bakeFlags = omm::Cpu::BakeFlags::None;
+#else
             Input.bakeFlags = omm::Cpu::BakeFlags::EnableValidation;
+#endif
             if (_EnableInternalThreads) {
 #if defined(_OPENMP)
                 if (_InternalThreadCount > 0) {
@@ -510,8 +518,9 @@ namespace Smile {
                 Fail("indice OMM nao possui uma entrada por triangulo bakeado");
 
             switch (Baked->indexFormat) {
-                case omm::IndexFormat::UINT_8:
-                    Out->IndexFormat = DXGI_FORMAT_R8_UINT; Out->IndexStride = 1; break;
+                // Sem UINT_8: o SDK so emite indice de 8 bits com Allow8BitIndices, que a engine
+                // nao pede, e o caminho de D3D12 nunca foi exercitado com R8_UINT. Se aparecer, e
+                // um flag novo vazando, e falhar alto e melhor que linkar um formato nao testado.
                 case omm::IndexFormat::UINT_16:
                     Out->IndexFormat = DXGI_FORMAT_R16_UINT; Out->IndexStride = 2; break;
                 case omm::IndexFormat::UINT_32:

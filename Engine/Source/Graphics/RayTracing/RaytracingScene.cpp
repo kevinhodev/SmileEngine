@@ -207,6 +207,14 @@ namespace Smile {
         // cima daria o par por pronto na tentativa seguinte.
         std::vector<FRebuiltBlas> Pending;
         Pending.reserve(Missing.size());
+        std::vector<u64> UncompactedBytes; // ResultDataMaxSizeInBytes de cada um, p/ o fallback
+        UncompactedBytes.reserve(Missing.size());
+        // O tamanho compactado de cada BLAS, emitido pelo proprio build (postbuild info).
+        ComPtr<ID3D12Resource> PostbuildBuf = CreateUAVBuffer(Dev5,
+            static_cast<UINT64>(Missing.size()) * sizeof(UINT64),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ComPtr<ID3D12Resource> ReadbackBuf = GpuResources::CreateReadbackBuffer(
+            Dev5, static_cast<u64>(Missing.size()) * sizeof(UINT64));
         for (const auto& [Mesh, Omm] : Missing) {
             D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC Tri{};
             Tri.VertexBuffer.StartAddress  = Mesh->VertexBufferGPUVA();
@@ -288,7 +296,10 @@ namespace Smile {
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS Inputs{};
             Inputs.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
             Inputs.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
-            Inputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+            // ALLOW_COMPACTION como no Build: sem ela, cada BLAS refeito ficava no tamanho de pior
+            // caso do prebuild, ~o dobro do compactado.
+            Inputs.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+                                 | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
             Inputs.NumDescs      = 1;
             Inputs.pGeometryDescs = &Geo;
 
@@ -297,9 +308,6 @@ namespace Smile {
             if (Info.ResultDataMaxSizeInBytes == 0)
                 throw std::runtime_error("Driver recusou o prebuild do BLAS no rebake");
 
-            // SEM compaction, ao contrario do Build: compactar exige um readback do tamanho, e
-            // portanto um segundo round-trip de fila. Sao poucos BLAS e o desperdicio e medido em
-            // RebuiltBlasBytes.
             auto Result = CreateUAVBuffer(Dev5, Info.ResultDataMaxSizeInBytes,
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
             auto Scratch = CreateUAVBuffer(Dev5, Info.ScratchDataSizeInBytes,
@@ -309,19 +317,89 @@ namespace Smile {
             BuildDesc.Inputs = Inputs;
             BuildDesc.DestAccelerationStructureData    = Result->GetGPUVirtualAddress();
             BuildDesc.ScratchAccelerationStructureData = Scratch->GetGPUVirtualAddress();
-            CL->BuildRaytracingAccelerationStructure(&BuildDesc, 0, nullptr);
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC Post{};
+            Post.InfoType   = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE;
+            Post.DestBuffer = PostbuildBuf->GetGPUVirtualAddress() + Pending.size() * sizeof(UINT64);
+            CL->BuildRaytracingAccelerationStructure(&BuildDesc, 1, &Post);
             GlobalUAVBarrier(CL);
 
-            Pending.push_back(FRebuiltBlas{ Mesh, Omm, Result, OmmArray,
-                                            Info.ResultDataMaxSizeInBytes + OmmArrayBytes });
+            // Bytes por enquanto so do OMM Array; o do BLAS entra depois do readback.
+            Pending.push_back(FRebuiltBlas{ Mesh, Omm, Result, OmmArray, OmmArrayBytes });
+            UncompactedBytes.push_back(Info.ResultDataMaxSizeInBytes);
             Scratches.push_back(Scratch);
             if (OmmIndexInput) UploadInputs.push_back(std::move(OmmIndexInput));
             if (OmmArrayInput) UploadInputs.push_back(std::move(OmmArrayInput));
             if (OmmDescInput)  UploadInputs.push_back(std::move(OmmDescInput));
         }
 
-        // Monte o estado FINAL ainda antes da submissao. Copiar pode alocar e lancar; fazendo-o
-        // com a list local e antes do Execute, a falha descarta tudo sem tocar o estado publicado.
+        {
+            std::vector<D3D12_RESOURCE_BARRIER> ToCopy;
+            PushTransition(ToCopy, PostbuildBuf.Get(),
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            CL->ResourceBarrier(static_cast<UINT>(ToCopy.size()), ToCopy.data());
+            CL->CopyResource(ReadbackBuf.Get(), PostbuildBuf.Get());
+        }
+
+        // Primeiro round-trip: builds + tamanhos compactados. Nada foi publicado ainda; se algo
+        // lancar daqui ate a troca final, os recursos locais morrem depois da espera e o estado
+        // visivel continua o anterior.
+        SMILE_HR(CL->Close());
+        {
+            ID3D12CommandList* BuildLists[] = { CL };
+            _Queue.ExecuteAndSync(BuildLists, 1);
+        }
+
+        // Segundo round-trip: a copia COMPACT para um recurso do tamanho exato. E o custo que a
+        // versao sem compaction evitava, e ele e pequeno: caminho de edicao manual, ja sincrono,
+        // poucos pares. Um tamanho 0 no readback (driver quebrado) cai para o BLAS sem compactar,
+        // igual ao Build.
+        bool Compact = true;
+        std::vector<UINT64> CompactSizes(Pending.size(), 0);
+        {
+            void* Mapped = nullptr;
+            D3D12_RANGE ReadRange{ 0, static_cast<SIZE_T>(Pending.size() * sizeof(UINT64)) };
+            SMILE_HR(ReadbackBuf->Map(0, &ReadRange, &Mapped));
+            std::memcpy(CompactSizes.data(), Mapped, Pending.size() * sizeof(UINT64));
+            D3D12_RANGE NoWrite{ 0, 0 };
+            ReadbackBuf->Unmap(0, &NoWrite);
+            for (const UINT64 Size : CompactSizes)
+                if (Size == 0) { Compact = false; break; }
+        }
+
+        // Os BLAS de build precisam viver ate a copia terminar.
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> BuildResults;
+        if (Compact) {
+            SMILE_HR(Allocator->Reset());
+            SMILE_HR(CL->Reset(Allocator.Get(), nullptr));
+            BuildResults.reserve(Pending.size());
+            for (size_t i = 0; i < Pending.size(); ++i) {
+                auto Compacted = CreateUAVBuffer(Dev5, CompactSizes[i],
+                    D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+                CL->CopyRaytracingAccelerationStructure(
+                    Compacted->GetGPUVirtualAddress(), Pending[i].Blas->GetGPUVirtualAddress(),
+                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+                BuildResults.push_back(std::move(Pending[i].Blas));
+                Pending[i].Blas   = std::move(Compacted);
+                Pending[i].Bytes += CompactSizes[i];
+            }
+            GlobalUAVBarrier(CL);
+            SMILE_HR(CL->Close());
+            u64 BeforeBytes = 0, AfterBytes = 0;
+            for (size_t i = 0; i < Pending.size(); ++i) {
+                BeforeBytes += UncompactedBytes[i];
+                AfterBytes  += CompactSizes[i];
+            }
+            LogDebug("[OMM] - BLAS do rebake compactados: " + std::to_string(Pending.size()) +
+                     ", " + std::to_string(BeforeBytes / 1024) + " KB -> " +
+                     std::to_string(AfterBytes / 1024) + " KB");
+        } else {
+            LogWarning("[GI] - Readback de compaction invalido no rebake; BLAS sem compactar");
+            for (size_t i = 0; i < Pending.size(); ++i)
+                Pending[i].Bytes += UncompactedBytes[i];
+        }
+
+        // Monte o estado FINAL ainda antes da ultima submissao. Copiar pode alocar e lancar;
+        // fazendo-o antes do Execute, a falha descarta tudo sem tocar o estado publicado.
         // Depois da espera so restam swaps noexcept e os contadores.
         auto PublishedBlasByMesh = BlasByMesh;
         auto PublishedRebuiltBlas = RebuiltBlas;
@@ -333,12 +411,13 @@ namespace Smile {
             PublishedRebuiltBlas.push_back(std::move(P));
         }
 
-        SMILE_HR(CL->Close());
-        ID3D12CommandList* Lists[] = { CL };
-        // Sincrono: uploads e scratches morrem no fim deste escopo, e a TLAS do proximo frame
-        // vai referenciar os enderecos novos. Isto e caminho de edicao manual, ja drenado pelo
-        // chamador — nao ha frame em voo para atrapalhar.
-        _Queue.ExecuteAndSync(Lists, 1);
+        // Sincrono: uploads, scratches e os BLAS de build morrem no fim deste escopo, e a TLAS do
+        // proximo frame vai referenciar os enderecos novos. Isto e caminho de edicao manual, ja
+        // drenado pelo chamador — nao ha frame em voo para atrapalhar.
+        if (Compact) {
+            ID3D12CommandList* CompactLists[] = { CL };
+            _Queue.ExecuteAndSync(CompactLists, 1);
+        }
 
         // A PUBLICACAO, e so agora. As tres trocas sao noexcept: ou o estado anterior inteiro
         // continua visivel, ou o novo inteiro passa a ser. O invariante "endereco registrado
