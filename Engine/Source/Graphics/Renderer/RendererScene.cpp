@@ -237,12 +237,21 @@ namespace Smile {
         if (Stale.empty() && DroppedMasked.empty()) return 0;
 
         // --- Fase 2: bakear todos os pares, marcando o material inteiro em caso de falha -------
+        //
+        // O alpha e preparado UMA vez por material e compartilhado pelos pares dele: todos leem a
+        // mesma textura com o mesmo alpha e cutoff. Por par, ele era 70% do rebake — um commit no
+        // material 125 do Bistro decodificava a mesma textura 36 vezes (10 s parado).
+        std::unordered_map<const FMaterial*, std::shared_ptr<FOmmPreparedAlpha>> AlphaOf;
         for (const auto& [Index, Key] : Stale) {
             if (Rebaked.contains(Key) || Failed.contains(Key.Material)) continue;
-            auto Novo = BakeOpacityMicromapFor(Key.Mesh, Key.Material);
+            auto& Alpha = AlphaOf[Key.Material];
+            if (!Alpha) Alpha = PrepareOmmAlphaFor(Key.Material);
+            if (!Alpha) { Failed.insert(Key.Material); continue; }
+            auto Novo = BakeOpacityMicromapFor(Key.Mesh, Key.Material, *Alpha);
             if (!Novo) { Failed.insert(Key.Material); continue; }
             Rebaked.emplace(Key, std::move(Novo));
         }
+        AlphaOf.clear(); // solta as texturas do SDK antes da reconstrucao dos BLAS
         // Um material que falhou em QUALQUER par nao publica par nenhum: os bakes que deram certo
         // sao descartados, senao ele ficaria metade novo e metade revertido.
         if (!Failed.empty())
@@ -430,8 +439,35 @@ namespace Smile {
 
     // O bake de UM par, a partir das entradas retidas. Devolve nulo (e diz por que) quando falta
     // alguma peca — nunca devolve um micro-map de procedencia parcial.
+    std::shared_ptr<FOmmPreparedAlpha> Renderer::PrepareOmmAlphaFor(const FMaterial* _Material) {
+        if (!_Material) return nullptr;
+        // A textura de alpha e RELIDA do disco, com o carimbo do arquivo conferido dentro do
+        // store. Guardar os pixels residentes custaria dezenas de MB de BC7 de folhagem por um
+        // caminho que roda quando alguem mexe num slider.
+        FTextureCPUData Alpha;
+        const FTextureCPUData* AlphaPtr = nullptr;
+        if (_Material->Albedo) {
+            if (!OmmBakeInputs.HasTextureSource(_Material->Albedo)) {
+                LogError("[OMM] Rebake impossivel: a textura de BaseColor deste material nao tem "
+                         "procedencia conhecida (gerada em runtime?)");
+                return nullptr;
+            }
+            if (!OmmBakeInputs.LoadAlphaTexture(_Material->Albedo, Alpha)) return nullptr;
+            AlphaPtr = &Alpha;
+        }
+        try {
+            // O preparado copia o que precisa para a textura do SDK; o FTextureCPUData relido
+            // morre no fim desta funcao.
+            return FOmmPreparedAlpha::Create(AlphaPtr, _Material->Constants.BaseColorFactor.W,
+                                             _Material->Constants.AlphaCutoff);
+        } catch (const std::exception& Error) {
+            LogError(std::string("[OMM] Rebake falhou ao preparar o alpha: ") + Error.what());
+            return nullptr;
+        }
+    }
+
     std::shared_ptr<FOpacityMicromapData> Renderer::BakeOpacityMicromapFor(
-        const FGpuMesh* _Mesh, const FMaterial* _Material) {
+        const FGpuMesh* _Mesh, const FMaterial* _Material, const FOmmPreparedAlpha& _Alpha) {
         if (!_Mesh || !_Material) return nullptr;
 
         // Geometria lida do .smesh sob demanda; nada disto fica residente.
@@ -447,25 +483,8 @@ namespace Smile {
             return nullptr;
         }
 
-        // A textura de alpha e RELIDA do disco, com o carimbo do arquivo conferido dentro do
-        // store. Guardar os pixels residentes custaria dezenas de MB de BC7 de folhagem por um
-        // caminho que roda quando alguem mexe num slider.
-        FTextureCPUData Alpha;
-        const FTextureCPUData* AlphaPtr = nullptr;
-        if (_Material->Albedo) {
-            if (!OmmBakeInputs.HasTextureSource(_Material->Albedo)) {
-                LogError("[OMM] Rebake impossivel: a textura de BaseColor deste material nao tem "
-                         "procedencia conhecida (gerada em runtime?)");
-                return nullptr;
-            }
-            if (!OmmBakeInputs.LoadAlphaTexture(_Material->Albedo, Alpha)) return nullptr;
-            AlphaPtr = &Alpha;
-        }
-
         try {
-            auto Out = FOpacityMicromapBaker::Bake(Geometry, AlphaPtr,
-                                                   _Material->Constants.BaseColorFactor.W,
-                                                   _Material->Constants.AlphaCutoff);
+            auto Out = FOpacityMicromapBaker::Bake(Geometry, _Alpha);
             if (!Out || !Out->Valid()) {
                 LogError("[OMM] Rebake devolveu micro-map invalido");
                 return nullptr;

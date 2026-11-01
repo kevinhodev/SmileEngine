@@ -176,8 +176,62 @@ namespace Smile {
     // nivel do ruido entre execucoes. Ver Docs/OMM-AUDIT.md.
     inline constexpr u32 kOmmMaxSubdivisionLevel = 6u;
 
+    // O ALPHA PREPARADO de um bake: o plano de alpha extraido da textura e o objeto de textura do
+    // OMM SDK criado sobre ele, prontos para N bakes.
+    //
+    // Por que existe: medido no BistroExterior (2026-11-01), 70% do tempo de bake era preparar o
+    // alpha — decodificar um BC7 2048^2 para FP32 custa ~180 ms —, e ele era refeito a CADA par
+    // (malha, material). Os 122 pares do Bistro usam 4 texturas: um commit de edicao no material
+    // 125 decodificava a mesma textura 36 vezes, e o rebake inteiro levava 10 s com a render thread
+    // parada. Preparar uma vez por (textura, alpha, cutoff) e compartilhar nao muda um byte do
+    // resultado: e o mesmo plano, o mesmo cutoff e os mesmos parametros.
+    //
+    // Guarda o baker do SDK junto porque a textura do SDK pertence a ele. Bakes concorrentes sobre
+    // o mesmo preparado sao seguros: o guia do SDK diz que as tarefas de bake sao thread safe e que
+    // nao e preciso um baker por thread, e a textura so e lida durante o bake.
+    class FOmmPreparedAlpha {
+    public:
+        // AlphaTexture nula (ou sem mip) e o plano branco, como no Bake de sempre. Lanca em falha.
+        static std::shared_ptr<FOmmPreparedAlpha> Create(const FTextureCPUData* AlphaTexture,
+                                                         f32 BaseAlpha, f32 AlphaCutoff);
+        ~FOmmPreparedAlpha();
+        FOmmPreparedAlpha(const FOmmPreparedAlpha&)            = delete;
+        FOmmPreparedAlpha& operator=(const FOmmPreparedAlpha&) = delete;
+
+        u32    Width() const       { return Width_; }
+        u32    Height() const      { return Height_; }
+        f32    BaseAlpha() const   { return BaseAlpha_; }
+        f32    AlphaCutoff() const { return AlphaCutoff_; }
+        double PrepareMs() const   { return PrepareMs_; }
+
+    private:
+        FOmmPreparedAlpha() = default;
+        friend class FOpacityMicromapBaker;
+        void*  Baker_       = nullptr; // omm::Baker (ponteiro opaco do SDK)
+        void*  Texture_     = nullptr; // omm::Cpu::Texture (idem), do Baker_ acima
+        u32    Width_       = 1;
+        u32    Height_      = 1;
+        f32    BaseAlpha_   = 1.0f;
+        f32    AlphaCutoff_ = 0.5f;
+        f32    BakeCutoff_  = 0.5f;    // o cutoff deslocado um ULP (ver Create)
+        double PrepareMs_   = 0.0;
+    };
+
     class FOpacityMicromapBaker {
     public:
+        // Sobre um alpha JA PREPARADO, compartilhado entre os pares que usam a mesma textura,
+        // alpha e cutoff. E o caminho dos bakes em lote (import, SmileOmmBaker, rebake do editor).
+        static std::shared_ptr<FOpacityMicromapData> Bake(const FOmmGeometry& Geometry,
+                                                          const FOmmPreparedAlpha& Alpha,
+                                                          bool EnableInternalThreads = true,
+                                                          u32 InternalThreadCount = 0,
+                                                          u64 MaxWorkloadSize = kOmmRuntimeMaxWorkload);
+        static std::shared_ptr<FOpacityMicromapData> Bake(const FMesh& Mesh,
+                                                          const FOmmPreparedAlpha& Alpha,
+                                                          bool EnableInternalThreads = true,
+                                                          u32 InternalThreadCount = 0,
+                                                          u64 MaxWorkloadSize = kOmmRuntimeMaxWorkload);
+
         // Baker CPU oficial NVIDIA, em 4-state. AlphaTexture nula representa uma textura branca;
         // BaseAlpha e multiplicado no plano antes do bake para casar com AlphaTestPass no HLSL.
         // Falha lanca: OMM e requisito da engine, portanto nao existe retorno para o BLAS antigo.

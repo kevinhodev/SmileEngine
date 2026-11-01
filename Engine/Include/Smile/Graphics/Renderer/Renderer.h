@@ -727,7 +727,11 @@ namespace Smile {
         // com log dizendo QUAL peca faltou — micro-map de procedencia parcial e o que a fase
         // existe para impedir.
         std::shared_ptr<FOpacityMicromapData> BakeOpacityMicromapFor(const FGpuMesh* Mesh,
-                                                                     const FMaterial* Material);
+                                                                     const FMaterial* Material,
+                                                                     const FOmmPreparedAlpha& Alpha);
+        // O alpha de um material, relido do disco e PREPARADO uma vez para todos os pares dele
+        // (ver FOmmPreparedAlpha). Nulo em falha, com log dizendo qual peca faltou.
+        std::shared_ptr<FOmmPreparedAlpha> PrepareOmmAlphaFor(const FMaterial* Material);
 
         // A GUARDA do OMM 2-state no GI. O knob (FRenderSettings::SetGIOmm2State) so PEDE; quem
         // liga e isto, e so com ZERO triangulos mascarados sem micro-map na cena: o 2-state

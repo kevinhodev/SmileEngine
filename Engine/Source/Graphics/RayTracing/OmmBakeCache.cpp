@@ -12,9 +12,11 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <system_error>
 #include <thread>
+#include <tuple>
 
 namespace Smile {
     u32 OmmSdkVersion() {
@@ -184,14 +186,53 @@ namespace Smile {
         // paralelo sem equipes aninhadas. Separar as duas faixas evita uma cauda single-thread.
         const unsigned HardwareThreads = std::max(1u, std::thread::hardware_concurrency());
         const unsigned WorkerBudget = HardwareThreads > 2 ? HardwareThreads - 2 : 1;
+
+        // ALPHA PREPARADO uma vez por (textura, alpha, cutoff), e nao por par: era 70% do tempo
+        // de bake no Bistro (ver FOmmPreparedAlpha). As preparacoes sao independentes entre si e
+        // rodam em paralelo; os bakes de depois so leem o preparado.
+        using FAlphaKey = std::tuple<const FTextureCPUData*, u32, u32>;
+        auto KeyOf = [](const FOmmBakeJob& J) {
+            return FAlphaKey{ J.AlphaTexture, J.Key.BaseAlphaBits, J.Key.CutoffBits };
+        };
+        std::map<FAlphaKey, std::shared_ptr<FOmmPreparedAlpha>> Prepared;
+        std::map<FAlphaKey, const FOmmBakeJob*> PrepareFrom;
+        for (size_t I : _Which) PrepareFrom.try_emplace(KeyOf(_Jobs[I]), &_Jobs[I]);
+        {
+            std::vector<std::pair<FAlphaKey, const FOmmBakeJob*>> Todo(PrepareFrom.begin(),
+                                                                     PrepareFrom.end());
+            std::vector<std::shared_ptr<FOmmPreparedAlpha>> Made(Todo.size());
+            std::atomic_size_t Next{ 0 };
+            std::mutex ErrorMutex;
+            std::exception_ptr Error;
+            auto Prepare = [&]() {
+                for (size_t K; (K = Next.fetch_add(1)) < Todo.size();) {
+                    try {
+                        const FOmmBakeJob& J = *Todo[K].second;
+                        Made[K] = FOmmPreparedAlpha::Create(J.AlphaTexture, J.BaseAlpha, J.AlphaCutoff);
+                    } catch (...) {
+                        std::scoped_lock Lock(ErrorMutex);
+                        if (!Error) Error = std::current_exception();
+                    }
+                }
+            };
+            std::vector<std::jthread> Threads;
+            const unsigned Count = std::min<unsigned>(WorkerBudget, static_cast<unsigned>(Todo.size()));
+            for (unsigned T = 0; T < Count; ++T) Threads.emplace_back(Prepare);
+            for (std::jthread& T : Threads) T.join();
+            if (Error) std::rethrow_exception(Error);
+            for (size_t K = 0; K < Todo.size(); ++K) Prepared[Todo[K].first] = Made[K];
+        }
+        auto AlphaOf = [&](const FOmmBakeJob& J) -> const FOmmPreparedAlpha& {
+            return *Prepared.at(KeyOf(J));
+        };
+
         constexpr size_t kInternalThreadTriangleThreshold = 4096;
         std::vector<size_t> Parallel;
         Parallel.reserve(_Which.size());
         for (size_t I : _Which) {
             const FOmmBakeJob& Job = _Jobs[I];
             if (Job.Mesh->Indices.size() / 3 >= kInternalThreadTriangleThreshold) {
-                _Results[I] = FOpacityMicromapBaker::Bake(*Job.Mesh, Job.AlphaTexture,
-                                                          Job.BaseAlpha, Job.AlphaCutoff,
+                _Results[I] = FOpacityMicromapBaker::Bake(*Job.Mesh, AlphaOf(Job),
                                                           true, WorkerBudget, _MaxWorkloadSize);
                 ++Stats.InternalJobs;
             } else {
@@ -212,8 +253,7 @@ namespace Smile {
                 const FOmmBakeJob& Job = _Jobs[Parallel[Slot]];
                 try {
                     _Results[Parallel[Slot]] = FOpacityMicromapBaker::Bake(
-                        *Job.Mesh, Job.AlphaTexture, Job.BaseAlpha, Job.AlphaCutoff, false, 0,
-                        _MaxWorkloadSize);
+                        *Job.Mesh, AlphaOf(Job), false, 0, _MaxWorkloadSize);
                 } catch (...) {
                     {
                         std::scoped_lock Lock(ErrorMutex);

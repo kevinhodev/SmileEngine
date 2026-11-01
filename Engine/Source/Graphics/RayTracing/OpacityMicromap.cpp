@@ -7,6 +7,7 @@
 #include <DirectXTex.h>
 #include <omm.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -305,56 +306,118 @@ namespace Smile {
         return G;
     }
 
+    namespace {
+        void CheckMeshFits32(const FMesh& _Mesh) {
+            // O teto de 32 bits e conferido AQUI, sobre o vetor, e nao na FOmmGeometry: la os
+            // tamanhos ja sao u32, entao o estouro teria acontecido no cast silenciosamente.
+            if (_Mesh.Vertices.size() > std::numeric_limits<u32>::max() ||
+                _Mesh.Indices.size() > std::numeric_limits<u32>::max())
+                Fail("mesh excede os limites de 32 bits do baker");
+        }
+    }
+
+    std::shared_ptr<FOmmPreparedAlpha> FOmmPreparedAlpha::Create(
+        const FTextureCPUData* _AlphaTexture, f32 _BaseAlpha, f32 _AlphaCutoff) {
+        const auto TStart = std::chrono::steady_clock::now();
+        std::shared_ptr<FOmmPreparedAlpha> P(new FOmmPreparedAlpha());
+        P->BaseAlpha_   = _BaseAlpha;
+        P->AlphaCutoff_ = _AlphaCutoff;
+
+        FAlphaPlane Alpha = ExtractAlpha(_AlphaTexture, _BaseAlpha);
+        P->Width_  = Alpha.Width;
+        P->Height_ = Alpha.Height;
+        const float Cutoff = std::clamp(_AlphaCutoff, 0.0f, 1.0f);
+        // O raster/HLSL usa >=; o baker classifica com >. Deslocar um ULP preserva a igualdade.
+        P->BakeCutoff_ = std::nextafter(Cutoff, -std::numeric_limits<float>::infinity());
+
+        // Daqui em diante o destrutor solta o que foi criado, inclusive se algo abaixo lancar.
+        omm::BakerCreationDesc BakerDesc{};
+        BakerDesc.type = omm::BakerType::CPU;
+        BakerDesc.messageInterface.messageCallback = OmmMessage;
+        omm::Baker Baker = nullptr;
+        CheckOmm(omm::CreateBaker(BakerDesc, &Baker), "CreateBaker");
+        P->Baker_ = Baker;
+
+        omm::Cpu::TextureMipDesc Mip{};
+        Mip.width       = Alpha.Width;
+        Mip.height      = Alpha.Height;
+        // OMM 1.9.2 interpreta rowPitch em TEXELS e multiplica internamente pelo tamanho do
+        // formato. Zero seleciona o layout compacto (width texels) e evita contar sizeof(float)
+        // duas vezes — isso fazia CreateTexture ler quatro vezes alem do plano FP32.
+        Mip.rowPitch    = 0;
+        Mip.textureData = Alpha.Pixels.data();
+
+        omm::Cpu::TextureDesc TextureDesc{};
+        TextureDesc.format      = omm::Cpu::TextureFormat::FP32;
+        TextureDesc.mips        = &Mip;
+        TextureDesc.mipCount    = 1;
+        TextureDesc.alphaCutoff = P->BakeCutoff_;
+        omm::Cpu::Texture Texture = nullptr;
+        CheckOmm(omm::Cpu::CreateTexture(Baker, TextureDesc, &Texture), "CreateTexture");
+        P->Texture_ = Texture;
+        // O SDK COPIA os texels para o layout interno dele (texture_impl.cpp): o plano FP32 morre
+        // aqui, e o preparado segura so a textura do SDK.
+
+        P->PrepareMs_ =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - TStart).count();
+        LogDebug("[OMM] - Alpha preparado " + std::to_string(P->Width_) + "x" +
+                 std::to_string(P->Height_) + " em " +
+                 std::to_string(static_cast<int>(P->PrepareMs_)) + " ms");
+        return P;
+    }
+
+    FOmmPreparedAlpha::~FOmmPreparedAlpha() {
+        auto* Baker = static_cast<omm::Baker>(Baker_);
+        if (Texture_ && Baker) omm::Cpu::DestroyTexture(Baker, static_cast<omm::Cpu::Texture>(Texture_));
+        if (Baker) omm::DestroyBaker(Baker);
+    }
+
     std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
         const FMesh& _Mesh, const FTextureCPUData* _AlphaTexture,
         f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
         u32 _InternalThreadCount, u64 _MaxWorkloadSize) {
-        // O teto de 32 bits e conferido AQUI, sobre o vetor, e nao na FOmmGeometry: la os
-        // tamanhos ja sao u32, entao o estouro teria acontecido no cast silenciosamente.
-        if (_Mesh.Vertices.size() > std::numeric_limits<u32>::max() ||
-            _Mesh.Indices.size() > std::numeric_limits<u32>::max())
-            Fail("mesh excede os limites de 32 bits do baker");
+        CheckMeshFits32(_Mesh);
         return Bake(GeometryOf(_Mesh), _AlphaTexture, _BaseAlpha, _AlphaCutoff,
                     _EnableInternalThreads, _InternalThreadCount, _MaxWorkloadSize);
     }
 
+    std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
+        const FMesh& _Mesh, const FOmmPreparedAlpha& _Alpha, bool _EnableInternalThreads,
+        u32 _InternalThreadCount, u64 _MaxWorkloadSize) {
+        CheckMeshFits32(_Mesh);
+        return Bake(GeometryOf(_Mesh), _Alpha, _EnableInternalThreads, _InternalThreadCount,
+                    _MaxWorkloadSize);
+    }
+
+    // O bake avulso: prepara o alpha so para este par. Quem bakeia varios pares sobre a mesma
+    // textura deve preparar uma vez e chamar a sobrecarga de baixo.
     std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
         const FOmmGeometry& _Geometry, const FTextureCPUData* _AlphaTexture,
         f32 _BaseAlpha, f32 _AlphaCutoff, bool _EnableInternalThreads,
         u32 _InternalThreadCount, u64 _MaxWorkloadSize) {
         if (!_Geometry.Valid())
             Fail("geometria de bake invalida (sem UV, sem indice, ou contagem nao-triangular)");
+        const auto Alpha = FOmmPreparedAlpha::Create(_AlphaTexture, _BaseAlpha, _AlphaCutoff);
+        return Bake(_Geometry, *Alpha, _EnableInternalThreads, _InternalThreadCount,
+                    _MaxWorkloadSize);
+    }
 
-        FAlphaPlane Alpha = ExtractAlpha(_AlphaTexture, _BaseAlpha);
-        const float Cutoff = std::clamp(_AlphaCutoff, 0.0f, 1.0f);
-        // O raster/HLSL usa >=; o baker classifica com >. Deslocar um ULP preserva a igualdade.
-        const float BakeCutoff = std::nextafter(Cutoff, -std::numeric_limits<float>::infinity());
+    std::shared_ptr<FOpacityMicromapData> FOpacityMicromapBaker::Bake(
+        const FOmmGeometry& _Geometry, const FOmmPreparedAlpha& _Alpha,
+        bool _EnableInternalThreads, u32 _InternalThreadCount, u64 _MaxWorkloadSize) {
+        if (!_Geometry.Valid())
+            Fail("geometria de bake invalida (sem UV, sem indice, ou contagem nao-triangular)");
 
-        omm::Baker Baker = nullptr;
-        omm::Cpu::Texture Texture = 0;
+        using FClock = std::chrono::steady_clock;
+        const FClock::time_point TStart = FClock::now();
+        auto* const Baker   = static_cast<omm::Baker>(_Alpha.Baker_);
+        auto* const Texture = static_cast<omm::Cpu::Texture>(_Alpha.Texture_);
+        const float BakeCutoff = _Alpha.BakeCutoff_;
+        const f32   BaseAlpha  = _Alpha.BaseAlpha_;
+        const f32   AlphaCutoff = _Alpha.AlphaCutoff_;
+
         omm::Cpu::BakeResult Result = 0;
         try {
-            omm::BakerCreationDesc BakerDesc{};
-            BakerDesc.type = omm::BakerType::CPU;
-            BakerDesc.messageInterface.messageCallback = OmmMessage;
-            CheckOmm(omm::CreateBaker(BakerDesc, &Baker), "CreateBaker");
-
-            omm::Cpu::TextureMipDesc Mip{};
-            Mip.width       = Alpha.Width;
-            Mip.height      = Alpha.Height;
-            // OMM 1.9.2 interpreta rowPitch em TEXELS e multiplica internamente pelo tamanho do
-            // formato. Zero seleciona o layout compacto (width texels) e evita contar sizeof(float)
-            // duas vezes — isso fazia CreateTexture ler quatro vezes alem do plano FP32.
-            Mip.rowPitch    = 0;
-            Mip.textureData = Alpha.Pixels.data();
-
-            omm::Cpu::TextureDesc TextureDesc{};
-            TextureDesc.format      = omm::Cpu::TextureFormat::FP32;
-            TextureDesc.mips        = &Mip;
-            TextureDesc.mipCount    = 1;
-            TextureDesc.alphaCutoff = BakeCutoff;
-            CheckOmm(omm::Cpu::CreateTexture(Baker, TextureDesc, &Texture), "CreateTexture");
-
             omm::Cpu::BakeInputDesc Input{};
             Input.bakeFlags = omm::Cpu::BakeFlags::EnableValidation;
             if (_EnableInternalThreads) {
@@ -410,7 +473,7 @@ namespace Smile {
             u64 Budget = kMaxWorkloadSize;
             for (u32 Attempt = 0; BakeStatus == omm::Result::WORKLOAD_TOO_BIG && Attempt < 4;
                  ++Attempt, Budget /= 2) {
-                Split = SplitByWorkload(_Geometry, Alpha.Width, Alpha.Height, Budget);
+                Split = SplitByWorkload(_Geometry, _Alpha.Width_, _Alpha.Height_, Budget);
                 if (Split.Kept.empty()) break;
                 KeptIndices.resize(Split.Kept.size() * 3u);
                 for (size_t K = 0; K < Split.Kept.size(); ++K)
@@ -428,11 +491,9 @@ namespace Smile {
             }
 
             if (BakeStatus == omm::Result::WORKLOAD_TOO_BIG) {
-                auto Out = MakeAllUnknown(_Geometry, _BaseAlpha, _AlphaCutoff);
+                auto Out = MakeAllUnknown(_Geometry, BaseAlpha, AlphaCutoff);
                 LogWarning("[OMM] - Workload excedeu o teto e nem a divisao coube; usando indices "
                            "OMM UNKNOWN em " + std::to_string(Out->TriangleCount) + " triangulos");
-                omm::Cpu::DestroyTexture(Baker, Texture); Texture = 0;
-                omm::DestroyBaker(Baker); Baker = nullptr;
                 return Out;
             }
             CheckOmm(BakeStatus, "Bake");
@@ -442,8 +503,8 @@ namespace Smile {
 
             auto Out = std::make_shared<FOpacityMicromapData>();
             Out->TriangleCount = TriangleCount;
-            Out->BakedBaseAlpha = _BaseAlpha;
-            Out->BakedAlphaCutoff = _AlphaCutoff;
+            Out->BakedBaseAlpha = BaseAlpha;
+            Out->BakedAlphaCutoff = AlphaCutoff;
             const u32 BakedTriangles = Divided ? static_cast<u32>(Split.Kept.size()) : TriangleCount;
             if (Baked->indexCount != BakedTriangles)
                 Fail("indice OMM nao possui uma entrada por triangulo bakeado");
@@ -540,16 +601,17 @@ namespace Smile {
                      std::to_string(Out->Coverage.MicromapTriangles) + " com micro-map, " +
                      std::to_string(Out->Coverage.FullyUnknownTriangles) + " UNKNOWN, area " +
                      std::to_string(static_cast<int>(Out->Coverage.KnownArea * 100.0f + 0.5f)) +
-                     "% conhecida");
+                     "% conhecida | baker " +
+                     std::to_string(static_cast<int>(std::chrono::duration<double, std::milli>(
+                         FClock::now() - TStart).count())) + " ms (alpha " +
+                     std::to_string(_Alpha.Width_) + "x" + std::to_string(_Alpha.Height_) +
+                     " preparado a parte)");
 
             omm::Cpu::DestroyBakeResult(Result); Result = 0;
-            omm::Cpu::DestroyTexture(Baker, Texture); Texture = 0;
-            omm::DestroyBaker(Baker); Baker = nullptr;
             return Out;
         } catch (...) {
-            if (Result)  omm::Cpu::DestroyBakeResult(Result);
-            if (Texture) omm::Cpu::DestroyTexture(Baker, Texture);
-            if (Baker)   omm::DestroyBaker(Baker);
+            // Baker e textura sao do FOmmPreparedAlpha: so o resultado deste bake e daqui.
+            if (Result) omm::Cpu::DestroyBakeResult(Result);
             throw;
         }
     }

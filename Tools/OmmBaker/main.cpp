@@ -14,6 +14,9 @@
 // reaproveitados. --force refaz todos.
 
 #include "Smile/Graphics/RayTracing/OmmBakeCache.h"
+#include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
+#include "Smile/Graphics/Resources/GpuMesh.h"
+#include "Smile/Graphics/Resources/Texture.h"
 #include "Smile/Scene/SceneLoader.h"
 
 #include <algorithm>
@@ -22,21 +25,123 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+namespace {
+    using namespace Smile;
+    using FClock = std::chrono::steady_clock;
+    double MsSince(FClock::time_point T) {
+        return std::chrono::duration<double, std::milli>(FClock::now() - T).count();
+    }
+
+    // O CUSTO DO REBAKE DO EDITOR, por material. Um commit de edicao num material mascarado
+    // (cutoff, alpha, troca de albedo) rebakeia TODOS os pares dele pelo caminho de runtime:
+    // Renderer::BakeOpacityMicromapFor, que rele a geometria do .smesh, rele a textura do disco
+    // (conferindo o hash) e bakeia com o teto de runtime — com a render thread esperando. Este
+    // modo repete exatamente essas tres etapas, pelo mesmo FOmmBakeInputStore, e cronometra cada
+    // uma. Os pares sao do material com mais triangulos primeiro.
+    int BenchRebake(const FSceneImportResult& _Scene, const std::vector<FOmmBakeJob>& _Jobs,
+                    u32 _MaxMaterials) {
+        // Chaves de identidade do store: objetos vazios, como no teste — nada neles e lido.
+        std::vector<FGpuMesh> MeshKeys(_Scene.Meshes.size());
+        std::vector<FTexture> TextureKeys(_Scene.TextureData.size());
+        std::unordered_map<const FTextureCPUData*, size_t> TextureIndex;
+        for (size_t I = 0; I < _Scene.TextureData.size(); ++I)
+            TextureIndex[&_Scene.TextureData[I]] = I;
+
+        FOmmBakeInputStore Store;
+        const std::wstring MeshFile =
+            (std::filesystem::path(_Scene.BasePath) += L".smesh").wstring();
+        std::map<u32, std::vector<const FOmmBakeJob*>> ByMaterial;
+        for (const FOmmBakeJob& J : _Jobs) {
+            Store.RetainMeshSource(&MeshKeys[J.Key.MeshIndex], MeshFile, J.Key.MeshIndex,
+                                   J.Key.Geometry);
+            if (J.AlphaTexture) {
+                const size_t T = TextureIndex.at(J.AlphaTexture);
+                Store.RetainTexturePath(
+                    &TextureKeys[T],
+                    (_Scene.SceneDir / std::filesystem::path(_Scene.TexturePaths[T])).wstring(),
+                    *J.AlphaTexture);
+            }
+            ByMaterial[J.Key.MaterialIndex].push_back(&J);
+        }
+
+        std::vector<std::pair<u32, u64>> Order;
+        for (const auto& [Material, Pairs] : ByMaterial) {
+            u64 Triangles = 0;
+            for (const FOmmBakeJob* J : Pairs) Triangles += J->Mesh->Indices.size() / 3;
+            Order.push_back({ Material, Triangles });
+        }
+        std::sort(Order.begin(), Order.end(),
+                  [](const auto& A, const auto& B) { return A.second > B.second; });
+        if (Order.size() > _MaxMaterials) Order.resize(_MaxMaterials);
+
+        // O caminho do Renderer::RebakeStaleOpacityMicromaps: textura relida e alpha preparado UMA
+        // vez por material (PrepareOmmAlphaFor), geometria relida e bake por par.
+        std::printf("[OMM BENCH] rebake do editor por material (material: pares | triangulos | "
+                    "geometria ms | textura+alpha ms | bake ms | total ms)\n");
+        double SumGeo = 0, SumTex = 0, SumBake = 0;
+        for (const auto& [Material, Triangles] : Order) {
+            double GeoMs = 0, TexMs = 0, BakeMs = 0;
+            const FOmmBakeJob& First = *ByMaterial[Material].front();
+            FClock::time_point T = FClock::now();
+            FTextureCPUData Alpha;
+            const FTextureCPUData* AlphaPtr = nullptr;
+            if (First.AlphaTexture) {
+                if (!Store.LoadAlphaTexture(&TextureKeys[TextureIndex.at(First.AlphaTexture)], Alpha)) {
+                    std::fprintf(stderr, "[OMM BENCH] LoadAlphaTexture falhou (material %u)\n",
+                                 Material);
+                    return 7;
+                }
+                AlphaPtr = &Alpha;
+            }
+            const auto Prepared =
+                FOmmPreparedAlpha::Create(AlphaPtr, First.BaseAlpha, First.AlphaCutoff);
+            TexMs += MsSince(T);
+
+            for (const FOmmBakeJob* J : ByMaterial[Material]) {
+                T = FClock::now();
+                FOmmBakeInputStore::FLoadedGeometry Loaded;
+                if (!Store.LoadGeometry(&MeshKeys[J->Key.MeshIndex], Loaded)) {
+                    std::fprintf(stderr, "[OMM BENCH] LoadGeometry falhou (mesh %u)\n",
+                                 J->Key.MeshIndex);
+                    return 6;
+                }
+                GeoMs += MsSince(T);
+
+                T = FClock::now();
+                FOpacityMicromapBaker::Bake(Loaded.View(), *Prepared);
+                BakeMs += MsSince(T);
+            }
+            std::printf("[OMM BENCH]   %4u: %3zu | %8llu | %8.1f | %8.1f | %8.1f | %8.1f\n",
+                        Material, ByMaterial[Material].size(),
+                        static_cast<unsigned long long>(Triangles), GeoMs, TexMs, BakeMs,
+                        GeoMs + TexMs + BakeMs);
+            SumGeo += GeoMs; SumTex += TexMs; SumBake += BakeMs;
+        }
+        std::printf("[OMM BENCH] soma dos %zu materiais: geometria %.0f ms, textura %.0f ms, "
+                    "bake %.0f ms\n", Order.size(), SumGeo, SumTex, SumBake);
+        return 0;
+    }
+}
 
 int main(int argc, char** argv) {
     using namespace Smile;
     const char* ScenePath = nullptr;
     bool Force = false;
+    bool Bench = false;
     for (int I = 1; I < argc; ++I) {
         if (std::strcmp(argv[I], "--force") == 0) Force = true;
+        else if (std::strcmp(argv[I], "--bench-rebake") == 0) Bench = true;
         else if (!ScenePath) ScenePath = argv[I];
         else { ScenePath = nullptr; break; }
     }
     if (!ScenePath) {
-        std::fprintf(stderr, "uso: SmileOmmBaker <cena.sscene> [--force]\n");
+        std::fprintf(stderr, "uso: SmileOmmBaker <cena.sscene> [--force | --bench-rebake]\n");
         return 2;
     }
 
@@ -49,6 +154,8 @@ int main(int argc, char** argv) {
         }
 
         const std::vector<FOmmBakeJob> Jobs = CollectOmmBakeJobs(*Scene);
+        // So mede: nao grava sidecar nenhum.
+        if (Bench) return BenchRebake(*Scene, Jobs, 12);
         const std::filesystem::path OutPath = FOmmBakeCache::PathFor(Scene->BasePath);
 
         FOmmBakeCache Previous;
