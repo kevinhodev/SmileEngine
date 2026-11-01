@@ -76,7 +76,57 @@ arrays committed é **pequeno** (61 arrays, não centenas).
 
 ---
 
-## P0 — Nenhum passe usa `RAY_FLAG_FORCE_OMM_2_STATE`
+## P0 — Nenhum passe usa `RAY_FLAG_FORCE_OMM_2_STATE` — **FEITO (knob, ligado por default)**
+
+**O que entrou:** o knob `GIOmm2State` (`FRenderSettings`, toggle "OMM 2-state no GI" no menu de
+visualização, `omm2State` no `gi_configure`/`gi_status` do pipe). O knob só **pede**; quem liga é
+`Renderer::RefreshOmmGI2State`, e só com **zero** triângulos mascarados sem micro-map na cena.
+A guarda é recontada no load de cena, no rebake do editor e quando o knob muda. Ligado, a flag
+vai no argumento de runtime do `TraceRayInline` dos 12 traces de GI: o gather, o retrace e a
+revalidação do ReSTIR GI, a visibilidade (Trace e Spatial), as sondas do DDGI, o update do
+radiance cache e as três sombras no hit via `FHitShadeParams::OmmRayFlags`. Reflexos e ReSTIR DI
+passam 0 e ficam em 4-state. O helper `SMILE_OmmRayFlags` mascara o valor que chega do CB, então
+só o bit do 2-state atravessa. A troca invalida o GI pelo mesmo `OnGIHitSamplingChanged` do
+`FoliageShadows`.
+
+**A/B medido** (BistroExterior com sidecar, RTX 3060 Ti, preset `gameplay_rr`, sequência
+intercalada off/on/off/on, 60 frames distintos por rodada, script
+[omm-2state-ab.mjs](Tools/SmileMCP/scripts/omm-2state-ab.mjs)):
+
+| passe | 4-state | 2-state | Δ | spread entre rodadas off |
+|---|---|---|---|---|
+| ReSTIR GI | 6,390 ms | 6,060 ms | **−0,33 ms (−5,2%)** | 0,010 ms |
+| ↳ Temporal + trace secundário | 5,009 ms | 4,714 ms | −0,30 ms (−5,9%) | 0,010 ms |
+| DDGI (async) | 1,374 ms | 1,271 ms | **−0,10 ms (−7,5%)** | 0,045 ms |
+| Radiance cache (update) | 0,539 ms | 0,506 ms | −0,03 ms (−6,2%) | 0,041 ms (dentro do ruído) |
+| ReSTIR DI (4-state, controle) | 2,972 ms | 3,022 ms | +0,05 ms | 0,080 ms (ruído) |
+| **Frame (GPU)** | 24,27 ms | 23,71 ms | **−0,56 ms (−2,3%)** | 0,44 ms |
+
+O ganho sustentado é de **~0,4 ms** nos passes de GI: o do ReSTIR GI está 30× acima do spread e o
+do DDGI 2×. O do frame inteiro fica perto do ruído. O ReSTIR DI, que não muda de política, não
+se moveu, o que serve de controle.
+
+**Imagem:** mesma câmera, histórico zerado, 256 frames de aquecimento. Só 0,37% dos pixels mudam
+mais de 2/255, o máximo é 34/255, e a luminância média varia 0,004%. O mapa de diferença
+concentra tudo na folhagem (vasos, cestas penduradas, árvore), que é onde o 2-state age, sem
+escurecimento visível do GI. Não houve captura de controle (off contra off), então parte disso pode
+ser ruído do RT, mas a localização na folhagem indica que é o efeito.
+
+**Correção desta auditoria: o −55% do Indiana Jones não era deste knob.** A tabela deles compara
+**OMM desligado contra OMM ligado** (com 2-state no indireto). A maior parte do ganho é o próprio
+OMM, que a SmileEngine já tinha e que o sidecar terminou de cobrir (0% UNKNOWN, 98% da área de UV
+conhecida). Com o hardware já resolvendo quase tudo, sobra pouco alpha-test para o 2-state
+eliminar. Os ~0,4 ms são o que faltava, não a fatia grande.
+
+**A guarda, verificada no editor** ([omm-2state-guard.mjs](Tools/SmileMCP/scripts/omm-2state-guard.mjs),
+Bistro **sem** `.somm`): a cena tem 113 154 triângulos sem micro-map, o pedido é registrado
+(`requested: true`) e **recusado** (`active: false`), e o log avisa: "2-state no GI pedido, mas
+113154 triangulos mascarados estao sem micro-map [...] Mantendo 4-state. Rode SmileOmmBaker na
+cena". **Default: ligado** (decisão de 31/10/2026, depois do A/B). A guarda é o que torna isso
+seguro: confirmado no editor, o Bistro com sidecar sobe com `2-state no GI LIGADO` no log, e
+uma cena sem `.somm` atual fica em 4-state e avisa.
+
+### Texto original desta seção
 
 São **16 declarações** de `RayQuery` (a primeira passada contou 17; a 17ª era o parâmetro de
 `PT_ResolveSelfIntersection`), todas com `RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS`, nenhuma forçando

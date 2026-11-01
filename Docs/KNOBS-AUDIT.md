@@ -87,6 +87,7 @@ obrigatória**, e ela tem que descer a cadeia inteira: quem acumula *sobre* o re
 | **Weather** — `RainAmount`, `DriveSky` | 2 | **C** | ❌ nenhuma |
 | **DDGI / Reflections** — `FoliageShadows` | 2 | **C** | ❌ atribuição pura |
 | **ReSTIRGI** — `FoliageShadows` | 1 | **C** | ⚠️ só `NeedsClear` local |
+| **GI (DDGI, ReSTIR GI, radiance cache)** — `GIOmm2State` (2026-10-31) | 1 | **C** | ✅ `OnGIHitSamplingChanged`, como o `FoliageShadows`; o knob só pede, a guarda de cobertura de OMM do `Renderer` decide (Docs/OMM-AUDIT.md, P0) |
 | **Weather** — wetness (`WetDarkening`, `PuddleAmount`, `PuddleScale`, `RippleStrength`, `RainOcclusion`) | 5 | B | ❌ nenhuma |
 | **ReSTIRGI** — `Visibility` | 1 | B | ❌ nenhuma |
 | **SunShadows** — 7 knobs de cascata/bias | 7 | B | ❌ nenhuma |
@@ -211,7 +212,7 @@ já foi decidido à mão, e de que as divergências acima são **omissões, não
 diferentes**.
 
 ```
-EHistoryDomain::RayVisibility    // FoliageShadows, GIBackfacePolicy, RayEpsilons
+EHistoryDomain::RayVisibility    // FoliageShadows, GIBackfacePolicy, RayEpsilons, GIOmm2State
     -> ReSTIR GI, ReSTIR DI, atlas do DDGI, Reflections, Nrd, NrdDirect, RR, TAA
 
 EHistoryDomain::SkyRadiance      // RainAmount, DriveSky
