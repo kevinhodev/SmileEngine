@@ -466,7 +466,20 @@ Ainda em aberto: o toggle `DISABLE_OMMS` (a metade GPU, ON/OFF para medir o ganh
 conferir um bake suspeito, `omm::Debug::SaveAsImages` desenha o overlay de estados sobre a textura.
 O log da TLAS com bytes de OMM só foi compilado, não rodou ainda (precisa do editor com GPU).
 
-## P3 — OMM Arrays como recurso committed individual
+## P3 — OMM Arrays como recurso committed individual — **MEDIDO: não vale; descartado**
+
+A premissa desta seção era errada. Os arrays não são "committed com heap de 64 KB": passam pelo
+**D3D12MA** como recursos placed, e o D3D12MA usa **tight alignment** quando driver e Agility SDK
+suportam, o que acontece aqui (RTX 3060 Ti, driver 616.56, Agility 1.619.5). Medido no build da TLAS
+(`GetResourceAllocationInfo` do recurso criado, o mesmo critério do `VramTracker`), Bistro com
+teto 6: **61 OMM Arrays, 7,3491 MB pedidos, 7,3491 MB alocados**. Padding zero.
+
+Um pool economizaria 0 byte de VRAM, e o resto que ele traria é desprezível: a etapa de OMM do load
+já leva ~12 ms, e são 61 recursos. **Não implementado.** O que ficou foi a telemetria: o log da TLAS
+agora imprime pedido **e** alocado, então numa máquina sem tight alignment (driver mais antigo,
+outro fabricante) a diferença aparece ali, e só então o pool volta a ter motivo.
+
+### Texto original desta seção
 
 **[2ª] Rebaixado de P2.** [RaytracingScene.cpp:642](Engine/Source/Graphics/RayTracing/RaytracingScene.cpp#L642)
 cria um `CreateUAVBuffer` por array enquanto o BLAS é pooled, e `OpacityMicromapBaseLocation` fica
@@ -533,8 +546,9 @@ a mesma textura que o material recebeu: plano branco quando ele caiu no default.
    26 s, sem regressão de GPU nem de imagem acima do ruído.
 6. **Plano de alpha por textura + UNORM8 + baker compartilhado**, e o agendamento — importam para
    o rebake do editor depois que o Cooker existir.
-7. Pool de OMM Arrays, compactação no `EnsureBlasFor`, `EnableValidation`, ramo de 8 bits,
-   comentário — higiene.
+7. ~~Pool de OMM Arrays~~ → **medido e descartado**: tight alignment do D3D12MA, padding zero
+   (7,35 MB pedidos = 7,35 MB alocados). Compactação no `EnsureBlasFor`, `EnableValidation`,
+   ramo de 8 bits — higiene. (Os comentários de `FORCE_NON_OPAQUE` foram corrigidos junto com o P0.)
 
 ## Referências
 
