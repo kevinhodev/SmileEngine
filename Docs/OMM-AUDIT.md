@@ -338,7 +338,49 @@ hashes do `FOmmBakeInputStore` são a camada que diz "este blob descreve este pa
 
 </details>
 
-## P2 — `ExtractAlpha`: 16 B/texel de intermediário, por par, em até 8 workers
+## P2 — `ExtractAlpha`: 16 B/texel de intermediário, por par, em até 8 workers — **FEITO em parte (alpha preparado e compartilhado)**
+
+**Medido antes de mexer** (`SmileOmmBaker --bench-rebake`, que repete o que um commit de edição
+de material dispara no editor: `LoadGeometry`, `LoadAlphaTexture` e bake com teto, por par). Um
+commit travava a render thread por **até 10 s** (material 125, 36 pares). O tempo não estava na
+geometria (88 ms somados) nem no disco (753 ms), e sim no bake. Dentro do bake, **70%** era
+preparar o alpha: ~180 ms para decodificar um BC7 2048² para FP32, refeitos **a cada par**. Os 122
+pares do Bistro usam **4 texturas**. O `CreateTexture` do SDK também se repetia por par.
+
+**O que entrou:** `FOmmPreparedAlpha`
+([OpacityMicromap.h](Engine/Include/Smile/Graphics/RayTracing/OpacityMicromap.h)) guarda o baker do
+SDK e a textura dele, preparados uma vez por (textura, alpha, cutoff) e compartilhados entre os
+pares. É o mesmo plano, o mesmo cutoff e os mesmos parâmetros, então **não muda um byte**. Usado
+nos três caminhos: o rebake do editor prepara uma vez por material, e o `BakeOmmJobs` (load sem
+sidecar e `SmileOmmBaker`) prepara uma vez por combinação, em paralelo. Isso também fecha o P2
+"Um `omm::Baker` por bake".
+
+| commit de edição (Bistro) | antes | depois |
+|---|---|---|
+| material 125 (36 pares) | 10,0 s | **1,8 s** |
+| material 57 (39 pares) | 9,0 s | **0,49 s** |
+| material 26 (12 pares, 288 tri) | 2,6 s | **0,23 s** |
+| soma dos 9 materiais | 32,3 s | **6,7 s** |
+| bake offline completo (`SmileOmmBaker`) | 26 s | **13,1 s** |
+
+Bytes idênticos, provado duas vezes: no teste, os bakes de runtime com o código novo batem com o
+sidecar do código antigo (112/112); e o sidecar rebakeado com o código novo sai idêntico byte a
+byte ao anterior.
+
+**Não feito, com o motivo:**
+- **UNORM8 e não pré-multiplicar `BaseAlpha`.** O que sobrou da preparação é ~220 ms por commit,
+  com o disco incluído. UNORM8 tiraria uma parte disso, mas **muda o resultado do bake** (outra
+  conversão de alpha, e o `BaseAlpha` dobrado no cutoff arredonda diferente do shader no nível do
+  ULP). Exigiria bump de `kOmmBakeSettingsVersion`, outra rodada de equivalência e o recook dos
+  sidecars, por algo em torno de 150 ms. Fica para quando a memória da preparação incomodar.
+- **Paralelizar os pares no rebake do editor.** Os dois materiais que ainda passam de 1 s (123 e
+  125) são os candidatos. O 123 tem as malhas que estouram o teto, e o 125 tem 36 pares bakeados
+  em sequência. Ganho possível ~1 s nesses dois; nos outros, o piso já é a preparação de ~220 ms.
+
+**Não verificado:** um commit de edição real no editor. O caminho foi exercitado pelo bench, que usa
+o mesmo `FOmmBakeInputStore`, e pelo build do editor, mas não houve edição de material pela UI.
+
+### Texto original desta seção
 
 [OpacityMicromap.cpp:90](Engine/Source/Graphics/RayTracing/OpacityMicromap.cpp#L90) descomprime o
 BC para `R32G32B32A32_FLOAT` e monta um plano FP32 de um canal: 20 B/texel no total — 84 MB para
@@ -413,7 +455,7 @@ que o guia chama de retorno decrescente. O Indiana Jones shipou 6 com `dynamicSu
 grátis em qualidade e diminui o array, e provavelmente o bake time — mas **não** os fallbacks: o
 workload que decide o fallback não depende do nível (ver o P1). Pede A/B de recorte.
 
-## P2 — Um `omm::Baker` por bake
+## P2 — Um `omm::Baker` por bake — **FEITO** (o baker mora no `FOmmPreparedAlpha`, um por textura; ver acima)
 
 [OpacityMicromap.cpp:187](Engine/Source/Graphics/RayTracing/OpacityMicromap.cpp#L187) cria e destrói
 um baker por chamada. O guia diz que as tarefas de bake são thread safe e que não é preciso criar
@@ -518,6 +560,17 @@ máximo `TRIANGLE_CULL_DISABLE`
 decide é o OMM. Num código em que os comentários carregam a decisão, este manda o próximo leitor
 procurar uma flag que não existe.
 
+## P3 — Latente: o sidecar de MATERIAIS do editor não passa pelo `.somm`
+
+Achado ao medir o rebake. O editor aplica um sidecar de materiais **depois** do load, e ele pode
+mudar `alphaTest` e `alphaCutoff` ([MaterialsBridge.cpp](Editor/Source/Scene/MaterialsBridge.cpp),
+perto de "alphaTest e alphaCutoff sao ENTRADAS do bake"). O `SmileOmmBaker` bakeia com os valores
+**cozidos**, então numa cena em que esse sidecar mexa num material mascarado, os pares dele não
+batem com o `.somm`. Eles vão para o rebake de runtime, com teto, e podem voltar a ter triângulos
+UNKNOWN, o que bloqueia o 2-state do GI pela guarda. Nada quebra (a guarda é justamente para isso),
+mas o ganho do bake offline se perde naquela cena. O BistroExterior não tem esse sidecar. Conserto
+possível: o `SmileOmmBaker` aplicar o mesmo sidecar de materiais antes de enumerar os pares.
+
 ## P3 — Latente: textura de albedo que falha no upload diverge do bake
 
 Achado de passagem, ao conferir que o import e o `SmileOmmBaker` enxergam as mesmas entradas. Em
@@ -544,8 +597,10 @@ a mesma textura que o material recebeu: plano branco quando ele caiu no default.
    e com o toggle `DISABLE_OMMS` para medir. É onde está o ganho de dois dígitos.
 5. ~~`maxSubdivisionLevel 6`~~ → **FEITO** (settings v2): VRAM de OMM 20,3 → 7,35 MB, bake 55 →
    26 s, sem regressão de GPU nem de imagem acima do ruído.
-6. **Plano de alpha por textura + UNORM8 + baker compartilhado**, e o agendamento — importam para
-   o rebake do editor depois que o Cooker existir.
+6. ~~Plano de alpha por textura + baker compartilhado~~ → **FEITO** (`FOmmPreparedAlpha`): rebake
+   do editor 32,3 → 6,7 s somados (até 18× por material), bake offline 26 → 13,1 s, bytes idênticos.
+   Falta, por decisão: UNORM8 (muda o resultado, ~150 ms) e paralelizar os pares no editor (~1 s em
+   dois materiais).
 7. ~~Pool de OMM Arrays~~ → **medido e descartado**: tight alignment do D3D12MA, padding zero
    (7,35 MB pedidos = 7,35 MB alocados). Compactação no `EnsureBlasFor`, `EnableValidation`,
    ramo de 8 bits — higiene. (Os comentários de `FORCE_NON_OPAQUE` foram corrigidos junto com o P0.)
