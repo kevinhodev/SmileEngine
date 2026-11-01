@@ -4,6 +4,8 @@
 
 add_executable(SmileOmmBaker
     main.cpp
+    MaterialSidecar.cpp
+    MaterialSidecar.h
 )
 
 target_compile_features(SmileOmmBaker PRIVATE cxx_std_20)

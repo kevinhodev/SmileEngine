@@ -185,6 +185,14 @@ namespace Smile {
         // mudou", que dao mensagens diferentes.
         bool HasTextureSource(const FTexture* Texture) const;
 
+        // A procedencia JA REGISTRADA, para montar a chave .somm de um par sem reler nada do disco
+        // (Renderer::LiveOmmBakeKey). Os hashes sao os mesmos que o CollectOmmBakeJobs calcula: as
+        // duas pontas usam OmmHashGeometry/OmmHashTexture sobre o que o loader carregou.
+        bool MeshSourceOf(const FGpuMesh* Mesh, std::wstring& FilePath, u32& MeshIndex,
+                          FOmmContentHash& ContentHash) const;
+        // kOmmNoContentHash quando a textura nao tem procedencia.
+        FOmmContentHash TextureHashOf(const FTexture* Texture) const;
+
         u32 MeshCount()    const { return static_cast<u32>(Meshes_.size()); }
         u32 TextureCount() const { return static_cast<u32>(Textures_.size()); }
         // Memoria que a cena segura por causa disto. CACHEADA, e nao recontada: isto e lido em

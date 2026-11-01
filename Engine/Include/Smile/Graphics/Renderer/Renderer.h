@@ -37,6 +37,7 @@
 #include "Smile/Graphics/Environment/RainWetness.h"
 #include "Smile/Graphics/Lighting/SunShadows.h"
 #include "Smile/Graphics/Lighting/LocalShadows.h"
+#include "Smile/Graphics/RayTracing/OmmBakeCache.h"
 #include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
 #include "Smile/Graphics/RayTracing/RaytracingScene.h"
 #include "Smile/Graphics/GI/GIFallback.h"
@@ -732,6 +733,14 @@ namespace Smile {
         // O alpha de um material, relido do disco e PREPARADO uma vez para todos os pares dele
         // (ver FOmmPreparedAlpha). Nulo em falha, com log dizendo qual peca faltou.
         std::shared_ptr<FOmmPreparedAlpha> PrepareOmmAlphaFor(const FMaterial* Material);
+        // A chave .somm VIVA de um par: indices cozidos + hashes da procedencia + bits ATUAIS de
+        // alpha/cutoff. Falso quando falta alguma peca (malha ou textura sem procedencia, material
+        // criado em runtime) — ai nao ha o que procurar no sidecar e o rebake bakeia.
+        // Sidecar recebe o .somm da cena de onde a malha veio (o .smesh dela, com outra extensao).
+        bool LiveOmmBakeKey(const FGpuMesh* Mesh, const FMaterial* Material, FOmmBakeKey& Out,
+                            std::filesystem::path& Sidecar) const;
+        // Indice COZIDO de cada material importado (por cena), para a chave acima.
+        std::unordered_map<const FMaterial*, u32> OmmMaterialIndex_;
 
         // A GUARDA do OMM 2-state no GI. O knob (FRenderSettings::SetGIOmm2State) so PEDE; quem
         // liga e isto, e so com ZERO triangulos mascarados sem micro-map na cena: o 2-state

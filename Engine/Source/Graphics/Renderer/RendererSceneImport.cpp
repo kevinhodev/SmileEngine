@@ -260,6 +260,7 @@ namespace Smile {
             // As entradas de bake retidas descrevem a cena que esta indo embora: os ponteiros de
             // malha e de textura morrem nas linhas seguintes.
             OmmBakeInputs.Clear();
+            OmmMaterialIndex_.clear(); // mesma razao: os FMaterial morrem logo abaixo
             for (auto& m : ImportedMaterials) m->Release(Backend->SRVHeap);
             ImportedMaterials.clear();
             for (auto& t : ImportedTextures) t->Release(Backend->SRVHeap);
@@ -316,23 +317,13 @@ namespace Smile {
             return (it != texCpuByPath.end()) ? it->second : nullptr;
         };
 
-        // SSceneMaterial nao possui padding e o Cooker inicializa todos os bytes; o hash e estavel.
-        auto MaterialContentId = [](const SSceneMaterial& _Sm) -> u64 {
-            const auto* Bytes = reinterpret_cast<const u8*>(&_Sm);
-            u64 H = 1469598103934665603ull;               // offset basis
-            for (size_t b = 0; b < sizeof(SSceneMaterial); ++b) {
-                H ^= Bytes[b];
-                H *= 1099511628211ull;                    // prime
-            }
-            return H;
-        };
 
         std::vector<FMaterial*> matPtrs(sh.MaterialCount, nullptr);
         for (u32 i = 0; i < sh.MaterialCount; ++i) {
             const SSceneMaterial& sm = mats[i];
             auto mat = std::make_unique<FMaterial>();
             mat->Name = std::string(sm.Name, strnlen(sm.Name, kCookedMaxName));
-            mat->Id   = MaterialContentId(sm);
+            mat->Id   = CookedMaterialId(sm);
 
             FTexture* baseT  = getTex(sm.BaseColor);
             FTexture* specT  = getTex(sm.Specular);
@@ -389,6 +380,10 @@ namespace Smile {
 
             mat->UpdateConstants();
             matPtrs[i] = mat.get();
+            // O indice COZIDO, que e metade da chave do par no .somm. O rebake (editor ou sidecar
+            // de materiais) precisa dele para achar no bake offline os valores que vieram depois
+            // do load.
+            OmmMaterialIndex_[mat.get()] = i;
             ImportedMaterials.push_back(std::move(mat));
         }
 

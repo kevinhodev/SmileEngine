@@ -103,14 +103,17 @@ namespace Smile {
         // Escreve num .tmp e renomeia por cima: um bake interrompido nao deixa sidecar truncado.
         bool Save(const std::filesystem::path& Path, std::string& WhyNot) const;
 
+        // Um par pode ter VARIAS entradas, uma por chave: o valor cozido (que o import procura) e
+        // os valores de um override do <cena>.materials.json (que o rebake procura, porque o editor
+        // aplica o override depois do load). Mesma chave substitui.
         void Put(const FOmmBakeKey& Key, std::shared_ptr<FOpacityMicromapData> Data);
 
         enum class ELookup { Hit, Missing, Stale };
-        // Hit so com a chave INTEIRA batendo. Stale = existe entrada para o par, mas alguma entrada
-        // do bake mudou desde a gravacao.
+        // Hit so com a chave INTEIRA batendo. Stale = existe entrada para o par, mas nenhuma com as
+        // entradas de bake de agora.
         ELookup Lookup(const FOmmBakeKey& Key, std::shared_ptr<FOpacityMicromapData>& Out) const;
 
-        size_t Size() const { return Entries_.size(); }
+        size_t Size() const;
         void   Clear() { Entries_.clear(); Flavor_ = 0; }
 
         // A CONFIGURACAO de build que gravou o sidecar. Informativa, NAO entra na validacao.
@@ -126,7 +129,12 @@ namespace Smile {
         u32 Flavor() const { return Flavor_; } // 0 antes de um Load bem-sucedido
 
         static constexpr u32 kMagic         = 0x4D4D4F53u; // "SOMM"
-        static constexpr u32 kFormatVersion = 1u;
+        // v2: VARIAS entradas por par (cozido + overrides do .materials.json). O layout em disco e o
+        // mesmo da v1, entao a v1 continua sendo lida; o bump existe para um leitor ANTIGO recusar
+        // um arquivo v2 com o motivo certo ("formato v2"), e nao com "par duplicado" — que foi o
+        // que a v1 disse ao ler o primeiro arquivo com variantes.
+        static constexpr u32 kFormatVersion       = 2u;
+        static constexpr u32 kOldestFormatVersion = 1u;
 
     private:
         u32 Flavor_ = 0;
@@ -137,7 +145,7 @@ namespace Smile {
         static u64 PairOf(u32 Mesh, u32 Material) {
             return (static_cast<u64>(Mesh) << 32) | Material;
         }
-        std::unordered_map<u64, FEntry> Entries_;
+        std::unordered_map<u64, std::vector<FEntry>> Entries_; // por par (malha, material)
     };
 
     // Versao do OMM SDK compilado, no cabecalho do sidecar. Outro SDK pode classificar diferente.

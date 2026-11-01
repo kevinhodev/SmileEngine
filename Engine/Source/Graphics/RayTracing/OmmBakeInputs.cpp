@@ -87,6 +87,21 @@ namespace Smile {
         return _Texture && Textures_.contains(_Texture);
     }
 
+    bool FOmmBakeInputStore::MeshSourceOf(const FGpuMesh* _Mesh, std::wstring& _FilePath,
+                                          u32& _MeshIndex, FOmmContentHash& _ContentHash) const {
+        const auto It = _Mesh ? Meshes_.find(_Mesh) : Meshes_.end();
+        if (It == Meshes_.end()) return false;
+        _FilePath    = It->second.FilePath;
+        _MeshIndex   = It->second.MeshIndex;
+        _ContentHash = It->second.ContentHash;
+        return true;
+    }
+
+    FOmmContentHash FOmmBakeInputStore::TextureHashOf(const FTexture* _Texture) const {
+        const auto It = _Texture ? Textures_.find(_Texture) : Textures_.end();
+        return It == Textures_.end() ? kOmmNoContentHash : It->second.ContentHash;
+    }
+
     bool FOmmBakeInputStore::LoadAlphaTexture(const FTexture* _Texture,
                                               FTextureCPUData& _Out) const {
         const auto It = _Texture ? Textures_.find(_Texture) : Textures_.end();

@@ -291,7 +291,10 @@ namespace Smile {
     }
 
     void FOmmBakeCache::Put(const FOmmBakeKey& _Key, std::shared_ptr<FOpacityMicromapData> _Data) {
-        Entries_[PairOf(_Key.MeshIndex, _Key.MaterialIndex)] = FEntry{ _Key, std::move(_Data) };
+        auto& Variants = Entries_[PairOf(_Key.MeshIndex, _Key.MaterialIndex)];
+        for (FEntry& E : Variants)
+            if (E.Key == _Key) { E.Data = std::move(_Data); return; }
+        Variants.push_back(FEntry{ _Key, std::move(_Data) });
     }
 
     FOmmBakeCache::ELookup FOmmBakeCache::Lookup(const FOmmBakeKey& _Key,
@@ -299,27 +302,47 @@ namespace Smile {
         _Out.reset();
         const auto It = Entries_.find(PairOf(_Key.MeshIndex, _Key.MaterialIndex));
         if (It == Entries_.end()) return ELookup::Missing;
-        if (!(It->second.Key == _Key)) return ELookup::Stale;
-        _Out = It->second.Data;
-        return ELookup::Hit;
+        for (const FEntry& E : It->second)
+            if (E.Key == _Key) { _Out = E.Data; return ELookup::Hit; }
+        return ELookup::Stale;
+    }
+
+    size_t FOmmBakeCache::Size() const {
+        size_t N = 0;
+        for (const auto& [Pair, Variants] : Entries_) N += Variants.size();
+        return N;
     }
 
     bool FOmmBakeCache::Save(const std::filesystem::path& _Path, std::string& _WhyNot) const {
         std::vector<u8> Payload;
         // Ordem estavel no arquivo (o unordered_map nao tem): dois saves do mesmo cache dao os
         // mesmos bytes, e um diff de sidecar e legivel.
+        // Por par e, dentro do par, pela chave inteira: as variantes de um par (cozido, override)
+        // nao podem sair numa ordem que dependa da ordem de insercao.
         std::vector<const FEntry*> Sorted;
-        Sorted.reserve(Entries_.size());
-        for (const auto& [Pair, E] : Entries_) Sorted.push_back(&E);
-        std::sort(Sorted.begin(), Sorted.end(), [](const FEntry* A, const FEntry* B) {
-            return PairOf(A->Key.MeshIndex, A->Key.MaterialIndex) <
-                   PairOf(B->Key.MeshIndex, B->Key.MaterialIndex);
-        });
+        Sorted.reserve(Size());
+        for (const auto& [Pair, Variants] : Entries_)
+            for (const FEntry& E : Variants) Sorted.push_back(&E);
+        auto Rank = [](const FEntry* E) {
+            return std::tuple{ PairOf(E->Key.MeshIndex, E->Key.MaterialIndex), E->Key.Geometry,
+                               E->Key.Texture, E->Key.BaseAlphaBits, E->Key.CutoffBits };
+        };
+        std::sort(Sorted.begin(), Sorted.end(),
+                  [&](const FEntry* A, const FEntry* B) { return Rank(A) < Rank(B); });
 
         for (const FEntry* E : Sorted) {
             const FOpacityMicromapData& D = *E->Data;
             if (!D.Valid()) {
                 _WhyNot = "entrada invalida no cache (mesh " + std::to_string(E->Key.MeshIndex) + ")";
+                return false;
+            }
+            // A chave E o valor bakeado: o Load reconstroi BakedBaseAlpha/BakedAlphaCutoff a partir
+            // dos bits dela. Uma entrada em que os dois divergem e erro de quem montou o cache, e
+            // grava-la produziria um sidecar que mente sobre o proprio bake.
+            if (BitsOf(D.BakedBaseAlpha) != E->Key.BaseAlphaBits ||
+                BitsOf(D.BakedAlphaCutoff) != E->Key.CutoffBits) {
+                _WhyNot = "chave e bake divergem em alpha/cutoff (mesh " +
+                          std::to_string(E->Key.MeshIndex) + ")";
                 return false;
             }
             SOmmEntry H{};
@@ -399,9 +422,9 @@ namespace Smile {
         SOmmFileHeader Header;
         std::memcpy(&Header, Bytes.data(), sizeof(Header));
         if (Header.Magic != kMagic) { _WhyNot = "magic invalido"; return false; }
-        if (Header.FormatVersion != kFormatVersion) {
+        if (Header.FormatVersion < kOldestFormatVersion || Header.FormatVersion > kFormatVersion) {
             _WhyNot = "formato v" + std::to_string(Header.FormatVersion) + ", esperado v" +
-                      std::to_string(kFormatVersion);
+                      std::to_string(kOldestFormatVersion) + " a v" + std::to_string(kFormatVersion);
             return false;
         }
         if (Header.SettingsVersion != kOmmBakeSettingsVersion) {
@@ -421,7 +444,7 @@ namespace Smile {
         }
 
         FReader R{ Payload, PayloadBytes, 0 };
-        std::unordered_map<u64, FEntry> Parsed;
+        std::unordered_map<u64, std::vector<FEntry>> Parsed;
         for (u32 E = 0; E < Header.EntryCount; ++E) {
             SOmmEntry H;
             if (!R.Read(&H, sizeof(H))) { _WhyNot = "entrada truncada"; return false; }
@@ -501,10 +524,15 @@ namespace Smile {
             Key.Texture       = H.TextureHash;
             Key.BaseAlphaBits = H.BaseAlphaBits;
             Key.CutoffBits    = H.CutoffBits;
-            if (!Parsed.emplace(PairOf(H.MeshIndex, H.MaterialIndex), FEntry{ Key, std::move(D) }).second) {
-                _WhyNot = "par (malha, material) duplicado";
-                return false;
-            }
+            // Varias entradas por par sao legitimas (cozido e overrides); a MESMA chave duas vezes
+            // nao e — o Save nunca grava isso, entao e arquivo corrompido ou montado a mao.
+            auto& Variants = Parsed[PairOf(H.MeshIndex, H.MaterialIndex)];
+            for (const FEntry& Existing : Variants)
+                if (Existing.Key == Key) {
+                    _WhyNot = "chave de bake duplicada (mesh " + std::to_string(H.MeshIndex) + ")";
+                    return false;
+                }
+            Variants.push_back(FEntry{ Key, std::move(D) });
         }
         if (R.Pos != R.Size) { _WhyNot = "bytes sobrando depois da ultima entrada"; return false; }
         Entries_ = std::move(Parsed);

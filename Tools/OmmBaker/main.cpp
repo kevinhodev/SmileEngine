@@ -13,6 +13,7 @@
 // Incremental por padrao: pares cujo bake no sidecar existente ainda bate com a cena sao
 // reaproveitados. --force refaz todos.
 
+#include "MaterialSidecar.h"
 #include "Smile/Graphics/RayTracing/OmmBakeCache.h"
 #include "Smile/Graphics/RayTracing/OmmBakeInputs.h"
 #include "Smile/Graphics/Resources/GpuMesh.h"
@@ -23,6 +24,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <map>
@@ -134,14 +136,17 @@ int main(int argc, char** argv) {
     const char* ScenePath = nullptr;
     bool Force = false;
     bool Bench = false;
+    bool ListIds = false;
     for (int I = 1; I < argc; ++I) {
         if (std::strcmp(argv[I], "--force") == 0) Force = true;
         else if (std::strcmp(argv[I], "--bench-rebake") == 0) Bench = true;
+        else if (std::strcmp(argv[I], "--material-ids") == 0) ListIds = true;
         else if (!ScenePath) ScenePath = argv[I];
         else { ScenePath = nullptr; break; }
     }
     if (!ScenePath) {
-        std::fprintf(stderr, "uso: SmileOmmBaker <cena.sscene> [--force | --bench-rebake]\n");
+        std::fprintf(stderr, "uso: SmileOmmBaker <cena.sscene> [--force | --bench-rebake | "
+                             "--material-ids]\n");
         return 2;
     }
 
@@ -153,9 +158,41 @@ int main(int argc, char** argv) {
             return 3;
         }
 
-        const std::vector<FOmmBakeJob> Jobs = CollectOmmBakeJobs(*Scene);
+        // A chave de cada material no <cena>.materials.json v2 (o id em hex, como o editor grava)
+        // e o que entra no bake. Para inspecionar ou escrever um sidecar sem adivinhar o id.
+        if (ListIds) {
+            for (u32 I = 0; I < Scene->Materials.size(); ++I) {
+                const SSceneMaterial& M = Scene->Materials[I];
+                std::printf("%4u  id=%llx  alphaTest=%u cutoff=%g  %s\n", I,
+                            static_cast<unsigned long long>(CookedMaterialId(M)), M.AlphaTest,
+                            M.AlphaCutoff, std::string(M.Name, strnlen(M.Name, kCookedMaxName)).c_str());
+            }
+            return 0;
+        }
+
+        std::vector<FOmmBakeJob> Jobs = CollectOmmBakeJobs(*Scene);
         // So mede: nao grava sidecar nenhum.
         if (Bench) return BenchRebake(*Scene, Jobs, 12);
+
+        // As VARIANTES do <cena>.materials.json: o editor aplica esses overrides depois do load, e
+        // o rebake da engine procura no .somm a chave com os valores DELES (LiveOmmBakeKey). Uma
+        // variante identica a uma cozida (override que repete o valor) nao entra duas vezes.
+        std::deque<FTextureCPUData> OverrideTextures; // vivas ate o fim do bake
+        {
+            std::string Why;
+            const auto Overrides = LoadMaterialOmmOverrides(*Scene, Why);
+            if (!Why.empty())
+                std::printf("[OMM BAKER] sidecar de materiais ignorado: %s\n", Why.c_str());
+            size_t Added = 0;
+            for (FOmmBakeJob& J : CollectOmmOverrideJobs(*Scene, Overrides, OverrideTextures)) {
+                const bool Same = std::any_of(Jobs.begin(), Jobs.end(),
+                                              [&](const FOmmBakeJob& C) { return C.Key == J.Key; });
+                if (!Same) { Jobs.push_back(J); ++Added; }
+            }
+            if (!Overrides.empty())
+                std::printf("[OMM BAKER] sidecar de materiais: %zu material(is) com override de "
+                            "bake, %zu variante(s) extra(s)\n", Overrides.size(), Added);
+        }
         const std::filesystem::path OutPath = FOmmBakeCache::PathFor(Scene->BasePath);
 
         FOmmBakeCache Previous;

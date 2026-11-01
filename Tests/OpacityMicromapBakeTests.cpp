@@ -336,10 +336,59 @@ static int TestarSidecar(const std::vector<std::shared_ptr<Smile::FOpacityMicrom
               "outra versao dos parametros de bake e recusada, com o motivo certo");
 
         Check(!C.Load(Dir / "nao_existe.somm", Why), "arquivo inexistente e falso");
+
+        // VERSAO DO FORMATO. A v2 so acrescentou variantes por par, entao um arquivo v1 continua
+        // legivel; uma versao do futuro e recusada com o motivo, e nao lida "do jeito que der".
+        auto ComVersao = [&](u32 _V) {
+            std::vector<char> Out = Original;
+            std::memcpy(Out.data() + 4, &_V, 4);
+            return Out;
+        };
+        Gravar(Arquivo, ComVersao(1));
+        Check(C.Load(Arquivo, Why) && C.Size() == _Bakes.size(), "arquivo v1 continua legivel");
+        Gravar(Arquivo, ComVersao(99));
+        Check(!C.Load(Arquivo, Why) && Why.find("formato") != std::string::npos,
+              "formato do futuro e recusado, com o motivo certo");
+    }
+
+    // VARIANTES POR PAR (v2): o cozido, que o import procura, e o override do .materials.json,
+    // que o rebake procura, convivem no mesmo par — cada uma achada pela PROPRIA chave.
+    {
+        FOmmBakeKey Cozido = Chave(0), Override = Chave(0);
+        const f32 OutroCutoff = 0.35f;
+        std::memcpy(&Override.CutoffBits, &OutroCutoff, 4);
+        // O bake da variante carrega o MESMO cutoff da chave dela — e assim que o baker produz.
+        auto OverrideData = std::make_shared<FOpacityMicromapData>(*_Bakes[1]);
+        OverrideData->BakedAlphaCutoff = OutroCutoff;
+        FOmmBakeCache V;
+        V.Put(Cozido, _Bakes[0]);
+        V.Put(Override, OverrideData);
+        V.Put(Cozido, _Bakes[0]); // a mesma chave SUBSTITUI, nao duplica
+        Check(V.Size() == 2, "duas variantes do mesmo par, sem duplicar a mesma chave");
+        const std::filesystem::path Variantes = Dir / "variantes.somm";
+        FOmmBakeCache Lido2;
+        std::shared_ptr<FOpacityMicromapData> A, B2;
+        Check(V.Save(Variantes, Why) && Lido2.Load(Variantes, Why) && Lido2.Size() == 2,
+              "variantes sobrevivem a ida e volta");
+        Check(Lido2.Lookup(Cozido, A) == FOmmBakeCache::ELookup::Hit && A && Igual(*A, *_Bakes[0]) &&
+              Lido2.Lookup(Override, B2) == FOmmBakeCache::ELookup::Hit && B2 && Igual(*B2, *OverrideData),
+              "cada variante e achada pela propria chave, com o proprio bake");
+
+        // E o Save recusa a combinacao que o baker nunca produz: chave dizendo um cutoff, bake
+        // feito com outro. Gravar isso daria um sidecar que mente sobre o proprio bake.
+        FOmmBakeCache Mentira;
+        Mentira.Put(Override, _Bakes[1]); // _Bakes[1] foi bakeado a 0,5, a chave diz 0,35
+        Check(!Mentira.Save(Dir / "mentira.somm", Why) && Why.find("divergem") != std::string::npos,
+              "chave e bake divergentes sao recusados no Save");
+        FOmmBakeKey Terceira = Chave(0);
+        Terceira.CutoffBits ^= 1u;
+        std::shared_ptr<FOpacityMicromapData> D3;
+        Check(Lido2.Lookup(Terceira, D3) == FOmmBakeCache::ELookup::Stale && !D3,
+              "um terceiro valor do mesmo par continua Stale");
     }
 
     std::filesystem::remove_all(Dir, Ec);
-    if (Falhas == 0) std::printf("[OMM TEST] sidecar .somm: 14 casos OK\n");
+    if (Falhas == 0) std::printf("[OMM TEST] sidecar .somm: 21 casos OK\n");
     return Falhas;
 }
 

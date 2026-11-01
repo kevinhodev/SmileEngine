@@ -110,4 +110,20 @@ namespace Smile {
     };
 
     constexpr u32 kNoMaterial = 0xFFFFFFFFu;
+
+    // A identidade ESTAVEL de um material cozido: FNV-1a sobre os bytes do SSceneMaterial. Vira o
+    // FMaterial::Id no import, e e por ela que o sidecar <cena>.materials.json (v2) do editor chaveia
+    // os overrides. Mora aqui porque mais de um lado precisa da MESMA conta — o import e o
+    // SmileOmmBaker, que le aquele sidecar para bakear os valores sobrescritos.
+    //
+    // SSceneMaterial nao possui padding e o Cooker inicializa todos os bytes; o hash e estavel.
+    inline u64 CookedMaterialId(const SSceneMaterial& _Sm) {
+        const auto* Bytes = reinterpret_cast<const u8*>(&_Sm);
+        u64 H = 1469598103934665603ull;               // offset basis
+        for (size_t b = 0; b < sizeof(SSceneMaterial); ++b) {
+            H ^= Bytes[b];
+            H *= 1099511628211ull;                    // prime
+        }
+        return H;
+    }
 }

@@ -241,9 +241,41 @@ namespace Smile {
         // O alpha e preparado UMA vez por material e compartilhado pelos pares dele: todos leem a
         // mesma textura com o mesmo alpha e cutoff. Por par, ele era 70% do rebake — um commit no
         // material 125 do Bistro decodificava a mesma textura 36 vezes (10 s parado).
+        //
+        // E ANTES de bakear, o bake OFFLINE: o .somm da cena pode ja ter o par com os valores de
+        // AGORA — o SmileOmmBaker bakeia tambem os overrides do <cena>.materials.json, que o editor
+        // aplica DEPOIS do load. Sem esta consulta, todo valor que nao fosse o cozido caia no bake
+        // de runtime, com teto, e podia voltar a ter UNKNOWN (o que tambem bloqueia o 2-state do
+        // GI). Cada .somm e lido uma vez por reconciliacao; arquivo ausente ou recusado fica nulo.
+        std::unordered_map<std::wstring, std::unique_ptr<FOmmBakeCache>> Sidecars;
+        u32 FromSidecar = 0;
+        auto FromOfflineBake = [&](const FPairKey& _Key) -> std::shared_ptr<FOpacityMicromapData> {
+            FOmmBakeKey Live;
+            std::filesystem::path Path;
+            if (!LiveOmmBakeKey(_Key.Mesh, _Key.Material, Live, Path)) return nullptr;
+            auto& Cache = Sidecars[Path.wstring()];
+            if (!Cache) {
+                auto Loaded = std::make_unique<FOmmBakeCache>();
+                std::string Why;
+                if (std::filesystem::exists(Path) && Loaded->Load(Path, Why)) Cache = std::move(Loaded);
+                else Cache = std::make_unique<FOmmBakeCache>(); // vazio: nenhum Hit, sem reler
+            }
+            std::shared_ptr<FOpacityMicromapData> Data;
+            if (Cache->Lookup(Live, Data) != FOmmBakeCache::ELookup::Hit) return nullptr;
+            // Carimbo das entradas, como no bake: sem ele o micro-map seria obsoleto no frame
+            // seguinte e o rebake entraria em laco.
+            Data->BakedInputs = FOmmInputKey::From(_Key.Mesh, _Key.Material);
+            return Data;
+        };
+
         std::unordered_map<const FMaterial*, std::shared_ptr<FOmmPreparedAlpha>> AlphaOf;
         for (const auto& [Index, Key] : Stale) {
             if (Rebaked.contains(Key) || Failed.contains(Key.Material)) continue;
+            if (auto Offline = FromOfflineBake(Key)) {
+                Rebaked.emplace(Key, std::move(Offline));
+                ++FromSidecar;
+                continue;
+            }
             auto& Alpha = AlphaOf[Key.Material];
             if (!Alpha) Alpha = PrepareOmmAlphaFor(Key.Material);
             if (!Alpha) { Failed.insert(Key.Material); continue; }
@@ -252,6 +284,7 @@ namespace Smile {
             Rebaked.emplace(Key, std::move(Novo));
         }
         AlphaOf.clear(); // solta as texturas do SDK antes da reconstrucao dos BLAS
+        Sidecars.clear(); // os micro-maps achados ja estao no Rebaked (shared_ptr)
         // Um material que falhou em QUALQUER par nao publica par nenhum: os bakes que deram certo
         // sao descartados, senao ele ficaria metade novo e metade revertido.
         if (!Failed.empty())
@@ -368,7 +401,9 @@ namespace Smile {
 
         if (!Rebaked.empty() || BuiltBlas > 0)
             LogInfo("[OMM] Rebake em runtime: " + std::to_string(Rebaked.size()) +
-                    " par(es) rebakeado(s), " + std::to_string(BuiltBlas) + " BLAS reconstruido(s)");
+                    " par(es) refeito(s) (" + std::to_string(FromSidecar) +
+                    " do bake offline .somm, " + std::to_string(Rebaked.size() - FromSidecar) +
+                    " bakeados agora), " + std::to_string(BuiltBlas) + " BLAS reconstruido(s)");
         // O rebake do editor e de RUNTIME, com teto: pode devolver triangulos UNKNOWN numa cena
         // que estava toda coberta pelo sidecar. A guarda do 2-state tem de ver isso.
         RefreshOmmGI2State();
@@ -435,6 +470,37 @@ namespace Smile {
         // Um contador, e nao um sinal: o Renderer nao conhece Qt, e a ponte ja tem um tick por
         // frame ligado ao FrameReady.
         ++MaterialRevertVersion_;
+    }
+
+    bool Renderer::LiveOmmBakeKey(const FGpuMesh* _Mesh, const FMaterial* _Material,
+                                  FOmmBakeKey& _Out, std::filesystem::path& _Sidecar) const {
+        if (!_Mesh || !_Material) return false;
+        std::wstring MeshFile;
+        u32 MeshIndex = 0;
+        FOmmContentHash Geometry = kOmmNoContentHash;
+        if (!OmmBakeInputs.MeshSourceOf(_Mesh, MeshFile, MeshIndex, Geometry)) return false;
+        const auto Material = OmmMaterialIndex_.find(_Material);
+        if (Material == OmmMaterialIndex_.end()) return false;
+
+        // Sem albedo o material usa o branco default, e o bake usou o plano branco — o mesmo
+        // criterio do CollectOmmBakeJobs (textura nula = kOmmWhiteTexture).
+        const FOmmContentHash Texture =
+            (!_Material->Albedo || _Material->Albedo == &TexDefaultWhite)
+                ? kOmmWhiteTexture
+                : OmmBakeInputs.TextureHashOf(_Material->Albedo);
+        if (Texture == kOmmNoContentHash) return false; // textura sem procedencia
+
+        _Out = FOmmBakeKey{};
+        _Out.MeshIndex     = MeshIndex;
+        _Out.MaterialIndex = Material->second;
+        _Out.Geometry      = Geometry;
+        _Out.Texture       = Texture;
+        const f32 BaseAlpha = _Material->Constants.BaseColorFactor.W;
+        const f32 Cutoff    = _Material->Constants.AlphaCutoff;
+        std::memcpy(&_Out.BaseAlphaBits, &BaseAlpha, sizeof(f32));
+        std::memcpy(&_Out.CutoffBits, &Cutoff, sizeof(f32));
+        _Sidecar = std::filesystem::path(MeshFile).replace_extension(L".somm");
+        return true;
     }
 
     // O bake de UM par, a partir das entradas retidas. Devolve nulo (e diz por que) quando falta
