@@ -534,8 +534,29 @@ Na mesma linha: o BLAS do `EnsureBlasFor` não usa `ALLOW_COMPACTION`
 ([linha 291](Engine/Source/Graphics/RayTracing/RaytracingScene.cpp#L291)), e o pool usa
 ([linha 667](Engine/Source/Graphics/RayTracing/RaytracingScene.cpp#L667)). O Indiana Jones mediu BLAS
 compactado em ~50%, e `RebuiltBlasBytes()` existe porque "o modo de falha é crescimento silencioso".
+(→ **FEITO**, seção abaixo.)
 
-## P3 — `EnableValidation` sempre ligado
+## P3 — BLAS do `EnsureBlasFor` sem compaction — **FEITO**
+
+O BLAS refeito pelo rebake agora sai com `ALLOW_COMPACTION`, como o pool do `Build`: o build emite o
+tamanho compactado (postbuild info), um readback o traz para a CPU e uma cópia `COMPACT` vai para um
+recurso do tamanho exato. Custa um segundo round-trip de fila, num caminho que já era síncrono e só
+roda em edição manual. A publicação continua transacional: nada entra em `BlasByMesh` antes da
+última espera, e um tamanho 0 no readback cai para o BLAS sem compactar, com aviso, igual ao `Build`.
+
+**Medido** no BistroExterior, com dois overrides de material forçando o rebake de 48 pares:
+**4032 KB → 2512 KB (−38%)** nos BLAS refeitos (log `[OMM] - BLAS do rebake compactados`). É o que
+`RebuiltBlasBytes()` passa a contar.
+
+## P3 — `EnableValidation` sempre ligado — **FEITO (só em Debug)**
+
+Gateado por `NDEBUG`; o `messageCallback` continua instalado nas duas configurações. Conferido no
+`bake_cpu_impl.cpp` que a flag só **loga** (triângulos não classificáveis, aviso de workload acima de
+128 texturas 1K) e força o cálculo do workload mesmo sem teto; o teto é avaliado com ou sem ela. O
+teste confirma: o bake de runtime em Release, agora sem a flag, segue **byte a byte** idêntico ao
+`.somm` gravado com ela (112 de 112 pares comparáveis).
+
+### Texto original desta seção
 
 [OpacityMicromap.cpp:206](Engine/Source/Graphics/RayTracing/OpacityMicromap.cpp#L206). Seguro de
 gatear em Debug: `bake_cpu_impl.cpp:685-696` avalia o teto de workload independentemente da flag.
@@ -543,7 +564,13 @@ gatear em Debug: `bake_cpu_impl.cpp:685-696` avalia o teto de workload independe
 calculado de qualquer jeito por causa do teto. Manter o `messageCallback` sempre (o SDK recusa a
 flag sem ele, `bake_cpu_impl.cpp:269`).
 
-## P3 — Latente: `IndexFormat::UINT_8 → DXGI_FORMAT_R8_UINT`
+## P3 — Latente: `IndexFormat::UINT_8 → DXGI_FORMAT_R8_UINT` — **FEITO (ramo removido)**
+
+O `case UINT_8` saiu do switch: um índice de 8 bits agora cai no `Fail("formato do index buffer OMM
+desconhecido")`. Se aparecer, é um flag novo vazando, e falhar alto é melhor que linkar um formato que
+o caminho de D3D12 nunca exercitou.
+
+### Texto original desta seção
 
 [OpacityMicromap.cpp:266-267](Engine/Source/Graphics/RayTracing/OpacityMicromap.cpp#L266).
 Inalcançável hoje (`Allow8BitIndices` não é setado), mas o ramo parece suporte e não é: o RHI da
@@ -560,7 +587,34 @@ máximo `TRIANGLE_CULL_DISABLE`
 decide é o OMM. Num código em que os comentários carregam a decisão, este manda o próximo leitor
 procurar uma flag que não existe.
 
-## P3 — Latente: o sidecar de MATERIAIS do editor não passa pelo `.somm`
+## P3 — Latente: o sidecar de MATERIAIS do editor não passa pelo `.somm` — **FEITO**
+
+Eram duas metades, e a segunda não estava no texto original: o baker gravar as variantes não
+adianta se o rebake do editor não as procura. O import consulta o `.somm` com os valores **cozidos**;
+o override do `<cena>.materials.json` só entra depois, e o rebake bakeava tudo de novo.
+
+- **Baker** ([Tools/OmmBaker/MaterialSidecar.cpp](Tools/OmmBaker/MaterialSidecar.cpp)): lê o mesmo
+  sidecar que o `MaterialsBridge` (v2 por `FMaterial::Id`, v1 por nome), resolve `alphaTest`,
+  `alphaCutoff` e albedo, e acrescenta um job por par mascarado cujo override muda a chave. Chave igual
+  à do job cozido não duplica. `--material-ids` lista os ids para escrever o json à mão. O id é o
+  `CookedMaterialId` — a função que o import usava como lambda local foi para o `CookedFormat.h`, para
+  os dois lados calcularem o mesmo id.
+- **Formato v2** (`kFormatVersion = 2`, lê a v1): várias entradas por par, uma por chave. `Lookup`
+  devolve Hit só na chave inteira e Stale se o par existe com outra. O `Save` recusa entrada cuja chave
+  diverge dos bits de alpha/cutoff do próprio bake, e o `Load` recusa chave duplicada. O bump existe
+  para um leitor antigo recusar com "formato v2", e não com "par duplicado".
+- **Rebake do editor** (`RebakeStaleOpacityMicromaps`): antes de bakear, monta a chave **viva** do par
+  (`LiveOmmBakeKey`: índices de malha e material do import, hashes de conteúdo, bits atuais) e procura
+  no `.somm` da malha, carregado uma vez por reconciliação. Só o que não está lá vai para o baker.
+
+**Medido** no BistroExterior, com um `materials.json` temporário (material 125 por id com cutoff 0,35;
+`Streetlight_Chains` por nome com 0,4) e o `.somm` regerado com ele: o import pega os 122 pares
+cozidos do sidecar, e o rebake faz **48 pares, 48 do `.somm`, 0 bakeados agora**, com o 2-state
+seguindo ligado. **Caso negativo**: mudando o 125 para 0,36 sem regerar, 12 do `.somm` e 36
+bakeados agora — o par que não bate cai no baker, como deve. O teste ganhou os casos do formato v2
+(21 no total).
+
+### Texto original desta seção
 
 Achado ao medir o rebake. O editor aplica um sidecar de materiais **depois** do load, e ele pode
 mudar `alphaTest` e `alphaCutoff` ([MaterialsBridge.cpp](Editor/Source/Scene/MaterialsBridge.cpp),
@@ -602,8 +656,16 @@ a mesma textura que o material recebeu: plano branco quando ele caiu no default.
    Falta, por decisão: UNORM8 (muda o resultado, ~150 ms) e paralelizar os pares no editor (~1 s em
    dois materiais).
 7. ~~Pool de OMM Arrays~~ → **medido e descartado**: tight alignment do D3D12MA, padding zero
-   (7,35 MB pedidos = 7,35 MB alocados). Compactação no `EnsureBlasFor`, `EnableValidation`,
-   ramo de 8 bits — higiene. (Os comentários de `FORCE_NON_OPAQUE` foram corrigidos junto com o P0.)
+   (7,35 MB pedidos = 7,35 MB alocados). (Os comentários de `FORCE_NON_OPAQUE` foram corrigidos
+   junto com o P0.)
+8. ~~Sidecar de materiais no `.somm`~~ → **FEITO**: baker grava as variantes dos overrides e o rebake
+   do editor as procura; 48 de 48 pares vindos do `.somm` no Bistro com override.
+9. ~~Higiene~~ → **FEITA**: BLAS do `EnsureBlasFor` compactado (−38% medido), `EnableValidation` só em
+   Debug (bytes idênticos), ramo de índice de 8 bits removido.
+
+Ficam abertos, de propósito: UNORM8 no plano de alpha e paralelizar os pares no editor (item 6), o
+toggle `DISABLE_OMMS`, o agendamento dos workers do bake offline e a textura de albedo que falha no
+upload (P3 latente acima).
 
 ## Referências
 
