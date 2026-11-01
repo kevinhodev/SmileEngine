@@ -372,7 +372,39 @@ medido**. Antes de mexer, olhar a ocupação de CPU durante a fase serial. Se el
 os pequenos em paralelo com os grandes é o conserto barato. O Cooker torna isto irrelevante no
 load, mas não no rebake do editor.
 
-## P2 — `maxSubdivisionLevel = 8` contra o 6 de produção
+## P2 — `maxSubdivisionLevel = 8` contra o 6 de produção — **FEITO (6, settings v2)**
+
+**Antes de mudar, medido se o teto mordia.** O `SmileOmmBaker` passou a imprimir o histograma por
+nível. No Bistro com teto 8:
+
+| nível | micro-maps | array | triângulos com micro-map |
+|---|---|---|---|
+| ≤5 | 1 891 | 0,4 MB | 4 226 |
+| 6 | 4 289 | 4,2 MB | 38 483 |
+| 7 | 2 139 | 8,4 MB | 15 924 |
+| **8** | **456** | **7,1 MB** | **220 371** |
+
+O teto mordia, e muito: o nível 8 tem poucos micro-maps, mas **reaproveitados por 79%** dos
+triângulos com micro-map, e os níveis 7+8 eram 15,6 dos 20,1 MB.
+
+**A/B** (`kOmmMaxSubdivisionLevel` em [OpacityMicromap.h](Engine/Include/Smile/Graphics/RayTracing/OpacityMicromap.h)):
+bake com 8 e com 6, e quatro aberturas do editor intercaladas (8, 6, 8, 6), com 2-state no GI
+ligado ([omm-sidecar-arm.mjs](Tools/SmileMCP/scripts/omm-sidecar-arm.mjs)).
+
+| | teto 8 | **teto 6** |
+|---|---|---|
+| VRAM dos OMM Arrays | 20,3 MB | **7,35 MB** (−64%) |
+| sidecar | 23,0 MB | 9,5 MB |
+| bake offline do Bistro | 55 s | **26 s** |
+| cobertura (resolvidos / micro-map / UNKNOWN) | 69 / 31 / 0% | igual |
+| GPU | — | nenhuma regressão acima do ruído; ReSTIR DI e reflexos (4-state, onde a faixa UNKNOWN mais larga cobraria alpha-test) parados |
+| imagem | — | 0,235% dos pixels >2/255, máx. 27/255, luminância −0,05%: nível do ruído entre execuções |
+
+**Adotado:** `kOmmMaxSubdivisionLevel = 6`, `kOmmBakeSettingsVersion` 1 → 2. Na prática o bump
+também validou o mecanismo: o baker recusou o sidecar antigo sozinho ("parametros de bake v1, a
+engine usa v2") e rebakeou. O Bistro carrega do sidecar novo com 61 OMM Arrays em 7,35 MB.
+
+### Texto original desta seção
 
 [OpacityMicromap.cpp:238](Engine/Source/Graphics/RayTracing/OpacityMicromap.cpp#L238). Nível 8 são
 65 536 microtriângulos por triângulo — 16× o dado de array do nível 6, para um ganho de cobertura
@@ -497,8 +529,8 @@ a mesma textura que o material recebeu: plano branco quando ele caiu no default.
 4. **`FORCE_OMM_2_STATE` nos passes indiretos** (P0), pela flag de runtime do `TraceRayInline`, com
    A/B de frame e de GI na folhagem, **com a guarda por cena** (só com `FullyUnknown == 0` no load)
    e com o toggle `DISABLE_OMMS` para medir. É onde está o ganho de dois dígitos.
-5. **`maxSubdivisionLevel 6`** — uma linha, com A/B de recorte. **Não** reduz fallback (o workload
-   não depende do nível); reduz array e bake time.
+5. ~~`maxSubdivisionLevel 6`~~ → **FEITO** (settings v2): VRAM de OMM 20,3 → 7,35 MB, bake 55 →
+   26 s, sem regressão de GPU nem de imagem acima do ruído.
 6. **Plano de alpha por textura + UNORM8 + baker compartilhado**, e o agendamento — importam para
    o rebake do editor depois que o Cooker existir.
 7. Pool de OMM Arrays, compactação no `EnsureBlasFor`, `EnableValidation`, ramo de 8 bits,
