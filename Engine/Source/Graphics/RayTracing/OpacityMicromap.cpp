@@ -388,7 +388,7 @@ namespace Smile {
             Input.format                   = omm::Format::OC1_4_State;
             Input.unknownStatePromotion    = omm::UnknownStatePromotion::ForceOpaque;
             Input.unresolvedTriState       = omm::SpecialIndex::FullyUnknownOpaque;
-            Input.maxSubdivisionLevel      = 8;
+            Input.maxSubdivisionLevel      = static_cast<uint8_t>(kOmmMaxSubdivisionLevel);
             // Limite UV/texel: impede ilhas patologicas de monopolizarem minutos do commit.
             // Acima dele os triangulos mais caros saem do bake com indice especial UNKNOWN (ver
             // SplitByWorkload); continua sendo a geometria DXR 1.2, e o alpha-test exato so roda

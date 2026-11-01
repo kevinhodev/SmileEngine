@@ -159,7 +159,22 @@ namespace Smile {
     // agora e outro micro-map, e o sidecar inteiro e recusado. BUMPAR a cada mudanca em
     // FOpacityMicromapBaker::Bake que altere o resultado — o teto de workload NAO conta, ele so
     // decide quanto e bakeado, e o cache offline e sem teto por definicao.
-    inline constexpr u32 kOmmBakeSettingsVersion = 1u;
+    //   v2 (2026-11-01): kOmmMaxSubdivisionLevel 8 -> 6.
+    inline constexpr u32 kOmmBakeSettingsVersion = 2u;
+
+    // Teto do nivel de subdivisao do micro-map (4^N microtriangulos por triangulo). O nivel de
+    // cada micro-map e escolhido pelo dynamicSubdivisionScale (~2x2 texels por microtriangulo); o
+    // teto so corta quem pediria mais. Faz parte dos parametros do bake: mudar exige bump de
+    // kOmmBakeSettingsVersion.
+    //
+    // 6, e nao os 8 do default do SDK — o valor que o Indiana Jones shipou. Medido no
+    // BistroExterior (2026-11-01), A/B intercalado no editor com 2-state no GI ligado: com 8, os
+    // niveis 7+8 eram 15,6 dos 20,1 MB do array (o nivel 8 tinha so 456 micro-maps, mas servindo
+    // 220 k triangulos). Com 6: array 20,3 -> 7,35 MB de VRAM, bake offline 55 -> 26 s, cobertura
+    // de triangulos identica, nenhuma regressao de GPU acima do ruido (os passes em 4-state, onde
+    // a faixa UNKNOWN mais larga cobraria alpha-test, nao se moveram) e diferenca de imagem no
+    // nivel do ruido entre execucoes. Ver Docs/OMM-AUDIT.md.
+    inline constexpr u32 kOmmMaxSubdivisionLevel = 6u;
 
     class FOpacityMicromapBaker {
     public:

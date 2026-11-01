@@ -16,6 +16,7 @@
 #include "Smile/Graphics/RayTracing/OmmBakeCache.h"
 #include "Smile/Scene/SceneLoader.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -113,6 +114,33 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(Triangles), 100.0 * Known / N,
                     100.0 * Micromap / N, 100.0 * Unknown / N,
                     static_cast<double>(ArrayBytes) / (1024.0 * 1024.0));
+        // Histograma por NIVEL de subdivisao: micro-maps, bytes de array e triangulos que os
+        // referenciam. E o que diz se o teto de nivel (maxSubdivisionLevel) morde em alguma coisa —
+        // o nivel de cada micro-map e escolhido pelo dynamicSubdivisionScale, e o teto so corta
+        // quem pediria mais que ele.
+        struct FLevel { u64 Maps = 0, Bytes = 0, Triangles = 0; };
+        FLevel Levels[13]{};
+        for (const auto& D : Results) {
+            for (const auto& Desc : D->Descs) {
+                const u32 L = std::min<u32>(Desc.SubdivisionLevel, 12u);
+                const u64 Bits = Desc.Format == D3D12_RAYTRACING_OPACITY_MICROMAP_FORMAT_OC1_4_STATE ? 2 : 1;
+                ++Levels[L].Maps;
+                Levels[L].Bytes += ((1ull << (2 * L)) * Bits + 7) / 8;
+            }
+            for (u32 T = 0; T < D->TriangleCount; ++T) {
+                const i32 Index = D->IndexOf(T);
+                if (Index >= 0 && static_cast<size_t>(Index) < D->Descs.size())
+                    ++Levels[std::min<u32>(D->Descs[Index].SubdivisionLevel, 12u)].Triangles;
+            }
+        }
+        std::printf("[OMM BAKER] por nivel de subdivisao (nivel: micro-maps | KB de array | "
+                    "triangulos com micro-map):\n");
+        for (u32 L = 0; L <= 12; ++L)
+            if (Levels[L].Maps)
+                std::printf("[OMM BAKER]   %2u: %6llu | %9.1f | %8llu\n", L,
+                            static_cast<unsigned long long>(Levels[L].Maps),
+                            static_cast<double>(Levels[L].Bytes) / 1024.0,
+                            static_cast<unsigned long long>(Levels[L].Triangles));
         std::printf("[OMM BAKER] gravado: %s\n", OutPath.string().c_str());
         return 0;
     } catch (const std::exception& E) {
