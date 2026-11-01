@@ -592,8 +592,11 @@ namespace Smile {
         };
         std::vector<FBlasPlan> Plans(NumBlas);
         UINT64 TotalScratch = 0, TotalBuild = 0;
-        // VRAM dos OMM Arrays, que nao moram no BlasPool: o log dava so a CONTAGEM deles.
+        // VRAM dos OMM Arrays, que nao moram no BlasPool: o log dava so a CONTAGEM deles. Pedido E
+        // alocado: cada array e um recurso proprio, e a diferenca e o alinhamento de colocacao que
+        // o driver cobra por recurso — e ela que diz se agrupar os arrays num pool compensa.
         UINT64 TotalOmmArrayBytes = 0;
+        UINT64 TotalOmmArrayAllocated = 0;
         for (u32 i = 0; i < NumBlas; ++i) {
             const FBlasKey& Key = UniqueBlas[i];
             const FGpuMesh* M = Key.Mesh;
@@ -645,6 +648,11 @@ namespace Smile {
                         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
                     OmmArrays.push_back(P.OmmArray);
                     TotalOmmArrayBytes += OmmInfo.ResultDataMaxSizeInBytes;
+                    // O mesmo criterio do VramTracker: o desc do recurso CRIADO, com as flags que
+                    // o alocador escolheu (tight alignment, se houver).
+                    const D3D12_RESOURCE_DESC OmmDesc = P.OmmArray->GetDesc();
+                    TotalOmmArrayAllocated +=
+                        Dev5->GetResourceAllocationInfo(0, 1, &OmmDesc).SizeInBytes;
                 }
 
                 P.OmmLinkage.OpacityMicromapIndexBuffer = {
@@ -892,11 +900,13 @@ namespace Smile {
         const double BuildMB   = static_cast<double>(TotalBuild)   / (1024.0 * 1024.0);
         const double FinalMB   = static_cast<double>(Compact ? TotalCompact : TotalBuild) / (1024.0 * 1024.0);
         const double OmmMB     = static_cast<double>(TotalOmmArrayBytes) / (1024.0 * 1024.0);
+        const double OmmAllocMB = static_cast<double>(TotalOmmArrayAllocated) / (1024.0 * 1024.0);
         LogDebug("[GI] - TLAS construida: " + std::to_string(InstanceCount_) +
                 " instancias / " + std::to_string(NumBlas) + " BLAS (pool " +
                 std::to_string(FinalMB).substr(0, 6) + " MB, build " +
                 std::to_string(BuildMB).substr(0, 6) + " MB, compaction " +
                 (Compact ? "ON" : "OFF") + ") / " + std::to_string(OmmArrays.size()) +
-                " OMM Arrays (" + std::to_string(OmmMB).substr(0, 6) + " MB)");
+                " OMM Arrays (" + std::to_string(OmmMB).substr(0, 6) + " MB pedidos, " +
+                std::to_string(OmmAllocMB).substr(0, 6) + " MB alocados)");
     }
 }
